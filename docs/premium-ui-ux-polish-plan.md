@@ -1,4 +1,4 @@
-# Virel Studio Premium UI/UX Polish Plan
+# Framehouse Premium UI/UX Polish Plan
 
 Status: planning document only. This plan assumes the current workspace architecture mostly stays in place. It is not a big redesign plan.
 
@@ -651,7 +651,7 @@ Rules:
 Examples:
 
 - Import split button:
-  - primary: Import to VIREL Vault
+  - primary: Import to Framehouse Vault
   - menu: Import Folder, Import Selection, Import With Preset, Refresh Sources
 - Export split button:
   - primary: Start Export or Queue Export

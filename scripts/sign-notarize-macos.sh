@@ -15,7 +15,7 @@ skip_app_notarize=0
 
 usage() {
   cat <<'EOF'
-Sign, notarize, staple, and package a macOS Virel Studio release.
+Sign, notarize, staple, and package a macOS Looksy release.
 
 Usage:
   scripts/sign-notarize-macos.sh --identity "Developer ID Application: Name (TEAMID)" --notary-profile PROFILE [options]
@@ -23,7 +23,7 @@ Usage:
 Options:
   --version X.Y.Z          Release version. Defaults to VERSION.
   --package-dir PATH       Output directory. Defaults to build/release-macos/package.
-  --app PATH               Staged VirelStudio.app to sign. Defaults to CPack staging path.
+  --app PATH               Staged Looksy.app to sign. Defaults to CPack staging path.
   --identity NAME          Developer ID Application signing identity.
   --notary-profile NAME    notarytool keychain profile created with xcrun notarytool store-credentials.
   --skip-notarize          Sign and create a signed DMG without notarization.
@@ -99,7 +99,7 @@ if [ "${skip_notarize}" -eq 0 ]; then
 fi
 
 if [ -z "${source_app}" ]; then
-  source_app="$(find "${package_dir}/_CPack_Packages" -type d -path "*/VirelStudio-${version}-Darwin-*/VirelStudio.app" | head -n 1)"
+  source_app="$(find "${package_dir}/_CPack_Packages" -type d -path "*/Looksy-${version}-Darwin-*/Looksy.app" | head -n 1)"
 fi
 
 [ -d "${source_app}" ] || fail "staged app not found: ${source_app}"
@@ -111,42 +111,21 @@ fi
 work_root="${package_dir}/signed-macos-${version}"
 signed_root="${work_root}/dmg-root"
 architecture="$(uname -m)"
-signed_app="${signed_root}/VirelStudio.app"
-app_zip="${work_root}/VirelStudio-${version}-Darwin-${architecture}.app.zip"
-signed_dmg="${work_root}/VirelStudio-${version}-Darwin-${architecture}.dmg"
+signed_app="${signed_root}/Looksy.app"
+app_zip="${work_root}/Looksy-${version}-Darwin-${architecture}.app.zip"
+signed_dmg="${work_root}/Looksy-${version}-Darwin-${architecture}.dmg"
 
 rm -rf "${work_root}"
 mkdir -p "${signed_root}"
 ditto "${source_app}" "${signed_app}"
 ln -s /Applications "${signed_root}/Applications"
 
-is_macho() {
-  file -b "$1" | grep -q 'Mach-O'
-}
-
-log "Signing nested bundles"
-while IFS= read -r -d '' bundle; do
-  case "${bundle}" in
-    "${signed_app}") ;;
-    *)
-      codesign --force --options runtime --timestamp --sign "${identity}" "${bundle}"
-      ;;
-  esac
-done < <(find "${signed_app}" -type d \( -name '*.app' -o -name '*.framework' -o -name '*.xpc' -o -name '*.appex' \) -print0 | sort -rz)
-
-log "Signing Mach-O files outside nested bundles"
-while IFS= read -r -d '' candidate; do
-  case "${candidate}" in
-    *".framework/"*) continue ;;
-  esac
-  if is_macho "${candidate}"; then
-    codesign --force --options runtime --timestamp --sign "${identity}" "${candidate}"
-  fi
-done < <(find "${signed_app}" -type f -print0 | sort -z)
-
-log "Signing app bundle"
-codesign --force --options runtime --timestamp --sign "${identity}" "${signed_app}"
-codesign --verify --deep --strict --verbose=2 "${signed_app}"
+log "Signing app bundle from Mach-O leaves to outer seal"
+"${SCRIPT_DIR}/sign-macos-bundle.sh" \
+  "${signed_app}" \
+  "${identity}" \
+  --hardened-runtime \
+  --timestamp
 
 if [ "${skip_notarize}" -eq 0 ] && [ "${skip_app_notarize}" -eq 0 ]; then
   log "Notarizing app bundle archive"
@@ -157,7 +136,7 @@ if [ "${skip_notarize}" -eq 0 ] && [ "${skip_app_notarize}" -eq 0 ]; then
 fi
 
 log "Creating signed DMG"
-hdiutil create -ov -srcfolder "${signed_root}" -volname "Virel Studio ${version}" -fs HFS+ -format UDZO "${signed_dmg}"
+hdiutil create -ov -srcfolder "${signed_root}" -volname "Looksy ${version}" -fs HFS+ -format UDZO "${signed_dmg}"
 
 log "Signing DMG"
 codesign --force --timestamp --sign "${identity}" "${signed_dmg}"

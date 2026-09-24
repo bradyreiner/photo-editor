@@ -45,7 +45,7 @@ def main() -> int:
 
     document = {
         "schemaVersion": 1,
-        "product": "Virel Studio",
+        "product": "Looksy",
         "version": args.version,
         "channel": args.channel,
         "publishedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

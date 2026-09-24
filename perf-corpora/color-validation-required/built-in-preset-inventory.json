@@ -1,0 +1,79 @@
+{
+  "schema": "photo-editor-built-in-preset-inventory:v1",
+  "registry_id": "photo-editor-built-in-presets-v1",
+  "source_path": "apps/desktop/src/preset_registry.cpp",
+  "source_region_sha256": "6930bcf0fce2ff655df36edc1a81c8a2b3f4064cb136ed7e417b9cefa9e6dd0d",
+  "preset_count": 14,
+  "presets": [
+    {
+      "name": "Clean Portrait",
+      "pack": "Portrait Essentials",
+      "category": "Portrait"
+    },
+    {
+      "name": "Camera Aware Portrait",
+      "pack": "Portrait Essentials",
+      "category": "Portrait"
+    },
+    {
+      "name": "Soft Skin Editorial",
+      "pack": "Portrait Essentials",
+      "category": "Portrait"
+    },
+    {
+      "name": "Dramatic Portrait",
+      "pack": "Portrait Essentials",
+      "category": "Portrait"
+    },
+    {
+      "name": "Landscape Pop",
+      "pack": "Landscape Core",
+      "category": "Landscape"
+    },
+    {
+      "name": "Golden Hour Landscape",
+      "pack": "Landscape Core",
+      "category": "Landscape"
+    },
+    {
+      "name": "Moody Forest",
+      "pack": "Landscape Core",
+      "category": "Landscape"
+    },
+    {
+      "name": "Clean Black and White",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "Matte Black and White",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "High Contrast Grit",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "Night Sky Recovery",
+      "pack": "Low Light",
+      "category": "Night"
+    },
+    {
+      "name": "Aerial Clean Color",
+      "pack": "Drone Core",
+      "category": "Drone"
+    },
+    {
+      "name": "RAW Highlight Recovery",
+      "pack": "RAW Recovery",
+      "category": "RAW Recovery"
+    },
+    {
+      "name": "Natural HDR Balance",
+      "pack": "Dynamic Range",
+      "category": "HDR"
+    }
+  ]
+}

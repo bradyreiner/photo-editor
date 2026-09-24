@@ -1,0 +1,381 @@
+{
+  "schema": "photo-editor-color-source-inventory:v1",
+  "inventory_id": "hdrplus-public-source-candidates-v1",
+  "description": "Non-shipping, checksum-pinned source candidates for constructing the licensed color-validation corpus. This inventory is acquisition evidence, not promotion approval.",
+  "candidate_count": 6,
+  "promotion_eligible": false,
+  "promotion_blockers": [
+    "skin-raw-depicted-person-review-required",
+    "no-measured-chart-reference",
+    "no-real-dcp-profile",
+    "pending-project-license-review",
+    "missing-recorded-iso-for-six-captures",
+    "no-two-person-editorial-approval"
+  ],
+  "datasets": [
+    {
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "name": "HDR+ Burst Photography Dataset curated subset",
+      "source_page": "https://hdrplusdata.org/dataset.html",
+      "download_prefix": "https://storage.googleapis.com/hdrplusdata/20171106_subset/",
+      "license_name": "Creative Commons Attribution-ShareAlike",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "license_evidence": "The official dataset page identifies the DNG inputs, final JPEG results, 2017-10-23 processing snapshot, anonymous Google Cloud distribution, and CC-BY-SA license.",
+      "attribution": "HDR+ Burst Photography Dataset; Hasinoff et al., Burst photography for high dynamic range and low-light imaging on mobile cameras, SIGGRAPH Asia 2016.",
+      "distribution": "private-ci-only",
+      "license_review": {
+        "status": "pending-project-review",
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation"
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "candidate_id": "hdrplus-nexus6-skin-0218",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified-depicted-person-review-pending",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "depicted-person-review-required",
+        "pending-project-license-review"
+      ],
+      "capture": {
+        "file_name": "hdrplus-nexus6-skin-0218.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0218_20141031_195419_627/payload_N000.dng",
+        "sha256": "143ab8714d4e8ae0c7cd2d0da9b37efbd00d9b4d5e9068413e1cb53f798044ac",
+        "byte_size": 26283846
+      },
+      "reference": {
+        "file_name": "hdrplus-nexus6-skin-0218-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/0218_20141031_195419_627/final.jpg",
+        "sha256": "c72ef2255c871d9fbdca088b70db4e93f2e2d138bff39d30c66e263755276945",
+        "byte_size": 3521942,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-nexus6-skin-0218-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0218_20141031_195419_627/rgb2rgb.txt",
+          "sha256": "c5b616652f9ff9c2a635dbfa97a62d6a53a70c4aab6ffc21c65aa6f3691838a6",
+          "byte_size": 73
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-nexus6-skin-0218-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0218_20141031_195419_627/lens_shading_map_N000.tiff",
+          "sha256": "38e204d8d17dceafa5897108f769e17137028193b90790927e21c813a72812a4",
+          "byte_size": 3336
+        }
+      ],
+      "camera": {
+        "make": "Motorola",
+        "model": "Nexus 6"
+      },
+      "iso": null,
+      "illuminant": "mixed",
+      "scene_tags": [
+        "skin",
+        "portrait",
+        "mixed-light",
+        "deep-shadow"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-09-03",
+        "reviewer_id": "source-audit-automation",
+        "people_present": true,
+        "notes": "Close side-profile portrait with broad visible skin range, mixed window/interior light, highlight transition, and deep hair/background values. Official gallery ordering was cross-checked against two existing checksum-pinned captures. Human project review of depicted-person use remains required."
+      }
+    },
+    {
+      "candidate_id": "hdrplus-huawei-saturated-glass-0382",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "pending-project-license-review"
+      ],
+      "capture": {
+        "file_name": "hdrplus-huawei-saturated-glass-0382.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0382_20150912_131056_666/payload_N000.dng",
+        "sha256": "e2ca9bc1ad73ac850511cc30497f58cb0f9a753dc0a9d35a50d8fa32886fc43c",
+        "byte_size": 24410884
+      },
+      "reference": {
+        "file_name": "hdrplus-huawei-saturated-glass-0382-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/0382_20150912_131056_666/final.jpg",
+        "sha256": "70714bcb7104b69a2fde8ecc1c8c798da5d129f16bfb92bcfef2ef764845c3a3",
+        "byte_size": 5393899,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-huawei-saturated-glass-0382-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0382_20150912_131056_666/rgb2rgb.txt",
+          "sha256": "a80854963624177fffaf55cdccaf5fb6f4bac94c8e747494965ca6c0875c9525",
+          "byte_size": 91
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-huawei-saturated-glass-0382-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0382_20150912_131056_666/lens_shading_map_N000.tiff",
+          "sha256": "bd606f64cf61af592133fe7f6958cadc19b511228b5f93805a356799b6c37396",
+          "byte_size": 3854
+        }
+      ],
+      "camera": {
+        "make": "Huawei",
+        "model": "angler"
+      },
+      "iso": null,
+      "illuminant": "daylight",
+      "scene_tags": [
+        "saturated-materials",
+        "specular-highlights",
+        "near-black-background"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation",
+        "people_present": false,
+        "notes": "Highly saturated glass objects, metallic sparkle, specular highlights, and near-black cloth; no recognizable people."
+      }
+    },
+    {
+      "candidate_id": "hdrplus-huawei-sunset-shadow-0543",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "pending-project-license-review"
+      ],
+      "capture": {
+        "file_name": "hdrplus-huawei-sunset-shadow-0543.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0543_20150918_192012_043/payload_N000.dng",
+        "sha256": "3d604ea18fae08a03649043d5c4672cfd5aed91370058c325cb371c93cf798cf",
+        "byte_size": 24410894
+      },
+      "reference": {
+        "file_name": "hdrplus-huawei-sunset-shadow-0543-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/0543_20150918_192012_043/final.jpg",
+        "sha256": "2283fc1443c4e945f55211f45d69055990bf680cfc1cabe739190379182aac24",
+        "byte_size": 3336637,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-huawei-sunset-shadow-0543-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0543_20150918_192012_043/rgb2rgb.txt",
+          "sha256": "a80854963624177fffaf55cdccaf5fb6f4bac94c8e747494965ca6c0875c9525",
+          "byte_size": 91
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-huawei-sunset-shadow-0543-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/0543_20150918_192012_043/lens_shading_map_N000.tiff",
+          "sha256": "364f840b881545c41b4649adbf466d68503c050d1cb7da1cb3818e4c7031a6a3",
+          "byte_size": 3854
+        }
+      ],
+      "camera": {
+        "make": "Huawei",
+        "model": "angler"
+      },
+      "iso": null,
+      "illuminant": "daylight",
+      "scene_tags": [
+        "sky",
+        "deep-shadows",
+        "highlight-rolloff"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation",
+        "people_present": false,
+        "notes": "Warm-to-blue sunset gradient above deep mountain and rock shadows; no recognizable people."
+      }
+    },
+    {
+      "candidate_id": "hdrplus-nexus6-tungsten-glass-33tj",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "pending-project-license-review"
+      ],
+      "capture": {
+        "file_name": "hdrplus-nexus6-tungsten-glass-33tj.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/33TJ_20150606_224837_294/payload_N000.dng",
+        "sha256": "83f4bdee37093266ea34f1fbbd80f69f0d2a87d99561b108d0c514c0acd6417c",
+        "byte_size": 26284016
+      },
+      "reference": {
+        "file_name": "hdrplus-nexus6-tungsten-glass-33tj-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/33TJ_20150606_224837_294/final.jpg",
+        "sha256": "c7996e8ce616b89b626e9b2ffa343275b7cb5dd04a482bea6ab0e84390a2dd87",
+        "byte_size": 3080470,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-nexus6-tungsten-glass-33tj-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/33TJ_20150606_224837_294/rgb2rgb.txt",
+          "sha256": "026811342e4473846c2e1f9243349a2c553bee11ab2773e1925a211cd82ec7c1",
+          "byte_size": 82
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-nexus6-tungsten-glass-33tj-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/33TJ_20150606_224837_294/lens_shading_map_N000.tiff",
+          "sha256": "068d09c269eb75edda904713b9b6caf5ae55abc3854b3f61ed345735294fe828",
+          "byte_size": 3854
+        }
+      ],
+      "camera": {
+        "make": "Motorola",
+        "model": "Nexus 6"
+      },
+      "iso": null,
+      "illuminant": "tungsten",
+      "scene_tags": [
+        "saturated-materials",
+        "specular-highlights",
+        "deep-shadows"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation",
+        "people_present": false,
+        "notes": "Warm low-light glass, ice, saturated red liquid, bright specular reflections, and deep background values; no recognizable people."
+      }
+    },
+    {
+      "candidate_id": "hdrplus-nexus5-mixed-projection-c1b1",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "pending-project-license-review",
+        "depicted-work-review-required"
+      ],
+      "capture": {
+        "file_name": "hdrplus-nexus5-mixed-projection-c1b1.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_192800_654/payload_N000.dng",
+        "sha256": "a04f72666f877405c038565ebb195b1b6eb4de6cc7e0ce62edaaf2d1d640a98b",
+        "byte_size": 16184672
+      },
+      "reference": {
+        "file_name": "hdrplus-nexus5-mixed-projection-c1b1-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/c1b1_20150424_192800_654/final.jpg",
+        "sha256": "fc02a86bdff61d38b2a3f667dd0a4393033920a674e3eb12148950d18db77f5e",
+        "byte_size": 2526673,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-nexus5-mixed-projection-c1b1-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_192800_654/rgb2rgb.txt",
+          "sha256": "493fa2e862bdd082183154293698c08c5bea7e64687c1285a4629cd6747d0cd0",
+          "byte_size": 110
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-nexus5-mixed-projection-c1b1-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_192800_654/lens_shading_map_N000.tiff",
+          "sha256": "859fe19481a574a80078c4deacb60c0f63a66761310bded99f30c66a709fa305",
+          "byte_size": 2374
+        }
+      ],
+      "camera": {
+        "make": "LG",
+        "model": "Nexus 5"
+      },
+      "iso": null,
+      "illuminant": "mixed",
+      "scene_tags": [
+        "saturated-lights",
+        "mixed-light",
+        "highlight-rolloff"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation",
+        "people_present": false,
+        "notes": "Projected saturated imagery, warm exhibit light, cool background values, and illuminated display objects; no recognizable people."
+      }
+    },
+    {
+      "candidate_id": "hdrplus-nexus5-led-pendulum-c1b1",
+      "dataset_id": "google-hdrplus-20171106-subset",
+      "technical_status": "source-qualified",
+      "promotion_eligible": false,
+      "promotion_blockers": [
+        "missing-iso-metadata",
+        "pending-project-license-review",
+        "depicted-work-review-required"
+      ],
+      "capture": {
+        "file_name": "hdrplus-nexus5-led-pendulum-c1b1.dng",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_203727_155/payload_N000.dng",
+        "sha256": "b8ff64696584474c172b94eb72fe248da8c63f31efcd44748577974d137ff5ca",
+        "byte_size": 16184672
+      },
+      "reference": {
+        "file_name": "hdrplus-nexus5-led-pendulum-c1b1-reference.jpg",
+        "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/results_20171023/c1b1_20150424_203727_155/final.jpg",
+        "sha256": "94f674b130e6ad76552e51809c2b794154ccbd516d45c07ce7f490cd8d31afb8",
+        "byte_size": 2750623,
+        "producer": "Google HDR+ desktop reprocessing pipeline",
+        "pipeline_version": "2017-10-23"
+      },
+      "sidecars": [
+        {
+          "kind": "sensor-to-linear-srgb-matrix",
+          "file_name": "hdrplus-nexus5-led-pendulum-c1b1-rgb2rgb.txt",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_203727_155/rgb2rgb.txt",
+          "sha256": "c6a54fc317aa3aa841f25a855ff8f06eaf7d3d542c1800a65ff213a197341c35",
+          "byte_size": 116
+        },
+        {
+          "kind": "lens-shading-map",
+          "file_name": "hdrplus-nexus5-led-pendulum-c1b1-lens-shading.tiff",
+          "url": "https://storage.googleapis.com/hdrplusdata/20171106_subset/bursts/c1b1_20150424_203727_155/lens_shading_map_N000.tiff",
+          "sha256": "545251a977461cf9fb15e4ceaee9277cd32a40bd927de4b469ec19720129a177",
+          "byte_size": 2374
+        }
+      ],
+      "camera": {
+        "make": "LG",
+        "model": "Nexus 5"
+      },
+      "iso": null,
+      "illuminant": "fluorescent-led",
+      "scene_tags": [
+        "saturated-lights",
+        "specular-highlights",
+        "near-black-background"
+      ],
+      "visual_review": {
+        "reviewed_on": "2026-07-14",
+        "reviewer_id": "source-audit-automation",
+        "people_present": false,
+        "notes": "Saturated red emitter, cool white edge light, reflective metal, marble, and near-black surroundings; no recognizable people."
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Dialog {
@@ -23,6 +23,7 @@ Dialog {
     readonly property string selectedThumbnailSource: hasSelection ? String(selectedAsset.thumbnailSource || "") : ""
     readonly property string selectedMediaType: hasSelection ? String(selectedAsset.mediaType || "") : ""
     readonly property string selectedDurationText: hasSelection ? String(selectedAsset.durationText || "") : ""
+    readonly property real selectedDurationSeconds: hasSelection ? Number(selectedAsset.durationSeconds || 0) : 0
     readonly property string selectedFilePath: hasSelection ? String(selectedAsset.filePath || "") : ""
     readonly property string selectedTimelineDocumentPath: hasSelection ? String(selectedAsset.timelineDocumentPath || "") : ""
     readonly property bool selectedOnline: hasSelection ? Boolean(selectedAsset.online) : false
@@ -167,9 +168,12 @@ Dialog {
 
                     GridView {
                         id: mediaGrid
+                        objectName: "timelineVirtualizedGalleryGrid"
                         anchors.fill: parent
                         anchors.margins: 12
                         clip: true
+                        reuseItems: true
+                        cacheBuffer: Math.max(height, 640)
                         cellWidth: 176
                         cellHeight: 212
                         model: root.assets

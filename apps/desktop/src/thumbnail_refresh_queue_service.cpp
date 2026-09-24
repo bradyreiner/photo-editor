@@ -1,18 +1,20 @@
+#include "photo_paint_surface.h"
 #include "thumbnail_refresh_queue_service.h"
+
+#include "photo_layer_adjustment_recipe.h"
+#include "linked_image_source.h"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
-#include <QBuffer>
 #include <QColor>
-#include <QColorSpace>
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QFont>
 #include <QGuiApplication>
 #include <QImageReader>
-#include <QImageWriter>
 #include <QIODevice>
 #include <QJsonDocument>
 #include <QLinearGradient>
@@ -25,7 +27,64 @@ namespace photo_editor::desktop {
 
 namespace {
 
-constexpr qint64 kMaxLayerThumbnailSourceBytes = 512 * 1024;
+constexpr qint64 kThumbnailRenderLatencyBudgetMs = 100;
+
+void insert_thumbnail_job_fields(
+    QVariantMap* fields,
+    const ThumbnailRefreshQueueRequest& request,
+    const QString& job_kind,
+    qint64 elapsed_ms) {
+  if (fields == nullptr || request.job.state_signature.isEmpty() ||
+      job_kind.isEmpty()) {
+    return;
+  }
+  const auto separator = request.job.state_signature.indexOf(QLatin1Char(':'));
+  const auto signature_token =
+      request.job.state_signature.mid(separator >= 0 ? separator + 1 : 0, 12);
+  const auto job_id = QStringLiteral("%1-%2-%3")
+                          .arg(job_kind)
+                          .arg(request.job.generation)
+                          .arg(signature_token);
+  fields->insert(QStringLiteral("async_job_id"), job_id);
+  fields->insert(QStringLiteral("async_job_kind"), job_kind);
+  fields->insert(QStringLiteral("async_job_stage"), QStringLiteral("thumbnail"));
+  fields->insert(QStringLiteral("async_job_asset_id"), request.job.asset_id);
+  fields->insert(QStringLiteral("async_job_file_path"), request.job.file_path);
+  fields->insert(
+      QStringLiteral("async_job_state_signature"), request.job.state_signature);
+  fields->insert(QStringLiteral("async_job_generation"), request.job.generation);
+  fields->insert(
+      QStringLiteral("async_job_state_revision"), request.job.state_revision);
+  fields->insert(QStringLiteral("thumbnailId"), job_id);
+  fields->insert(QStringLiteral("thumbnail_id"), job_id);
+  fields->insert(QStringLiteral("observabilityThumbnailId"), job_id);
+  fields->insert(QStringLiteral("thumbnailJobId"), job_id);
+  fields->insert(QStringLiteral("thumbnailJobKind"), job_kind);
+  fields->insert(QStringLiteral("thumbnailJobStage"), QStringLiteral("thumbnail"));
+  fields->insert(QStringLiteral("thumbnailJobGeneration"), request.job.generation);
+  fields->insert(
+      QStringLiteral("thumbnailJobStateRevision"), request.job.state_revision);
+  fields->insert(
+      QStringLiteral("thumbnailJobStateSignature"), request.job.state_signature);
+  fields->insert(
+      QStringLiteral("thumbnail_render_budget_ms"),
+      kThumbnailRenderLatencyBudgetMs);
+  const auto measured_elapsed_ms =
+      fields->contains(QStringLiteral("thumbnail_render_elapsed_ms"))
+          ? fields->value(QStringLiteral("thumbnail_render_elapsed_ms")).toLongLong()
+          : elapsed_ms;
+  fields->insert(
+      QStringLiteral("thumbnail_render_elapsed_ms"), measured_elapsed_ms);
+  fields->insert(
+      QStringLiteral("thumbnail_render_within_latency_budget"),
+      measured_elapsed_ms <= kThumbnailRenderLatencyBudgetMs);
+  fields->insert(
+      QStringLiteral("thumbnail_render_stage_contract"),
+      QStringLiteral("layer-mask-render-stage-telemetry-v1"));
+  fields->insert(
+      QStringLiteral("thumbnail_render_stage"),
+      QStringLiteral("thumbnail_render"));
+}
 
 QString thumbnail_variant_sha1(const QVariant& value) {
   return QString::fromLatin1(
@@ -81,6 +140,11 @@ void paint_thumbnail_checker(QPainter* painter, const QRect& rect) {
 }
 
 QImage decoded_layer_pixel_image(const QVariantMap& layer) {
+  if (layer.contains("paintTiles")) {
+    const QSize size(layer.value("pixelWidth").toInt(),layer.value("pixelHeight").toInt());
+    return rasterize_photo_paint_layer(layer,size.scaled(128,128,Qt::KeepAspectRatio))
+        .convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
+  }
   const auto pixel_data = layer.value(QStringLiteral("pixelData")).toByteArray();
   if (!pixel_data.isEmpty()) {
     return QImage::fromData(pixel_data, "PNG");
@@ -100,39 +164,79 @@ QImage decoded_layer_pixel_image(const QVariantMap& layer) {
 
 }  // namespace
 
-void insert_thumbnail_pixel_metrics(
-    QVariantMap* target,
-    const QSize& backing_size,
-    const QSize& display_size) {
-  if (target == nullptr) {
-    return;
-  }
+QString thumbnail_state_signature(
+    const QString& asset_id,
+    int edit_intent_revision,
+    int mask_revision,
+    int photo_layer_revision) {
+  return QStringLiteral("sha1:%1").arg(QString::fromLatin1(
+      QCryptographicHash::hash(
+          QStringLiteral("asset:%1|edit:%2|mask:%3|layer:%4")
+              .arg(asset_id)
+              .arg(edit_intent_revision)
+              .arg(mask_revision)
+              .arg(photo_layer_revision)
+              .toUtf8(),
+          QCryptographicHash::Sha1)
+          .toHex()));
+}
 
-  const auto backing_width = std::max(0, backing_size.width());
-  const auto backing_height = std::max(0, backing_size.height());
-  const auto display_width = std::max(1, display_size.width());
-  const auto display_height = std::max(1, display_size.height());
-  const auto horizontal_ratio =
-      backing_width > 0 ? static_cast<double>(backing_width) / display_width : 0.0;
-  const auto vertical_ratio =
-      backing_height > 0 ? static_cast<double>(backing_height) / display_height : 0.0;
-  const auto device_pixel_ratio =
-      horizontal_ratio > 0.0 && vertical_ratio > 0.0
-          ? std::min(horizontal_ratio, vertical_ratio)
-          : 0.0;
-  target->insert(QStringLiteral("thumbnailBackingWidth"), backing_width);
-  target->insert(QStringLiteral("thumbnailBackingHeight"), backing_height);
-  target->insert(QStringLiteral("thumbnailDisplayWidth"), display_width);
-  target->insert(QStringLiteral("thumbnailDisplayHeight"), display_height);
-  target->insert(QStringLiteral("thumbnailDevicePixelRatio"), device_pixel_ratio);
-  target->insert(
-      QStringLiteral("thumbnailPixelRatioSignature"),
-      QStringLiteral("backing:%1x%2|display:%3x%4|dpr:%5")
-          .arg(backing_width)
-          .arg(backing_height)
-          .arg(display_width)
-          .arg(display_height)
-          .arg(device_pixel_ratio, 0, 'f', 2));
+ThumbnailRefreshQueueRequest make_thumbnail_refresh_queue_request(
+    ThumbnailRefreshQueueRequestFacts facts) {
+  const auto state_signature = thumbnail_state_signature(
+      facts.asset_id,
+      facts.edit_intent_revision,
+      facts.mask_revision,
+      facts.photo_layer_revision);
+  auto job = AsyncMaskJob{
+      .job_id = QStringLiteral("thumbnail-refresh-queue-%1").arg(facts.generation),
+      .job_kind = QStringLiteral("thumbnail_refresh"),
+      .stage = QStringLiteral("thumbnail_refresh_queue"),
+      .asset_id = facts.asset_id,
+      .file_path = facts.file_path,
+      .state_signature = state_signature,
+      .generation = facts.generation,
+      .state_revision = facts.mask_revision,
+  };
+  return ThumbnailRefreshQueueRequest{
+      .job = std::move(job),
+      .reason = std::move(facts.reason),
+      .queue_signature = std::move(facts.queue_signature),
+      .state = std::move(facts.state),
+      .published_preview_image = std::move(facts.published_preview_image),
+      .published_preview_state_signature =
+          std::move(facts.published_preview_state_signature),
+      .photo_layers = std::move(facts.photo_layers),
+      .mask_stack = std::move(facts.mask_stack),
+      .mask_sets = std::move(facts.mask_sets),
+      .mask_thumbnail_dirty = facts.mask_thumbnail_dirty,
+      .photo_layer_thumbnail_dirty = facts.photo_layer_thumbnail_dirty,
+      .cancellation = std::move(facts.cancellation),
+  };
+}
+
+ThumbnailRefreshQueuePublicationCounts publish_thumbnail_refresh_queue_entries(
+    const ThumbnailRefreshQueueResult& result,
+    const std::function<void(const QString& cache_key, const QVariantMap& entry)>& store_entry) {
+  ThumbnailRefreshQueuePublicationCounts counts;
+  if (!store_entry) {
+    return counts;
+  }
+  for (auto iterator = result.photo_layer_thumbnail_entries.constBegin();
+       iterator != result.photo_layer_thumbnail_entries.constEnd();
+       ++iterator) {
+    store_entry(iterator.key(), iterator.value().toMap());
+    ++counts.photo_layer_entries;
+    ++counts.total_entries;
+  }
+  for (auto iterator = result.mask_thumbnail_entries.constBegin();
+       iterator != result.mask_thumbnail_entries.constEnd();
+       ++iterator) {
+    store_entry(iterator.key(), iterator.value().toMap());
+    ++counts.mask_entries;
+    ++counts.total_entries;
+  }
+  return counts;
 }
 
 QString thumbnail_invalidation_key(
@@ -371,31 +475,6 @@ void clear_thumbnail_transient_fields(QVariantMap* target) {
   target->insert(QStringLiteral("thumbnailQueueWorkerServiceContract"), QString());
 }
 
-QString encoded_layer_thumbnail_source(const QImage& image) {
-  if (image.isNull()) {
-    return {};
-  }
-
-  auto encoded_image = image;
-  if (!encoded_image.colorSpace().isValid()) {
-    encoded_image.setColorSpace(QColorSpace(QColorSpace::SRgb));
-  }
-
-  QByteArray encoded;
-  QBuffer buffer(&encoded);
-  if (!buffer.open(QIODevice::WriteOnly)) {
-    return {};
-  }
-
-  QImageWriter writer(&buffer, "PNG");
-  writer.setCompression(1);
-  if (!writer.write(encoded_image) || encoded.size() > kMaxLayerThumbnailSourceBytes) {
-    return {};
-  }
-
-  return QStringLiteral("data:image/png;base64,%1").arg(QString::fromLatin1(encoded.toBase64()));
-}
-
 QImage scaled_square_thumbnail_image(QImage image, int edge) {
   if (image.isNull()) {
     return {};
@@ -421,6 +500,9 @@ QImage scaled_layer_thumbnail_image(QImage image) {
 
 QString rendered_photo_layer_thumbnail_source(const QVariantMap& layer) {
   const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
+  // Normalization also calls this on the UI thread. Linked sources must be
+  // decoded by the cancellable worker, never by QImageReader or a placeholder.
+  if (kind == QStringLiteral("source")) return {};
   QImage thumbnail(kLayerThumbnailEdge, kLayerThumbnailEdge, QImage::Format_ARGB32_Premultiplied);
   thumbnail.fill(Qt::transparent);
   QPainter painter(&thumbnail);
@@ -553,6 +635,12 @@ QString non_adjustment_photo_layer_thumbnail_recipe_hash(const QVariantMap& laye
     payload.insert(QStringLiteral("pixelHeight"), layer.value(QStringLiteral("pixelHeight")).toInt());
   } else if (kind == QStringLiteral("pixel") || kind == QStringLiteral("source")) {
     payload.insert(QStringLiteral("sourcePath"), layer.value(QStringLiteral("sourcePath")).toString());
+    if (kind == QStringLiteral("source") &&
+        layer.value(QStringLiteral("pixelData")).toByteArray().isEmpty()) {
+      payload.insert(QStringLiteral("sourceRevision"), linked_image_file_revision(
+          layer.value(QStringLiteral("sourcePath")).toString()));
+    }
+    payload.insert(QStringLiteral("paintTiles"), layer.value(QStringLiteral("paintTiles")));
     payload.insert(
         QStringLiteral("pixelDataHash"),
         QStringLiteral("sha1:%1").arg(QString::fromLatin1(
@@ -578,6 +666,44 @@ QString non_adjustment_photo_layer_thumbnail_entry_recipe_hash(const QVariantMap
       QStringLiteral("opacity"),
       QString::number(
           std::clamp(layer.value(QStringLiteral("opacity"), 1.0).toDouble(), 0.0, 1.0),
+          'f',
+          3));
+  payload.insert(
+      QStringLiteral("visible"),
+      layer.value(QStringLiteral("enabled"), true).toBool());
+  return QStringLiteral("sha1:%1").arg(thumbnail_variant_sha1(payload));
+}
+
+QString photo_layer_thumbnail_recipe_hash(const QVariantMap& layer) {
+  const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
+  if (kind == QStringLiteral("adjustment")) {
+    return QStringLiteral("sha1:%1").arg(
+        thumbnail_variant_sha1(photo_layer_adjustment_recipe(layer)));
+  }
+  return non_adjustment_photo_layer_thumbnail_recipe_hash(layer);
+}
+
+QString photo_layer_thumbnail_entry_recipe_hash(const QVariantMap& layer) {
+  const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
+  if (kind != QStringLiteral("adjustment")) {
+    return non_adjustment_photo_layer_thumbnail_entry_recipe_hash(layer);
+  }
+
+  QVariantMap payload;
+  payload.insert(
+      QStringLiteral("recipeHash"),
+      photo_layer_thumbnail_recipe_hash(layer));
+  payload.insert(
+      QStringLiteral("blendMode"),
+      normalized_mask_blend_mode(
+          layer.value(QStringLiteral("blendMode")).toString()));
+  payload.insert(
+      QStringLiteral("opacity"),
+      QString::number(
+          std::clamp(
+              layer.value(QStringLiteral("opacity"), 1.0).toDouble(),
+              0.0,
+              1.0),
           'f',
           3));
   payload.insert(
@@ -710,13 +836,20 @@ QVariantMap rendered_adjustment_photo_layer_thumbnail_entry(
       request.job.job_id,
       QStringLiteral("masked-adjustment-photo-layer"),
       layer_timer.elapsed());
+  insert_thumbnail_job_fields(
+      &layer,
+      request,
+      QStringLiteral("photo_layer_thumbnail"),
+      layer_timer.elapsed());
   return layer;
 }
 
 QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
     const QVariantMap& source_layer,
-    const ThumbnailRefreshQueueRequest& request) {
-  if (!photo_layer_thumbnail_queue_worker_supported(source_layer)) {
+    const ThumbnailRefreshQueueRequest& request,
+    const SourceLayerThumbnailRenderer& source_renderer) {
+  if (!photo_layer_thumbnail_queue_worker_supported(source_layer) ||
+      thumbnail_refresh_cancelled(request)) {
     return {};
   }
 
@@ -738,8 +871,14 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
       request.job.state_revision);
 
   QVariantMap thumbnail_metadata;
-  const auto thumbnail_source = rendered_photo_layer_thumbnail_source(layer);
-  if (thumbnail_source.trimmed().isEmpty() || thumbnail_refresh_cancelled(request)) {
+  QVariantMap source_metadata;
+  const auto is_source = layer.value(QStringLiteral("kind")).toString().trimmed().toLower() ==
+      QStringLiteral("source");
+  const auto thumbnail_source = is_source
+      ? (source_renderer ? source_renderer(layer, request, &source_metadata) : QString{})
+      : rendered_photo_layer_thumbnail_source(layer);
+  if (thumbnail_source.trimmed().isEmpty() || thumbnail_refresh_cancelled(request) ||
+      layer_recipe_hash != non_adjustment_photo_layer_thumbnail_recipe_hash(layer)) {
     return {};
   }
 
@@ -770,12 +909,15 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
   thumbnail_metadata.insert(QStringLiteral("thumbnailColorManaged"), false);
   thumbnail_metadata.insert(
       QStringLiteral("thumbnailColorManagementContract"),
-      QStringLiteral("layer-thumbnail-active-color-management:v1|adjustment:shared-preview-render|render-mode:layer_thumbnail|fallback:raster-explicit"));
+      QStringLiteral("layer-thumbnail-active-color-management:v2|adjustment:shared-preview-render|adjustment-fallback:fail-closed|non-adjustment:raster-explicit"));
   thumbnail_metadata.insert(
       QStringLiteral("thumbnailPreviewRenderMode"),
       QStringLiteral("layer_thumbnail_raster"));
   thumbnail_metadata.insert(QStringLiteral("thumbnailMasked"), false);
   thumbnail_metadata.insert(QStringLiteral("thumbnailMaskSetId"), QString());
+  for (auto it = source_metadata.cbegin(); it != source_metadata.cend(); ++it) {
+    thumbnail_metadata.insert(it.key(), it.value());
+  }
 
   layer.insert(QStringLiteral("thumbnailSource"), thumbnail_source);
   layer.insert(QStringLiteral("thumbnailReady"), true);
@@ -829,6 +971,11 @@ QVariantMap rendered_non_adjustment_photo_layer_thumbnail_entry(
       &layer,
       request.job.job_id,
       QStringLiteral("non-adjustment-photo-layer"),
+      layer_timer.elapsed());
+  insert_thumbnail_job_fields(
+      &layer,
+      request,
+      QStringLiteral("photo_layer_thumbnail"),
       layer_timer.elapsed());
   return layer;
 }
@@ -936,6 +1083,11 @@ QVariantMap rendered_mask_source_thumbnail_entry(
       request.job.job_id,
       QStringLiteral("mask-source"),
       timer.elapsed());
+  insert_thumbnail_job_fields(
+      &entry,
+      request,
+      QStringLiteral("mask_thumbnail"),
+      timer.elapsed());
   return entry;
 }
 
@@ -1041,6 +1193,11 @@ QVariantMap rendered_mask_set_thumbnail_entry(
       request.job.job_id,
       QStringLiteral("mask-set"),
       timer.elapsed());
+  insert_thumbnail_job_fields(
+      &entry,
+      request,
+      QStringLiteral("mask_thumbnail"),
+      timer.elapsed());
   return entry;
 }
 
@@ -1081,7 +1238,8 @@ ThumbnailRefreshQueueResult compute_thumbnail_refresh_queue_result(
       } else {
         entry = rendered_non_adjustment_photo_layer_thumbnail_entry(
             layer,
-            request);
+            request,
+            renderers.source_layer_thumbnail);
       }
       const auto cache_key = entry.value(QStringLiteral("thumbnailCacheKey")).toString();
       if (!cache_key.isEmpty()) {
@@ -1098,6 +1256,26 @@ ThumbnailRefreshQueueResult compute_thumbnail_refresh_queue_result(
       result.photo_layer_thumbnail_entries.size());
   result.mask_thumbnail_entry_count = static_cast<int>(
       result.mask_thumbnail_entries.size());
+  auto expected_mask_entries = 0;
+  for (const auto& value : request.mask_sets) {
+    const auto sources = value.toMap().value(QStringLiteral("sources")).toList();
+    expected_mask_entries += sources.size();
+    if (!sources.isEmpty()) {
+      ++expected_mask_entries;
+    }
+  }
+  result.mask_thumbnail_failed = request.mask_thumbnail_dirty &&
+                                 expected_mask_entries > 0 &&
+                                 result.mask_thumbnail_entry_count < expected_mask_entries;
+  result.photo_layer_thumbnail_failed = request.photo_layer_thumbnail_dirty &&
+                                        !request.photo_layers.isEmpty() &&
+                                        result.photo_layer_thumbnail_entry_count <
+                                            request.photo_layers.size();
+  if (result.mask_thumbnail_failed || result.photo_layer_thumbnail_failed) {
+    result.failure_stage = QStringLiteral("thumbnail_source_decode");
+    result.failure_detail = QStringLiteral(
+        "Thumbnail worker could not decode or render every requested entry.");
+  }
   for (auto iterator = result.photo_layer_thumbnail_entries.begin();
        iterator != result.photo_layer_thumbnail_entries.end();
        ++iterator) {
@@ -1117,7 +1295,9 @@ ThumbnailRefreshQueueResult compute_thumbnail_refresh_queue_result(
     iterator.value() = entry;
   }
   result.cancelled = thumbnail_refresh_cancelled(request);
-  result.success = !result.cancelled;
+  result.success = !result.cancelled &&
+                   !result.mask_thumbnail_failed &&
+                   !result.photo_layer_thumbnail_failed;
   result.elapsed_ms = timer.elapsed();
   return result;
 }

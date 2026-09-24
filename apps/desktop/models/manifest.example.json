@@ -1,16 +1,19 @@
 {
-  "selection": {
-    "name": "sam2.1_hiera_tiny",
-    "format": "onnx",
-    "path": "selection/sam2.1_hiera_tiny.onnx",
-    "license": "Apache-2.0",
-    "sha256": "replace-with-release-checksum"
-  },
-  "inpaint": {
-    "name": "lama",
-    "format": "onnx",
-    "path": "inpaint/lama.onnx",
-    "license": "Apache-2.0",
-    "sha256": "replace-with-release-checksum"
-  }
+  "schema": "framehouse-ai-model-bundle-v1",
+  "version": 1,
+  "artifacts": [
+    {
+      "id": "opencv-inpainting-lama-2025jan",
+      "role": "inpaint",
+      "contract": "opencv-lama-image-mask-nchw-float32-512-v1",
+      "path": "inpaint/lama.onnx",
+      "bytes": 92591623,
+      "sha256": "7df918ac3921d3daf0aae1d219776cf0dc4e4935f035af81841b40adcf74fdf2",
+      "sourceUrl": "https://huggingface.co/opencv/inpainting_lama/blob/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/inpainting_lama_2025jan.onnx",
+      "license": {
+        "name": "Apache-2.0",
+        "url": "https://huggingface.co/opencv/inpainting_lama/blob/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/LICENSE"
+      }
+    }
+  ]
 }

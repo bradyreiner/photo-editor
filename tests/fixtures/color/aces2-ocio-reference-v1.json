@@ -1,0 +1,14 @@
+{
+  "built_in_config": "cg-config-v4.0.0_aces-v2.0_ocio-v2.5",
+  "comparison_encoding": "linear sRGB decoded from the OCIO display-view output",
+  "config_cache_id": "351c1452fc2bde6177841947c5fce086:6001c324468d497f99aa06d3014798d8",
+  "csv_sha256": "d0305b67a3b1dbb5db5d4f23f61190fc738da6eeee68cb7c3ce49ceead4968de",
+  "display": "sRGB - Display",
+  "generator": "tests/generate_aces2_ocio_reference.py",
+  "ocio_version": "2.5.1",
+  "patch_count": 600,
+  "processor_cache_id": "46f84ce1bd1216d9ee4839b31026c167",
+  "schema": "aces2-ocio-reference:v1",
+  "source_color_space": "ACES2065-1",
+  "view": "ACES 2.0 - SDR 100 nits (Rec.709)"
+}

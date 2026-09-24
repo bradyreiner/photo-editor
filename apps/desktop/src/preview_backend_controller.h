@@ -18,6 +18,8 @@ class PreviewBackendController final : public QObject {
   Q_PROPERTY(bool metalAvailable READ metalAvailable NOTIFY backendChanged)
   Q_PROPERTY(bool cudaAvailable READ cudaAvailable NOTIFY backendChanged)
   Q_PROPERTY(bool gpuAvailable READ gpuAvailable NOTIFY backendChanged)
+  Q_PROPERTY(QString metalUnavailableReason READ metalUnavailableReason NOTIFY backendChanged)
+  Q_PROPERTY(QString cudaUnavailableReason READ cudaUnavailableReason NOTIFY backendChanged)
 
  public:
   explicit PreviewBackendController(QObject* parent = nullptr);
@@ -30,6 +32,8 @@ class PreviewBackendController final : public QObject {
   [[nodiscard]] bool metalAvailable() const;
   [[nodiscard]] bool cudaAvailable() const;
   [[nodiscard]] bool gpuAvailable() const;
+  [[nodiscard]] QString metalUnavailableReason() const;
+  [[nodiscard]] QString cudaUnavailableReason() const;
 
   void setPreferredBackend(const QString& preferred_backend);
 

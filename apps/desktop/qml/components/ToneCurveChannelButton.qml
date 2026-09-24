@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 
 Item {
     id: root
@@ -15,7 +14,7 @@ Item {
     readonly property string toneCurveChannelButtonContract: "tone-curve-channel-button:v1|selected-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
-    implicitHeight: 24
+    implicitHeight: 34
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.channelName.length > 0 ? root.channelName + " curve channel" : "Curve channel"
@@ -27,15 +26,14 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius6
+        radius: theme.radius8
         color: root.selected
-               ? theme.alpha(root.accent, 0.09)
+               ? theme.editorSelectionFill
                : (channelMouse.containsMouse || root.activeFocus
-                  ? theme.alpha(theme.glassLift, 0.30)
-                  : theme.alpha(theme.ink950, 0.30))
-        border.width: root.activeFocus ? 2 : 0
-        border.color: root.activeFocus
-                      ? theme.focusRing
+                  ? theme.alpha(theme.glassLift, 0.42)
+                  : theme.alpha(theme.glassBase, 0.54))
+        border.width: root.activeFocus || root.selected ? 1 : 0
+        border.color: root.activeFocus || root.selected ? theme.controlEdge
                       : "transparent"
     }
 
@@ -48,7 +46,7 @@ Item {
         text: root.channelName
         color: root.selected ? theme.textStrong : (channelMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
         font.family: theme.fontUi
-        font.pixelSize: 9
+        font.pixelSize: theme.typeControl
         font.weight: Font.DemiBold
         font.letterSpacing: 0
         horizontalAlignment: Text.AlignHCenter
@@ -56,16 +54,7 @@ Item {
         maximumLineCount: 1
         elide: Text.ElideNone
         fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: 7
-    }
-
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 1
-        visible: root.selected
-        color: root.accent
+        minimumPixelSize: 9
     }
 
     MouseArea {
@@ -76,8 +65,11 @@ Item {
         onClicked: root.selectedRequested(root.channelName)
     }
 
-    ToolTip.visible: channelMouse.containsMouse && root.channelName.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: 2600
-    ToolTip.text: root.channelName + " curve channel"
+    AppToolTip {
+        targetItem: root
+        visible: channelMouse.containsMouse && root.channelName.length > 0
+        delay: 350
+        timeout: 2600
+        text: root.channelName + " curve channel"
+    }
 }

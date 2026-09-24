@@ -1,4 +1,4 @@
-function(virel_dereference_deployed_qml_plugins bundle_name)
+function(framehouse_dereference_deployed_qml_plugins bundle_name)
   if(NOT APPLE)
     return()
   endif()

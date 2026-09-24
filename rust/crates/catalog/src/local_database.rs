@@ -23,8 +23,8 @@ const LOCAL_POSTGRES_DATA_DIR: &str = "data";
 const LOCAL_POSTGRES_LOG_DIR: &str = "logs";
 const LOCAL_POSTGRES_LOG_FILE: &str = "postgres.log";
 const LOCAL_POSTGRES_STATE_FILE: &str = "state.json";
+const LOCAL_POSTGRES_LEGACY_CREDENTIAL_FILE: &str = ".credential";
 const LOCAL_POSTGRES_STATE_VERSION: u32 = 2;
-const LOCAL_POSTGRES_KEYRING_SERVICE: &str = "com.virel.studio.local-postgres";
 const LOCAL_DATABASE_HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(750);
 
 type LocalDatabaseResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -167,6 +167,203 @@ impl LocalCatalogDatabaseManager {
         Ok(())
     }
 
+    pub async fn backup_to(&self, destination: &Path) -> LocalDatabaseResult<()> {
+        if destination.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "PostgreSQL backup destination already exists: {}",
+                    destination.display()
+                ),
+            )
+            .into());
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let database_url = self.ensure_ready_database_url().await?;
+        self.write_backup_archive(&database_url, destination)
+    }
+
+    fn write_backup_archive(
+        &self,
+        database_url: &str,
+        destination: &Path,
+    ) -> LocalDatabaseResult<()> {
+        let mut command = Command::new(self.postgres_executable("pg_dump"));
+        command
+            .arg("--format=custom")
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            .arg("--dbname")
+            .arg(database_url)
+            .arg("--file")
+            .arg(destination.with_extension("dump.partial"));
+        self.publish_backup_archive(destination, command, "pg_dump failed")
+    }
+
+    fn publish_backup_archive(
+        &self,
+        destination: &Path,
+        mut command: Command,
+        failure_context: &str,
+    ) -> LocalDatabaseResult<()> {
+        if destination.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "PostgreSQL backup destination already exists: {}",
+                    destination.display()
+                ),
+            )
+            .into());
+        }
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let partial_path = destination.with_extension("dump.partial");
+        if partial_path.exists() {
+            fs::remove_file(&partial_path)?;
+        }
+        apply_runtime_environment(&mut command);
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = fs::remove_file(&partial_path);
+                return Err(error.into());
+            }
+        };
+        if !output.status.success() {
+            let _ = fs::remove_file(&partial_path);
+            return Err(io::Error::other(format!(
+                "{failure_context}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+            .into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) =
+                fs::set_permissions(&partial_path, fs::Permissions::from_mode(0o600))
+            {
+                let _ = fs::remove_file(&partial_path);
+                return Err(error.into());
+            }
+        }
+        if let Err(error) = fs::hard_link(&partial_path, destination) {
+            let _ = fs::remove_file(&partial_path);
+            if destination.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!(
+                        "PostgreSQL backup destination already exists: {}",
+                        destination.display()
+                    ),
+                )
+                .into());
+            }
+            return Err(error.into());
+        }
+        let _ = fs::remove_file(&partial_path);
+        Ok(())
+    }
+
+    pub async fn backup_now(&self) -> LocalDatabaseResult<PathBuf> {
+        self.runtime_paths.ensure_directories()?;
+        let destination = self
+            .runtime_paths
+            .backup_dir
+            .join(format!("catalog-manual-{}.dump", backup_timestamp()?));
+        self.backup_to(&destination).await?;
+        Ok(destination)
+    }
+
+    pub async fn restore_latest_backup(&self) -> LocalDatabaseResult<PathBuf> {
+        if std::env::var("PHOTO_EDITOR_DATABASE_URL").is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "automatic restore is disabled for an external PostgreSQL server; use an administrator-reviewed pg_restore workflow",
+            )
+            .into());
+        }
+        self.runtime_paths.ensure_directories()?;
+        let candidate =
+            latest_restorable_backup(&self.runtime_paths.backup_dir)?.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no PostgreSQL catalog backup is available to restore",
+                )
+            })?;
+        self.validate_backup(&candidate)?;
+
+        let database_url = self.ensure_ready_database_url().await?;
+        let safety_backup = self
+            .runtime_paths
+            .backup_dir
+            .join(format!("pre-restore-{}.dump", backup_timestamp()?));
+        self.backup_to(&safety_backup).await?;
+
+        if let Err(restore_error) = self.restore_from(&database_url, &candidate) {
+            let rollback_result = self.restore_from(&database_url, &safety_backup);
+            return match rollback_result {
+                Ok(()) => Err(io::Error::other(format!(
+                    "PostgreSQL restore failed and the pre-restore safety backup was reapplied: {restore_error}"
+                ))
+                .into()),
+                Err(rollback_error) => Err(io::Error::other(format!(
+                    "PostgreSQL restore failed ({restore_error}) and rollback also failed ({rollback_error}); safety backup: {}",
+                    safety_backup.display()
+                ))
+                .into()),
+            };
+        }
+
+        ensure_external_database_ready(&database_url).await?;
+        Ok(candidate)
+    }
+
+    fn validate_backup(&self, backup: &Path) -> LocalDatabaseResult<()> {
+        let mut command = Command::new(self.postgres_executable("pg_restore"));
+        command.arg("--list").arg(backup);
+        apply_runtime_environment(&mut command);
+        let output = command.output()?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "PostgreSQL backup validation failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        )
+        .into())
+    }
+
+    fn restore_from(&self, database_url: &str, backup: &Path) -> LocalDatabaseResult<()> {
+        let mut command = Command::new(self.postgres_executable("pg_restore"));
+        command
+            .arg("--clean")
+            .arg("--if-exists")
+            .arg("--exit-on-error")
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            .arg("--dbname")
+            .arg(database_url)
+            .arg(backup);
+        apply_runtime_environment(&mut command);
+        let output = command.output()?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(io::Error::other(format!(
+            "pg_restore failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+        .into())
+    }
+
     fn service_root(&self) -> PathBuf {
         self.runtime_paths.app_data_dir.join(LOCAL_POSTGRES_DIR)
     }
@@ -187,15 +384,33 @@ impl LocalCatalogDatabaseManager {
         self.service_root().join(LOCAL_POSTGRES_STATE_FILE)
     }
 
+    fn legacy_credential_file_path(&self) -> PathBuf {
+        self.service_root()
+            .join(LOCAL_POSTGRES_LEGACY_CREDENTIAL_FILE)
+    }
+
     async fn ensure_local_database_ready(&self) -> LocalDatabaseResult<LocalPostgresState> {
         fs::create_dir_all(self.service_root())?;
         fs::create_dir_all(self.cluster_log_dir())?;
 
-        let state = self.load_or_create_state()?;
+        let mut state = self.load_or_create_state()?;
         self.initialize_cluster_if_needed(&state)?;
 
+        state = self.recover_legacy_credential_if_needed(state).await?;
         if !database_healthcheck(&state.maintenance_database_url()).await {
-            self.start_cluster(&state)?;
+            // A short SQL probe can time out under load while the postmaster is
+            // healthy. Do not try to start a second server in its data directory.
+            // The normal catalog connection below still validates credentials
+            // and database readiness; a running process alone is not success.
+            let status = Command::new(self.postgres_executable("pg_ctl"))
+                .arg("-D")
+                .arg(self.cluster_data_dir())
+                .arg("status")
+                .output()?;
+            if !status.status.success() {
+                self.start_cluster(&state)?;
+                state = self.recover_legacy_credential_if_needed(state).await?;
+            }
         }
 
         self.ensure_database_exists(&state).await?;
@@ -205,7 +420,8 @@ impl LocalCatalogDatabaseManager {
             max_connections: 2,
         };
         let catalog = CatalogService::connect(&config).await?;
-        self.backup_before_schema_migration(&state, &catalog).await?;
+        self.backup_before_schema_migration(&state, &catalog)
+            .await?;
         catalog.initialize_schema().await?;
         catalog.healthcheck().await?;
 
@@ -255,15 +471,13 @@ impl LocalCatalogDatabaseManager {
             return Ok(());
         }
 
-        let timestamp = OffsetDateTime::now_utc()
-            .format(&time::macros::format_description!(
-                "[year][month][day]T[hour][minute][second]Z"
-            ))?;
+        let timestamp = OffsetDateTime::now_utc().format(&time::macros::format_description!(
+            "[year][month][day]T[hour][minute][second]Z"
+        ))?;
         let final_path = self
             .runtime_paths
             .backup_dir
             .join(format!("{backup_prefix}{timestamp}.dump"));
-        let partial_path = final_path.with_extension("dump.partial");
         let mut command = Command::new(self.postgres_executable("pg_dump"));
         command
             .arg("--format=custom")
@@ -278,26 +492,13 @@ impl LocalCatalogDatabaseManager {
             .arg("--dbname")
             .arg(&state.database_name)
             .arg("--file")
-            .arg(&partial_path)
+            .arg(final_path.with_extension("dump.partial"))
             .env("PGPASSWORD", &state.password);
-        apply_runtime_environment(&mut command);
-        let output = command.output()?;
-        if !output.status.success() {
-            let _ = fs::remove_file(&partial_path);
-            return Err(io::Error::other(format!(
-                "pg_dump failed before catalog migration: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ))
-            .into());
-        }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&partial_path, fs::Permissions::from_mode(0o600))?;
-        }
-        fs::rename(partial_path, final_path)?;
-        Ok(())
+        self.publish_backup_archive(
+            &final_path,
+            command,
+            "pg_dump failed before catalog migration",
+        )
     }
 
     async fn ensure_database_exists(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
@@ -380,7 +581,16 @@ impl LocalCatalogDatabaseManager {
     fn load_or_create_state(&self) -> LocalDatabaseResult<LocalPostgresState> {
         match self.load_state() {
             Ok(state) => Ok(state),
-            Err(_) => {
+            Err(error) => {
+                if self.cluster_data_dir().join("PG_VERSION").exists() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "managed PostgreSQL state is invalid for an existing catalog; refusing to generate replacement authority: {error}"
+                        ),
+                    )
+                    .into());
+                }
                 let state = LocalPostgresState {
                     version: LOCAL_POSTGRES_STATE_VERSION,
                     host: LOCAL_DATABASE_HOST.to_string(),
@@ -401,31 +611,51 @@ impl LocalCatalogDatabaseManager {
         let contents = fs::read_to_string(self.state_file_path())?;
         let mut state: LocalPostgresState = serde_json::from_str(&contents)?;
         if state.password.is_empty() {
-            state.password = keyring::Entry::new(
-                LOCAL_POSTGRES_KEYRING_SERVICE,
-                &state.database_name,
-            )?
-            .get_password()?;
-            if state.version < LOCAL_POSTGRES_STATE_VERSION {
-                state.version = LOCAL_POSTGRES_STATE_VERSION;
-                self.save_state(&state)?;
-            }
-        } else {
-            // One-time migration from private-alpha state files. Move the
-            // credential into the platform keychain and immediately rewrite
-            // the file without the secret.
-            state.version = LOCAL_POSTGRES_STATE_VERSION;
-            self.save_state(&state)?;
+            state.password = self.read_legacy_credential()?;
         }
         Ok(state)
     }
 
+    fn read_legacy_credential(&self) -> LocalDatabaseResult<String> {
+        let credential = fs::read_to_string(self.legacy_credential_file_path())?
+            .trim()
+            .to_string();
+        if credential.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "managed PostgreSQL legacy credential file is empty",
+            )
+            .into());
+        }
+        Ok(credential)
+    }
+
+    async fn recover_legacy_credential_if_needed(
+        &self,
+        state: LocalPostgresState,
+    ) -> LocalDatabaseResult<LocalPostgresState> {
+        if database_healthcheck(&state.maintenance_database_url()).await {
+            return Ok(state);
+        }
+
+        let legacy_credential = match self.read_legacy_credential() {
+            Ok(credential) if credential != state.password => credential,
+            Ok(_) | Err(_) => return Ok(state),
+        };
+        let mut recovered = state.clone();
+        recovered.password = legacy_credential;
+        if !database_healthcheck(&recovered.maintenance_database_url()).await {
+            return Ok(state);
+        }
+
+        recovered.version = LOCAL_POSTGRES_STATE_VERSION;
+        self.save_state(&recovered)?;
+        Ok(recovered)
+    }
+
     fn save_state(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
-        keyring::Entry::new(LOCAL_POSTGRES_KEYRING_SERVICE, &state.database_name)?
-            .set_password(&state.password)?;
-        let mut persisted_state = state.clone();
-        persisted_state.password.clear();
-        let json = serde_json::to_string_pretty(&persisted_state)?;
+        // The database listens only on loopback and this credential file is owner-only.
+        let json = serde_json::to_string_pretty(state)?;
         write_secret_file(&self.state_file_path(), &json)?;
         Ok(())
     }
@@ -461,6 +691,34 @@ impl LocalCatalogDatabaseManager {
         ))
         .into())
     }
+}
+
+fn backup_timestamp() -> LocalDatabaseResult<String> {
+    Ok(
+        OffsetDateTime::now_utc().format(&time::macros::format_description!(
+            "[year][month][day]T[hour][minute][second][subsecond digits:3]Z"
+        ))?,
+    )
+}
+
+fn latest_restorable_backup(backup_dir: &Path) -> LocalDatabaseResult<Option<PathBuf>> {
+    let mut candidates = fs::read_dir(backup_dir)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !entry.file_type().ok()?.is_file()
+                || !name.ends_with(".dump")
+                || name.starts_with("pre-restore-")
+            {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    Ok(candidates.into_iter().next().map(|(_, path)| path))
 }
 
 pub async fn ensure_external_database_ready(database_url: &str) -> LocalDatabaseResult<()> {
@@ -642,6 +900,12 @@ fn quote_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn environment_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn local_state_builds_expected_urls() {
@@ -673,6 +937,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn legacy_owner_only_credential_recovers_passwordless_state() {
+        let root = tempfile::tempdir().unwrap();
+        let app_data_dir = root.path().join("app-data");
+        let service_root = app_data_dir.join(LOCAL_POSTGRES_DIR);
+        fs::create_dir_all(&service_root).unwrap();
+        fs::write(
+            service_root.join(LOCAL_POSTGRES_STATE_FILE),
+            r#"{
+  "version": 4,
+  "host": "127.0.0.1",
+  "port": 15432,
+  "database_name": "photo_editor",
+  "user_name": "photo_editor",
+  "initialized_at": "2026-03-26T00:00:00Z"
+}"#,
+        )
+        .unwrap();
+        write_secret_file(
+            &service_root.join(LOCAL_POSTGRES_LEGACY_CREDENTIAL_FILE),
+            "recovered-secret\n",
+        )
+        .unwrap();
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir,
+                log_dir: root.path().join("logs"),
+                backup_dir: root.path().join("backups"),
+            },
+        };
+
+        let state = manager.load_state().unwrap();
+        assert_eq!(state.version, 4);
+        assert_eq!(state.password, "recovered-secret");
+        assert_eq!(state.port, 15432);
+    }
+
+    #[test]
+    fn invalid_state_cannot_replace_existing_postgres_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let app_data_dir = root.path().join("app-data");
+        let service_root = app_data_dir.join(LOCAL_POSTGRES_DIR);
+        let data_dir = service_root.join(LOCAL_POSTGRES_DATA_DIR);
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("PG_VERSION"), "14\n").unwrap();
+        let invalid_state_path = service_root.join(LOCAL_POSTGRES_STATE_FILE);
+        fs::write(&invalid_state_path, "{ invalid state").unwrap();
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir,
+                log_dir: root.path().join("logs"),
+                backup_dir: root.path().join("backups"),
+            },
+        };
+
+        let error = manager.load_or_create_state().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("refusing to generate replacement authority"));
+        assert_eq!(
+            fs::read_to_string(invalid_state_path).unwrap(),
+            "{ invalid state"
+        );
+    }
+
     #[tokio::test]
     async fn local_healthcheck_fails_fast_for_unavailable_database() {
         let started_at = std::time::Instant::now();
@@ -687,5 +1016,191 @@ mod tests {
             started_at.elapsed() < Duration::from_secs(2),
             "healthcheck should not wait for SQLx's default connection timeout"
         );
+    }
+
+    #[test]
+    fn restore_selection_uses_latest_normal_dump_and_excludes_safety_snapshots() {
+        let directory = tempfile::tempdir().unwrap();
+        let older = directory.path().join("catalog-manual-older.dump");
+        fs::write(&older, b"older").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let safety = directory.path().join("pre-restore-newer.dump");
+        fs::write(&safety, b"safety").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let latest = directory.path().join("pre-recipe-migration-latest.dump");
+        fs::write(&latest, b"latest").unwrap();
+        fs::write(directory.path().join("ignored.dump.partial"), b"partial").unwrap();
+
+        assert_eq!(
+            latest_restorable_backup(directory.path()).unwrap(),
+            Some(latest)
+        );
+    }
+
+    #[test]
+    fn restore_selection_returns_none_when_only_safety_or_partial_files_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("pre-restore-only.dump"), b"safety").unwrap();
+        fs::write(directory.path().join("catalog.dump.partial"), b"partial").unwrap();
+
+        assert_eq!(latest_restorable_backup(directory.path()).unwrap(), None);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // Serializes process-wide environment mutation through await.
+    async fn automatic_restore_refuses_external_postgresql_before_touching_the_server() {
+        let _lock = environment_lock();
+        let previous_database_url = std::env::var_os("PHOTO_EDITOR_DATABASE_URL");
+        std::env::set_var(
+            "PHOTO_EDITOR_DATABASE_URL",
+            "postgresql://administrator:secret@database.example/catalog",
+        );
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir: tempfile::tempdir().unwrap().path().join("app-data"),
+                log_dir: tempfile::tempdir().unwrap().path().join("logs"),
+                backup_dir: tempfile::tempdir().unwrap().path().join("backups"),
+            },
+        };
+
+        let error = manager.restore_latest_backup().await.unwrap_err();
+        match previous_database_url {
+            Some(value) => std::env::set_var("PHOTO_EDITOR_DATABASE_URL", value),
+            None => std::env::remove_var("PHOTO_EDITOR_DATABASE_URL"),
+        }
+
+        assert!(error.to_string().contains("external PostgreSQL server"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_backup_removes_partial_archive_and_never_publishes_destination() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = environment_lock();
+        let root = tempfile::tempdir().unwrap();
+        let bin_dir = root.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let pg_dump = bin_dir.join("pg_dump");
+        fs::write(
+            &pg_dump,
+            "#!/bin/sh\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = '--file' ]; then\n    printf 'incomplete archive' > \"$argument\"\n  fi\n  previous=\"$argument\"\ndone\necho 'simulated interrupted dump' >&2\nexit 23\n",
+        )
+        .unwrap();
+        fs::set_permissions(&pg_dump, fs::Permissions::from_mode(0o700)).unwrap();
+        let previous_bin_dir = std::env::var_os(POSTGRES_BIN_DIR_ENV);
+        std::env::set_var(POSTGRES_BIN_DIR_ENV, &bin_dir);
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir: root.path().join("app-data"),
+                log_dir: root.path().join("logs"),
+                backup_dir: root.path().join("backups"),
+            },
+        };
+        let destination = root.path().join("backups/catalog.dump");
+
+        let error = manager
+            .write_backup_archive("postgresql://unused", &destination)
+            .unwrap_err();
+        match previous_bin_dir {
+            Some(value) => std::env::set_var(POSTGRES_BIN_DIR_ENV, value),
+            None => std::env::remove_var(POSTGRES_BIN_DIR_ENV),
+        }
+
+        assert!(error.to_string().contains("simulated interrupted dump"));
+        assert!(!destination.exists());
+        assert!(!destination.with_extension("dump.partial").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_backup_is_owner_only_atomically_published_and_never_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = environment_lock();
+        let root = tempfile::tempdir().unwrap();
+        let bin_dir = root.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let pg_dump = bin_dir.join("pg_dump");
+        fs::write(
+            &pg_dump,
+            "#!/bin/sh\nprevious=''\nfor argument in \"$@\"; do\n  if [ \"$previous\" = '--file' ]; then\n    printf 'complete custom archive' > \"$argument\"\n  fi\n  previous=\"$argument\"\ndone\n",
+        )
+        .unwrap();
+        fs::set_permissions(&pg_dump, fs::Permissions::from_mode(0o700)).unwrap();
+        let previous_bin_dir = std::env::var_os(POSTGRES_BIN_DIR_ENV);
+        std::env::set_var(POSTGRES_BIN_DIR_ENV, &bin_dir);
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir: root.path().join("app-data"),
+                log_dir: root.path().join("logs"),
+                backup_dir: root.path().join("backups"),
+            },
+        };
+        let destination = root.path().join("backups/catalog.dump");
+
+        manager
+            .write_backup_archive("postgresql://unused", &destination)
+            .unwrap();
+        let original = fs::read(&destination).unwrap();
+        let second_error = manager
+            .write_backup_archive("postgresql://unused", &destination)
+            .unwrap_err();
+        match previous_bin_dir {
+            Some(value) => std::env::set_var(POSTGRES_BIN_DIR_ENV, value),
+            None => std::env::remove_var(POSTGRES_BIN_DIR_ENV),
+        }
+
+        assert_eq!(original, b"complete custom archive");
+        assert_eq!(fs::read(&destination).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            second_error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert!(!destination.with_extension("dump.partial").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn corrupt_dump_fails_validation_without_running_a_restore() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = environment_lock();
+        let root = tempfile::tempdir().unwrap();
+        let bin_dir = root.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let pg_restore = bin_dir.join("pg_restore");
+        fs::write(
+            &pg_restore,
+            "#!/bin/sh\necho 'invalid custom archive' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&pg_restore, fs::Permissions::from_mode(0o700)).unwrap();
+        let corrupt_dump = root.path().join("corrupt.dump");
+        fs::write(&corrupt_dump, b"not a PostgreSQL custom archive").unwrap();
+        let previous_bin_dir = std::env::var_os(POSTGRES_BIN_DIR_ENV);
+        std::env::set_var(POSTGRES_BIN_DIR_ENV, &bin_dir);
+        let manager = LocalCatalogDatabaseManager {
+            runtime_paths: AppRuntimePaths {
+                app_data_dir: root.path().join("app-data"),
+                log_dir: root.path().join("logs"),
+                backup_dir: root.path().join("backups"),
+            },
+        };
+
+        let error = manager.validate_backup(&corrupt_dump).unwrap_err();
+        match previous_bin_dir {
+            Some(value) => std::env::set_var(POSTGRES_BIN_DIR_ENV, value),
+            None => std::env::remove_var(POSTGRES_BIN_DIR_ENV),
+        }
+
+        assert!(error
+            .to_string()
+            .contains("PostgreSQL backup validation failed"));
+        assert!(error.to_string().contains("invalid custom archive"));
     }
 }

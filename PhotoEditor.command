@@ -4,4 +4,4 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-exec "${SCRIPT_DIR}/scripts/run-native.sh"
+exec "${SCRIPT_DIR}/scripts/run-native.sh" "$@"

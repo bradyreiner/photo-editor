@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 Item {
     id: root
@@ -15,7 +15,7 @@ Item {
     readonly property string toneCurvePresetButtonContract: "tone-curve-preset-button:v1|preview-hover:true|select:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
-    implicitHeight: 24
+    implicitHeight: 30
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.presetName.length > 0 ? root.presetName + " curve preset" : "Curve preset"
@@ -26,10 +26,10 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius6
+        radius: theme.radius8
         color: presetMouse.containsMouse || root.activeFocus
-               ? theme.alpha(theme.glassLift, 0.30)
-               : theme.alpha(theme.ink950, 0.30)
+               ? theme.alpha(theme.glassLift, 0.42)
+               : theme.alpha(theme.glassBase, 0.54)
         border.width: root.activeFocus ? 2 : 0
         border.color: root.activeFocus ? theme.focusRing : "transparent"
     }
@@ -43,7 +43,7 @@ Item {
         text: root.presetName
         color: presetMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted
         font.family: theme.fontUi
-        font.pixelSize: 9
+        font.pixelSize: theme.typeCaption
         font.weight: Font.DemiBold
         font.letterSpacing: 0
         horizontalAlignment: Text.AlignHCenter
@@ -51,7 +51,7 @@ Item {
         maximumLineCount: 1
         elide: Text.ElideNone
         fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: 7
+        minimumPixelSize: 8
     }
 
     MouseArea {

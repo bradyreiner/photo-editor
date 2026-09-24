@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -9,10 +9,10 @@ Rectangle {
     required property string title
     property string subtitle: ""
     property color accent: theme.accentWarm400
-    property bool showAccentMarker: true
-    property bool uppercaseTitle: true
-    property string titleFontFamily: theme.fontMono
-    property int titlePixelSize: 10
+    property bool showAccentMarker: false
+    property bool uppercaseTitle: false
+    property string titleFontFamily: theme.fontUi
+    property int titlePixelSize: theme.typeLabel
     property int titleWeight: Font.DemiBold
     property real titleLetterSpacing: 0
     property string disabledReason: ""
@@ -55,6 +55,7 @@ Rectangle {
 
     signal toggled()
     signal beforeAfterRequested()
+    signal beforeAfterHoldRequested(bool held)
     signal resetRequested()
     signal menuItemTriggered(string key)
 
@@ -185,7 +186,30 @@ Rectangle {
                         enabled: root.enabled
                         accent: root.accent
                         tooltipText: root.beforeAfterTooltip
-                        onClicked: root.beforeAfterRequested()
+                        property bool heldComparison: false
+                        property bool suppressComparisonClick: false
+                        onPressed: suppressComparisonClick = false
+                        onPressAndHold: {
+                            heldComparison = true
+                            suppressComparisonClick = true
+                            root.beforeAfterHoldRequested(true)
+                        }
+                        onReleased: {
+                            if (heldComparison) {
+                                heldComparison = false
+                                root.beforeAfterHoldRequested(false)
+                            }
+                        }
+                        onCanceled: {
+                            if (heldComparison) {
+                                heldComparison = false
+                                root.beforeAfterHoldRequested(false)
+                            }
+                        }
+                        onClicked: {
+                            if (!suppressComparisonClick)
+                                root.beforeAfterRequested()
+                        }
                     }
 
                     Components.ActionButton {
@@ -208,6 +232,7 @@ Rectangle {
                         visible: root.menuActions.length > 0
                         Layout.preferredHeight: theme.controlHeightDense
                         text: "More"
+                        primaryOpensMenu: true
                         iconName: "menu"
                         compact: true
                         enabled: root.enabled

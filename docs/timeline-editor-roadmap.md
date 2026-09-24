@@ -1,27 +1,31 @@
 # Timeline Editor Roadmap
 
+## Active milestone
+
+The active milestone is the proof-gated [Timeline MVP Checklist](timeline-mvp-checklist.md): a 15-capability workflow for producing a publishable 30–60 second social video. The professional material below is architectural direction and post-MVP scope; it must not expand the MVP release gate.
+
 ## Goal
 
-Turn the current single-track timeline into a dedicated video editing workspace with a credible professional workflow.
+Ship a fast, trustworthy social-video timeline whose Program Monitor, saved state, reopened state, and MP4 export agree. Preserve an architecture that can grow into professional workflows after the MVP gate passes.
 
 ## Current baseline
 
-The app already supports:
+The app now has a dedicated Timeline workspace and a track-based sequence model. It supports:
 
-- loading and saving timeline documents
-- adding gallery videos as clips
-- selecting, trimming, splitting, reordering, and removing clips
-- sequence playback and timeline render export
+- source and program monitoring
+- a resizable monitor/timeline workspace with usable collapsible Source and Inspector panels
+- paired multitrack video/audio lanes with targeting, lock, mute, solo, and visibility state
+- insert, overwrite, lift, extract, ripple trim, razor, roll, slip, and slide edits
+- magnetic clip-edge and playhead snapping with visible feedback
+- cached audio waveforms, clip fades/gain, transitions, effects, framing, opacity, and playback rate
+- markers with notes, status, completion, filtering, and search
+- undo/redo, native playback, save/load, render export, and queued job status
 
-The current gaps are structural:
-
-- timeline editing still lives inside the shared Sequence workspace
-- the document model is a flat clip list rather than tracks and clip instances
-- the UI is a clip strip, not a real multitrack timeline canvas
+The main gap is no longer the workspace scaffold. It is professional depth: reliable high-performance playback, real animation/keyframes, proxies and render caching, captions/transcripts, and finishing-grade audio and delivery workflows.
 
 ## Product target
 
-The first serious milestone is workflow parity for short-form editing, not full Resolve or Premiere feature parity.
+The first serious milestone is a best-in-class short-form and internet-video workflow, with an architecture that can grow into longer-form professional work.
 
 That means:
 

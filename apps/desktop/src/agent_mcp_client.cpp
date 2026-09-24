@@ -73,6 +73,10 @@ void AgentMcpClient::setEndpoint(const QString& endpoint) {
   endpoint_ = endpoint.trimmed();
 }
 
+void AgentMcpClient::setBearerToken(const QString& token) {
+  bearer_token_ = token.trimmed();
+}
+
 int AgentMcpClient::timeoutMs() const {
   return timeout_ms_;
 }
@@ -228,6 +232,9 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
       (url.host() != QStringLiteral("127.0.0.1") && url.host() != QStringLiteral("localhost"))) {
     return http_error(QStringLiteral("MCP client only connects to local http endpoints."));
   }
+  if (bearer_token_.isEmpty()) {
+    return http_error(QStringLiteral("MCP capability token is required."));
+  }
 
   QTcpSocket socket;
   socket.connectToHost(url.host(), static_cast<quint16>(url.port()));
@@ -246,7 +253,10 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
   http_request.append(url.host().toUtf8());
   http_request.append(':');
   http_request.append(QByteArray::number(url.port()));
-  http_request.append("\r\nOrigin: http://127.0.0.1\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: ");
+  http_request.append("\r\nAuthorization: Bearer ");
+  http_request.append(bearer_token_.toUtf8());
+  http_request.append("\r\n");
+  http_request.append("Origin: http://127.0.0.1\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: ");
   http_request.append(QByteArray::number(body.size()));
   http_request.append("\r\n\r\n");
   http_request.append(body);

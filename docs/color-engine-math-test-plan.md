@@ -1,5 +1,9 @@
 # Color Engine Mathematical Test Plan
 
+> Supporting evidence specification. This document defines focused mathematical proof but does not
+> supersede the execution, deletion, migration, or release gates in
+> `docs/color-engine-and-app-foundations-completion-strategy.md`.
+
 This plan defines the proof obligations for the color and detail pipeline. The
 tests must run against scene-referred floating-point pixels before UI preview,
 file export, or `QImage` conversion can hide clipping and hue errors.
@@ -223,11 +227,14 @@ Proofs:
 
 - neutral identity behavior
 - tone/exposure/contrast/highlight headroom
+- middle-gray contrast pivot and positive/negative stop-distance response
 - shadow/black/zone monotonicity
+- highlight, shadow, white, and black tonal locality
 - white-balance neutral-ramp order and headroom
 - parametric, master, and luma curve monotonicity
 - vibrance, saturation, OKLab mixer, color replacement, skin protection, harmony
-- grading and RGB channel mixer
+- vibrance low-chroma selectivity and hue stability
+- three-way grading tonal locality and RGB channel mixer
 - black-and-white mixer achromatic output
 - identity user LUT preservation
 - flat-field presence/detail preservation

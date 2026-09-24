@@ -1448,6 +1448,97 @@ QVariantMap agent_memory_vault_snapshot(const QString& app_data_location) {
   };
 }
 
+QVariantMap agent_memory_continuity_state(const QString& app_data_location) {
+  const auto path = QDir(agent_memory_root_directory(app_data_location))
+                        .filePath(QStringLiteral("continuity.json"));
+  QFile file(path);
+  if (!file.exists()) {
+    return QVariantMap{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("projects"), QVariantMap{}},
+    };
+  }
+  if (!file.open(QIODevice::ReadOnly)) {
+    return QVariantMap{
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("errors"),
+         QStringList{QStringLiteral("Unable to read agent continuity state: %1").arg(path)}},
+    };
+  }
+  QJsonParseError parse_error;
+  const auto document = QJsonDocument::fromJson(file.readAll(), &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+    return QVariantMap{
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("errors"),
+         QStringList{QStringLiteral("Agent continuity state is invalid JSON at offset %1: %2")
+                         .arg(parse_error.offset)
+                         .arg(parse_error.errorString())}},
+    };
+  }
+  auto state = document.object().toVariantMap();
+  state.insert(QStringLiteral("ok"), true);
+  state.insert(QStringLiteral("path"), path);
+  if (!state.contains(QStringLiteral("version"))) {
+    state.insert(QStringLiteral("version"), 1);
+  }
+  if (!state.contains(QStringLiteral("projects"))) {
+    state.insert(QStringLiteral("projects"), QVariantMap{});
+  }
+  return state;
+}
+
+QVariantMap write_agent_memory_continuity_state(
+    const QString& app_data_location,
+    const QVariantMap& continuity_state) {
+  const auto root_path = agent_memory_root_directory(app_data_location);
+  const auto path = QDir(root_path).filePath(QStringLiteral("continuity.json"));
+  if (!QDir().mkpath(root_path)) {
+    return QVariantMap{
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("errors"),
+         QStringList{QStringLiteral("Unable to create agent memory directory: %1").arg(root_path)}},
+    };
+  }
+  auto state = continuity_state;
+  state.remove(QStringLiteral("ok"));
+  state.remove(QStringLiteral("path"));
+  state.insert(QStringLiteral("version"), 1);
+  state.insert(
+      QStringLiteral("updatedAtUtc"),
+      QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+  QSaveFile file(path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return QVariantMap{
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("errors"),
+         QStringList{QStringLiteral("Unable to write agent continuity state: %1").arg(path)}},
+    };
+  }
+  const auto bytes =
+      QJsonDocument(QJsonObject::fromVariantMap(state)).toJson(QJsonDocument::Indented);
+  if (file.write(bytes) != bytes.size() || !file.commit()) {
+    return QVariantMap{
+        {QStringLiteral("ok"), false},
+        {QStringLiteral("path"), path},
+        {QStringLiteral("errors"),
+         QStringList{QStringLiteral("Unable to commit agent continuity state: %1").arg(path)}},
+    };
+  }
+  return QVariantMap{
+      {QStringLiteral("ok"), true},
+      {QStringLiteral("path"), path},
+      {QStringLiteral("version"), 1},
+      {QStringLiteral("projectCount"), state.value(QStringLiteral("projects")).toMap().size()},
+  };
+}
+
 QVariantMap export_agent_memory_vault(
     const QString& app_data_location,
     const QString& destination_directory,

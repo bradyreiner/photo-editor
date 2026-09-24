@@ -1,12 +1,12 @@
-# Database Migrations
+# Catalog Migrations
 
-The catalog schema is now versioned through `sqlx` migration files in:
-
-`rust/crates/catalog/migrations`
+The PostgreSQL catalog schema is versioned by SQLx migration files under
+`rust/crates/catalog/migrations`. Managed and externally configured PostgreSQL databases apply the
+same migrations before the repository becomes available.
 
 ## Workflow
 
-Create a new migration:
+Create a SQLx migration:
 
 ```sh
 cd rust
@@ -14,7 +14,7 @@ cargo install sqlx-cli --no-default-features --features rustls,postgres
 cargo sqlx migrate add <name>
 ```
 
-Apply migrations locally:
+Apply migrations:
 
 ```sh
 cd rust
@@ -23,12 +23,12 @@ cargo run -p photo-catalog --bin catalog_migrate
 
 ## Source Of Truth
 
-- Runtime schema changes come from the migration files.
-- `docs/postgres-schema.sql` is the reviewed schema snapshot for humans and tooling.
+- SQLx migration files are the runtime source of truth.
+- `docs/postgres-schema.sql` is the reviewed PostgreSQL schema snapshot for humans and tooling.
 - User catalog data is not version-controlled in Git.
 
 ## Rules
 
-- Prefer forward-only migrations for shipped catalogs.
+- Prefer forward-only, idempotent migrations for shipped catalogs.
 - Keep edit recipe versioning separate from raw schema evolution.
-- Never rely on `docker-entrypoint-initdb.d` as the only migration path for production.
+- Never rely on container initialization as the only production migration path.

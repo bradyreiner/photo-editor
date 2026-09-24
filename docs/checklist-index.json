@@ -1,0 +1,327 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "id": "DOC-ENGINEERING-A-RATING",
+      "path": "docs/engineering-a-rating-remediation-checklist.md",
+      "area": "engineering-quality",
+      "state": "active",
+      "canonicalOwner": "docs/engineering-a-rating-remediation-checklist.md"
+    },
+    {
+      "id": "DOC-CAPABILITY-VERIFICATION",
+      "path": "docs/capability-verification-plan.md",
+      "area": "capability-acceptance",
+      "state": "active",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-CAROUSEL-DELIVERY",
+      "path": "docs/carousel-delivery-100-checklist.md",
+      "area": "carousel",
+      "state": "active",
+      "canonicalOwner": "docs/carousel-delivery-100-checklist.md"
+    },
+    {
+      "id": "DOC-COLOR-FOUNDATIONS",
+      "path": "docs/color-engine-and-app-foundations-completion-strategy.md",
+      "area": "color-render-foundations",
+      "state": "active",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-COLOR-INDUSTRY-PLAN",
+      "path": "docs/color-engine-industry-leading-plan.md",
+      "area": "color-render-foundations",
+      "state": "historical",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-COLOR-MATH-PLAN",
+      "path": "docs/color-engine-math-test-plan.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-COLOR-SCIENCE-ROADMAP",
+      "path": "docs/color-science-roadmap.md",
+      "area": "color-render-foundations",
+      "state": "historical",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-COLOR-TOOLS-REMEDIATION",
+      "path": "docs/color-tools-remediation-checklist.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-COLOR-RECIPE",
+      "path": "docs/industry-grade-color-recipe-checklist.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-RAW-FIXTURES",
+      "path": "docs/raw-reference-fixture-plan.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-MAX-RES-PREVIEW",
+      "path": "docs/max-resolution-preview-rendering-plan.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-USER-EXPERIENCE",
+      "path": "docs/user-experience-improvement-checklist.md",
+      "area": "photographer-workflow-ui",
+      "state": "active",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-EDITOR-EXPERIENCE-AUDIT-2026-09-12",
+      "path": "docs/editor-experience-audit-2026-09-12.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-PREMIUM-UI",
+      "path": "docs/premium-ui-ux-polish-plan.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-UI-REDESIGN",
+      "path": "docs/ui-ux-redesign-plan.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-STUDIO-PRO-UX",
+      "path": "docs/studio-professional-ux-checklist.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-TOOL-POLISH",
+      "path": "docs/tool-polish-audit.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-PERFORMANCE-MEASUREMENT",
+      "path": "docs/performance-measurement-expansion-checklist.md",
+      "area": "performance-operability",
+      "state": "active",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-PERFORMANCE-OPERABILITY",
+      "path": "docs/app-performance-operability-plan.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-MASK-LAYER-SELECTION",
+      "path": "docs/mask-layer-selection-checklist.md",
+      "area": "masking-layers",
+      "state": "active",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-PROFESSIONAL-EDITING-TOOLS",
+      "path": "docs/professional-editing-tools-upgrade-plan.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-LAYER-SPARSE-UI",
+      "path": "docs/layer-system-sparse-ui-checklist.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-MASKING-REMEDIATION",
+      "path": "docs/masking-brush-selection-remediation-checklist.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-MASKING-UX-REBUILD",
+      "path": "docs/masking-brush-selection-ux-rebuild-checklist.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-MASKING-PIXEL-ACCURACY",
+      "path": "docs/masking-pixel-accuracy-rebuild-checklist.md",
+      "area": "masking-layers",
+      "state": "supporting",
+      "canonicalOwner": "docs/mask-layer-selection-checklist.md"
+    },
+    {
+      "id": "DOC-LOCAL-MODEL-AGENT-UX",
+      "path": "docs/local-model-agent-ux-checklist.md",
+      "area": "local-agent",
+      "state": "active",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-LOCAL-AGENT-PHOTO",
+      "path": "docs/local-agent-photo-editing-checklist.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-LEARNED-STYLE-AGENT",
+      "path": "docs/learned-style-agent-workflow-checklist.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-MCP-AGENT-INTEGRATION",
+      "path": "docs/mcp-agent-tool-integration-plan.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-MCP-SERVER-IMPROVEMENT",
+      "path": "docs/mcp-server-improvement-checklist.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-MVP",
+      "path": "docs/timeline-mvp-checklist.md",
+      "area": "timeline",
+      "state": "active",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-EDITOR-ROADMAP",
+      "path": "docs/timeline-editor-roadmap.md",
+      "area": "timeline",
+      "state": "supporting",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-INDUSTRY",
+      "path": "docs/timeline-industry-leading-checklist.md",
+      "area": "timeline",
+      "state": "parked",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-NEXT-100",
+      "path": "docs/timeline-next-100-checklist.md",
+      "area": "timeline",
+      "state": "parked",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-PRO-PARITY",
+      "path": "docs/timeline-professional-parity-checklist.md",
+      "area": "timeline",
+      "state": "parked",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-STATE-OF-ART",
+      "path": "docs/timeline-state-of-the-art-backlog.md",
+      "area": "timeline",
+      "state": "parked",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-UI-CONSISTENCY",
+      "path": "docs/timeline-ui-consistency-checklist.md",
+      "area": "timeline",
+      "state": "supporting",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-TIMELINE-UI-REMEDIATION",
+      "path": "docs/timeline-ui-ux-remediation-checklist.md",
+      "area": "timeline",
+      "state": "complete",
+      "canonicalOwner": "docs/timeline-mvp-checklist.md"
+    },
+    {
+      "id": "DOC-PRODUCTION-LAUNCH",
+      "path": "docs/production-launch-checklist.md",
+      "area": "production-launch",
+      "state": "active",
+      "canonicalOwner": "docs/production-launch-checklist.md"
+    },
+    {
+      "id": "DOC-RELEASE-PER-VERSION",
+      "path": "docs/release-checklist.md",
+      "area": "per-version-release",
+      "state": "active",
+      "canonicalOwner": "docs/release-checklist.md"
+    },
+    {
+      "id": "DOC-FRAMEHOUSE-RENAME",
+      "path": "docs/framehouse-rename-implementation-plan.md",
+      "area": "production-launch",
+      "state": "supporting",
+      "canonicalOwner": "docs/production-launch-checklist.md"
+    },
+    {
+      "id": "DOC-EDITOR-UPGRADE",
+      "path": "docs/editor-upgrade-plan.md",
+      "area": "capability-acceptance",
+      "state": "historical",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-MASTER-PLAN",
+      "path": "docs/master-plan.md",
+      "area": "capability-acceptance",
+      "state": "historical",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-NEXT-LEVEL-BACKLOG",
+      "path": "docs/next-level-execution-backlog.md",
+      "area": "capability-acceptance",
+      "state": "complete",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-NEXT-LEVEL-ROADMAP",
+      "path": "docs/next-level-roadmap.md",
+      "area": "capability-acceptance",
+      "state": "historical",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-WORLD-CLASS-PHOTO",
+      "path": "docs/world-class-photo-editor-checklist.md",
+      "area": "capability-acceptance",
+      "state": "parked",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    }
+  ]
+}

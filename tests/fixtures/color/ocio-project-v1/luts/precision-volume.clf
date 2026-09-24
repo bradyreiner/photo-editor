@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList id="photo-editor-precision-volume-v1" compCLFversion="3.0">
+  <LUT3D inBitDepth="32f" outBitDepth="32f" interpolation="trilinear">
+    <Array dim="2 2 2 3">
+      0 0 0
+      0 0 0
+      0 0 0
+      0 1 0
+      0 0 0
+      0 0 1
+      1 0 0
+      1 1 1
+    </Array>
+  </LUT3D>
+</ProcessList>

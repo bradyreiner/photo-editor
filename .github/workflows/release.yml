@@ -3,6 +3,20 @@ name: Release
 permissions:
   contents: read
 
+env:
+  LOOKSY_ACCESS_MODE: ${{ vars.LOOKSY_ACCESS_MODE }}
+  LOOKSY_SUPPORTED_PLATFORMS: ${{ vars.LOOKSY_SUPPORTED_PLATFORMS }}
+  LOOKSY_PURCHASE_URL: ${{ vars.LOOKSY_PURCHASE_URL }}
+  LOOKSY_SUBSCRIPTION_PURCHASE_URL: ${{ vars.LOOKSY_SUBSCRIPTION_PURCHASE_URL }}
+  LOOKSY_SUBSCRIPTION_PRICE_LABEL: ${{ vars.LOOKSY_SUBSCRIPTION_PRICE_LABEL }}
+  LOOKSY_PURCHASE_RECOVERY_URL: ${{ vars.LOOKSY_PURCHASE_RECOVERY_URL }}
+  LOOKSY_PRICE_LABEL: ${{ vars.LOOKSY_PRICE_LABEL }}
+  LOOKSY_LICENSE_SUMMARY: ${{ vars.LOOKSY_LICENSE_SUMMARY }}
+  LOOKSY_CUSTOMER_API_URL: ${{ vars.LOOKSY_CUSTOMER_API_URL }}
+  LOOKSY_ENTITLEMENT_PUBLIC_KEY: ${{ vars.LOOKSY_ENTITLEMENT_PUBLIC_KEY }}
+  LOOKSY_ENTITLEMENT_KEY_ID: ${{ vars.LOOKSY_ENTITLEMENT_KEY_ID || 'looksy-1' }}
+  LOOKSY_COMMERCIAL_TERMS_APPROVED: ${{ vars.LOOKSY_COMMERCIAL_TERMS_APPROVED }}
+
 on:
   push:
     tags:
@@ -10,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Publish verified artifacts to the public release repository"
+        description: "Publish verified artifacts; false builds a candidate and keeps artifacts in Actions"
         required: true
         type: boolean
         default: false
@@ -18,11 +32,15 @@ on:
 jobs:
   quality-gate:
     runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+      macos: ${{ steps.platforms.outputs.macos }}
     env:
-      VIREL_PUBLIC_RELEASE_REPOSITORY: ${{ vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
-      VIREL_WEBSITE_URL: ${{ vars.VIREL_WEBSITE_URL }}
-      VIREL_SUPPORT_EMAIL: ${{ vars.VIREL_SUPPORT_EMAIL }}
-      VIREL_SUPPORT_PAYMENT_URL: ${{ vars.VIREL_SUPPORT_PAYMENT_URL }}
+      FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY: ${{ vars.LOOKSY_PUBLIC_RELEASE_REPOSITORY || vars.FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY || vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
+      FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
+      FRAMEHOUSE_SUPPORT_EMAIL: ${{ vars.LOOKSY_SUPPORT_EMAIL || vars.FRAMEHOUSE_SUPPORT_EMAIL || vars.VIREL_SUPPORT_EMAIL }}
+      FRAMEHOUSE_SUPPORT_PAYMENT_URL: ${{ vars.LOOKSY_SUPPORT_PAYMENT_URL || vars.FRAMEHOUSE_SUPPORT_PAYMENT_URL || vars.VIREL_SUPPORT_PAYMENT_URL }}
+      FRAMEHOUSE_LEGAL_PUBLISHER: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
       PHOTO_EDITOR_MACOS_APPCAST_URL: ${{ vars.PHOTO_EDITOR_MACOS_APPCAST_URL }}
       PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY }}
       PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE }}
@@ -34,6 +52,9 @@ jobs:
       PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL }}
     steps:
       - uses: actions/checkout@v4
+      - name: Select supported release platforms
+        id: platforms
+        run: python3 scripts/release-platforms.py --github-output "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - name: Release preflight
         shell: bash
@@ -43,6 +64,8 @@ jobs:
           else
             python3 scripts/release-preflight.py --mode candidate
           fi
+      - name: Test commerce and release platform gates
+        run: python3 -B scripts/test-release-commerce.py
       - name: Test Rust workspace
         run: cargo test --manifest-path rust/Cargo.toml --workspace --locked
       - name: Configure headless native suite
@@ -55,7 +78,7 @@ jobs:
         run: python3 scripts/generate-third-party-inventory.py --output third-party-inventory.json
       - uses: actions/upload-artifact@v4
         with:
-          name: virel-release-compliance
+          name: looksy-release-compliance
           path: |
             LICENSE
             THIRD_PARTY_NOTICES.md
@@ -64,22 +87,12 @@ jobs:
 
   package:
     needs: quality-gate
+    env:
+      FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
+      FRAMEHOUSE_LEGAL_PUBLISHER: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            configure_preset: release-macos
-            build_preset: build-release-macos
-            artifact_suffix: macos-arm64
-          - os: macos-15-intel
-            configure_preset: release-macos
-            build_preset: build-release-macos
-            artifact_suffix: macos-x86_64
-          - os: windows-2022
-            configure_preset: release-windows
-            build_preset: build-release-windows
-            artifact_suffix: windows-x64
+      matrix: ${{ fromJSON(needs.quality-gate.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -115,22 +128,56 @@ jobs:
 
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
-        run: brew install cmake ninja postgresql@16
+        run: brew install cmake ninja openexr libheif libraw openssl@3 postgresql@16
 
-      - name: Install Windows native dependencies
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build Rust helper binaries
-        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
-
-      - name: Prepare macOS PostgreSQL runtime
+      - name: Prepare relocatable macOS PostgreSQL runtime
         if: runner.os == 'macOS'
         id: postgres-runtime-macos
         shell: bash
         run: |
-          runtime_dir="$(brew --prefix postgresql@16)"
+          source_runtime="$(brew --prefix postgresql@16)"
+          destination_runtime="${RUNNER_TEMP}/looksy-postgres-macos"
+          runtime_dir="$(
+            scripts/prepare-macos-postgres-runtime.sh \
+              "${source_runtime}" \
+              "${destination_runtime}"
+          )"
           printf 'runtime_dir=%s\n' "${runtime_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Windows PostgreSQL runtime
+        if: runner.os == 'Windows'
+        id: postgres-runtime-windows
+        shell: bash
+        env:
+          PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE }}
+          PHOTO_EDITOR_POSTGRES_RUNTIME_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL }}
+          PHOTO_EDITOR_POSTGRES_RUNTIME_DEST: "${{ runner.temp }}/looksy-postgres-windows"
+        run: |
+          chmod +x scripts/prepare-postgres-runtime.sh
+          runtime_dir="$(scripts/prepare-postgres-runtime.sh)"
+          printf 'runtime_dir=%s\n' "${runtime_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure Windows native toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install pinned Windows RAW dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $toolchain = "$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          "PHOTO_EDITOR_VCPKG_TOOLCHAIN=$toolchain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            --triplet x64-windows `
+            --x-manifest-root="$env:GITHUB_WORKSPACE"
+
+      - name: Build macOS Rust multicall helper
+        if: runner.os == 'macOS'
+        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bin catalog_helper --release
+
+      - name: Build Windows Rust helper binaries
+        if: runner.os == 'Windows'
+        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
 
       - name: Prepare Sparkle distribution
         if: runner.os == 'macOS'
@@ -150,34 +197,21 @@ jobs:
           distribution_dir="$(./scripts/prepare-sparkle-distribution.sh)"
           printf 'distribution_dir=%s\n' "${distribution_dir}" >> "${GITHUB_OUTPUT}"
 
-      - name: Prepare Windows PostgreSQL runtime
-        if: runner.os == 'Windows'
-        id: postgres-runtime-windows
-        shell: bash
-        env:
-          PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE }}
-          PHOTO_EDITOR_POSTGRES_RUNTIME_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL }}
-          PHOTO_EDITOR_POSTGRES_RUNTIME_DEST: "${{ runner.temp }}/photo-editor-postgres-windows"
-        run: |
-          if [ -z "${PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE}" ] && [ -z "${PHOTO_EDITOR_POSTGRES_RUNTIME_URL}" ]; then
-            echo "Skipping bundled Windows PostgreSQL runtime because no archive path or URL was configured."
-            printf 'runtime_dir=\n' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          ./scripts/prepare-postgres-runtime.sh >/tmp/photo-editor-postgres-runtime-path.txt
-          runtime_dir="$(cat /tmp/photo-editor-postgres-runtime-path.txt)"
-          printf 'runtime_dir=%s\n' "${runtime_dir}" >> "${GITHUB_OUTPUT}"
-
       - name: Configure
         shell: bash
         run: |
           configure_args=(
+            "-DLOOKSY_CUSTOMER_API_URL=${LOOKSY_CUSTOMER_API_URL:-}"
+            "-DLOOKSY_ENTITLEMENT_PUBLIC_KEY=${LOOKSY_ENTITLEMENT_PUBLIC_KEY:-}"
+            "-DLOOKSY_ENTITLEMENT_KEY_ID=${LOOKSY_ENTITLEMENT_KEY_ID:-looksy-1}"
+            "-DLOOKSY_RELEASE_CHANNEL=stable"
             --preset "${{ matrix.configure_preset }}"
             "-DPHOTO_EDITOR_RUST_BINARY_DIR=${GITHUB_WORKSPACE}/rust/target/release"
             "-DPHOTO_EDITOR_STRICT_PACKAGING=ON"
-            "-DVIREL_SUPPORT_URL=${{ vars.VIREL_WEBSITE_URL }}/support.html"
-            "-DVIREL_PRIVACY_URL=${{ vars.VIREL_WEBSITE_URL }}/privacy.html"
-            "-DVIREL_TERMS_URL=${{ vars.VIREL_WEBSITE_URL }}/terms.html"
+            "-DFRAMEHOUSE_LEGAL_PUBLISHER=${FRAMEHOUSE_LEGAL_PUBLISHER}"
+            "-DFRAMEHOUSE_SUPPORT_URL=${FRAMEHOUSE_WEBSITE_URL}/support.html"
+            "-DFRAMEHOUSE_PRIVACY_URL=${FRAMEHOUSE_WEBSITE_URL}/privacy.html"
+            "-DFRAMEHOUSE_TERMS_URL=${FRAMEHOUSE_WEBSITE_URL}/terms.html"
           )
           if [ "${RUNNER_OS}" = "macOS" ]; then
             configure_args+=("-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=${{ steps.postgres-runtime-macos.outputs.runtime_dir }}")
@@ -190,13 +224,60 @@ jobs:
               )
             fi
           fi
-          if [ "${RUNNER_OS}" = "Windows" ] && [ -n "${{ steps.postgres-runtime-windows.outputs.runtime_dir }}" ]; then
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            configure_args+=("-DCMAKE_TOOLCHAIN_FILE=${PHOTO_EDITOR_VCPKG_TOOLCHAIN}")
             configure_args+=("-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=${{ steps.postgres-runtime-windows.outputs.runtime_dir }}")
           fi
           cmake "${configure_args[@]}"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.build_preset }}
+
+      - name: Run native release test suite
+        shell: bash
+        run: ctest --test-dir "build/${{ matrix.configure_preset }}" --output-on-failure --timeout 420 -LE monolithic -j 4
+
+      - name: Capture rendering migration proof
+        shell: bash
+        run: |
+          proof_dir="${RUNNER_TEMP}/rendering-migration-proof"
+          mkdir -p "${proof_dir}"
+          extension=""
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            extension=".exe"
+          fi
+          executable="build/${{ matrix.configure_preset }}/tests/rendering_migration_proof_test${extension}"
+          "${executable}" --report "${proof_dir}/report.json"
+          python3 -B scripts/color/validate-rendering-migration-proof.py \
+            "${proof_dir}/report.json" --executable "${executable}"
+          cp "${executable}" "${proof_dir}/rendering_migration_proof_test${extension}"
+
+      - name: Upload rendering migration proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendering-migration-proof-${{ matrix.artifact_suffix }}-${{ github.sha }}
+          path: ${{ runner.temp }}/rendering-migration-proof
+          if-no-files-found: error
+
+      - name: Capture Windows RAW runtime proof
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          proof_dir="${RUNNER_TEMP}/windows-raw-runtime-proof"
+          mkdir -p "${proof_dir}"
+          executable="build/${{ matrix.configure_preset }}/tests/raw_camera_linear_decoder_test.exe"
+          "${executable}" --report "${proof_dir}/report.json"
+          python3 -B scripts/color/validate-windows-raw-runtime-proof.py \
+            "${proof_dir}/report.json" --executable "${executable}"
+          cp "${executable}" "${proof_dir}/raw_camera_linear_decoder_test.exe"
+
+      - name: Upload Windows RAW runtime proof
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-raw-runtime-proof-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-raw-runtime-proof
+          if-no-files-found: error
 
       - name: Materialize real-image QA corpus
         if: runner.os == 'macOS'
@@ -221,6 +302,25 @@ jobs:
         run: |
           build_dir="build/${{ matrix.configure_preset }}"
           cpack --config "${build_dir}/CPackConfig.cmake" -B "${build_dir}/package"
+
+      - name: Inventory macOS staged package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          build_dir="build/${{ matrix.configure_preset }}"
+          stage_root="${RUNNER_TEMP}/looksy-package-composition"
+          cmake --install "${build_dir}" --prefix "${stage_root}"
+          python3 -B scripts/package-composition-report.py \
+            --root "${stage_root}/Looksy.app" \
+            --output "${build_dir}/package/package-composition.json" \
+            --commit "${GITHUB_SHA}" \
+            --artifact-dir "${build_dir}/package" \
+            --max-category-bytes "catalog-helper=10000000" \
+            --max-category-bytes "postgres-runtime=70000000" \
+            --max-category-bytes "qt-quick-controls-non-basic-style=0" \
+            --max-category-bytes "qt-macos-pruned-runtime=0" \
+            --fail-on-duplicates
+          scripts/verify-macos-bundle-dependencies.sh "${stage_root}/Looksy.app"
 
       - name: Require macOS release credentials
         if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
@@ -256,9 +356,9 @@ jobs:
           APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
         run: |
-          keychain="${RUNNER_TEMP}/virel-release.keychain-db"
+          keychain="${RUNNER_TEMP}/looksy-release.keychain-db"
           keychain_password="$(uuidgen)"
-          certificate="${RUNNER_TEMP}/virel-developer-id.p12"
+          certificate="${RUNNER_TEMP}/looksy-developer-id.p12"
           printf '%s' "${APPLE_DEVELOPER_ID_P12_BASE64}" | base64 --decode > "${certificate}"
           security create-keychain -p "${keychain_password}" "${keychain}"
           security set-keychain-settings -lut 21600 "${keychain}"
@@ -266,19 +366,19 @@ jobs:
           security import "${certificate}" -k "${keychain}" -P "${APPLE_DEVELOPER_ID_P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain}"
           security list-keychains -d user -s "${keychain}"
-          xcrun notarytool store-credentials "virel-notary" \
+          xcrun notarytool store-credentials "looksy-notary" \
             --keychain "${keychain}" \
             --apple-id "${APPLE_NOTARY_APPLE_ID}" \
             --team-id "${APPLE_NOTARY_TEAM_ID}" \
             --password "${APPLE_NOTARY_PASSWORD}"
-          printf 'VIREL_RELEASE_KEYCHAIN=%s\n' "${keychain}" >> "${GITHUB_ENV}"
+          printf 'FRAMEHOUSE_RELEASE_KEYCHAIN=%s\n' "${keychain}" >> "${GITHUB_ENV}"
 
       - name: Sign, notarize, and verify macOS package
         if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           PHOTO_EDITOR_MACOS_CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APP }}
-          PHOTO_EDITOR_NOTARY_PROFILE: virel-notary
+          PHOTO_EDITOR_NOTARY_PROFILE: looksy-notary
         run: |
           package_dir="build/${{ matrix.configure_preset }}/package"
           scripts/sign-notarize-macos.sh --package-dir "${package_dir}"
@@ -290,8 +390,8 @@ jobs:
         if: always() && runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          if [ -n "${VIREL_RELEASE_KEYCHAIN:-}" ]; then
-            security delete-keychain "${VIREL_RELEASE_KEYCHAIN}" || true
+          if [ -n "${FRAMEHOUSE_RELEASE_KEYCHAIN:-}" ]; then
+            security delete-keychain "${FRAMEHOUSE_RELEASE_KEYCHAIN}" || true
           fi
 
       - name: Stage Windows install root
@@ -299,6 +399,26 @@ jobs:
         shell: bash
         run: |
           cmake --install "build/${{ matrix.configure_preset }}" --prefix "${RUNNER_TEMP}/photo-editor-windows-install"
+
+      - name: Verify Windows RAW runtime packaging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rawRuntime = Get-ChildItem `
+            -Path "$env:RUNNER_TEMP\photo-editor-windows-install" `
+            -Recurse `
+            -File | Where-Object { $_.Name -match '^(lib)?raw(_r)?\.dll$' }
+          if ($null -eq $rawRuntime) {
+            throw "The staged Windows release is missing its LibRaw runtime dependency."
+          }
+          $rawRuntime | ForEach-Object { Write-Host "Packaged RAW runtime: $($_.FullName)" }
+
+      - name: Verify Windows PostgreSQL catalog runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-postgres-catalog-runtime.ps1 `
+            -InstallRoot "${env:RUNNER_TEMP}\photo-editor-windows-install"
 
       - name: Prepare Windows signing certificate
         if: runner.os == 'Windows'
@@ -324,10 +444,10 @@ jobs:
         shell: pwsh
         env:
           PHOTO_EDITOR_WINDOWS_PACKAGE_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_NAME }}
-          PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME }}
+          PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME: Looksy
           PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER }}
-          PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME }}
-          PHOTO_EDITOR_WINDOWS_DESCRIPTION: ${{ vars.PHOTO_EDITOR_WINDOWS_DESCRIPTION }}
+          PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
+          PHOTO_EDITOR_WINDOWS_DESCRIPTION: Looksy photo editor
           PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL }}
           PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI: ${{ vars.PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI }}
           PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI }}
@@ -360,10 +480,21 @@ jobs:
             throw "MSIX signature is not valid: $($signature.Status) $($signature.StatusMessage)"
           }
 
+      - name: Inventory Windows staged package and installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python3 -B scripts/package-composition-report.py \
+            --root "${RUNNER_TEMP}/photo-editor-windows-install" \
+            --output "build/${{ matrix.configure_preset }}/package/package-composition.json" \
+            --commit "${GITHUB_SHA}" \
+            --artifact-dir "build/${{ matrix.configure_preset }}/package" \
+            --fail-on-duplicates
+
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: virel-release-${{ matrix.artifact_suffix }}
+          name: looksy-release-${{ matrix.artifact_suffix }}
           path: |
             build/${{ matrix.configure_preset }}/package/*.dmg
             build/${{ matrix.configure_preset }}/package/*.zip
@@ -372,6 +503,7 @@ jobs:
             build/${{ matrix.configure_preset }}/package/*.appinstaller
             build/${{ matrix.configure_preset }}/package/*.xml
             build/${{ matrix.configure_preset }}/package/*.txt
+            build/${{ matrix.configure_preset }}/package/package-composition.json
             build/${{ matrix.configure_preset }}/package/signed-macos-*/*.dmg
             build/${{ matrix.configure_preset }}/package/signed-macos-*/*.xml
             build/${{ matrix.configure_preset }}/package/signed-macos-*/*.txt
@@ -379,14 +511,14 @@ jobs:
           retention-days: 14
 
   macos-appcast:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: package
+    if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_dispatch' || inputs.publish) && needs.quality-gate.outputs.macos == 'true'
+    needs: [quality-gate, package]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: virel-release-macos-*
+          pattern: looksy-release-macos-*
           path: incoming
           merge-multiple: true
       - name: Prepare Sparkle distribution
@@ -395,7 +527,7 @@ jobs:
         env:
           PHOTO_EDITOR_SPARKLE_ARCHIVE: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE }}
           PHOTO_EDITOR_SPARKLE_URL: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_URL }}
-          PHOTO_EDITOR_SPARKLE_DEST: ${{ runner.temp }}/virel-sparkle
+          PHOTO_EDITOR_SPARKLE_DEST: ${{ runner.temp }}/looksy-sparkle
         run: |
           distribution_dir="$(scripts/prepare-sparkle-distribution.sh)"
           printf 'distribution_dir=%s\n' "${distribution_dir}" >> "${GITHUB_OUTPUT}"
@@ -403,28 +535,25 @@ jobs:
         shell: bash
         env:
           SPARKLE_ED_PRIVATE_KEY_BASE64: ${{ secrets.SPARKLE_ED_PRIVATE_KEY_BASE64 }}
-          VIREL_PUBLIC_RELEASE_REPOSITORY: ${{ vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
+          FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY: ${{ vars.LOOKSY_PUBLIC_RELEASE_REPOSITORY || vars.FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY || vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
         run: |
           if [ -z "${SPARKLE_ED_PRIVATE_KEY_BASE64}" ]; then
             echo "SPARKLE_ED_PRIVATE_KEY_BASE64 is required." >&2
             exit 1
           fi
-          if [ -z "${VIREL_PUBLIC_RELEASE_REPOSITORY}" ]; then
-            echo "VIREL_PUBLIC_RELEASE_REPOSITORY is required." >&2
+          if [ -z "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" ]; then
+            echo "FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY is required." >&2
             exit 1
           fi
           version="$(tr -d '[:space:]' < VERSION)"
           tag="v${version}"
-          release_dir="${RUNNER_TEMP}/virel-appcast"
+          release_dir="${RUNNER_TEMP}/looksy-appcast"
           mkdir -p "${release_dir}"
           while IFS= read -r -d '' artifact; do
             cp "${artifact}" "${release_dir}/"
           done < <(find incoming -type f -path '*signed-macos-*' -name '*.dmg' -print0)
-          if [ "$(find "${release_dir}" -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')" -lt 2 ]; then
-            echo "Both Apple silicon and Intel notarized DMGs are required." >&2
-            exit 1
-          fi
-          download_prefix="https://github.com/${VIREL_PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}/"
+          python3 scripts/release-platforms.py --artifacts "${release_dir}" --without-appcast --macos-only
+          download_prefix="https://github.com/${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}/"
           printf '%s' "${SPARKLE_ED_PRIVATE_KEY_BASE64}" | base64 --decode | \
             "${{ steps.sparkle.outputs.distribution_dir }}/bin/generate_appcast" \
               --ed-key-file - \
@@ -438,22 +567,23 @@ jobs:
           cp "${release_dir}"/*.xml outgoing/
       - uses: actions/upload-artifact@v4
         with:
-          name: virel-release-macos-appcast
+          name: looksy-release-macos-appcast
           path: outgoing/*.xml
           if-no-files-found: error
           retention-days: 14
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_dispatch' || inputs.publish) && needs.quality-gate.result == 'success' && needs.package.result == 'success' && (needs.macos-appcast.result == 'success' || needs.macos-appcast.result == 'skipped')
     needs: [quality-gate, package, macos-appcast]
     runs-on: ubuntu-24.04
     environment: production
     env:
       GH_TOKEN: ${{ secrets.PUBLIC_RELEASES_TOKEN }}
-      VIREL_PUBLIC_RELEASE_REPOSITORY: ${{ vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
-      VIREL_WEBSITE_URL: ${{ vars.VIREL_WEBSITE_URL }}
-      VIREL_SUPPORT_EMAIL: ${{ vars.VIREL_SUPPORT_EMAIL }}
-      VIREL_SUPPORT_PAYMENT_URL: ${{ vars.VIREL_SUPPORT_PAYMENT_URL }}
+      FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY: ${{ vars.LOOKSY_PUBLIC_RELEASE_REPOSITORY || vars.FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY || vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
+      FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
+      FRAMEHOUSE_SUPPORT_EMAIL: ${{ vars.LOOKSY_SUPPORT_EMAIL || vars.FRAMEHOUSE_SUPPORT_EMAIL || vars.VIREL_SUPPORT_EMAIL }}
+      FRAMEHOUSE_SUPPORT_PAYMENT_URL: ${{ vars.LOOKSY_SUPPORT_PAYMENT_URL || vars.FRAMEHOUSE_SUPPORT_PAYMENT_URL || vars.VIREL_SUPPORT_PAYMENT_URL }}
+      FRAMEHOUSE_LEGAL_PUBLISHER: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
       PHOTO_EDITOR_MACOS_APPCAST_URL: ${{ vars.PHOTO_EDITOR_MACOS_APPCAST_URL }}
       PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY }}
       PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE }}
@@ -467,7 +597,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: virel-release-*
+          pattern: looksy-release-*
           path: incoming
           merge-multiple: true
       - name: Public release preflight
@@ -483,10 +613,8 @@ jobs:
           while IFS= read -r -d '' artifact; do cp "${artifact}" public-release/; done \
             < <(find incoming -type f \( -name '*.msix' -o -name '*.appinstaller' -o -name '*.xml' -o -name 'third-party-inventory.json' \) -print0)
           cp LICENSE THIRD_PARTY_NOTICES.md public-release/
-          test "$(find public-release -maxdepth 1 -name '*.dmg' | wc -l)" -ge 2
-          test "$(find public-release -maxdepth 1 -name '*.msix' | wc -l)" -ge 1
-          test -f public-release/VirelStudio.appinstaller
-          base_url="https://github.com/${VIREL_PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}"
+          python3 scripts/release-platforms.py --artifacts public-release
+          base_url="https://github.com/${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}/releases/download/${tag}"
           python3 scripts/write-release-manifest.py \
             --artifacts public-release \
             --output public-release/release-manifest.json \
@@ -502,45 +630,44 @@ jobs:
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           tag="v${version}"
-          visibility="$(gh repo view "${VIREL_PUBLIC_RELEASE_REPOSITORY}" --json visibility --jq .visibility)"
+          visibility="$(gh repo view "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" --json visibility --jq .visibility)"
           if [ "${visibility}" != "PUBLIC" ]; then
             echo "Public release repository must be public; got ${visibility}." >&2
             exit 1
           fi
           notes="docs/releases/v${version}-alpha.md"
-          if ! gh release view "${tag}" --repo "${VIREL_PUBLIC_RELEASE_REPOSITORY}" >/dev/null 2>&1; then
+          if ! gh release view "${tag}" --repo "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" >/dev/null 2>&1; then
             gh release create "${tag}" \
-              --repo "${VIREL_PUBLIC_RELEASE_REPOSITORY}" \
-              --title "Virel Studio ${version} Alpha" \
+              --repo "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" \
+              --title "Looksy ${version} Alpha" \
               --notes-file "${notes}" \
               --draft
           fi
           gh release upload "${tag}" public-release/* \
-            --repo "${VIREL_PUBLIC_RELEASE_REPOSITORY}" \
+            --repo "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" \
             --clobber
           gh release edit "${tag}" \
-            --repo "${VIREL_PUBLIC_RELEASE_REPOSITORY}" \
+            --repo "${FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY}" \
             --draft=false \
             --prerelease=false \
             --latest
 
   deploy-site:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && (github.event_name != 'workflow_dispatch' || inputs.publish)
     needs: publish
     runs-on: ubuntu-24.04
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      VIREL_CLOUDFLARE_PAGES_PROJECT: ${{ vars.VIREL_CLOUDFLARE_PAGES_PROJECT }}
-      VIREL_PUBLIC_RELEASE_REPOSITORY: ${{ vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
-      VIREL_WEBSITE_URL: ${{ vars.VIREL_WEBSITE_URL }}
-      VIREL_SUPPORT_EMAIL: ${{ vars.VIREL_SUPPORT_EMAIL }}
-      VIREL_SUPPORT_PAYMENT_URL: ${{ vars.VIREL_SUPPORT_PAYMENT_URL }}
-      VIREL_PURCHASE_URL: ${{ vars.VIREL_PURCHASE_URL }}
-      VIREL_RELEASE_CHANNEL: Public alpha
-      VIREL_ACCESS_LABEL: Public alpha
-      VIREL_ACCESS_MODE: free-support
+      FRAMEHOUSE_CLOUDFLARE_PAGES_PROJECT: ${{ vars.LOOKSY_CLOUDFLARE_PAGES_PROJECT || vars.FRAMEHOUSE_CLOUDFLARE_PAGES_PROJECT || vars.VIREL_CLOUDFLARE_PAGES_PROJECT }}
+      FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY: ${{ vars.LOOKSY_PUBLIC_RELEASE_REPOSITORY || vars.FRAMEHOUSE_PUBLIC_RELEASE_REPOSITORY || vars.VIREL_PUBLIC_RELEASE_REPOSITORY }}
+      FRAMEHOUSE_WEBSITE_URL: ${{ vars.LOOKSY_WEBSITE_URL || vars.FRAMEHOUSE_WEBSITE_URL || vars.VIREL_WEBSITE_URL }}
+      FRAMEHOUSE_SUPPORT_EMAIL: ${{ vars.LOOKSY_SUPPORT_EMAIL || vars.FRAMEHOUSE_SUPPORT_EMAIL || vars.VIREL_SUPPORT_EMAIL }}
+      FRAMEHOUSE_SUPPORT_PAYMENT_URL: ${{ vars.LOOKSY_SUPPORT_PAYMENT_URL || vars.FRAMEHOUSE_SUPPORT_PAYMENT_URL || vars.VIREL_SUPPORT_PAYMENT_URL }}
+      FRAMEHOUSE_PURCHASE_URL: ${{ vars.LOOKSY_PURCHASE_URL || vars.FRAMEHOUSE_PURCHASE_URL || vars.VIREL_PURCHASE_URL }}
+      FRAMEHOUSE_LEGAL_PUBLISHER: ${{ vars.LOOKSY_LEGAL_PUBLISHER || vars.FRAMEHOUSE_LEGAL_PUBLISHER }}
+      FRAMEHOUSE_RELEASE_CHANNEL: Public alpha
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -549,16 +676,16 @@ jobs:
       - name: Configure public site
         shell: bash
         run: |
-          for value in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID VIREL_CLOUDFLARE_PAGES_PROJECT; do
+          for value in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID FRAMEHOUSE_CLOUDFLARE_PAGES_PROJECT; do
             if [ -z "${!value}" ]; then
               echo "${value} is required to deploy the public site." >&2
               exit 1
             fi
           done
-          VIREL_RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
-          export VIREL_RELEASE_VERSION
+          FRAMEHOUSE_RELEASE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          export FRAMEHOUSE_RELEASE_VERSION
           python3 scripts/configure-release-site.py
       - name: Validate static site
-        run: python3 scripts/validate-release-site.py site
+        run: python3 scripts/validate-release-site.py site --production
       - name: Deploy public download site
-        run: npx --yes wrangler@4 pages deploy site --project-name "${VIREL_CLOUDFLARE_PAGES_PROJECT}" --branch main
+        run: npx --yes wrangler@4 pages deploy site --project-name "${FRAMEHOUSE_CLOUDFLARE_PAGES_PROJECT}" --branch main

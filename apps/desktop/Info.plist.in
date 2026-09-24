@@ -5,7 +5,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>@VIREL_PRODUCT_NAME@</string>
+  <string>@FRAMEHOUSE_PRODUCT_NAME@</string>
   <key>CFBundleExecutable</key>
   <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
   <key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>@VIREL_PRODUCT_NAME@</string>
+  <string>@FRAMEHOUSE_PRODUCT_NAME@</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -21,17 +21,21 @@
   <key>CFBundleVersion</key>
   <string>@PROJECT_VERSION@</string>
   <key>LSMinimumSystemVersion</key>
-  <string>@VIREL_MACOS_MINIMUM_VERSION@</string>
+  <string>@FRAMEHOUSE_MACOS_MINIMUM_VERSION@</string>
   <key>CFBundleIconFile</key>
-  <string>VirelStudio</string>
+  <string>Looksy</string>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © 2026 @VIREL_VENDOR_NAME@. All rights reserved.</string>
-  <key>VirelSupportURL</key>
-  <string>@VIREL_SUPPORT_URL@</string>
-  <key>VirelPrivacyURL</key>
-  <string>@VIREL_PRIVACY_URL@</string>
-  <key>VirelTermsURL</key>
-  <string>@VIREL_TERMS_URL@</string>
+  <string>Copyright © 2026 @FRAMEHOUSE_LEGAL_PUBLISHER@. All rights reserved.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Looksy uses speech recognition to create editable, word-timed captions from video audio you choose to transcribe.</string>
+  <key>LooksySupportURL</key>
+  <string>@FRAMEHOUSE_SUPPORT_URL@</string>
+  <key>LooksyPrivacyURL</key>
+  <string>@FRAMEHOUSE_PRIVACY_URL@</string>
+  <key>LooksyTermsURL</key>
+  <string>@FRAMEHOUSE_TERMS_URL@</string>
+  <key>LooksySearchRuntimeReceiptSHA256</key>
+  <string>@PHOTO_EDITOR_SEARCH_RUNTIME_RECEIPT@</string>
 @PHOTO_EDITOR_MACOS_SPARKLE_PLIST_KEYS@
 </dict>
 </plist>

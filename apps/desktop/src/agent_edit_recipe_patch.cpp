@@ -1,6 +1,11 @@
 #include "agent_edit_recipe_patch.h"
 
+#include "photo_layer_effect_codec.h"
+#include "photo_text_style.h"
+
+#include <QJsonObject>
 #include <QMetaType>
+#include <QSet>
 #include <QVector>
 
 #include <algorithm>
@@ -72,18 +77,27 @@ struct RecipeLayerStackField final {
   const char* group;
   const char* field;
   QVariantList EditRecipeState::*member;
+  bool append = false;
+};
+
+struct RecipeLayerEffectField final {
+  const char* group;
+  const char* field;
+  QVariantList EditRecipeState::*member;
 };
 
 struct RecipeMaskStackField final {
   const char* group;
   const char* field;
   QVariantList EditRecipeState::*member;
+  bool append = false;
 };
 
 struct RecipeRetouchStackField final {
   const char* group;
   const char* field;
   QVariantList EditRecipeState::*member;
+  bool append = false;
 };
 
 const QStringList& mixer_channel_names() {
@@ -315,11 +329,6 @@ void sync_selected_hsl_channel(EditRecipeState* state) {
 const QVector<RecipeDoubleField>& recipe_double_fields() {
   static const QVector<RecipeDoubleField> fields = {
       {"raw", "rawExposure", -5.0, 5.0, &EditRecipeState::raw_exposure},
-      {"raw", "rawBoost", -2.0, 2.0, &EditRecipeState::raw_boost},
-      {"raw", "rawShadowBoost", 0.0, 3.0, &EditRecipeState::raw_shadow_boost},
-      {"raw", "rawDetail", 0.0, 100.0, &EditRecipeState::raw_detail},
-      {"raw", "rawChromaNoiseReduction", 0.0, 100.0, &EditRecipeState::raw_chroma_noise_reduction},
-      {"raw", "rawMoireReduction", 0.0, 100.0, &EditRecipeState::raw_moire_reduction},
       {"raw", "rawHotDeadPixelCleanup", 0.0, 1.0, &EditRecipeState::raw_hot_dead_pixel_cleanup},
       {"raw", "rawFalseColorSuppression", 0.0, 1.0, &EditRecipeState::raw_false_color_suppression},
       {"raw", "rawWhiteBalanceTemperature", 1800.0, 50000.0, &EditRecipeState::raw_white_balance_temperature},
@@ -554,20 +563,30 @@ const QVector<RecipeStringField>& recipe_string_fields() {
 const QVector<RecipeLayerStackField>& recipe_layer_stack_fields() {
   static const QVector<RecipeLayerStackField> fields = {
       {"layers", "photoLayers", &EditRecipeState::layers},
+      {"graphics", "textLayers", &EditRecipeState::layers, true},
+  };
+  return fields;
+}
+
+const QVector<RecipeLayerEffectField>& recipe_layer_effect_fields() {
+  static const QVector<RecipeLayerEffectField> fields = {
+      {"layers", "effectChanges", &EditRecipeState::layers},
   };
   return fields;
 }
 
 const QVector<RecipeMaskStackField>& recipe_mask_stack_fields() {
   static const QVector<RecipeMaskStackField> fields = {
-      {"masks", "maskStack", &EditRecipeState::mask_stack},
+      {"masks", "maskStack", &EditRecipeState::mask_stack, false},
+      {"masks", "appendMaskStack", &EditRecipeState::mask_stack, true},
   };
   return fields;
 }
 
 const QVector<RecipeRetouchStackField>& recipe_retouch_stack_fields() {
   static const QVector<RecipeRetouchStackField> fields = {
-      {"retouch", "retouchStack", &EditRecipeState::mask_stack},
+      {"retouch", "retouchStack", &EditRecipeState::mask_stack, false},
+      {"retouch", "appendRetouchStack", &EditRecipeState::mask_stack, true},
   };
   return fields;
 }
@@ -575,7 +594,6 @@ const QVector<RecipeRetouchStackField>& recipe_retouch_stack_fields() {
 const QVector<RecipeBoolField>& recipe_bool_fields() {
   static const QVector<RecipeBoolField> fields = {
       {"raw", "rawHighlightRecovery", &EditRecipeState::raw_highlight_recovery},
-      {"raw", "rawGamutMapping", &EditRecipeState::raw_gamut_mapping},
       {"raw", "rawLensCorrection", &EditRecipeState::raw_lens_correction},
       {"raw", "rawWhiteBalanceOverride", &EditRecipeState::raw_white_balance_override},
       {"crop", "contentAwareCropFill", &EditRecipeState::content_aware_crop_fill},
@@ -625,6 +643,9 @@ QStringList group_tool_names(const QString& group) {
   if (group == QStringLiteral("layers") || group == QStringLiteral("luts")) {
     return {QStringLiteral("layers_luts")};
   }
+  if (group == QStringLiteral("graphics")) {
+    return {QStringLiteral("graphics")};
+  }
   return {};
 }
 
@@ -656,6 +677,8 @@ void append_tool_validation_warnings(
     warnings->append(QStringLiteral("Retouch edits require provenance review before commit or export."));
   } else if (group == QStringLiteral("layers") || group == QStringLiteral("luts")) {
     warnings->append(QStringLiteral("Layer and LUT edits require opacity, blend, gamut, and ordering review."));
+  } else if (group == QStringLiteral("graphics")) {
+    warnings->append(QStringLiteral("Graphic text overlays require layout, contrast, and legibility review."));
   } else if (group == QStringLiteral("output")) {
     warnings->append(QStringLiteral("Output color and soft-proof edits require export preflight review."));
   }
@@ -764,6 +787,18 @@ const RecipeLayerStackField* find_layer_stack_field(const QString& group, const 
       fields.cbegin(),
       fields.cend(),
       [&](const RecipeLayerStackField& candidate) {
+        return group == QString::fromLatin1(candidate.group) &&
+               field == QString::fromLatin1(candidate.field);
+      });
+  return iterator == fields.cend() ? nullptr : &(*iterator);
+}
+
+const RecipeLayerEffectField* find_layer_effect_field(const QString& group, const QString& field) {
+  const auto& fields = recipe_layer_effect_fields();
+  const auto iterator = std::find_if(
+      fields.cbegin(),
+      fields.cend(),
+      [&](const RecipeLayerEffectField& candidate) {
         return group == QString::fromLatin1(candidate.group) &&
                field == QString::fromLatin1(candidate.field);
       });
@@ -1277,6 +1312,315 @@ void validate_photo_layers_field(
   }
 }
 
+void validate_graphic_text_layers(const QVariant& value, QStringList* errors) {
+  if (value.typeId() != QMetaType::QVariantList) {
+    errors->append(QStringLiteral("Graphic text layers must be an array."));
+    return;
+  }
+  const auto layers = value.toList();
+  if (layers.isEmpty() || layers.size() > 12) {
+    errors->append(QStringLiteral("Graphic text layers must contain between 1 and 12 entries."));
+    return;
+  }
+  QSet<QString> ids;
+  for (int index = 0; index < layers.size(); ++index) {
+    const auto layer = layers.at(index).toMap();
+    const auto context = QStringLiteral("Graphic text layer %1").arg(index + 1);
+    const auto id = layer.value(QStringLiteral("id")).toString().trimmed();
+    if (layer.isEmpty() || !id.startsWith(QStringLiteral("agent-graphic-")) || id.size() > 80) {
+      errors->append(QStringLiteral("%1 requires an agent-graphic- id no longer than 80 characters.").arg(context));
+    }
+    if (ids.contains(id)) {
+      errors->append(QStringLiteral("%1 id must be unique within the graphic draft.").arg(context));
+    }
+    ids.insert(id);
+    if (!is_bounded_non_empty_string(layer.value(QStringLiteral("name")), 120)) {
+      errors->append(QStringLiteral("%1 name must be a non-empty string no longer than 120 characters.").arg(context));
+    }
+    if (layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text")) {
+      errors->append(QStringLiteral("%1 kind must be text.").arg(context));
+    }
+    if (!is_bounded_non_empty_string(layer.value(QStringLiteral("text")), 2048)) {
+      errors->append(QStringLiteral("%1 text must be a non-empty string no longer than 2048 characters.").arg(context));
+    }
+    if (!variant_is_bool(layer, QStringLiteral("enabled"))) {
+      errors->append(QStringLiteral("%1 enabled must be boolean.").arg(context));
+    }
+    if (!optional_number_in_range(layer, QStringLiteral("opacity"), 0.0, 1.0)) {
+      errors->append(QStringLiteral("%1 opacity must be between 0 and 1.").arg(context));
+    }
+    if (layer.contains(QStringLiteral("blendMode"))) {
+      const auto blend_mode = layer.value(QStringLiteral("blendMode")).toString().trimmed().toLower();
+      if (layer.value(QStringLiteral("blendMode")).typeId() != QMetaType::QString ||
+          !layer_blend_modes().contains(blend_mode)) {
+        errors->append(QStringLiteral("%1 blendMode is unsupported.").arg(context));
+      }
+    }
+    const auto validate_dimension = [&](const QString& key, double minimum, double maximum) {
+      auto ok = false;
+      const auto dimension = layer.value(key).toDouble(&ok);
+      if (!ok || dimension < minimum || dimension > maximum || std::floor(dimension) != dimension) {
+        errors->append(QStringLiteral("%1 %2 must be an integer between %3 and %4.")
+                           .arg(context, key).arg(minimum).arg(maximum));
+      }
+    };
+    validate_dimension(QStringLiteral("x"), 0.0, 1000000.0);
+    validate_dimension(QStringLiteral("y"), 0.0, 1000000.0);
+    validate_dimension(QStringLiteral("pixelWidth"), 16.0, 8192.0);
+    validate_dimension(QStringLiteral("pixelHeight"), 16.0, 8192.0);
+    validate_dimension(QStringLiteral("canvasWidth"), 16.0, 1000000.0);
+    validate_dimension(QStringLiteral("canvasHeight"), 16.0, 1000000.0);
+    const auto x = layer.value(QStringLiteral("x")).toDouble();
+    const auto y = layer.value(QStringLiteral("y")).toDouble();
+    const auto width = layer.value(QStringLiteral("pixelWidth")).toDouble();
+    const auto height = layer.value(QStringLiteral("pixelHeight")).toDouble();
+    const auto canvas_width = layer.value(QStringLiteral("canvasWidth")).toDouble();
+    const auto canvas_height = layer.value(QStringLiteral("canvasHeight")).toDouble();
+    if (x + width > canvas_width || y + height > canvas_height) {
+      errors->append(QStringLiteral("%1 text box must fit within its source image canvas.").arg(context));
+    }
+    const auto typography = layer.value(QStringLiteral("textTypography")).toMap();
+    QString typography_error;
+    if (typography.isEmpty() || !decode_photo_text_style(
+                                     QJsonObject::fromVariantMap(typography), &typography_error)) {
+      errors->append(QStringLiteral("%1 textTypography is invalid: %2").arg(context, typography_error));
+    }
+  }
+}
+
+void validate_layer_effect_changes(const QVariant& value, QStringList* errors) {
+  if (value.typeId() != QMetaType::QVariantList) {
+    errors->append(QStringLiteral("Layer effect changes must be an array."));
+    return;
+  }
+  const auto changes = value.toList();
+  if (changes.isEmpty() || changes.size() > 32) {
+    errors->append(QStringLiteral("Layer effect changes must contain between 1 and 32 entries."));
+    return;
+  }
+  const QSet<QString> allowed_fields{
+      QStringLiteral("layerId"), QStringLiteral("effectId"), QStringLiteral("type"),
+      QStringLiteral("enabled"), QStringLiteral("amount"), QStringLiteral("sigma"),
+      QStringLiteral("radius"), QStringLiteral("levels"), QStringLiteral("distance"),
+      QStringLiteral("angle"), QStringLiteral("strength"), QStringLiteral("threshold"),
+      QStringLiteral("edgeMode")};
+  const QSet<QString> allowed_types{
+      QStringLiteral("gaussian_blur"), QStringLiteral("box_blur"),
+      QStringLiteral("posterize_linear_rgb"), QStringLiteral("invert_linear_rgb"),
+      QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask")};
+  const QSet<QString> allowed_edges{
+      QStringLiteral("transparent"), QStringLiteral("extend"), QStringLiteral("reflect")};
+  QSet<QString> ids;
+  for (int index = 0; index < changes.size(); ++index) {
+    const auto change = changes.at(index).toMap();
+    const auto context = QStringLiteral("Layer effect %1").arg(index + 1);
+    for (auto iterator = change.cbegin(); iterator != change.cend(); ++iterator) {
+      if (!allowed_fields.contains(iterator.key())) {
+        errors->append(QStringLiteral("%1 contains unsupported field %2.").arg(context, iterator.key()));
+      }
+    }
+    const auto layer_id = change.value(QStringLiteral("layerId"));
+    const auto effect_id = change.value(QStringLiteral("effectId"));
+    const auto type = change.value(QStringLiteral("type")).toString();
+    const auto identity = layer_id.toString().trimmed() + QLatin1Char('/') + effect_id.toString().trimmed();
+    if (!is_bounded_non_empty_string(layer_id, 80) ||
+        !is_bounded_non_empty_string(effect_id, 80) ||
+        !effect_id.toString().startsWith(QStringLiteral("agent-effect-"))) {
+      errors->append(QStringLiteral("%1 requires a target layer id and agent-effect- id.").arg(context));
+    }
+    if (ids.contains(identity)) {
+      errors->append(QStringLiteral("%1 target and effect id must be unique in the draft.").arg(context));
+    }
+    ids.insert(identity);
+    if (!allowed_types.contains(type)) {
+      errors->append(QStringLiteral("%1 type is not supported by the effect renderer.").arg(context));
+    }
+    QSet<QString> type_fields{
+        QStringLiteral("layerId"), QStringLiteral("effectId"), QStringLiteral("type"),
+        QStringLiteral("enabled"), QStringLiteral("amount")};
+    if (type == QStringLiteral("gaussian_blur")) {
+      type_fields.unite({QStringLiteral("sigma"), QStringLiteral("edgeMode")});
+    } else if (type == QStringLiteral("box_blur")) {
+      type_fields.unite({QStringLiteral("radius"), QStringLiteral("edgeMode")});
+    } else if (type == QStringLiteral("posterize_linear_rgb")) {
+      type_fields.insert(QStringLiteral("levels"));
+    } else if (type == QStringLiteral("motion_blur")) {
+      type_fields.unite({QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("edgeMode")});
+    } else if (type == QStringLiteral("unsharp_mask")) {
+      type_fields.unite({QStringLiteral("sigma"), QStringLiteral("strength"),
+                         QStringLiteral("threshold"), QStringLiteral("edgeMode")});
+    }
+    for (auto iterator = change.cbegin(); iterator != change.cend(); ++iterator) {
+      if (!type_fields.contains(iterator.key())) {
+        errors->append(QStringLiteral("%1 field %2 does not apply to effect type %3.")
+                           .arg(context, iterator.key(), type));
+      }
+    }
+    if (!change.contains(QStringLiteral("enabled")) || !variant_is_bool(change, QStringLiteral("enabled"))) {
+      errors->append(QStringLiteral("%1 enabled must be boolean.").arg(context));
+    }
+    if (!change.contains(QStringLiteral("amount")) ||
+        !optional_number_in_range(change, QStringLiteral("amount"), 0.0, 1.0)) {
+      errors->append(QStringLiteral("%1 amount must be between 0 and 1.").arg(context));
+    }
+    if (change.contains(QStringLiteral("edgeMode")) &&
+        (change.value(QStringLiteral("edgeMode")).typeId() != QMetaType::QString ||
+         !allowed_edges.contains(change.value(QStringLiteral("edgeMode")).toString()))) {
+      errors->append(QStringLiteral("%1 edgeMode must be transparent, extend, or reflect.").arg(context));
+    }
+    if (type == QStringLiteral("gaussian_blur")) {
+      if (!change.contains(QStringLiteral("sigma")) || !optional_number_in_range(change, QStringLiteral("sigma"), 0.0, 4096.0))
+        errors->append(QStringLiteral("%1 Gaussian sigma must be between 0 and 4096.").arg(context));
+    } else if (type == QStringLiteral("box_blur")) {
+      if (!change.contains(QStringLiteral("radius")) || !optional_integer_in_range(change, QStringLiteral("radius"), 0, 4096))
+        errors->append(QStringLiteral("%1 box radius must be an integer from 0 to 4096.").arg(context));
+    } else if (type == QStringLiteral("posterize_linear_rgb")) {
+      if (!change.contains(QStringLiteral("levels")) || !optional_integer_in_range(change, QStringLiteral("levels"), 2, 256))
+        errors->append(QStringLiteral("%1 posterize levels must be an integer from 2 to 256.").arg(context));
+    } else if (type == QStringLiteral("motion_blur")) {
+      if (!change.contains(QStringLiteral("distance")) || !optional_number_in_range(change, QStringLiteral("distance"), 0.0, 4096.0))
+        errors->append(QStringLiteral("%1 motion distance must be between 0 and 4096.").arg(context));
+      if (!change.contains(QStringLiteral("angle")) || !optional_number_in_range(change, QStringLiteral("angle"), -180.0, 180.0))
+        errors->append(QStringLiteral("%1 motion angle must be between -180 and 180.").arg(context));
+    } else if (type == QStringLiteral("unsharp_mask")) {
+      if (!change.contains(QStringLiteral("sigma")) || !optional_number_in_range(change, QStringLiteral("sigma"), 0.0, 4096.0))
+        errors->append(QStringLiteral("%1 unsharp sigma must be between 0 and 4096.").arg(context));
+      if (!change.contains(QStringLiteral("strength")) || !optional_number_in_range(change, QStringLiteral("strength"), 0.0, 5.0))
+        errors->append(QStringLiteral("%1 unsharp strength must be between 0 and 5.").arg(context));
+      if (!change.contains(QStringLiteral("threshold")) || !optional_number_in_range(change, QStringLiteral("threshold"), 0.0, 1.0))
+        errors->append(QStringLiteral("%1 unsharp threshold must be between 0 and 1.").arg(context));
+    }
+  }
+}
+
+photo_editor::pipeline::PhotoEffectEdgeMode effect_edge_mode(const QString& value) {
+  using photo_editor::pipeline::PhotoEffectEdgeMode;
+  if (value == QStringLiteral("extend")) return PhotoEffectEdgeMode::Extend;
+  if (value == QStringLiteral("reflect")) return PhotoEffectEdgeMode::Reflect;
+  return PhotoEffectEdgeMode::Transparent;
+}
+
+photo_editor::pipeline::PhotoEffectInstance effect_instance_from_change(
+    const QVariantMap& change,
+    const QString& layer_kind) {
+  using photo_editor::pipeline::PhotoEffectInputScope;
+  using photo_editor::pipeline::PhotoEffectInstance;
+  PhotoEffectInstance effect;
+  effect.id = change.value(QStringLiteral("effectId")).toString().toStdString();
+  effect.type_id = change.value(QStringLiteral("type")).toString().toStdString();
+  effect.enabled = change.value(QStringLiteral("enabled")).toBool();
+  effect.amount = change.value(QStringLiteral("amount")).toDouble();
+  effect.input_scope = layer_kind == QStringLiteral("adjustment")
+      ? PhotoEffectInputScope::CompositeBelow
+      : PhotoEffectInputScope::LayerContent;
+  const auto requested_edge = change.value(QStringLiteral("edgeMode")).toString();
+  const auto default_edge = effect.type_id == "motion_blur" ? QStringLiteral("extend")
+      : effect.type_id == "unsharp_mask" ? QStringLiteral("reflect")
+                                           : QStringLiteral("transparent");
+  const auto edge = effect_edge_mode(requested_edge.isEmpty() ? default_edge : requested_edge);
+  if (effect.type_id == "gaussian_blur") {
+    effect.gaussian.sigma = change.value(QStringLiteral("sigma")).toDouble();
+    effect.gaussian.edge_mode = edge;
+  } else if (effect.type_id == "box_blur") {
+    effect.box.radius = change.value(QStringLiteral("radius")).toInt();
+    effect.box.edge_mode = edge;
+  } else if (effect.type_id == "posterize_linear_rgb") {
+    effect.posterize_levels = change.value(QStringLiteral("levels")).toInt();
+  } else if (effect.type_id == "motion_blur") {
+    effect.motion.distance = change.value(QStringLiteral("distance")).toDouble();
+    effect.motion.angle = change.value(QStringLiteral("angle")).toDouble();
+    effect.motion.edge_mode = edge;
+  } else if (effect.type_id == "unsharp_mask") {
+    effect.unsharp.sigma = change.value(QStringLiteral("sigma")).toDouble();
+    effect.unsharp.strength = change.value(QStringLiteral("strength")).toDouble();
+    effect.unsharp.threshold = change.value(QStringLiteral("threshold")).toDouble();
+    effect.unsharp.edge_mode = edge;
+  }
+  return effect;
+}
+
+QVariantMap effect_instance_to_map(const photo_editor::pipeline::PhotoEffectInstance& effect) {
+  using photo_editor::pipeline::PhotoEffectEdgeMode;
+  const auto edge_name = [](PhotoEffectEdgeMode edge) {
+    if (edge == PhotoEffectEdgeMode::Extend) return QStringLiteral("extend");
+    if (edge == PhotoEffectEdgeMode::Reflect) return QStringLiteral("reflect");
+    return QStringLiteral("transparent");
+  };
+  QVariantMap result{
+      {QStringLiteral("effectId"), QString::fromStdString(effect.id)},
+      {QStringLiteral("type"), QString::fromStdString(effect.type_id)},
+      {QStringLiteral("enabled"), effect.enabled},
+      {QStringLiteral("amount"), effect.amount},
+  };
+  if (effect.type_id == "gaussian_blur") {
+    result.insert(QStringLiteral("sigma"), effect.gaussian.sigma);
+    result.insert(QStringLiteral("edgeMode"), edge_name(effect.gaussian.edge_mode));
+  } else if (effect.type_id == "box_blur") {
+    result.insert(QStringLiteral("radius"), effect.box.radius);
+    result.insert(QStringLiteral("edgeMode"), edge_name(effect.box.edge_mode));
+  } else if (effect.type_id == "posterize_linear_rgb") {
+    result.insert(QStringLiteral("levels"), effect.posterize_levels);
+  } else if (effect.type_id == "motion_blur") {
+    result.insert(QStringLiteral("distance"), effect.motion.distance);
+    result.insert(QStringLiteral("angle"), effect.motion.angle);
+    result.insert(QStringLiteral("edgeMode"), edge_name(effect.motion.edge_mode));
+  } else if (effect.type_id == "unsharp_mask") {
+    result.insert(QStringLiteral("sigma"), effect.unsharp.sigma);
+    result.insert(QStringLiteral("strength"), effect.unsharp.strength);
+    result.insert(QStringLiteral("threshold"), effect.unsharp.threshold);
+    result.insert(QStringLiteral("edgeMode"), edge_name(effect.unsharp.edge_mode));
+  }
+  return result;
+}
+
+QVariantMap layer_effect_view(const QVariantList& layers, const QString& layer_id, const QString& effect_id) {
+  for (const auto& value : layers) {
+    const auto layer = value.toMap();
+    if (layer.value(QStringLiteral("id")).toString() != layer_id) continue;
+    const auto effects = photo_editor::desktop::decode_photo_layer_effects(layer);
+    if (!effects) return {};
+    for (const auto& effect : *effects) {
+      if (QString::fromStdString(effect.id) == effect_id) return effect_instance_to_map(effect);
+    }
+  }
+  return {};
+}
+
+void apply_layer_effect_changes(EditRecipeState* state, const QVariantList& changes) {
+  if (state == nullptr) return;
+  auto layers = state->layers;
+  for (const auto& value : changes) {
+    const auto change = value.toMap();
+    const auto layer_id = change.value(QStringLiteral("layerId")).toString();
+    for (auto index = 0; index < layers.size(); ++index) {
+      auto layer = layers.at(index).toMap();
+      if (layer.value(QStringLiteral("id")).toString() != layer_id ||
+          layer.value(QStringLiteral("locked")).toBool()) continue;
+      const auto kind = layer.value(QStringLiteral("kind")).toString();
+      if (kind != QStringLiteral("adjustment") && kind != QStringLiteral("pixel") &&
+          kind != QStringLiteral("source") && kind != QStringLiteral("text") &&
+          kind != QStringLiteral("fill")) continue;
+      auto effects = photo_editor::desktop::decode_photo_layer_effects(layer);
+      if (!effects) continue;
+      const auto requested = effect_instance_from_change(change, kind);
+      auto existing = std::find_if(effects->begin(), effects->end(), [&](const auto& effect) {
+        return effect.id == requested.id;
+      });
+      if (existing == effects->end()) {
+        effects->push_back(requested);
+      } else {
+        *existing = requested;
+      }
+      const auto encoded = photo_editor::desktop::encode_photo_layer_effects(*effects);
+      if (!encoded) continue;
+      layer.insert(QStringLiteral("effectStack"), *encoded);
+      layers[index] = layer;
+      break;
+    }
+  }
+  state->layers = layers;
+}
+
 void validate_mask_stack_field(
     const QString& group,
     const QString& field,
@@ -1326,6 +1670,168 @@ void validate_mask_stack_field(
         !mask_kinds().contains(kind)) {
       errors->append(
           QStringLiteral("%1 kind must be one of: %2").arg(context, mask_kinds().join(QStringLiteral(", "))));
+    }
+    const auto agent_selection_mode =
+        mask.value(QStringLiteral("agentSelectionMode")).toString().trimmed().toLower();
+    const auto agent_semantic_target =
+        mask.value(QStringLiteral("agentSemanticTarget")).toString().trimmed().toLower();
+    const auto agent_selection_label =
+        mask.value(QStringLiteral("agentSelectionLabel")).toString().simplified();
+    if (mask.contains(QStringLiteral("agentSelectionMode")) &&
+        (mask.value(QStringLiteral("agentSelectionMode")).typeId() != QMetaType::QString ||
+         (agent_selection_mode != QStringLiteral("region") &&
+          agent_selection_mode != QStringLiteral("semantic") &&
+          agent_selection_mode != QStringLiteral("guided")))) {
+      errors->append(
+          QStringLiteral("%1 agentSelectionMode must be region, semantic, or guided").arg(context));
+    }
+    if (agent_selection_mode == QStringLiteral("semantic")) {
+      const QStringList semantic_targets{
+          QStringLiteral("subject"),
+          QStringLiteral("background"),
+          QStringLiteral("sky"),
+      };
+      if (mask.value(QStringLiteral("agentSemanticTarget")).typeId() !=
+              QMetaType::QString ||
+          !semantic_targets.contains(agent_semantic_target)) {
+        errors->append(
+            QStringLiteral("%1 semantic selection must target subject, background, or sky")
+                .arg(context));
+      }
+      if (kind != QStringLiteral("radial")) {
+        errors->append(
+            QStringLiteral("%1 semantic selection requests must retain a radial fail-closed fallback")
+                .arg(context));
+      }
+      if (mask.contains(QStringLiteral("agentSelectionLabel"))) {
+        errors->append(
+            QStringLiteral("%1 agentSelectionLabel is reserved for guided selections")
+                .arg(context));
+      }
+    } else if (agent_selection_mode == QStringLiteral("guided")) {
+      if (mask.value(QStringLiteral("agentSelectionLabel")).typeId() !=
+              QMetaType::QString ||
+          agent_selection_label.isEmpty() || agent_selection_label.size() > 100) {
+        errors->append(
+            QStringLiteral("%1 guided selection requires a target label no longer than 100 characters")
+                .arg(context));
+      }
+      if (kind != QStringLiteral("radial")) {
+        errors->append(
+            QStringLiteral("%1 guided selection requests must retain a radial fail-closed fallback")
+                .arg(context));
+      }
+      if (mask.contains(QStringLiteral("agentSemanticTarget"))) {
+        errors->append(
+            QStringLiteral("%1 guided selection cannot supply agentSemanticTarget")
+                .arg(context));
+      }
+    } else if (mask.contains(QStringLiteral("agentSemanticTarget"))) {
+      errors->append(
+          QStringLiteral("%1 agentSemanticTarget requires agentSelectionMode=semantic")
+              .arg(context));
+    } else if (mask.contains(QStringLiteral("agentSelectionLabel"))) {
+      errors->append(
+          QStringLiteral("%1 agentSelectionLabel requires agentSelectionMode=guided")
+              .arg(context));
+    }
+    if (mask.contains(QStringLiteral("agentSelectionCandidates"))) {
+      const auto candidate_value =
+          mask.value(QStringLiteral("agentSelectionCandidates"));
+      const auto candidates = candidate_value.toList();
+      if (agent_selection_mode != QStringLiteral("guided")) {
+        errors->append(
+            QStringLiteral("%1 selection candidates require agentSelectionMode=guided")
+                .arg(context));
+      }
+      if (candidate_value.typeId() != QMetaType::QVariantList ||
+          candidates.size() < 2 || candidates.size() > 3) {
+        errors->append(
+            QStringLiteral("%1 must provide two or three grounded selection candidates")
+                .arg(context));
+      }
+      QSet<QString> candidate_ids;
+      for (auto candidate_index = 0;
+           candidate_index < candidates.size(); ++candidate_index) {
+        const auto candidate = candidates.at(candidate_index).toMap();
+        const auto candidate_context =
+            QStringLiteral("%1 candidate %2").arg(context).arg(candidate_index);
+        const auto candidate_id =
+            candidate.value(QStringLiteral("id")).toString().trimmed();
+        if (!is_bounded_non_empty_string(
+                candidate.value(QStringLiteral("id")), 80) ||
+            candidate_ids.contains(candidate_id)) {
+          errors->append(
+              QStringLiteral("%1 id must be unique, non-empty, and no longer than 80 characters")
+                  .arg(candidate_context));
+        }
+        candidate_ids.insert(candidate_id);
+        if (!is_bounded_non_empty_string(
+                candidate.value(QStringLiteral("label")), 100)) {
+          errors->append(
+              QStringLiteral("%1 label must be non-empty and no longer than 100 characters")
+                  .arg(candidate_context));
+        }
+        if (!candidate.contains(QStringLiteral("confidence")) ||
+            !optional_number_in_range(
+                candidate, QStringLiteral("confidence"), 0.0, 1.0)) {
+          errors->append(
+              QStringLiteral("%1 confidence must be between 0 and 1")
+                  .arg(candidate_context));
+        }
+        const auto region_value = candidate.value(QStringLiteral("region"));
+        const auto region = region_value.toMap();
+        const auto region_valid =
+            region_value.typeId() == QMetaType::QVariantMap &&
+            region.contains(QStringLiteral("centerX")) &&
+            region.contains(QStringLiteral("centerY")) &&
+            region.contains(QStringLiteral("radiusX")) &&
+            region.contains(QStringLiteral("radiusY")) &&
+            region.contains(QStringLiteral("feather")) &&
+            optional_number_in_range(
+                region, QStringLiteral("centerX"), 0.0, 1.0) &&
+            optional_number_in_range(
+                region, QStringLiteral("centerY"), 0.0, 1.0) &&
+            optional_number_in_range(
+                region, QStringLiteral("radiusX"), 0.04, 0.5) &&
+            optional_number_in_range(
+                region, QStringLiteral("radiusY"), 0.04, 0.5) &&
+            optional_number_in_range(
+                region, QStringLiteral("feather"), 0.05, 1.0);
+        if (!region_valid) {
+          errors->append(
+              QStringLiteral("%1 region must be a bounded normalized evidence region")
+                  .arg(candidate_context));
+        }
+      }
+    }
+    const auto has_visual_referent_id =
+        mask.contains(QStringLiteral("agentVisualReferentId"));
+    const auto has_visual_referent_source =
+        mask.contains(QStringLiteral("agentSelectionSource"));
+    if (has_visual_referent_id || has_visual_referent_source) {
+      if (agent_selection_mode != QStringLiteral("guided")) {
+        errors->append(
+            QStringLiteral("%1 visual referents require agentSelectionMode=guided")
+                .arg(context));
+      }
+      if (!is_bounded_non_empty_string(
+              mask.value(QStringLiteral("agentVisualReferentId")), 80)) {
+        errors->append(
+            QStringLiteral("%1 agentVisualReferentId must be a bounded non-empty string")
+                .arg(context));
+      }
+      if (mask.value(QStringLiteral("agentSelectionSource")).toString() !=
+          QStringLiteral("confirmed-visual-referent")) {
+        errors->append(
+            QStringLiteral("%1 agentSelectionSource must identify a confirmed visual referent")
+                .arg(context));
+      }
+      if (mask.contains(QStringLiteral("agentSelectionCandidates"))) {
+        errors->append(
+            QStringLiteral("%1 a resolved visual referent cannot retain ambiguous candidates")
+                .arg(context));
+      }
     }
     if (mask.contains(QStringLiteral("toolRole")) &&
         mask.value(QStringLiteral("toolRole")).toString().trimmed().toLower() == QStringLiteral("retouch")) {
@@ -1542,6 +2048,7 @@ void validate_retouch_stack_field(
           QStringLiteral("inpaintFinalRequired"), QStringLiteral("inpaintFallback"),
           QStringLiteral("inpaintFallbackReason"), QStringLiteral("inpaintRegionKind"),
           QStringLiteral("inpaintEdgeContinuation"), QStringLiteral("inpaintTextureSynthesis"),
+          QStringLiteral("inpaintTextureExemplar"),
           QStringLiteral("generatedAlphaData"), QStringLiteral("generatedMaskCleanupSourceData"),
           QStringLiteral("maskData")}) {
       if (retouch.contains(key)) {
@@ -1636,6 +2143,12 @@ void validate_retouch_stack_field(
     if (!is_optional_bounded_string(retouch, QStringLiteral("brushPreset"), 64)) {
       errors->append(QStringLiteral("%1 string fields must be bounded non-empty strings").arg(context));
     }
+    if (!is_optional_bounded_string(
+            retouch, QStringLiteral("agentInstruction"), 240)) {
+      errors->append(
+          QStringLiteral("%1 agentInstruction must be a non-empty string no longer than 240 characters")
+              .arg(context));
+    }
     if (retouch.contains(QStringLiteral("cloneSources"))) {
       validate_clone_sources(retouch.value(QStringLiteral("cloneSources")), context, errors);
     }
@@ -1680,6 +2193,40 @@ QVariantList replace_retouch_stack(const QVariantList& masks, const QVariantList
     auto retouch = value.toMap();
     retouch.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
     next_stack.append(retouch);
+  }
+  return normalize_mask_stack(next_stack);
+}
+
+QVariantList append_retouch_stack(
+    const QVariantList& masks,
+    const QVariantList& retouch_stack) {
+  auto next_stack = masks;
+  for (const auto& value : retouch_stack) {
+    auto retouch = value.toMap();
+    retouch.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+    const auto retouch_id =
+        retouch.value(QStringLiteral("id")).toString().trimmed();
+    auto replaced = false;
+    if (!retouch_id.isEmpty()) {
+      for (auto index = 0; index < next_stack.size(); ++index) {
+        const auto existing = next_stack.at(index).toMap();
+        if (existing.value(QStringLiteral("toolRole")).toString().trimmed().toLower() !=
+                QStringLiteral("retouch") ||
+            existing.value(QStringLiteral("id")).toString().trimmed() != retouch_id) {
+          continue;
+        }
+        auto merged = existing;
+        for (auto field = retouch.cbegin(); field != retouch.cend(); ++field) {
+          merged.insert(field.key(), field.value());
+        }
+        next_stack[index] = merged;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) {
+      next_stack.append(retouch);
+    }
   }
   return normalize_mask_stack(next_stack);
 }
@@ -1873,13 +2420,101 @@ QVariantMap agent_recipe_patch_tool_schema() {
         });
   }
   for (const auto& field : recipe_layer_stack_fields()) {
+    QVariantMap schema{
+        {QStringLiteral("type"), field.append ? QStringLiteral("graphicTextStack")
+                                               : QStringLiteral("photoLayerStack")},
+        {QStringLiteral("entryValidation"), field.append
+             ? QStringLiteral("bounded-editable-text-layer-schema")
+             : QStringLiteral("photo-layer-lut-adjustment-schema")},
+        {QStringLiteral("appendOnly"), field.append},
+        {QStringLiteral("maximumEntries"), field.append ? 12 : 24},
+    };
+    if (field.append) {
+      schema.insert(QStringLiteral("requiredEntryFields"), QStringList{
+          QStringLiteral("id: agent-graphic-*"), QStringLiteral("kind: text"),
+          QStringLiteral("name"), QStringLiteral("text"), QStringLiteral("enabled"),
+          QStringLiteral("opacity"), QStringLiteral("x"), QStringLiteral("y"),
+          QStringLiteral("pixelWidth"), QStringLiteral("pixelHeight"),
+          QStringLiteral("canvasWidth"), QStringLiteral("canvasHeight"),
+          QStringLiteral("textTypography"),
+      });
+      schema.insert(QStringLiteral("coordinateUnits"), QStringLiteral("source-image-pixels"));
+      schema.insert(QStringLiteral("textTypographySchema"), QStringLiteral("photo-text-style-v1-or-v2"));
+      schema.insert(QStringLiteral("replacementPolicy"), QStringLiteral("replace-prior-agent-graphic-layers-only"));
+      schema.insert(QStringLiteral("textMaximumLength"), 2048);
+      schema.insert(QStringLiteral("maximumTextLayers"), 12);
+      schema.insert(QStringLiteral("dimensionRanges"), QVariantMap{
+          {QStringLiteral("x"), QVariantList{0, 1000000}},
+          {QStringLiteral("y"), QVariantList{0, 1000000}},
+          {QStringLiteral("pixelWidth"), QVariantList{16, 8192}},
+          {QStringLiteral("pixelHeight"), QVariantList{16, 8192}},
+          {QStringLiteral("canvasWidth"), QVariantList{16, 1000000}},
+          {QStringLiteral("canvasHeight"), QVariantList{16, 1000000}},
+      });
+      schema.insert(QStringLiteral("typographyFields"), QStringList{
+          QStringLiteral("version"), QStringLiteral("family"), QStringLiteral("face"),
+          QStringLiteral("size"), QStringLiteral("weight"), QStringLiteral("italic"),
+          QStringLiteral("underline"), QStringLiteral("tracking"), QStringLiteral("lineHeight"),
+          QStringLiteral("baselineOffset"), QStringLiteral("color"),
+          QStringLiteral("mode"), QStringLiteral("paragraphSpacing")});
+    }
+    insert_typed_schema_field(
+        &groups,
+        QString::fromLatin1(field.group),
+        QString::fromLatin1(field.field),
+        schema);
+  }
+  for (const auto& field : recipe_layer_effect_fields()) {
+    const QVariantMap edge_modes{
+        {QStringLiteral("allowed"), QStringList{QStringLiteral("transparent"),
+                                                QStringLiteral("extend"),
+                                                QStringLiteral("reflect")}}};
+    const QVariantMap type_schemas{
+        {QStringLiteral("gaussian_blur"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("sigma")}},
+             {QStringLiteral("sigmaRange"), QVariantList{0.0, 4096.0}},
+             {QStringLiteral("edgeModes"), edge_modes.value(QStringLiteral("allowed"))}}},
+        {QStringLiteral("box_blur"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("radius")}},
+             {QStringLiteral("radiusRange"), QVariantList{0, 4096}},
+             {QStringLiteral("edgeModes"), edge_modes.value(QStringLiteral("allowed"))}}},
+        {QStringLiteral("posterize_linear_rgb"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("levels")}},
+             {QStringLiteral("levelsRange"), QVariantList{2, 256}}}},
+        {QStringLiteral("invert_linear_rgb"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{}}}},
+        {QStringLiteral("motion_blur"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("distance"), QStringLiteral("angle")}},
+             {QStringLiteral("distanceRange"), QVariantList{0.0, 4096.0}},
+             {QStringLiteral("angleRange"), QVariantList{-180.0, 180.0}},
+             {QStringLiteral("edgeModes"), edge_modes.value(QStringLiteral("allowed"))}}},
+        {QStringLiteral("unsharp_mask"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("sigma"),
+                                                            QStringLiteral("strength"),
+                                                            QStringLiteral("threshold")}},
+             {QStringLiteral("sigmaRange"), QVariantList{0.0, 4096.0}},
+             {QStringLiteral("strengthRange"), QVariantList{0.0, 5.0}},
+             {QStringLiteral("thresholdRange"), QVariantList{0.0, 1.0}},
+             {QStringLiteral("edgeModes"), edge_modes.value(QStringLiteral("allowed"))}}},
+    };
     insert_typed_schema_field(
         &groups,
         QString::fromLatin1(field.group),
         QString::fromLatin1(field.field),
         QVariantMap{
-            {QStringLiteral("type"), QStringLiteral("photoLayerStack")},
-            {QStringLiteral("entryValidation"), QStringLiteral("photo-layer-lut-adjustment-schema")},
+            {QStringLiteral("type"), QStringLiteral("layerEffectChanges")},
+            {QStringLiteral("entryValidation"), QStringLiteral("supported-photo-effect-instance-v1")},
+            {QStringLiteral("allowedTypes"), QStringList{
+                 QStringLiteral("gaussian_blur"), QStringLiteral("box_blur"),
+                 QStringLiteral("posterize_linear_rgb"), QStringLiteral("invert_linear_rgb"),
+                 QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask")}},
+            {QStringLiteral("typeSchemas"), type_schemas},
+            {QStringLiteral("commonRanges"), QVariantMap{
+                 {QStringLiteral("amount"), QVariantList{0.0, 1.0}}}},
+            {QStringLiteral("appendOnly"), true},
+            {QStringLiteral("maximumEntries"), 32},
+            {QStringLiteral("stableEffectIdPrefix"), QStringLiteral("agent-effect-")},
+            {QStringLiteral("preservesOtherLayerProperties"), true},
         });
   }
   for (const auto& field : recipe_mask_stack_fields()) {
@@ -2041,13 +2676,15 @@ AgentRecipePatchValidationResult validate_agent_recipe_patch(
       const auto* string_enum_field = find_string_enum_field(group, field_iterator.key());
       const auto* string_field = find_string_field(group, field_iterator.key());
       const auto* layer_stack_field = find_layer_stack_field(group, field_iterator.key());
+      const auto* layer_effect_field = find_layer_effect_field(group, field_iterator.key());
       const auto* mask_stack_field = find_mask_stack_field(group, field_iterator.key());
       const auto* retouch_stack_field = find_retouch_stack_field(group, field_iterator.key());
       if (field == nullptr && bool_field == nullptr && array_field == nullptr &&
           mixer_channel_field == nullptr && rgb_channel_mixer_field == nullptr &&
           curve_points_field == nullptr && string_field == nullptr &&
           string_enum_field == nullptr && layer_stack_field == nullptr &&
-          mask_stack_field == nullptr && retouch_stack_field == nullptr) {
+          layer_effect_field == nullptr && mask_stack_field == nullptr &&
+          retouch_stack_field == nullptr) {
         result.errors.append(
             QStringLiteral("Unsupported recipe patch field: %1.%2")
                 .arg(group, field_iterator.key()));
@@ -2125,7 +2762,15 @@ AgentRecipePatchValidationResult validate_agent_recipe_patch(
         continue;
       }
       if (layer_stack_field != nullptr) {
-        validate_photo_layers_field(group, field_iterator.key(), field_iterator.value(), &result.errors);
+        if (layer_stack_field->append) {
+          validate_graphic_text_layers(field_iterator.value(), &result.errors);
+        } else {
+          validate_photo_layers_field(group, field_iterator.key(), field_iterator.value(), &result.errors);
+        }
+        continue;
+      }
+      if (layer_effect_field != nullptr) {
+        validate_layer_effect_changes(field_iterator.value(), &result.errors);
         continue;
       }
       if (mask_stack_field != nullptr) {
@@ -2244,12 +2889,50 @@ QVariantMap agent_recipe_patch_diff(
             });
       } else if (const auto* layer_stack_field =
                      find_layer_stack_field(group_iterator.key(), field_iterator.key())) {
+        const auto before_layers = before.*(layer_stack_field->member);
+        const auto after_layers = after.*(layer_stack_field->member);
+        if (layer_stack_field->append) {
+          const auto agent_graphics = [](const QVariantList& layers) {
+            QVariantList result;
+            for (const auto& value : layers) {
+              const auto layer = value.toMap();
+              if (layer.value(QStringLiteral("agentGraphic")).toBool()) {
+                result.append(layer);
+              }
+            }
+            return result;
+          };
+          group_diff.insert(
+              field_iterator.key(),
+              QVariantMap{
+                  {QStringLiteral("before"), agent_graphics(before_layers)},
+                  {QStringLiteral("after"), agent_graphics(after_layers)},
+              });
+        } else {
         group_diff.insert(
             field_iterator.key(),
             QVariantMap{
-                {QStringLiteral("before"), before.*(layer_stack_field->member)},
-                {QStringLiteral("after"), after.*(layer_stack_field->member)},
+                {QStringLiteral("before"), before_layers},
+                {QStringLiteral("after"), after_layers},
             });
+        }
+      } else if (const auto* layer_effect_field =
+                     find_layer_effect_field(group_iterator.key(), field_iterator.key())) {
+        QVariantList effect_diffs;
+        const auto requested_changes = field_iterator.value().toList();
+        for (const auto& value : requested_changes) {
+          auto effect_change = value.toMap();
+          const auto layer_id = effect_change.value(QStringLiteral("layerId")).toString();
+          const auto effect_id = effect_change.value(QStringLiteral("effectId")).toString();
+          effect_change.insert(
+              QStringLiteral("before"),
+              layer_effect_view(before.*(layer_effect_field->member), layer_id, effect_id));
+          effect_change.insert(
+              QStringLiteral("after"),
+              layer_effect_view(after.*(layer_effect_field->member), layer_id, effect_id));
+          effect_diffs.append(effect_change);
+        }
+        group_diff.insert(field_iterator.key(), effect_diffs);
       } else if (const auto* mask_stack_field =
                      find_mask_stack_field(group_iterator.key(), field_iterator.key())) {
         group_diff.insert(
@@ -2312,14 +2995,72 @@ void apply_agent_recipe_patch(EditRecipeState* state, const QVariantMap& patch) 
         (*state).*(string_field->member) = field_iterator.value().toString().trimmed();
       } else if (const auto* layer_stack_field =
                      find_layer_stack_field(group_iterator.key(), field_iterator.key())) {
-        (*state).*(layer_stack_field->member) = field_iterator.value().toList();
+        if (layer_stack_field->append) {
+          auto merged_layers = (*state).*(layer_stack_field->member);
+          for (auto index = merged_layers.size() - 1; index >= 0; --index) {
+            if (merged_layers.at(index).toMap().value(QStringLiteral("agentGraphic")).toBool()) {
+              merged_layers.removeAt(index);
+            }
+          }
+          const auto generated_layers = field_iterator.value().toList();
+          for (auto index = generated_layers.size() - 1; index >= 0; --index) {
+            auto generated_layer = generated_layers.at(index).toMap();
+            generated_layer.insert(QStringLiteral("agentGraphic"), true);
+            merged_layers.prepend(generated_layer);
+          }
+          (*state).*(layer_stack_field->member) = merged_layers;
+        } else {
+          (*state).*(layer_stack_field->member) = field_iterator.value().toList();
+        }
+      } else if (find_layer_effect_field(group_iterator.key(), field_iterator.key()) != nullptr) {
+        apply_layer_effect_changes(
+            state, field_iterator.value().toList());
       } else if (const auto* mask_stack_field =
                      find_mask_stack_field(group_iterator.key(), field_iterator.key())) {
-        (*state).*(mask_stack_field->member) = normalize_mask_stack(field_iterator.value().toList());
+        if (mask_stack_field->append) {
+          auto merged_masks = (*state).*(mask_stack_field->member);
+          for (const auto& appended_value : field_iterator.value().toList()) {
+            const auto appended_mask = appended_value.toMap();
+            const auto appended_id =
+                appended_mask.value(QStringLiteral("id")).toString().trimmed();
+            auto replaced = false;
+            if (!appended_id.isEmpty()) {
+              for (auto index = 0; index < merged_masks.size(); ++index) {
+                if (merged_masks.at(index)
+                        .toMap()
+                        .value(QStringLiteral("id"))
+                        .toString()
+                        .trimmed() == appended_id) {
+                  auto merged_mask = merged_masks.at(index).toMap();
+                  for (auto field = appended_mask.cbegin();
+                       field != appended_mask.cend();
+                       ++field) {
+                    merged_mask.insert(field.key(), field.value());
+                  }
+                  merged_masks[index] = merged_mask;
+                  replaced = true;
+                  break;
+                }
+              }
+            }
+            if (!replaced) {
+              merged_masks.append(appended_mask);
+            }
+          }
+          (*state).*(mask_stack_field->member) = normalize_mask_stack(merged_masks);
+        } else {
+          (*state).*(mask_stack_field->member) =
+              normalize_mask_stack(field_iterator.value().toList());
+        }
       } else if (const auto* retouch_stack_field =
                      find_retouch_stack_field(group_iterator.key(), field_iterator.key())) {
-        (*state).*(retouch_stack_field->member) =
-            replace_retouch_stack((*state).*(retouch_stack_field->member), field_iterator.value().toList());
+        (*state).*(retouch_stack_field->member) = retouch_stack_field->append
+            ? append_retouch_stack(
+                  (*state).*(retouch_stack_field->member),
+                  field_iterator.value().toList())
+            : replace_retouch_stack(
+                  (*state).*(retouch_stack_field->member),
+                  field_iterator.value().toList());
       }
     }
   }

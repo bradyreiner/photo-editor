@@ -1,0 +1,2 @@
+# Commit the production copy before evidence collection. One line per independent final approver:
+# reviewer-id ssh-ed25519 BASE64_PUBLIC_KEY reviewer-comment

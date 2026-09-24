@@ -1,7 +1,8 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtMultimedia
 import QtQml
 import "../components"
 
@@ -10,6 +11,10 @@ Rectangle {
     objectName: "carouselWorkspace"
     color: "transparent"
     focus: true
+    LayoutMirroring.enabled: uiRightToLeft
+    LayoutMirroring.childrenInherit: true
+
+    signal editPhotoRequested(var payload)
 
     Theme { id: theme }
 
@@ -19,12 +24,144 @@ Rectangle {
     readonly property string carouselWorkflowPolishContract: "carousel-workflow-polish:v1|first-glance:setup-or-board-canvas-tool-rail-inspector-strip|close-inspection:active-tool-board-selection-media-layer-rating-export|clutter:one-active-selection-context-media-picker-contextual|interaction:create-select-pan-text-media-shape-guide-layer-export|text:no-elide-no-overlap|functionality:preserved"
     readonly property string carouselPageCompletionContract: "page-completion:v1|carousel|rail:select-pan-text-media-shape-guides|content:setup-or-artboard-empty-slot-board-strip|inspector:board-selection-layers-media|toolbar:save-export-board-actions|states:setup-empty-board-selected-media-exporting-error"
     readonly property string carouselSlotSelectorContract: "carousel-slot-selector:v1|split:left-right|stack:top-middle-bottom|full-labels:true|no-abbreviations:true|no-elide:true"
+    readonly property string carouselControlVocabularyContract: "carousel-control-vocabulary:v1|gradients:horizontal-vertical|distribution:horizontal-vertical|delete:board-layer|increments:board-count-export-version|add-board:explicit|icons:labeled|abbreviations:none|duplicate-plus:none|no-elide:true"
+    readonly property string carouselInteractionConsistencyContract: "carousel-interaction-consistency:v1|shared:theme-interaction-states|surfaces:header-actions-chips-template-cards-swatches-layer-rows-board-thumbnails|states:hover-pressed-focus-disabled-destructive-selected|non-color-cues:true|duration:theme-fast|no-elide:true"
+    readonly property string carouselAccessibilityContract: "carousel-accessibility:v1|names:true|roles:true|values-in-descriptions:true|selected-state:true|state-bindings-live:true|focus-restoration:drawer-command-reading-order:true|swatches:true|thumbnails:true|slots:true|canvas-objects:true|drag-alternatives:keyboard-nudge-reorder:true|no-mouse-required:true"
+    readonly property bool uiRightToLeft: Qt.application.layoutDirection === Qt.RightToLeft
+    readonly property string carouselLocaleStressContract: "carousel-locale-stress:v1|ui-mirroring:rtl-aware|canvas-geometry:logical-unmirrored|text:bidi-auto|board-sequence:logical-number-preserved|templates:mixed-script-readable|export-filenames:unicode-preserved|no-elide:true"
+    readonly property string carouselVisualRegressionContract: "carousel-visual-regression:v1|states:empty-template-browser-composer-multi-select-crop-missing-resource-preflight-export-compact-wide-high-dpi-reduced-motion|real-qml:true|required-objects:true|png:true|sha256:true|manifest:true|nonblank:true|no-elide:true"
+    readonly property string carouselPrecisionLayoutContract: "carousel-precision-layout:v1|persistent-settings:true|multi-selection-transform:true|anchor-positioning:9-point|grid:columns-rows-margins-gutters|rulers:create-guides|custom-guides:drag-remove|snap:priority-distance-equal-gap|safe-bleed:true|nudge:configurable|presets:4|undo:true|no-elide:true"
+    readonly property string carouselSafeAreaContract: "carousel-safe-area:v1|instagram-feed:true|reels-stories:true|tiktok:true|generic-device-ui:true|preview-only:true|never-export:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselTextLayoutContract: "carousel-text-layout:v1|line-height:true|paragraph-spacing:true|text-inset:true|maximum-lines:true|vertical-overflow:true|shared-preview-export-layout:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselTextFitContract: "carousel-text-fit:v1|content-height:true|auto-size:true|fixed-warn:true|minimum:true|maximum:true|fitted-state:true|live-copy:true|frame-resize:true|typography-change:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselRichTextContract: "carousel-rich-text:v1|range-based:true|emphasis:true|links:true|color:true|weight:true|italic:true|superscript:true|edit-remap:true|shared-measurement:true|preview-export-parity:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselTextStylesContract: "carousel-text-styles:v1|type-scale:true|named:true|custom:true|selected-boards:true|all-document:true|affected-preview:true|explicit-apply:true|one-step-undo:true|persistence:true|no-elide:true"
+    readonly property string carouselDocumentVariablesContract: "carousel-document-variables:v1|keys:title,client,campaign,date,url,handle,board_number,total_boards|raw-tokens:true|resolved-layout:true|resolved-preview:true|board-aware:true|snippets:true|detach-to-text:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselListsNumberingContract: "carousel-lists-numbering:v1|bullets:true|numbering:true|non-destructive:true|hanging-indent:true|shared-line-geometry:true|auto-board:true|auto-step:true|reorder-aware:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselFocusedCropContract: "carousel-focused-crop:v1|outside-dim:true|rule-overlays:thirds-golden-center|reset:true|numeric-zoom-position:true|keyboard-nudge:true|previous-next-media:true|manual-authoritative:true|undo:true|preview-export-parity:true|no-elide:true"
+    readonly property string carouselCropOwnershipContract: "carousel-crop-ownership:v1|use-edit-crop:true|use-original:true|use-carousel-crop:true|edit-crop-isolated:true|original-bypasses-edits:true|carousel-keeps-color:true|explicit-only:true|undo:true|persistence:true|preview-export-parity:true|no-elide:true"
+    readonly property string carouselPhotoFramesContract: "carousel-photo-frames:v1|bordered-print:true|rounded-card:true|instant-photo-caption:true|contact-sheet-cell:true|browser-device:true|editorial-mount:true|editable-compositions:true|grouped:true|undo:true|persistence:true|export:true|no-elide:true"
+    readonly property string carouselVideoCompositionContract: "carousel-video-composition:v1|trim-in-out:true|poster-frame:true|audio-policy:mute-preserve|loop-intent:true|duration:true|board-playback-preview:true|trim-aware-preview:true|export-enforced:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselMediaUsageContract: "carousel-media-usage:v1|duplicates:true|unused-selection:true|reused-crops:true|offline:true|dependent-boards:true|placement-jump:true|autofill-overflow:true|no-elide:true"
+    readonly property string carouselSelectionBatchContract: "carousel-selection-batch:v1|match-size:true|match-width:true|match-height:true|match-style:true|swap-position:true|replace-content:true|anchor-explicit:true|preview:true|compatible-skip:true|one-step-undo:true|no-elide:true"
+    readonly property string carouselTransformFieldsContract: "carousel-transform-fields:v1|coordinate-space:board|units:px-degrees|anchor:9-point|aspect-lock:visible-persistent|relative:add-subtract-multiply-divide|absolute-prefix:equals|mixed:x-y-width-height-rotation|multi-selection:true|undo:true|no-elide:true"
+    readonly property string carouselRepeatGridContract: "carousel-repeat-grid:v1|rows:1-10|columns:1-10|gap-x:true|gap-y:true|ordering:row-column-major|projected-bounds:true|projected-layer-count:true|preview:true|atomic:true|detached:true|editable:true|unique-identities:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselRepeatedElementLinksContract: "carousel-repeated-element-links:v1|multi-part:true|scopes:selected-following-all|board-relative:true|automatic-sync:true|geometry:true|style:true|content:true|media:true|detach-board-override:true|unlink-all:true|undo:true|save-reopen:true|no-elide:true"
+    readonly property string carouselPreviewInvalidationContract: "carousel-preview-invalidation:v2|board-aware:true|item-aware:true|selection-no-render:true|decode-ms:true|layout-ms:true|render-ms:true|publish-ms:true|revision:true|shared-cache:true|budget:512mb|stale-request-cancellation:true|no-elide:true"
+    readonly property string carouselMediaAutofillContract: "carousel-media-autofill:v1|ordered-selection:true|slot-mapping-preview:true|reorder:true|skip:true|atomic-apply:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselStoryboardContract: "carousel-storyboard:v1|all-boards:true|useful-size:true|drag-reorder:true|duplicate:true|delete:true|multi-select:true|role-assignment:true|return-to-composer:true|undo:true|no-elide:true"
+    readonly property string carouselBoardSectionsContract: "carousel-board-sections:v1|named:true|consecutive-selection:true|linked-spread-boundary:true|overview:true|collapse:true|expand:true|move-complete:true|preserve-internal-order:true|rename:true|ungroup:true|undo:true|save-reopen:true|no-elide:true"
+    readonly property string carouselSequenceTemplateContract: "carousel-sequence-templates:v1|atomic:true|visual-cards:true|full-preview:true|metadata:true|editable-layers:true|roles:true|component-links:true|placeholders:true|undo:true|save-reopen:true|no-elide:true"
+    readonly property string carouselListiclePackContract: "carousel-listicle-pack:v1|cover:true|numbered-variants:5|image-caption:true|comparison-pair:true|progress-numbering:true|reorder-aware:true|recap:true|final-prompt:true|editable-layers:true|ratios:4x5-1x1-9x16-5x4|undo:true|save-reopen:true|export:true|no-elide:true"
+    readonly property string carouselPortfolioEditorialPackContract: "carousel-portfolio-editorial-pack:v1|photography-dominant:true|opener:true|diptych:true|triptych:true|full-bleed:true|pull-quote:true|credits:true|contact:true|no-marketing-card:true|editable-layers:true|ratios:4x5-1x1-9x16-5x4|undo:true|save-reopen:true|export:true|no-elide:true"
+    readonly property string carouselAnnouncementEventPackContract: "carousel-announcement-event-pack:v1|save-date:true|headline:true|date-time:true|location-access:true|supporting-point:true|program:true|contributors:true|reminder:true|cta-copy:true|editable-layers:true|ratios:4x5-1x1-9x16-5x4|undo:true|save-reopen:true|export:true|no-elide:true"
+    readonly property string carouselThoughtLeadershipPackContract: "carousel-thought-leadership-pack:v1|hook-question:true|thesis:true|supporting-point:true|matched-evidence:true|quote:true|attribution:true|counterpoint:true|implications:true|cta-copy:true|editable-layers:true|ratios:4x5-1x1-9x16-5x4|undo:true|save-reopen:true|export:true|no-elide:true"
+    readonly property string carouselTemplateLibraryContract: "carousel-template-library:v1|unified-metadata:true|search:true|goal-category-filter:true|favorites:persistent|recents:persistent|sections:all-favorites-recent-installed-custom|density:compact-comfortable|installed-preview:role-metadata|custom-preview-max:320x400|card-decode-max:160x200|no-full-resolution-card-assets:true|no-elide:true"
+    readonly property string carouselTemplatePackUpdateContract: "carousel-template-pack-update:v1|provenance:id-version|availability:non-mutating|changes:component-level|preview:exact-counts|local-overrides:preserved|missing-components:reported|automatic:false|approval:explicit|apply:one-step-undo|history:persistent|no-elide:true"
+    readonly property string carouselBackgroundRemovalContract: "carousel-background-removal:v1|targets:slot-layer|processing:visible|failure:retryable|refine:feather-expand-edge-contrast|original-fallback:reversible|preview:result-black-white-matte-edges|preview-only-inspection:true|transparent-background:true|export:png-webp-alpha|async:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselFocalPointContract: "carousel-focal-point:v1|per-instance:true|smart-across-ratios:true|manual-authoritative:true|slot:true|layer:true|undo:true|persistence:true|preview-export-parity:true|no-elide:true"
+    readonly property string carouselMediaDropContract: "carousel-media-drop:v1|library:true|filesystem:true|board:true|exact-slot:true|layer-stack:true|thumbnail:true|preview:true|copy-action:true|atomic-undo:true|no-elide:true"
+    readonly property string carouselBoardLayoutTokensContract: "carousel-board-layout-tokens:v1|board-local:true|columns:true|rows:true|margins:true|gutters:true|canvas-visualization:true|snap:true|presets:true|undo:true|persistence:true|never-export:true|no-elide:true"
+    readonly property string carouselLayoutRecipesContract: "carousel-layout-recipes:v1|layout-only:true|grid:true|guides:true|safe-areas:true|margins:true|gutters:true|repeated-spacing:true|preview:true|style-mutations:zero|content-mutations:zero|atomic-apply:true|undo:true|library-persistence:true|export-invariant:true|no-elide:true"
+    readonly property string carouselVariantComparisonContract: "carousel-variant-comparison:v1|captured-left:true|live-right:true|synchronized-board-navigation:true|bounded-rendered-previews:true|different-state:true|keep-left:true|keep-right:true|keep-both-as-version:true|restore-version:true|delete-version:true|atomic-undo:true|persistence:true|no-elide:true"
+    readonly property string carouselConstraintStackContract: "carousel-constraint-stack:v1|explicit-only:true|axes:vertical-horizontal|ordered:true|padding:true|gap:true|copy-reflow:true|media-size-preserved:true|move-as-unit:true|manual-reflow:true|detach-keeps-geometry:true|undo:true|persistence:true|export:true|no-hidden-auto-layout:true|no-elide:true"
+    readonly property string carouselCrossDocumentClipboardContract: "carousel-cross-document-clipboard:v1|kinds:boards-components|system-clipboard:true|versioned-payload:true|fresh-identities:true|groups:true|stacks:true|repeated-links:true|missing-assets:true|missing-fonts:true|style-policy:preserve-map-brand|aspect-adaptation:true|atomic-undo:true|save-reopen:true|export:true|no-elide:true"
+    readonly property string carouselContinuityPreviewContract: "carousel-continuity-preview:v1|linked-spread:true|actual-export-cut:true|rendered-board-previews:true|platform-gutter-simulation:true|unsafe-seam-band:true|critical-content-warning:true|jump-to-layer:true|never-export:true|no-elide:true"
+    readonly property string carouselNeighborComparisonContract: "carousel-neighbor-comparison:v1|previous-overlay:true|next-overlay:true|two-up:true|live-previews:true|current-focus:true|direct-open:true|temporary:true|never-export:true|keyboard:true|no-elide:true"
+    readonly property string carouselBoardRangeCommandContract: "carousel-board-range-command:v1|operations:background-template-brand-spacing-text-style|scopes:current-selected-following-all|preview:exact-boards|linked-spread-guard:true|atomic:true|one-step-undo:true|no-elide:true"
+    readonly property string carouselDocumentStructureContract: "carousel-document-structure:v1|empty-required-slots:true|duplicate-copy:true|unmatched-components:true|broken-links:true|style-outliers:true|category-filter:true|direct-jump:true|live-refresh:true|no-elide:true"
+    readonly property string carouselFontBrowserContract: "carousel-font-browser:v1|installed-families:true|search:true|favorites:persistent|recents:persistent|live-preview:true|missing-state:true|explicit-fallback-preview:true|no-silent-substitution:true|virtualized-list:true|no-elide:true"
+    readonly property string carouselCopyProofContract: "carousel-copy-proof:v1|languages:en-US-en-GB|spelling:true|repeated-words:true|spacing:true|next-issue:true|ignore:true|custom-dictionary:persistent|exact-layer-location:true|no-silent-rewrite:true|undoable-ignore:true|persistence:true|no-elide:true"
+    readonly property string carouselKeyboardContract: "carousel-keyboard:v1|board-navigation:true|board-reorder:true|tool-selection:true|layer-selection:true|layer-reorder:true|transforms:true|text-editing:true|inspector-focus:true|preflight:true|save:true|export:true|platform-modifiers:true|no-mouse-required:true"
+    readonly property string carouselCommandPaletteContract: "carousel-command-palette:v1|search:true|shared-dispatch:true|categories:add-transform-arrange-board-template-inspect-accessibility-preflight-save-export|keyboard:contextual-ctrl-meta-k|navigation:up-down-enter-escape|disabled-reasons:true|focus-restore:true|no-elide:true"
+    readonly property string carouselReadingOrderContract: "carousel-reading-order:v1|board-specific:true|content:visible-text-meaningful-image-video|decorative-media:excluded|slots-and-layers:true|reorder:explicit|visual-fallback:top-left|focus-entry:true|undo:true|persistence:true|manifest:v2|no-elide:true"
+    readonly property string carouselBrandKitEditorContract: "carousel-brand-kit-editor:v1|named-palettes:true|role-typography:true|logo-assets:true|required-checks:true|font-license-reminder:true|token-scales:true|live-preview:true|safe-cancel:true|no-elide:true"
+    readonly property string carouselLogoUsageRulesContract: "carousel-logo-usage-rules:v1|safe-area:true|minimum-size:true|variants:primary-light-dark-monochrome|surface-rule:true|contrast-rule:true|warnings-only:true|never-mutate-artwork:true|jump-to-placement:true|ignore-explicit:true|persistence:true|no-elide:true"
+    readonly property string carouselBrandTokenBindingContract: "carousel-brand-token-binding:v1|named-colors:true|named-typography:true|text-shape-brush:true|follow-updates:true|explicit-detach:true|local-value-retained:true|local-edit-detaches:true|undo:true|persistence:true|export:true|no-elide:true"
+    readonly property string carouselBrandThemeVariantsContract: "carousel-brand-theme-variants:v1|variants:light-dark-campaign|editable:true|scopes:current-selected-all|content-preserved:true|geometry-preserved:true|token-aware:true|atomic-undo:true|persistence:true|export:true|no-elide:true"
+    readonly property string carouselReusableComponentsContract: "carousel-reusable-components:v1|types:logo-lockup-page-number-quote-attribution-stat-card-product-badge-cta-block|ordinary-editable-layers:true|built-in:true|custom:true|fresh-instance-identity:true|preview-thumbnails:bounded|ratio-adaptive:true|undo:true|persistence:true|export:true|no-elide:true"
+    readonly property string carouselComponentInstanceLifecycleContract: "carousel-component-instance-lifecycle:v1|definition-versioned:true|automatic-updates:false|update-definition:explicit|apply-update:explicit|local-overrides:field-preserved|removed-overrides:detached|new-parts:added|detach-keeps-content-geometry:true|atomic-undo:true|persistence:true|export:true|no-elide:true"
+    readonly property string carouselDesignPackageContract: "carousel-design-package:v1|artifacts:brand-kit-component|manifest:true|artifact-sha256:true|package-sha256:true|asset-sha256:true|brand-assets:embedded|private-project-media:never-embedded|absolute-paths:excluded|import-preview:non-mutating|conflicts:id-name|resolutions:keep-both-replace|checksum-required:true|no-elide:true"
+    readonly property string carouselBrandApplicationDiffContract: "carousel-brand-application-diff:v1|boards:true|layers:true|before-target-result:true|missing-mappings:true|contrast-regressions:true|retain-overrides:true|replace-overrides:true|explicit-apply:true|no-elide:true"
+    readonly property string carouselBrandLintContract: "carousel-brand-lint:v1|unapproved-colors:true|unapproved-fonts:true|required-logo:true|heading-caption-consistency:true|minimum-contrast:true|jump-to-layer:true|explicit-ignore:true|persistent-ignore:true|live-revalidation:true|no-elide:true"
+    readonly property string carouselLiveContrastContract: "carousel-live-contrast:v1|wcag-style:true|opacity:true|gradients:true|image-region-samples:true|text-background-treatment:true|stroke-treatment:true|photographic-uncertainty:true|large-text-threshold:true|live:true|no-elide:true"
+    readonly property string carouselPlatformPreviewContract: "carousel-platform-preview:v1|feed-grid-crop:true|profile-header:true|captions:true|like-comment-controls:true|progress-bars:true|device-corners:true|reference-only:true|verify-current:true|never-export:true|no-elide:true"
+    readonly property string carouselColorInspectionContract: "carousel-color-inspection:v1|modes:normal-protanopia-deuteranopia-tritanopia-grayscale|matrix:linear-rgb|transfer:srgb-linear-srgb|canvas-only:true|document-state:unchanged|export:unchanged|normal-return:always-visible|no-elide:true"
+    readonly property string carouselExportSizeContract: "carousel-export-size:v1|one-x:true|two-x:true|custom:true|aspect-lock:true|platform-warnings:true|preview-vs-export:true|pixel-verification:true|undo:true|persistence:true|no-elide:true"
+    readonly property string carouselPdfProofContract: "carousel-pdf-proof:v1|review-only:true|platform-output:separate|page:a4-landscape|boards-per-page:4|board-numbers:true|board-names:true|roles:true|resolved-file-names:true|optional-notes:true|thumbnail-color-management:output-profile-to-srgb|collision-policy:true|undo:true|persistence:true|no-elide:true"
 
     readonly property var selection: carouselDocument.selectionDetails
+    property string clipboardPasteStylePolicy: "preserve"
+    property string clipboardPasteBrandId: ""
+    property string layoutRecipeName: ""
+    property string variantComparisonName: "Variant A"
+    property string richTextLinkDraft: ""
+    property string richTextColorDraft: "#ff5d57"
+    property string brandThemeScope: "current"
+    property string brandLogoDraftField: "logoPath"
+    readonly property var selectedTextContrast: {
+        const checks = carouselDocument.textContrastChecks || []
+        for (let index = 0; index < checks.length; ++index) {
+            if (String(checks[index].itemId || "") === String(carouselDocument.selectedItemId || ""))
+                return checks[index]
+        }
+        return ({})
+    }
     property var mediaPickerAssets: []
     property string mediaPickerProjectName: ""
     property string mediaPickerScope: "all"
     property string mediaPickerIntent: "slot"
+    property var sequenceTemplatePreview: ({})
+    property string templateLibrarySearchText: ""
+    property string templateLibrarySection: "all"
+    property string templateLibraryCategory: "all"
+    property string templateLibraryDensity: "comfortable"
+    property var mediaUsageReportState: ({ entries: [], unusedSelections: [] })
+    property int repeatGridRows: 2
+    property int repeatGridColumns: 2
+    property real repeatGridGapX: 24
+    property real repeatGridGapY: 24
+    property string repeatGridOrdering: "row-major"
+    property string repeatedElementLinkName: ""
+    property string repeatedElementLinkScope: "following"
+    readonly property var selectedRepeatedElementLink: carouselDocument.selectedRepeatedElementLinkState
+    property string boardRangeOperation: "background"
+    property string boardRangeValue: "#fbf7f1"
+    property string boardRangeScope: "current"
+    property var boardRangePreview: ({})
+    property var documentStructureIssueState: []
+    property string documentStructureCategory: "all"
+    property string storyboardSectionName: ""
+    property var carouselDropPreview: ({ active: false, boardIndex: -1, targetKind: "", slotName: "", label: "" })
+    readonly property var continuityPreview: carouselDocument.continuityPreview
+    readonly property var neighborComparison: carouselDocument.neighborComparison
+    property int continuityGutterPixels: 16
+    property string fontBrowserSearchText: ""
+    property string fontBrowserSection: "all"
+    property string platformPreviewProfileId: "none"
+    property string carouselInspectionMode: "normal"
+    property bool focusedCropMode: false
+    property string cropRuleOverlay: "thirds"
+    property var pendingPreflightIgnoreIssue: ({})
+    property string preflightIgnoreReason: ""
+    property string carouselCommandSearchText: ""
+    property int carouselCommandIndex: 0
+    property var carouselCommandRestoreFocusItem: null
+    property bool carouselCommandSuppressFocusRestore: false
+    property var carouselReadingOrderRestoreFocusItem: null
+    property string inspectorPrimarySurface: "board"
+    readonly property string carouselInspectorSplitContract: "carousel-inspector-split:v1|surfaces:board-properties-reusable-designs|board:authoring-selection-layers-media-layout-preflight|designs:saved-boards-components-templates-brand-kits|selection-preserved:true|board-preserved:true|single-visible-surface:true|no-elide:true"
+    readonly property var platformPreviewProfile: {
+        const profiles = carouselDocument.platformPreviewProfiles || []
+        for (let index = 0; index < profiles.length; ++index) {
+            if (String(profiles[index].profileId || "") === platformPreviewProfileId)
+                return profiles[index]
+        }
+        return ({ profileId: "none", cropKind: "none", captionBand: 0,
+                  controlsRail: 0, progressEdge: "none", deviceCornerRatio: 0,
+                  showsProfileHeader: false, disclaimer: "" })
+    }
+    readonly property bool carouselInspectionModeActive: carouselInspectionMode !== "normal"
     property string activeTool: "select"
     property real composerZoom: 1.0
     readonly property var textColorPresets: [
@@ -39,13 +176,13 @@ Rectangle {
     ]
     readonly property var backgroundGradientButtons: [
         { label: "Solid", value: "solid" },
-        { label: "H Grad", value: "linear-horizontal" },
-        { label: "V Grad", value: "linear-vertical" }
+        { label: "Horizontal gradient", value: "linear-horizontal" },
+        { label: "Vertical gradient", value: "linear-vertical" }
     ]
     readonly property var shapeFillKindButtons: [
         { label: "Solid", value: "solid" },
-        { label: "H Grad", value: "linear-horizontal" },
-        { label: "V Grad", value: "linear-vertical" }
+        { label: "Horizontal gradient", value: "linear-horizontal" },
+        { label: "Vertical gradient", value: "linear-vertical" }
     ]
     readonly property var textSizePresets: [
         { label: "S", value: 36 },
@@ -70,6 +207,17 @@ Rectangle {
         { label: "Bold", value: "bold" },
         { label: "Black", value: "black" }
     ]
+    readonly property var textRoleButtons: [
+        { label: "Title", value: "title" },
+        { label: "Subtitle", value: "subtitle" },
+        { label: "Heading", value: "heading" },
+        { label: "Body", value: "body" },
+        { label: "Caption", value: "caption" },
+        { label: "Quote", value: "quote" },
+        { label: "Attribution", value: "attribution" },
+        { label: "Number", value: "number" },
+        { label: "CTA", value: "cta" }
+    ]
     readonly property var textFontFamilyButtons: [
         { label: "Display", value: "display" },
         { label: "Serif", value: "serif" },
@@ -79,6 +227,10 @@ Rectangle {
     readonly property var shapeButtons: [
         { label: "Rect", value: "rectangle" },
         { label: "Oval", value: "ellipse" },
+        { label: "Tri", value: "triangle" },
+        { label: "Diamond", value: "diamond" },
+        { label: "Star", value: "star" },
+        { label: "Hex", value: "hexagon" },
         { label: "Line", value: "line" },
         { label: "Arrow", value: "arrow" }
     ]
@@ -94,27 +246,62 @@ Rectangle {
         { label: "9:16", value: "9x16", size: "1080 x 1920" },
         { label: "5:4", value: "5x4", size: "1350 x 1080" }
     ]
-    property bool snappingEnabled: true
-    property bool guidesEnabled: true
-    property bool thirdsGuidesEnabled: false
-    property bool safeGuidesEnabled: false
-    property real guideOpacity: 0.5
-    property color guideColor: "#5fc2d8"
-    property real snapThresholdPixels: 12
+    readonly property var layoutSettings: carouselDocument.layoutSettings
+    readonly property bool snappingEnabled: Boolean(layoutSettings.snappingEnabled)
+    readonly property bool guidesEnabled: Boolean(layoutSettings.guidesEnabled)
+    readonly property bool rulersEnabled: Boolean(layoutSettings.rulersEnabled)
+    readonly property bool gridEnabled: Boolean(layoutSettings.gridEnabled)
+    readonly property bool thirdsGuidesEnabled: Boolean(layoutSettings.thirdsEnabled)
+    readonly property bool safeGuidesEnabled: Boolean(layoutSettings.safeEnabled)
+    readonly property bool bleedGuidesEnabled: Boolean(layoutSettings.bleedEnabled)
+    readonly property real guideOpacity: Number(layoutSettings.guideOpacity || 0.5)
+    readonly property color guideColor: String(layoutSettings.guideColor || "#5fc2d8")
+    readonly property real snapThresholdPixels: Number(layoutSettings.snapThreshold || 12)
     property var activeSnapGuides: []
-    property var customGuides: []
-    property int nextGuideId: 1
+    readonly property var customGuides: layoutSettings.customGuides || []
     property real globalDragOffsetX: 0
     property real globalDragOffsetY: 0
     property bool anyItemDragging: false
-    property bool transformAspectLocked: true
+    readonly property bool transformAspectLocked: Boolean(layoutSettings.aspectLocked)
+    property string transformAnchor: "top-left"
+    property color brushColor: "#36f2a6"
+    property real brushWidth: 28
+    property real brushOpacity: 1
+    property real brushHardness: 1
+    property real brushSmoothing: 0.45
+    property string brushStyle: "marker"
+    property bool brushEraser: false
+    property var liveBrushPoints: []
+    property bool brushDrawing: false
+    property string templateNameDraft: ""
+    property int boardDropIndex: -1
     readonly property int quickLibraryLimit: 8
 
     property string setupCarouselName: ""
     property string setupFormat: "4x5"
     property int setupSlideCount: 1
+    property int setupCustomWidth: 1080
+    property int setupCustomHeight: 1350
+    property string setupColorSpace: "sRGB"
+    property color setupBackgroundColor: "#fbf7f1"
+    property string setupTemplateKind: "single"
+    property bool setupUseSelectedMedia: false
+    property bool setupInitialized: false
     property var recentCarouselRecords: []
-    readonly property bool compactWorkspace: width < 1500
+    readonly property string responsiveLayoutMode: width < 1050
+                                                   ? "compact"
+                                                   : width >= 1720 ? "wide" : "standard"
+    readonly property bool compactWorkspace: responsiveLayoutMode === "compact"
+    readonly property bool wideWorkspace: responsiveLayoutMode === "wide"
+    readonly property real responsiveInspectorWidth: Math.round(
+                                                        (wideWorkspace ? 336 : 300) *
+                                                        Math.min(theme.interfaceScale, 1.5))
+    readonly property real responsiveBoardStripHeight: compactWorkspace ? 112
+                                                            : wideWorkspace ? 152 : 136
+    readonly property real responsiveComposerMinimumWidth: compactWorkspace ? 360
+                                                              : wideWorkspace ? 600 : 460
+    readonly property var responsiveMetrics: carouselResponsiveLayoutMetrics(width, height)
+    readonly property string carouselResponsiveLayoutContract: "carousel-responsive-layout:v1|modes:compact-under-1050,standard-1050-to-1719,wide-1720-plus|supported:760x600,1280x720,1920x1080|compact-inspector:right-drawer|standard-inspector:300-scaled|wide-inspector:336-scaled|composer-min:360-460-600|board-strip:112-136-152|header:condensed|empty-card:bounded|state-preserved:true|no-elide:true|no-overlap:true"
     readonly property bool condensedHeader: width < 1180
     readonly property real stripAvailableWidth: Math.max(240, artboardFlick.width - 44)
     readonly property real stripAvailableHeight: Math.max(260, artboardFlick.height - 44)
@@ -133,18 +320,467 @@ Rectangle {
         return items
     }
     readonly property var templateButtons: [
-        { label: "Single", value: "single" },
-        { label: "Split Pair", value: "split-pair" },
-        { label: "Linked 2", value: "linked-horizontal-pair" },
-        { label: "Stacked 3", value: "stacked-triptych" }
+        { label: "Full bleed", shortLabel: "Full", description: "One image fills the board", value: "single", glyph: "1" },
+        { label: "Side by side", shortLabel: "Pair", description: "Two independent photo slots", value: "split-pair", glyph: "1 | 2" },
+        { label: "Seamless spread", shortLabel: "Spread", description: "One image continues across two boards", value: "linked-horizontal-pair", glyph: "1 → 2" },
+        { label: "Three-photo stack", shortLabel: "Stack", description: "Three horizontal photo bands", value: "stacked-triptych", glyph: "1 / 2 / 3" }
+    ]
+    readonly property var boardRoleButtons: [
+        { label: "Content", value: "content" },
+        { label: "Cover", value: "cover" },
+        { label: "Hook", value: "hook" },
+        { label: "Context", value: "context" },
+        { label: "Detail", value: "detail" },
+        { label: "Proof", value: "proof" },
+        { label: "Quote", value: "quote" },
+        { label: "Step", value: "step" },
+        { label: "Transition", value: "transition" },
+        { label: "CTA", value: "cta" }
     ]
     readonly property var toolButtons: [
         { value: "select", label: "Select", key: "V", cursor: Qt.ArrowCursor },
         { value: "hand", label: "Pan", key: "H", cursor: Qt.OpenHandCursor },
         { value: "text", label: "Text", key: "T", cursor: Qt.IBeamCursor },
         { value: "media", label: "Media", key: "M", cursor: Qt.PointingHandCursor },
-        { value: "shape", label: "Shape", key: "U", cursor: Qt.CrossCursor }
+        { value: "shape", label: "Shape", key: "U", cursor: Qt.CrossCursor },
+        { value: "brush", label: "Brush", key: "B", cursor: Qt.CrossCursor }
     ]
+
+    function carouselResponsiveLayoutMetrics(viewWidth, viewHeight) {
+        const mode = viewWidth < 1050 ? "compact" : (viewWidth >= 1720 ? "wide" : "standard")
+        const railWidth = 48
+        const gap = 6
+        const inspectorWidth = mode === "compact" ? 0 : (mode === "wide" ? 336 : 300)
+        const composerWidth = Math.max(0, viewWidth - railWidth - inspectorWidth - gap * 2)
+        const composerMinimum = mode === "compact" ? 360 : (mode === "wide" ? 600 : 460)
+        const boardStripHeight = mode === "compact" ? 112 : (mode === "wide" ? 152 : 136)
+        const headerHeight = 40
+        const artboardHeight = Math.max(0, viewHeight - headerHeight - boardStripHeight - gap * 4)
+        return {
+            mode: mode,
+            viewWidth: viewWidth,
+            viewHeight: viewHeight,
+            railWidth: railWidth,
+            inspectorWidth: inspectorWidth,
+            inspectorPresentation: mode === "compact" ? "drawer" : "inline",
+            composerWidth: composerWidth,
+            composerMinimum: composerMinimum,
+            boardStripHeight: boardStripHeight,
+            artboardHeight: artboardHeight,
+            horizontalNonOverlap: composerWidth >= composerMinimum,
+            verticalNonOverlap: artboardHeight >= 300,
+            supported: viewWidth >= 760 && viewHeight >= 600 &&
+                       composerWidth >= composerMinimum && artboardHeight >= 300
+        }
+    }
+
+    function carouselLocaleStressProbe() {
+        return {
+            layoutDirection: root.uiRightToLeft ? "rtl" : "ltr",
+            uiMirrored: root.uiRightToLeft,
+            canvasGeometryMirrored: false,
+            boardSequenceDirection: root.uiRightToLeft ? "rtl" : "ltr",
+            logicalBoardNumberingPreserved: true,
+            textDirection: "bidi-auto",
+            noElide: true
+        }
+    }
+
+    Component {
+        id: carouselVideoCompositionControls
+
+        ColumnLayout {
+            id: videoControls
+            objectName: "carouselVideoCompositionControls"
+            Layout.fillWidth: true
+            spacing: 5
+
+            readonly property real sourceDuration: Math.max(
+                                                       0.05,
+                                                       Number(root.selection.videoDurationSeconds || 0.05))
+            readonly property real trimIn: Math.max(
+                                                 0,
+                                                 Number(root.selection.videoTrimInSeconds || 0))
+            readonly property real trimOut: Math.max(
+                                                  trimIn + 0.05,
+                                                  Number(root.selection.videoTrimOutSeconds || sourceDuration))
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Video timing"
+                    color: theme.textMain
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                }
+
+                StatusChip {
+                    compact: true
+                    tone: "neutral"
+                    text: root.formatVideoTime(videoControls.trimOut - videoControls.trimIn) +
+                          " / " + root.formatVideoTime(videoControls.sourceDuration)
+                }
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Trim in"
+                valueText: root.formatVideoTime(value)
+                from: 0
+                to: Math.max(0.05, videoControls.trimOut - 0.05)
+                stepSize: 0.01
+                value: videoControls.trimIn
+                accent: theme.accentCool400
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setCurrentVideoTrim(nextValue, videoControls.trimOut)
+                }
+                onResetRequested: carouselDocument.setCurrentVideoTrim(0, videoControls.trimOut)
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Trim out"
+                valueText: root.formatVideoTime(value)
+                from: Math.min(videoControls.sourceDuration - 0.05, videoControls.trimIn + 0.05)
+                to: videoControls.sourceDuration
+                stepSize: 0.01
+                value: Math.min(videoControls.sourceDuration, videoControls.trimOut)
+                accent: theme.accentWarm400
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setCurrentVideoTrim(videoControls.trimIn, nextValue)
+                }
+                onResetRequested: carouselDocument.setCurrentVideoTrim(
+                                      videoControls.trimIn, videoControls.sourceDuration)
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Poster frame"
+                valueText: root.formatVideoTime(value)
+                from: videoControls.trimIn
+                to: videoControls.trimOut
+                stepSize: 0.01
+                value: Math.max(videoControls.trimIn,
+                                Math.min(videoControls.trimOut,
+                                         Number(root.selection.videoPosterSeconds || videoControls.trimIn)))
+                accent: theme.success
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setCurrentVideoPosterFrame(nextValue)
+                }
+                onResetRequested: carouselDocument.setCurrentVideoPosterFrame(videoControls.trimIn)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Mute audio"
+                    active: String(root.selection.videoAudioPolicy || "mute") === "mute"
+                    onClicked: carouselDocument.setCurrentVideoAudioPolicy("mute")
+                }
+
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Keep audio"
+                    active: String(root.selection.videoAudioPolicy || "mute") === "preserve"
+                    onClicked: carouselDocument.setCurrentVideoAudioPolicy("preserve")
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Loop playback"
+                    active: Boolean(root.selection.videoLoopIntent)
+                    onClicked: carouselDocument.setCurrentVideoLoopIntent(
+                                   !Boolean(root.selection.videoLoopIntent))
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    tone: "primary"
+                    iconName: "play"
+                    text: "Preview video"
+                    onClicked: carouselVideoPreviewDialog.openForSelection()
+                }
+            }
+        }
+    }
+
+    Component {
+        id: carouselCutoutControls
+
+        ColumnLayout {
+            id: cutoutControls
+            objectName: "carouselCutoutControls"
+            Layout.fillWidth: true
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Background removal"
+                    color: theme.textMain
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                }
+
+                StatusChip {
+                    compact: true
+                    tone: root.selection.cutoutState === "error"
+                          ? "error"
+                          : root.selection.cutoutState === "ready"
+                            ? "success"
+                            : root.selection.cutoutState === "processing"
+                              ? "warning" : "neutral"
+                    text: root.selection.cutoutState === "processing"
+                          ? "Processing"
+                          : root.selection.cutoutState === "ready"
+                            ? "Cutout active"
+                            : root.selection.cutoutState === "original"
+                              ? "Original active"
+                              : root.selection.cutoutState === "error"
+                                ? "Failed" : "No matte"
+                }
+            }
+
+            ProgressBar {
+                Layout.fillWidth: true
+                visible: root.selection.cutoutState === "processing"
+                indeterminate: true
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.selection.cutoutState === "error"
+                text: String(root.selection.cutoutError || "Background removal failed.")
+                color: theme.error
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    tone: root.selection.cutoutHasMask ? "neutral" : "primary"
+                    text: root.selection.cutoutState === "error"
+                          ? "Retry removal" : root.selection.cutoutHasMask ? "Run again" : "Remove background"
+                    enabled: root.selection.cutoutState !== "processing"
+                    onClicked: carouselDocument.startSelectedMediaBackgroundRemoval()
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "Refine edge"
+                    visible: Boolean(root.selection.cutoutHasMask)
+                    enabled: root.selection.cutoutState !== "processing"
+                    onClicked: carouselCutoutRefineDialog.open()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: Boolean(root.selection.cutoutHasMask)
+                spacing: 4
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "Use original"
+                    visible: Boolean(root.selection.cutoutEnabled)
+                    onClicked: carouselDocument.useSelectedMediaOriginal()
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "Restore cutout"
+                    visible: !Boolean(root.selection.cutoutEnabled)
+                    onClicked: carouselDocument.restoreSelectedMediaCutout()
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: Boolean(root.selection.cutoutEnabled)
+                text: "Inspect edge"
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                visible: Boolean(root.selection.cutoutEnabled)
+                spacing: 3
+
+                Repeater {
+                    model: [
+                        { label: "Result", value: "result" },
+                        { label: "On black", value: "black" },
+                        { label: "On white", value: "white" },
+                        { label: "Matte", value: "matte" },
+                        { label: "Edges", value: "edges" }
+                    ]
+
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: modelData.label
+                        active: String(root.selection.cutoutPreviewMode || "result") === modelData.value
+                        onClicked: carouselDocument.setCutoutPreviewMode(modelData.value)
+                    }
+                }
+            }
+        }
+    }
+
+    function editSelectedPhoto() {
+        const payload = carouselDocument.selectedPhotoEditPayload()
+        if (String(payload.targetKey || "").length === 0)
+            return false
+        root.editPhotoRequested(payload)
+        return true
+    }
+
+    function formatVideoTime(seconds) {
+        const safeSeconds = Math.max(0, Number(seconds || 0))
+        const wholeMinutes = Math.floor(safeSeconds / 60)
+        const remainder = safeSeconds - wholeMinutes * 60
+        return wholeMinutes + ":" + (remainder < 10 ? "0" : "") + remainder.toFixed(2)
+    }
+
+    function openMediaUsageReport() {
+        mediaUsageReportState = carouselDocument.mediaUsageReport(
+                    carouselDocument.mediaAutofillPlan || [])
+        carouselMediaUsageDialog.open()
+    }
+
+    function openSelectionBatchPreview(operation) {
+        if (carouselDocument.previewSelectionBatchOperation(operation))
+            carouselSelectionBatchDialog.open()
+    }
+
+    function openRepeatGridPreview() {
+        if (carouselDocument.previewRepeatGrid(
+                    repeatGridRows, repeatGridColumns,
+                    repeatGridGapX, repeatGridGapY,
+                    repeatGridOrdering))
+            carouselRepeatGridDialog.open()
+    }
+
+    function openClipboardPasteReview() {
+        if (!carouselDocument.previewClipboardPaste())
+            return
+        const preview = carouselDocument.clipboardPastePreview || ({})
+        const targets = preview.brandTargets || []
+        clipboardPasteStylePolicy = "preserve"
+        clipboardPasteBrandId = targets.length > 0 ? String(targets[0].brandId || "") : ""
+        carouselClipboardPasteDialog.open()
+    }
+
+    function openLayoutRecipePreview(recipeId) {
+        if (carouselDocument.previewLayoutRecipe(recipeId))
+            carouselLayoutRecipeDialog.open()
+    }
+
+    function openRepeatedElementLinkDialog() {
+        repeatedElementLinkName = String(selection.displayLabel || "Repeated element")
+        repeatedElementLinkScope = carouselDocument.selectedSlideCount > 1 ? "selected" : "following"
+        carouselRepeatedElementLinkDialog.open()
+    }
+
+    function applyRichTextSpan(attributes) {
+        const start = Math.min(textEditor.selectionStart, textEditor.selectionEnd)
+        const end = Math.max(textEditor.selectionStart, textEditor.selectionEnd)
+        return carouselDocument.applySelectedTextSpan(start, end - start, attributes)
+    }
+
+    function clearRichTextSpan() {
+        const start = Math.min(textEditor.selectionStart, textEditor.selectionEnd)
+        const end = Math.max(textEditor.selectionStart, textEditor.selectionEnd)
+        return carouselDocument.clearSelectedTextSpan(start, end - start)
+    }
+
+    function repeatedElementTargetCount() {
+        if (repeatedElementLinkScope === "all")
+            return carouselDocument.slideCount
+        if (repeatedElementLinkScope === "selected")
+            return carouselDocument.selectedSlideCount
+        return carouselDocument.slideCount - carouselDocument.currentIndex
+    }
+
+    function boardRangeValueOptions(operation) {
+        const options = []
+        if (operation === "background") {
+            for (let index = 0; index < root.backgroundColorPresets.length; ++index) {
+                const color = String(root.backgroundColorPresets[index])
+                options.push({ label: color.toUpperCase(), value: color })
+            }
+        } else if (operation === "template") {
+            options.push({ label: "Full", value: "single" })
+            options.push({ label: "Pair", value: "split-pair" })
+            options.push({ label: "Stack", value: "stacked-triptych" })
+        } else if (operation === "brand") {
+            const kits = carouselDocument.brandKits || []
+            for (let index = 0; index < kits.length; ++index)
+                options.push({ label: String(kits[index].name || "Brand kit"), value: String(kits[index].brandId || "") })
+        } else if (operation === "spacing") {
+            options.push({ label: "Compact · 48 / 16 px", value: "compact" })
+            options.push({ label: "Standard · 72 / 24 px", value: "standard" })
+            options.push({ label: "Airy · 108 / 36 px", value: "airy" })
+        } else if (operation === "text-style") {
+            const styles = carouselDocument.textStyles || []
+            for (let index = 0; index < styles.length; ++index)
+                options.push({ label: String(styles[index].name || "Text style"), value: String(styles[index].styleId || "") })
+        }
+        return options
+    }
+
+    function setBoardRangeOperation(operation) {
+        root.boardRangeOperation = operation
+        const options = root.boardRangeValueOptions(operation)
+        root.boardRangeValue = options.length > 0 ? String(options[0].value || "") : ""
+        root.refreshBoardRangePreview()
+    }
+
+    function refreshBoardRangePreview() {
+        root.boardRangePreview = carouselDocument.previewBoardRangeCommand(
+                    root.boardRangeOperation, root.boardRangeValue, root.boardRangeScope)
+    }
+
+    function openBoardRangeCommand() {
+        root.setBoardRangeOperation("background")
+        carouselBoardRangeCommandDialog.open()
+    }
+
+    function refreshDocumentStructureIssues() {
+        root.documentStructureIssueState = carouselDocument.documentStructureIssues()
+    }
+
+    function openDocumentStructureInspector() {
+        root.documentStructureCategory = "all"
+        root.refreshDocumentStructureIssues()
+        carouselDocumentStructureDialog.open()
+    }
 
     function slideWidthOnStrip() {
         return carouselDocument.slideCount > 0 ? stripSurface.width / carouselDocument.slideCount : stripSurface.width
@@ -183,6 +819,20 @@ Rectangle {
         return Font.DemiBold
     }
 
+    function transformedText(value, textCase) {
+        const text = String(value || "")
+        if (textCase === "uppercase")
+            return text.toUpperCase()
+        if (textCase === "lowercase")
+            return text.toLowerCase()
+        if (textCase === "title") {
+            return text.toLowerCase().split(" ").map(function(word) {
+                return word.length > 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word
+            }).join(" ")
+        }
+        return text
+    }
+
     function textFontFamily(value) {
         const normalized = String(value || "display")
         if (normalized === "serif")
@@ -213,9 +863,22 @@ Rectangle {
         const drawHeight = Math.max(1, sourceHeight * baseScale * root.clampedMediaLayerScale(item.mediaScale))
         const freeX = frameWidth - drawWidth
         const freeY = frameHeight - drawHeight
+        const smartOffset = function(focal, frameExtent, drawExtent) {
+            const freeSpace = frameExtent - drawExtent
+            if (Math.abs(freeSpace) < 0.001)
+                return 0
+            const desired = frameExtent * 0.5 - drawExtent * Math.max(0, Math.min(1, Number(focal)))
+            const position = Math.max(Math.min(0, freeSpace), Math.min(Math.max(0, freeSpace), desired))
+            return Math.max(-1, Math.min(1, (position / freeSpace) * 2 - 1))
+        }
+        const manual = String(item.mediaCropMode || "smart") === "manual"
+        const offsetX = manual ? root.clampedMediaLayerOffset(item.mediaOffsetX)
+                               : smartOffset(item.mediaFocalX, frameWidth, drawWidth)
+        const offsetY = manual ? root.clampedMediaLayerOffset(item.mediaOffsetY)
+                               : smartOffset(item.mediaFocalY, frameHeight, drawHeight)
         return {
-            x: freeX * ((root.clampedMediaLayerOffset(item.mediaOffsetX) + 1) / 2),
-            y: freeY * ((root.clampedMediaLayerOffset(item.mediaOffsetY) + 1) / 2),
+            x: freeX * ((offsetX + 1) / 2),
+            y: freeY * ((offsetY + 1) / 2),
             width: drawWidth,
             height: drawHeight
         }
@@ -239,32 +902,20 @@ Rectangle {
         carouselDocument.moveSelectedItemByPixels(dx, dy)
     }
 
-    function resizeSelectedFromTransformField(axis, value) {
-        if (!selection.hasSelection || selection.hasMultipleSelection || !selection.hasUnlockedSelection)
-            return
-        if (!Number.isFinite(value))
-            return
-
-        const currentWidth = Math.max(1, Number(selection.width || 1))
-        const currentHeight = Math.max(1, Number(selection.height || 1))
-        let nextWidth = currentWidth
-        let nextHeight = currentHeight
-
-        if (axis === "width") {
-            nextWidth = Math.max(1, value)
-            if (transformAspectLocked)
-                nextHeight = Math.max(1, nextWidth / (currentWidth / currentHeight))
-        } else {
-            nextHeight = Math.max(1, value)
-            if (transformAspectLocked)
-                nextWidth = Math.max(1, nextHeight * (currentWidth / currentHeight))
-        }
-
-        carouselDocument.setSelectedItemSize(nextWidth, nextHeight)
-    }
-
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    function handleStatusNoticeAction(actionKey) {
+        if (actionKey === "retry-save") {
+            carouselDocument.saveDocument()
+        } else if (actionKey === "open-export") {
+            openCarouselExportSheet()
+        } else if (actionKey === "relink-media") {
+            carouselRelinkDialog.open()
+        } else if (actionKey === "resolve-fonts") {
+            carouselFontRecoveryDialog.open()
+        }
     }
 
     function slidePixelWidth() {
@@ -279,6 +930,220 @@ Rectangle {
             width: width,
             height: carouselDocument.documentPixelHeight
         }
+    }
+
+    function selectionBounds() {
+        return {
+            x: Number(selection.hasMultipleSelection ? selection.selectionX : selection.x) || 0,
+            y: Number(selection.hasMultipleSelection ? selection.selectionY : selection.y) || 0,
+            width: Math.max(1, Number(selection.hasMultipleSelection ? selection.selectionWidth : selection.width) || 1),
+            height: Math.max(1, Number(selection.hasMultipleSelection ? selection.selectionHeight : selection.height) || 1)
+        }
+    }
+
+    function anchorFractions(anchor) {
+        const column = anchor.indexOf("left") >= 0 ? 0 : anchor.indexOf("right") >= 0 ? 1 : 0.5
+        const row = anchor.indexOf("top") >= 0 ? 0 : anchor.indexOf("bottom") >= 0 ? 1 : 0.5
+        return { x: column, y: row }
+    }
+
+    function selectionAnchorPosition() {
+        const bounds = selectionBounds()
+        const fractions = anchorFractions(transformAnchor)
+        const board = slideGeometry(Number(carouselDocument.currentIndex || 0))
+        return {
+            x: bounds.x - board.x + bounds.width * fractions.x,
+            y: bounds.y - board.y + bounds.height * fractions.y
+        }
+    }
+
+    function applyTransformField(field, expression) {
+        if (!carouselDocument.applyTransformExpression(
+                    field, String(expression || ""), root.transformAnchor,
+                    root.transformAspectLocked)) {
+            return false
+        }
+        return true
+    }
+
+    function transformMixedLabel() {
+        const mixed = []
+        if (selection.transformMixedX)
+            mixed.push("X")
+        if (selection.transformMixedY)
+            mixed.push("Y")
+        if (selection.transformMixedWidth)
+            mixed.push("W")
+        if (selection.transformMixedHeight)
+            mixed.push("H")
+        if (selection.transformMixedRotation)
+            mixed.push("R")
+        return mixed.join(", ")
+    }
+
+    function layoutGridForSlide(index) {
+        const rect = slideGeometry(index)
+        const board = slideData(index)
+        const columns = Math.max(1, Math.round(Number(board ? board.layoutColumns : 4)))
+        const rows = Math.max(1, Math.round(Number(board ? board.layoutRows : 4)))
+        const marginX = Math.min(rect.width / 2 - 1, Math.max(0, Number(board ? board.layoutMarginX : 72)))
+        const marginY = Math.min(rect.height / 2 - 1, Math.max(0, Number(board ? board.layoutMarginY : 72)))
+        const usableWidth = Math.max(1, rect.width - marginX * 2)
+        const usableHeight = Math.max(1, rect.height - marginY * 2)
+        const gutterX = Math.min(Number(board ? board.layoutGutterX : 24), usableWidth / Math.max(1, columns - 1))
+        const gutterY = Math.min(Number(board ? board.layoutGutterY : 24), usableHeight / Math.max(1, rows - 1))
+        const columnWidth = Math.max(1, (usableWidth - gutterX * (columns - 1)) / columns)
+        const rowHeight = Math.max(1, (usableHeight - gutterY * (rows - 1)) / rows)
+        const vertical = []
+        const horizontal = []
+        for (let column = 0; column < columns; ++column) {
+            const start = rect.x + marginX + column * (columnWidth + gutterX)
+            vertical.push(start)
+            vertical.push(start + columnWidth)
+        }
+        for (let row = 0; row < rows; ++row) {
+            const start = rect.y + marginY + row * (rowHeight + gutterY)
+            horizontal.push(start)
+            horizontal.push(start + rowHeight)
+        }
+        return { vertical: vertical, horizontal: horizontal }
+    }
+
+    function setCurrentBoardLayoutToken(key, value) {
+        let columns = Math.round(Number(selection.layoutColumns || 4))
+        let rows = Math.round(Number(selection.layoutRows || 4))
+        let marginX = Number(selection.layoutMarginX || 0)
+        let marginY = Number(selection.layoutMarginY || 0)
+        let gutterX = Number(selection.layoutGutterX || 0)
+        let gutterY = Number(selection.layoutGutterY || 0)
+        if (key === "columns")
+            columns = Math.round(value)
+        else if (key === "rows")
+            rows = Math.round(value)
+        else if (key === "marginX")
+            marginX = value
+        else if (key === "marginY")
+            marginY = value
+        else if (key === "gutterX")
+            gutterX = value
+        else if (key === "gutterY")
+            gutterY = value
+        carouselDocument.setCurrentSlideLayoutTokens(columns, rows, marginX, marginY, gutterX, gutterY)
+    }
+
+    function fontFamilyInList(family, values) {
+        const normalized = String(family || "").toLowerCase()
+        for (let index = 0; index < values.length; ++index) {
+            if (String(values[index] || "").toLowerCase() === normalized)
+                return true
+        }
+        return false
+    }
+
+    function templateLibraryCategories() {
+        const entries = carouselDocument.templateLibraryEntries || []
+        const seen = ({})
+        const categories = [{ label: "All goals", value: "all" }]
+        for (let index = 0; index < entries.length; ++index) {
+            const category = String(entries[index].category || "Uncategorized")
+            const key = category.toLowerCase()
+            if (!seen[key]) {
+                seen[key] = true
+                categories.push({ label: category, value: category })
+            }
+        }
+        return categories
+    }
+
+    function templateLibrarySectionCount(section) {
+        const entries = carouselDocument.templateLibraryEntries || []
+        if (section === "all")
+            return entries.length
+        let count = 0
+        for (let index = 0; index < entries.length; ++index) {
+            const entry = entries[index]
+            if ((section === "favorites" && Boolean(entry.isFavorite))
+                    || (section === "recent" && Boolean(entry.isRecent))
+                    || (section === "installed" && String(entry.sourceSection) === "installed")
+                    || (section === "custom" && String(entry.sourceSection) === "custom"))
+                ++count
+        }
+        return count
+    }
+
+    function filteredTemplateLibraryEntries() {
+        const entries = carouselDocument.templateLibraryEntries || []
+        const query = templateLibrarySearchText.trim().toLowerCase()
+        const filtered = []
+        for (let index = 0; index < entries.length; ++index) {
+            const entry = entries[index]
+            if (templateLibrarySection === "favorites" && !Boolean(entry.isFavorite))
+                continue
+            if (templateLibrarySection === "recent" && !Boolean(entry.isRecent))
+                continue
+            if (templateLibrarySection === "installed" && String(entry.sourceSection) !== "installed")
+                continue
+            if (templateLibrarySection === "custom" && String(entry.sourceSection) !== "custom")
+                continue
+            if (templateLibraryCategory !== "all"
+                    && String(entry.category) !== templateLibraryCategory)
+                continue
+            const searchable = (String(entry.name || "") + " "
+                                + String(entry.category || "") + " "
+                                + String(entry.goal || "") + " "
+                                + String(entry.purpose || "")).toLowerCase()
+            if (query.length > 0 && searchable.indexOf(query) < 0)
+                continue
+            filtered.push(entry)
+        }
+        if (templateLibrarySection === "recent") {
+            filtered.sort(function(left, right) {
+                return Number(left.recentRank) - Number(right.recentRank)
+            })
+        }
+        return filtered
+    }
+
+    function openTemplateLibraryEntry(entry) {
+        root.sequenceTemplatePreview = entry
+        carouselSequenceTemplateDialog.open()
+    }
+
+    function fontBrowserFamilies() {
+        let source = carouselDocument.installedFontFamilies
+        if (fontBrowserSection === "favorites")
+            source = carouselDocument.favoriteFontFamilies
+        else if (fontBrowserSection === "recent")
+            source = carouselDocument.recentFontFamilies
+        const query = fontBrowserSearchText.trim().toLowerCase()
+        if (query.length === 0)
+            return source
+        const filtered = []
+        for (let index = 0; index < source.length; ++index) {
+            if (String(source[index]).toLowerCase().indexOf(query) >= 0)
+                filtered.push(source[index])
+        }
+        return filtered
+    }
+
+    function chooseFontBrowserFamily(family) {
+        if (!selection.textFontAvailable) {
+            if (carouselDocument.previewFontSubstitution(selection.textFontFamily, family)) {
+                carouselFontBrowserDialog.close()
+                carouselFontRecoveryDialog.open()
+            }
+            return
+        }
+        if (carouselDocument.applyFontFamilyFromBrowser(family))
+            carouselFontBrowserDialog.close()
+    }
+
+    function rulerStep() {
+        if (stripScale >= 0.7)
+            return 50
+        if (stripScale >= 0.35)
+            return 100
+        return 200
     }
 
     function itemIntersectsSlide(item, slide) {
@@ -298,6 +1163,16 @@ Rectangle {
         return Boolean(modifiers & Qt.ControlModifier) || Boolean(modifiers & Qt.MetaModifier)
     }
 
+    function hasRangeSelectModifier(modifiers) {
+        return Boolean(modifiers & Qt.ShiftModifier)
+    }
+
+    function editableTextControlHasFocus() {
+        const window = root.Window.window
+        const item = window ? window.activeFocusItem : null
+        return Boolean(item && ("cursorPosition" in item) && ("selectedText" in item))
+    }
+
     function focusLayerItem(itemId, alreadySelected) {
         if (alreadySelected && selection.selectedCount > 1)
             carouselDocument.addItemToSelection(itemId)
@@ -306,7 +1181,7 @@ Rectangle {
     }
 
     function setActiveTool(toolName) {
-        const normalized = toolName === "hand" || toolName === "text" || toolName === "media" || toolName === "shape" ? toolName : "select"
+        const normalized = toolName === "hand" || toolName === "text" || toolName === "media" || toolName === "shape" || toolName === "brush" ? toolName : "select"
         activeTool = normalized
     }
 
@@ -319,7 +1194,39 @@ Rectangle {
             return Qt.PointingHandCursor
         if (activeTool === "shape")
             return Qt.CrossCursor
+        if (activeTool === "brush")
+            return Qt.CrossCursor
         return Qt.ArrowCursor
+    }
+
+    function finishBrushStroke() {
+        if (!root.brushDrawing)
+            return
+        root.brushDrawing = false
+        if (root.liveBrushPoints.length >= 2) {
+            const documentPoints = []
+            for (let i = 0; i < root.liveBrushPoints.length; ++i) {
+                let point = root.liveBrushPoints[i]
+                if (i > 0 && i + 1 < root.liveBrushPoints.length && root.brushSmoothing > 0) {
+                    const previous = root.liveBrushPoints[i - 1]
+                    const next = root.liveBrushPoints[i + 1]
+                    const amount = root.brushSmoothing
+                    point = {
+                        x: point.x * (1 - amount) + ((previous.x + next.x) / 2) * amount,
+                        y: point.y * (1 - amount) + ((previous.y + next.y) / 2) * amount
+                    }
+                }
+                documentPoints.push({
+                    x: point.x / root.stripScale,
+                    y: point.y / root.stripScale
+                })
+            }
+            carouselDocument.addBrushStroke(documentPoints, String(root.brushColor), root.brushWidth,
+                                             root.brushEraser ? root.brushHardness : root.brushOpacity,
+                                             root.brushStyle, root.brushEraser)
+        }
+        root.liveBrushPoints = []
+        brushCanvas.requestPaint()
     }
 
     function handleCanvasToolPress(mouse, width, height) {
@@ -357,6 +1264,279 @@ Rectangle {
         root.clearSnapGuides()
     }
 
+    function carouselCommand(id, label, category, keywords, shortcut, enabled, disabledReason) {
+        return {
+            commandId: id,
+            label: label,
+            category: category,
+            keywords: keywords,
+            shortcut: shortcut,
+            enabled: enabled === undefined ? true : Boolean(enabled),
+            disabledReason: disabledReason || ""
+        }
+    }
+
+    function carouselInspectionModeLabel(mode) {
+        if (mode === "protanopia")
+            return "Protanopia"
+        if (mode === "deuteranopia")
+            return "Deuteranopia"
+        if (mode === "tritanopia")
+            return "Tritanopia"
+        if (mode === "grayscale")
+            return "Grayscale"
+        return "Normal Color"
+    }
+
+    function carouselInspectionModeIndex() {
+        if (root.carouselInspectionMode === "protanopia")
+            return 1
+        if (root.carouselInspectionMode === "deuteranopia")
+            return 2
+        if (root.carouselInspectionMode === "tritanopia")
+            return 3
+        return 4
+    }
+
+    function setCarouselInspectionMode(mode) {
+        const normalized = mode === "protanopia" || mode === "deuteranopia" ||
+                           mode === "tritanopia" || mode === "grayscale" ? mode : "normal"
+        root.carouselInspectionMode = normalized
+    }
+
+    function carouselInspectionMenuItems() {
+        return [
+            { key: "inspect.normal", label: "Normal Color", icon: "visible", checked: root.carouselInspectionMode === "normal", tooltip: "Return the canvas to authored color." },
+            { key: "inspect.protanopia", label: "Simulate Protanopia", icon: "visible", checked: root.carouselInspectionMode === "protanopia", tooltip: "Inspect the canvas with a red-vision deficiency matrix. This never exports." },
+            { key: "inspect.deuteranopia", label: "Simulate Deuteranopia", icon: "visible", checked: root.carouselInspectionMode === "deuteranopia", tooltip: "Inspect the canvas with a green-vision deficiency matrix. This never exports." },
+            { key: "inspect.tritanopia", label: "Simulate Tritanopia", icon: "visible", checked: root.carouselInspectionMode === "tritanopia", tooltip: "Inspect the canvas with a blue-yellow deficiency matrix. This never exports." },
+            { key: "inspect.grayscale", label: "Preview Grayscale", icon: "visible", checked: root.carouselInspectionMode === "grayscale", tooltip: "Inspect luminance separation without color. This never exports." }
+        ]
+    }
+
+    function carouselCommandRegistry() {
+        const active = Boolean(carouselDocument.hasActiveCarousel)
+        const selected = Boolean(selection.hasSelection)
+        const unlocked = Boolean(selection.hasUnlockedSelection)
+        const multiple = Number(selection.selectedCount || 0) > 1
+        const grouped = Boolean(selection.isObjectGroup)
+        const activeReason = "Open or create a Carousel document first."
+        const selectionReason = "Select an unlocked object first."
+        return [
+            root.carouselCommand("add.media", "Add Media Layer", "Add", "photo video image library place", "Shift+M", active, activeReason),
+            root.carouselCommand("add.text", "Add Text Layer", "Add", "copy type words heading", "Shift+T", active, activeReason),
+            root.carouselCommand("add.shape", "Add Rectangle", "Add", "shape geometry box", "Shift+U", active, activeReason),
+            root.carouselCommand("add.paste", "Paste", "Add", "clipboard insert", "Ctrl/Meta+V", active && carouselDocument.canPaste,
+                                 active ? "Copy Carousel boards or layers before pasting." : activeReason),
+
+            root.carouselCommand("transform.nudge-left", "Nudge Left", "Transform", "move position x", "Left", active && unlocked, selectionReason),
+            root.carouselCommand("transform.nudge-right", "Nudge Right", "Transform", "move position x", "Right", active && unlocked, selectionReason),
+            root.carouselCommand("transform.nudge-up", "Nudge Up", "Transform", "move position y", "Up", active && unlocked, selectionReason),
+            root.carouselCommand("transform.nudge-down", "Nudge Down", "Transform", "move position y", "Down", active && unlocked, selectionReason),
+            root.carouselCommand("transform.rotate-clockwise", "Rotate 90 Degrees Clockwise", "Transform", "turn angle orientation", "", active && unlocked, selectionReason),
+            root.carouselCommand("transform.flip-horizontal", "Flip Horizontal", "Transform", "mirror x", "", active && unlocked, selectionReason),
+            root.carouselCommand("transform.flip-vertical", "Flip Vertical", "Transform", "mirror y", "", active && unlocked, selectionReason),
+            root.carouselCommand("transform.zoom-in", "Zoom In", "Transform", "view magnify canvas", "=", active, activeReason),
+            root.carouselCommand("transform.zoom-out", "Zoom Out", "Transform", "view reduce canvas", "-", active, activeReason),
+            root.carouselCommand("transform.zoom-fit", "Fit Board", "Transform", "view reset canvas", "0", active, activeReason),
+
+            root.carouselCommand("arrange.duplicate", "Duplicate Selection", "Arrange", "copy clone layer", "Ctrl/Meta+D", active && selected,
+                                 active ? "Select an object before duplicating." : activeReason),
+            root.carouselCommand("arrange.group", "Group Selection", "Arrange", "combine layers", "Ctrl/Meta+G", active && multiple,
+                                 active ? "Select at least two objects before grouping." : activeReason),
+            root.carouselCommand("arrange.ungroup", "Ungroup Selection", "Arrange", "separate layers", "Ctrl/Meta+Shift+G", active && grouped,
+                                 active ? "Select a group before ungrouping." : activeReason),
+            root.carouselCommand("arrange.forward", "Bring Forward", "Arrange", "layer order z front", "]", active && unlocked, selectionReason),
+            root.carouselCommand("arrange.backward", "Send Backward", "Arrange", "layer order z back", "[", active && unlocked, selectionReason),
+            root.carouselCommand("arrange.front", "Bring to Front", "Arrange", "layer order z top", "", active && unlocked, selectionReason),
+            root.carouselCommand("arrange.back", "Send to Back", "Arrange", "layer order z bottom", "", active && unlocked, selectionReason),
+            root.carouselCommand("arrange.delete", "Delete Selection", "Arrange", "remove layer object", "Delete", active && selected,
+                                 active ? "Select an object before deleting." : activeReason),
+
+            root.carouselCommand("board.add", "Add Board", "Board", "new slide page", "", active && carouselDocument.canAddSlide,
+                                 active ? "This Carousel already has the maximum number of boards." : activeReason),
+            root.carouselCommand("board.duplicate", "Duplicate Selected Boards", "Board", "copy clone slide page", "", active && carouselDocument.canAddSlide,
+                                 active ? "This Carousel already has the maximum number of boards." : activeReason),
+            root.carouselCommand("board.delete", "Delete Selected Boards", "Board", "remove slide page", "", active && carouselDocument.slideCount > 1,
+                                 active ? "A Carousel must keep at least one board." : activeReason),
+            root.carouselCommand("board.previous", "Previous Board", "Board", "navigate back slide page", "Ctrl/Meta+Left", active && carouselDocument.currentIndex > 0,
+                                 active ? "The first board is already selected." : activeReason),
+            root.carouselCommand("board.next", "Next Board", "Board", "navigate forward slide page", "Ctrl/Meta+Right", active && carouselDocument.currentIndex < carouselDocument.slideCount - 1,
+                                 active ? "The last board is already selected." : activeReason),
+            root.carouselCommand("board.move-backward", "Move Board Earlier", "Board", "reorder previous slide page", "Ctrl+Shift+Left", active && carouselDocument.currentIndex > 0,
+                                 active ? "The first board cannot move earlier." : activeReason),
+            root.carouselCommand("board.move-forward", "Move Board Later", "Board", "reorder next slide page", "Ctrl+Shift+Right", active && carouselDocument.currentIndex < carouselDocument.slideCount - 1,
+                                 active ? "The last board cannot move later." : activeReason),
+
+            root.carouselCommand("template.library", "Search Template Library", "Template", "browse installed custom favorite recent", "", active, activeReason),
+            root.carouselCommand("template.full-bleed", "Apply Full-Bleed Template", "Template", "single image layout", "", active, activeReason),
+            root.carouselCommand("template.side-by-side", "Apply Side-by-Side Template", "Template", "split pair two images layout", "", active, activeReason),
+            root.carouselCommand("template.seamless-spread", "Apply Seamless-Spread Template", "Template", "linked pair panorama layout", "", active, activeReason),
+            root.carouselCommand("template.three-photo-stack", "Apply Three-Photo Stack Template", "Template", "triptych three images layout", "", active, activeReason),
+
+            root.carouselCommand("inspect.normal", "Return to Normal Color", "Inspect", "disable simulation authored color", "", active && root.carouselInspectionModeActive,
+                                 active ? "The canvas is already showing normal authored color." : activeReason),
+            root.carouselCommand("inspect.protanopia", "Simulate Protanopia", "Inspect", "color vision red deficiency accessibility preview", "", active, activeReason),
+            root.carouselCommand("inspect.deuteranopia", "Simulate Deuteranopia", "Inspect", "color vision green deficiency accessibility preview", "", active, activeReason),
+            root.carouselCommand("inspect.tritanopia", "Simulate Tritanopia", "Inspect", "color vision blue yellow deficiency accessibility preview", "", active, activeReason),
+            root.carouselCommand("inspect.grayscale", "Preview Grayscale", "Inspect", "black white monochrome luminance accessibility", "", active, activeReason),
+            root.carouselCommand("accessibility.reading-order", "Edit Reading Order", "Accessibility", "narrative sequence text meaningful imagery decorative manifest", "", active && Number(carouselDocument.readingOrderState.entryCount || 0) > 0,
+                                 active ? "Add visible text or imagery before editing reading order." : activeReason),
+
+            root.carouselCommand("preflight.open", "Open Preflight", "Preflight", "check warnings blocking delivery inspect", "Ctrl+Shift+P", active, activeReason),
+            root.carouselCommand("save.document", "Save Document", "Save", "write store persist", "Ctrl/Meta+S", active, activeReason),
+            root.carouselCommand("export.open", "Export Carousel", "Export", "render deliver output images", "Ctrl+Shift+E", active && !carouselDocument.exportBusy,
+                                 active ? "Export is already running." : activeReason)
+        ]
+    }
+
+    function filteredCarouselCommands() {
+        const commands = root.carouselCommandRegistry()
+        const query = root.carouselCommandSearchText.trim().toLowerCase()
+        if (query.length === 0)
+            return commands
+        const terms = query.split(/\s+/)
+        const matches = []
+        for (let index = 0; index < commands.length; ++index) {
+            const command = commands[index]
+            const haystack = (command.label + " " + command.category + " " +
+                              command.keywords + " " + command.shortcut).toLowerCase()
+            let found = true
+            for (let termIndex = 0; termIndex < terms.length; ++termIndex) {
+                if (haystack.indexOf(terms[termIndex]) < 0) {
+                    found = false
+                    break
+                }
+            }
+            if (found)
+                matches.push(command)
+        }
+        return matches
+    }
+
+    function carouselCommandById(commandId) {
+        const commands = root.carouselCommandRegistry()
+        for (let index = 0; index < commands.length; ++index) {
+            if (commands[index].commandId === commandId)
+                return commands[index]
+        }
+        return null
+    }
+
+    function openCarouselCommandPalette() {
+        const window = root.Window.window
+        root.carouselCommandRestoreFocusItem = window ? window.activeFocusItem : null
+        root.carouselCommandSearchText = ""
+        root.carouselCommandIndex = 0
+        carouselCommandPalette.open()
+        Qt.callLater(function() { carouselCommandSearchField.forceActiveFocus() })
+    }
+
+    function openCarouselReadingOrderEditor() {
+        const window = root.Window.window
+        root.carouselReadingOrderRestoreFocusItem = window ? window.activeFocusItem : null
+        carouselReadingOrderDialog.open()
+        Qt.callLater(function() { carouselReadingOrderList.forceActiveFocus() })
+    }
+
+    function openCarouselPreflight() {
+        carouselPreflightPanel.expanded = true
+        carouselInspectorScroll.forceActiveFocus()
+        Qt.callLater(function() {
+            const flickable = carouselInspectorScroll.contentItem
+            const position = carouselPreflightPanel.mapToItem(flickable, 0, 0)
+            flickable.contentY = Math.max(0, Math.min(flickable.contentHeight - flickable.height,
+                                                      position.y - theme.space12))
+            carouselPreflightPanel.forceActiveFocus()
+        })
+    }
+
+    function openCarouselTemplateLibrary() {
+        carouselTemplateLibraryPanel.expanded = true
+        carouselInspectorScroll.forceActiveFocus()
+        Qt.callLater(function() {
+            const flickable = carouselInspectorScroll.contentItem
+            const position = carouselTemplateLibraryPanel.mapToItem(flickable, 0, 0)
+            flickable.contentY = Math.max(0, Math.min(flickable.contentHeight - flickable.height,
+                                                      position.y - theme.space12))
+            carouselTemplateLibrarySearchField.forceActiveFocus()
+        })
+    }
+
+    function runCarouselCommand(commandId) {
+        const command = root.carouselCommandById(commandId)
+        if (!command || !command.enabled)
+            return false
+        if (carouselCommandPalette.opened) {
+            root.carouselCommandSuppressFocusRestore = commandId === "add.media" ||
+                                                       commandId === "add.paste" ||
+                                                       commandId === "template.library" ||
+                                                       commandId === "accessibility.reading-order" ||
+                                                       commandId === "preflight.open" ||
+                                                       commandId === "export.open"
+            carouselCommandPalette.close()
+        }
+
+        const step = Number(root.layoutSettings.nudgeStep || 1)
+        switch (commandId) {
+        case "add.media": root.openMediaPicker("layer"); break
+        case "add.text": carouselDocument.addTextItem("New Text"); break
+        case "add.shape": carouselDocument.addShapeItem("rectangle"); break
+        case "add.paste": root.openClipboardPasteReview(); break
+        case "transform.nudge-left": root.nudgeSelected(-step, 0); break
+        case "transform.nudge-right": root.nudgeSelected(step, 0); break
+        case "transform.nudge-up": root.nudgeSelected(0, -step); break
+        case "transform.nudge-down": root.nudgeSelected(0, step); break
+        case "transform.rotate-clockwise": carouselDocument.setSelectedItemRotation(Number(selection.rotation || 0) + 90); break
+        case "transform.flip-horizontal": carouselDocument.setSelectedItemFlippedHorizontal(!Boolean(selection.flippedHorizontal)); break
+        case "transform.flip-vertical": carouselDocument.setSelectedItemFlippedVertical(!Boolean(selection.flippedVertical)); break
+        case "transform.zoom-in": root.zoomIn(); break
+        case "transform.zoom-out": root.zoomOut(); break
+        case "transform.zoom-fit": root.resetZoomToFit(); break
+        case "arrange.duplicate": carouselDocument.duplicateSelectedItem(); break
+        case "arrange.group": carouselDocument.groupSelectedItems(); break
+        case "arrange.ungroup": carouselDocument.ungroupSelectedItems(); break
+        case "arrange.forward": carouselDocument.bringSelectedForward(); break
+        case "arrange.backward": carouselDocument.sendSelectedBackward(); break
+        case "arrange.front": carouselDocument.bringSelectedToFront(); break
+        case "arrange.back": carouselDocument.sendSelectedToBack(); break
+        case "arrange.delete": carouselDocument.removeSelectedItem(); break
+        case "board.add": carouselDocument.addSlide(); break
+        case "board.duplicate":
+            if (carouselDocument.selectedSlideCount > 1)
+                carouselDocument.duplicateSelectedSlides()
+            else
+                carouselDocument.duplicateCurrentSlide()
+            break
+        case "board.delete":
+            if (carouselDocument.selectedSlideCount > 1)
+                carouselDocument.removeSelectedSlides()
+            else
+                carouselDocument.removeCurrentSlide()
+            break
+        case "board.previous": carouselDocument.selectSlide(carouselDocument.currentIndex - 1); break
+        case "board.next": carouselDocument.selectSlide(carouselDocument.currentIndex + 1); break
+        case "board.move-backward": carouselDocument.moveCurrentBackward(); break
+        case "board.move-forward": carouselDocument.moveCurrentForward(); break
+        case "template.library": root.openCarouselTemplateLibrary(); break
+        case "template.full-bleed": carouselDocument.applyTemplateToCurrent("single"); break
+        case "template.side-by-side": carouselDocument.applyTemplateToCurrent("split-pair"); break
+        case "template.seamless-spread": carouselDocument.applyTemplateToCurrent("linked-horizontal-pair"); break
+        case "template.three-photo-stack": carouselDocument.applyTemplateToCurrent("stacked-triptych"); break
+        case "inspect.normal": root.setCarouselInspectionMode("normal"); break
+        case "inspect.protanopia": root.setCarouselInspectionMode("protanopia"); break
+        case "inspect.deuteranopia": root.setCarouselInspectionMode("deuteranopia"); break
+        case "inspect.tritanopia": root.setCarouselInspectionMode("tritanopia"); break
+        case "inspect.grayscale": root.setCarouselInspectionMode("grayscale"); break
+        case "accessibility.reading-order": root.openCarouselReadingOrderEditor(); break
+        case "preflight.open": root.openCarouselPreflight(); break
+        case "save.document": carouselDocument.saveDocument(); break
+        case "export.open": root.openCarouselExportSheet(); break
+        default: return false
+        }
+        return true
+    }
+
     function carouselExportMenuItems() {
         return [
             {
@@ -378,12 +1558,14 @@ Rectangle {
     }
 
     function handleCarouselExportMenuAction(key) {
-        if (key === "save") {
-            carouselDocument.saveDocument()
-            return
-        }
-        if (key === "export" && !carouselDocument.exportBusy)
-            carouselDocument.exportCarousel()
+        if (key === "save")
+            root.runCarouselCommand("save.document")
+        else if (key === "export")
+            root.runCarouselCommand("export.open")
+    }
+
+    function openCarouselExportSheet() {
+        carouselExportSheet.open()
     }
 
     function carouselLayerAddMenuItems() {
@@ -413,16 +1595,12 @@ Rectangle {
     }
 
     function handleCarouselLayerAddMenuAction(key) {
-        if (key === "photo") {
-            root.openMediaPicker("layer")
-            return
-        }
-        if (key === "text") {
-            carouselDocument.addTextItem("New Text")
-            return
-        }
-        if (key === "shape")
-            carouselDocument.addShapeItem("rectangle")
+        if (key === "photo")
+            root.runCarouselCommand("add.media")
+        else if (key === "text")
+            root.runCarouselCommand("add.text")
+        else if (key === "shape")
+            root.runCarouselCommand("add.shape")
     }
 
     function carouselToolMenuItems(toolName) {
@@ -452,9 +1630,15 @@ Rectangle {
         if (toolName === "text") {
             return [
                 { key: "tool:text", label: "Text Tool", icon: "edit", checked: root.activeTool === "text", tooltip: "Click the board to place text." },
-                { key: "add-text", label: "Add Text Layer", icon: "plus", tooltip: "Add a text layer to the current board." },
-                { key: "font-display", label: "Default Font: Display", icon: "menu", enabled: false, disabledReason: "Select a text layer before changing font defaults.", tooltip: "Text font customization is available after selecting a text layer." },
-                { key: "font-system", label: "Default Font: System", icon: "menu", enabled: false, disabledReason: "Select a text layer before changing font defaults.", tooltip: "Select a text layer to adjust font family and weight." }
+                { key: "text-role:title", label: "Add Title", icon: "plus", tooltip: "Add a title using the current board's title style." },
+                { key: "text-role:subtitle", label: "Add Subtitle", icon: "plus", tooltip: "Add a subtitle using the current board's subtitle style." },
+                { key: "text-role:heading", label: "Add Heading", icon: "plus", tooltip: "Add a heading text layer." },
+                { key: "text-role:body", label: "Add Body", icon: "plus", tooltip: "Add body text." },
+                { key: "text-role:caption", label: "Add Caption", icon: "plus", tooltip: "Add compact caption text." },
+                { key: "text-role:quote", label: "Add Quote", icon: "plus", tooltip: "Add editorial quote text." },
+                { key: "text-role:attribution", label: "Add Attribution", icon: "plus", tooltip: "Add quote or source attribution text." },
+                { key: "text-role:number", label: "Add Number", icon: "plus", tooltip: "Add a display number." },
+                { key: "text-role:cta", label: "Add CTA", icon: "plus", tooltip: "Add call-to-action text." }
             ]
         }
         if (toolName === "media") {
@@ -466,10 +1650,23 @@ Rectangle {
                 { key: "fit-contain", label: "Fit Mode: Contain", icon: "fullscreen", checked: selection.fitMode === "contain", enabled: hasSelection && !Boolean(selection.isText), disabledReason: "Select a media object before changing fit mode.", tooltip: "Fit all selected media inside the frame." }
             ]
         }
+        if (toolName === "brush") {
+            return [
+                { key: "tool:brush", label: "Brush Tool", icon: "edit", checked: root.activeTool === "brush" && !root.brushEraser, tooltip: "Draw editable vector brush strokes." },
+                { key: "brush:marker", label: "Marker", icon: "edit", checked: root.brushStyle === "marker" && !root.brushEraser, tooltip: "Opaque round marker." },
+                { key: "brush:highlighter", label: "Highlighter", icon: "edit", checked: root.brushStyle === "highlighter" && !root.brushEraser, tooltip: "Translucent highlighter stroke." },
+                { key: "brush:glow", label: "Glow", icon: "edit", checked: root.brushStyle === "glow" && !root.brushEraser, tooltip: "Luminous double-pass stroke." },
+                { key: "brush:eraser", label: "Eraser", icon: "delete", checked: root.brushEraser, separatorBefore: true, tooltip: "Erase brush artwork without affecting photos or shapes." }
+            ]
+        }
         return [
             { key: "tool:shape", label: "Shape Tool", icon: "geometry", checked: root.activeTool === "shape", tooltip: "Click the board to place the default shape." },
             { key: "shape:rectangle", label: "Add Rectangle", icon: "geometry", tooltip: "Add a rectangle shape layer." },
             { key: "shape:ellipse", label: "Add Oval", icon: "geometry", tooltip: "Add an oval shape layer." },
+            { key: "shape:triangle", label: "Add Triangle", icon: "geometry", tooltip: "Add a triangle shape layer." },
+            { key: "shape:diamond", label: "Add Diamond", icon: "geometry", tooltip: "Add a diamond shape layer." },
+            { key: "shape:star", label: "Add Star", icon: "geometry", tooltip: "Add a star shape layer." },
+            { key: "shape:hexagon", label: "Add Hexagon", icon: "geometry", tooltip: "Add a hexagon shape layer." },
             { key: "shape:line", label: "Add Line", icon: "minus", tooltip: "Add a line shape layer." },
             { key: "shape:arrow", label: "Add Arrow", icon: "move-forward", tooltip: "Add an arrow shape layer." }
         ]
@@ -485,29 +1682,41 @@ Rectangle {
             root.setActiveTool("select")
             return
         }
+        if (key.indexOf("brush:") === 0) {
+            root.brushEraser = key === "brush:eraser"
+            if (!root.brushEraser)
+                root.brushStyle = key.slice(6)
+            root.setActiveTool("brush")
+            return
+        }
+        if (key.indexOf("text-role:") === 0) {
+            carouselDocument.addTextItemWithRole(key.slice(10), "")
+            root.setActiveTool("select")
+            return
+        }
         if (key === "duplicate") {
-            carouselDocument.duplicateSelectedItem()
+            root.runCarouselCommand("arrange.duplicate")
         } else if (key === "bring-forward") {
-            carouselDocument.bringSelectedForward()
+            root.runCarouselCommand("arrange.forward")
         } else if (key === "send-backward") {
-            carouselDocument.sendSelectedBackward()
+            root.runCarouselCommand("arrange.backward")
         } else if (key === "bring-front") {
-            carouselDocument.bringSelectedToFront()
+            root.runCarouselCommand("arrange.front")
         } else if (key === "send-back") {
-            carouselDocument.sendSelectedToBack()
+            root.runCarouselCommand("arrange.back")
         } else if (key === "delete") {
-            carouselDocument.removeSelectedItem()
+            root.runCarouselCommand("arrange.delete")
         } else if (key === "zoom-in") {
-            root.zoomIn()
+            root.runCarouselCommand("transform.zoom-in")
         } else if (key === "zoom-out") {
-            root.zoomOut()
+            root.runCarouselCommand("transform.zoom-out")
         } else if (key === "zoom-fit") {
-            root.resetZoomToFit()
+            root.runCarouselCommand("transform.zoom-fit")
         } else if (key === "add-text") {
-            carouselDocument.addTextItem("New Text")
+            root.runCarouselCommand("add.text")
             root.setActiveTool("select")
         } else if (key === "add-media-layer") {
-            root.openMediaPicker("layer")
+            root.runCarouselCommand("add.media")
         } else if (key === "replace-media") {
             root.replaceSelectedLayerFromGallery()
         } else if (key === "fit-cover") {
@@ -526,6 +1735,12 @@ Rectangle {
         if (index < 0 || index >= carouselDocument.slides.length)
             return null
         return carouselDocument.slides[index]
+    }
+
+    function currentBoardHasContent() {
+        const slide = slideData(carouselDocument.currentIndex)
+        return root.currentSlideLayers.length > 0 || Boolean(slide && (
+            slide.primaryHasMedia || slide.secondaryHasMedia || slide.tertiaryHasMedia))
     }
 
     function currentCanvasLabel() {
@@ -697,11 +1912,11 @@ Rectangle {
         }
 
         if (selection.canUseTertiary && selection.activeSlot === "tertiary")
-            carouselDocument.assignTertiaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+            carouselDocument.assignTertiaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedAdjustmentPatchJson)
         else if (selection.canUseSecondary && selection.activeSlot === "secondary")
-            carouselDocument.assignSecondaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+            carouselDocument.assignSecondaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedAdjustmentPatchJson)
         else
-            carouselDocument.assignPrimaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+            carouselDocument.assignPrimaryImage(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedAdjustmentPatchJson)
     }
 
     function galleryLayerSelectionSupported() {
@@ -716,7 +1931,7 @@ Rectangle {
         if (catalogAssets.selectedMediaType === "video")
             carouselDocument.addVideoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel)
         else
-            carouselDocument.addPhotoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+            carouselDocument.addPhotoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedAdjustmentPatchJson)
     }
 
     function placeLibraryAsset(asset, intent) {
@@ -726,7 +1941,7 @@ Rectangle {
         const mediaType = String(asset.mediaType || "")
         const filePath = String(asset.filePath || "")
         const displayLabel = String(asset.cameraLabel || asset.assetId || "")
-        const recipeJson = String(asset.recipeJson || "")
+        const recipeJson = String(asset.adjustmentPatchJson || "")
         if (filePath.length === 0)
             return
 
@@ -762,6 +1977,96 @@ Rectangle {
             carouselDocument.assignPrimaryImage(filePath, displayLabel, recipeJson)
     }
 
+    function mediaTypeForDropPath(filePath) {
+        const lower = String(filePath || "").toLowerCase().split("?")[0]
+        const videoSuffixes = [".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"]
+        for (let index = 0; index < videoSuffixes.length; ++index) {
+            if (lower.endsWith(videoSuffixes[index]))
+                return "video"
+        }
+        return "photo"
+    }
+
+    function mediaPayloadForDrop(drop) {
+        let payload = ({})
+        if (drop.hasFormat("application/x-carousel-media")) {
+            try {
+                payload = JSON.parse(drop.getDataAsString("application/x-carousel-media"))
+            } catch (error) {
+                payload = ({})
+            }
+        }
+        let filePath = String(payload.filePath || payload.path || "")
+        if (filePath.length === 0 && drop.urls && drop.urls.length > 0)
+            filePath = String(drop.urls[0])
+        return {
+            filePath: filePath,
+            mediaType: String(payload.mediaType || root.mediaTypeForDropPath(filePath)),
+            displayLabel: String(payload.cameraLabel || payload.displayLabel || payload.assetId || "Dropped media"),
+            recipeJson: String(payload.recipeJson || "")
+        }
+    }
+
+    function slotNameForDrop(slide, width, height, xPos, yPos) {
+        const regions = root.slotRegionsForSlide(slide, width, height)
+        for (let index = 0; index < regions.length; ++index) {
+            const region = regions[index]
+            if (xPos >= region.x && xPos <= region.x + region.width &&
+                    yPos >= region.y && yPos <= region.y + region.height)
+                return String(region.name || "primary")
+        }
+        return "primary"
+    }
+
+    function slotRegionForName(slide, width, height, slotName) {
+        const regions = root.slotRegionsForSlide(slide, width, height)
+        for (let index = 0; index < regions.length; ++index) {
+            if (String(regions[index].name || "primary") === String(slotName || "primary"))
+                return regions[index]
+        }
+        return ({ x: 0, y: 0, width: width, height: height, name: "primary" })
+    }
+
+    function showMediaDropPreview(boardIndex, targetKind, slotName) {
+        const slotLabel = slotName === "secondary" ? "secondary slot"
+                        : slotName === "tertiary" ? "tertiary slot" : "primary slot"
+        carouselDropPreview = {
+            active: true,
+            boardIndex: boardIndex,
+            targetKind: targetKind,
+            slotName: slotName,
+            label: targetKind === "layer-stack" ? "Add as layer on board " + (boardIndex + 1)
+                   : targetKind === "thumbnail" ? "Replace board " + (boardIndex + 1) + " primary media"
+                   : "Place in board " + (boardIndex + 1) + " " + slotLabel
+        }
+    }
+
+    function clearMediaDropPreview() {
+        carouselDropPreview = ({ active: false, boardIndex: -1, targetKind: "", slotName: "", label: "" })
+    }
+
+    function applyMediaDrop(drop, boardIndex, targetKind, slotName, normalizedX, normalizedY) {
+        const payload = root.mediaPayloadForDrop(drop)
+        if (payload.filePath.length === 0) {
+            root.clearMediaDropPreview()
+            return false
+        }
+        const changed = carouselDocument.dropMediaOnTarget(
+                    payload.filePath,
+                    payload.mediaType,
+                    boardIndex,
+                    targetKind,
+                    slotName,
+                    normalizedX,
+                    normalizedY,
+                    payload.displayLabel,
+                    payload.recipeJson)
+        if (changed)
+            drop.acceptProposedAction()
+        root.clearMediaDropPreview()
+        return changed
+    }
+
     function preferredMediaPickerProject() {
         if (catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned")
             return catalogAssets.projectFilter
@@ -779,7 +2084,7 @@ Rectangle {
         for (let index = 0; index < assets.length; ++index) {
             const item = assets[index]
             const mediaType = String(item.mediaType || "")
-            if (mediaType === "photo" || mediaType === "video")
+            if (mediaType === "photo" || (mediaType === "video" && mediaPickerIntent !== "brand-logo"))
                 filtered.push(item)
         }
         mediaPickerAssets = filtered
@@ -807,15 +2112,41 @@ Rectangle {
     }
 
     function openMediaPicker(intent) {
-        mediaPickerIntent = intent === "replace" ? "replace" : intent === "layer" ? "layer" : "slot"
+        mediaPickerIntent = intent === "replace" ? "replace"
+                                                   : intent === "layer" ? "layer"
+                                                                        : intent === "brand-logo" ? "brand-logo" : "slot"
         mediaPickerScope = hasProjectScopedMediaPicker() ? "project" : "all"
         refreshMediaPickerAssets()
         mediaPickerDialog.openDialog()
     }
 
+    function openBrandApplicationPreview(brandId, scope) {
+        if (carouselDocument.previewBrandKitApplication(brandId, scope, "retain"))
+            carouselBrandApplicationDialog.open()
+    }
+
+    function openPreflightIgnore(issue) {
+        pendingPreflightIgnoreIssue = issue || ({})
+        preflightIgnoreReason = ""
+        carouselPreflightIgnoreDialog.open()
+    }
+
     function applyPickedMedia() {
         if (!mediaPickerDialog.hasSelection || !mediaPickerDialog.selectedOnline)
             return
+
+        if (mediaPickerIntent === "brand-logo") {
+            if (mediaPickerDialog.selectedMediaType === "photo") {
+                carouselDocument.setBrandKitDraftField(root.brandLogoDraftField,
+                                                       mediaPickerDialog.selectedFilePath)
+                if (root.brandLogoDraftField === "logoPath") {
+                    carouselDocument.setBrandKitDraftField("logoName", mediaPickerDialog.selectedDisplayLabel)
+                    carouselDocument.setBrandKitDraftField("logoRequired", true)
+                }
+            }
+            mediaPickerDialog.close()
+            return
+        }
 
         if (mediaPickerIntent === "replace") {
             if (mediaPickerDialog.selectedMediaType === "photo") {
@@ -874,13 +2205,15 @@ Rectangle {
         openMediaPicker("replace")
     }
 
-    function pushGuide(target, orientation, position, label) {
+    function pushGuide(target, orientation, position, label, priority, centerOnly) {
         if (position < -0.001)
             return
         target.push({
             orientation: orientation,
             position: position,
-            label: label
+            label: label,
+            priority: Number(priority || 0),
+            centerOnly: Boolean(centerOnly)
         })
     }
 
@@ -888,26 +2221,37 @@ Rectangle {
         const rect = slideGeometry(index)
         const slide = slideData(index)
         const guides = []
+        const horizontalPeers = []
+        const verticalPeers = []
 
-        pushGuide(guides, "vertical", rect.x, "Left")
-        pushGuide(guides, "vertical", rect.x + rect.width / 2, "Center")
-        pushGuide(guides, "vertical", rect.x + rect.width, "Right")
-        pushGuide(guides, "horizontal", rect.y, "Top")
-        pushGuide(guides, "horizontal", rect.y + rect.height / 2, "Middle")
-        pushGuide(guides, "horizontal", rect.y + rect.height, "Bottom")
+        pushGuide(guides, "vertical", rect.x, "Left", 1)
+        pushGuide(guides, "vertical", rect.x + rect.width / 2, "Center", 1)
+        pushGuide(guides, "vertical", rect.x + rect.width, "Right", 1)
+        pushGuide(guides, "horizontal", rect.y, "Top", 1)
+        pushGuide(guides, "horizontal", rect.y + rect.height / 2, "Middle", 1)
+        pushGuide(guides, "horizontal", rect.y + rect.height, "Bottom", 1)
 
         if (root.thirdsGuidesEnabled) {
-            pushGuide(guides, "vertical", rect.x + rect.width / 3, "Third")
-            pushGuide(guides, "vertical", rect.x + rect.width * 2 / 3, "Third")
-            pushGuide(guides, "horizontal", rect.y + rect.height / 3, "Third")
-            pushGuide(guides, "horizontal", rect.y + rect.height * 2 / 3, "Third")
+            pushGuide(guides, "vertical", rect.x + rect.width / 3, "Third", 2)
+            pushGuide(guides, "vertical", rect.x + rect.width * 2 / 3, "Third", 2)
+            pushGuide(guides, "horizontal", rect.y + rect.height / 3, "Third", 2)
+            pushGuide(guides, "horizontal", rect.y + rect.height * 2 / 3, "Third", 2)
         }
 
         if (root.safeGuidesEnabled) {
-            pushGuide(guides, "vertical", rect.x + rect.width * 0.08, "Safe")
-            pushGuide(guides, "vertical", rect.x + rect.width * 0.92, "Safe")
-            pushGuide(guides, "horizontal", rect.y + rect.height * 0.08, "Safe")
-            pushGuide(guides, "horizontal", rect.y + rect.height * 0.92, "Safe")
+            const inset = Number(layoutSettings.safeInset || 0.08)
+            pushGuide(guides, "vertical", rect.x + rect.width * inset, "Safe", 3)
+            pushGuide(guides, "vertical", rect.x + rect.width * (1 - inset), "Safe", 3)
+            pushGuide(guides, "horizontal", rect.y + rect.height * inset, "Safe", 3)
+            pushGuide(guides, "horizontal", rect.y + rect.height * (1 - inset), "Safe", 3)
+        }
+
+        if (root.gridEnabled && Boolean(layoutSettings.snapToGrid)) {
+            const grid = layoutGridForSlide(index)
+            for (let verticalIndex = 0; verticalIndex < grid.vertical.length; ++verticalIndex)
+                pushGuide(guides, "vertical", grid.vertical[verticalIndex], "Grid", 4)
+            for (let horizontalIndex = 0; horizontalIndex < grid.horizontal.length; ++horizontalIndex)
+                pushGuide(guides, "horizontal", grid.horizontal[horizontalIndex], "Grid", 4)
         }
 
         if (slide && slide.templateKind === "split-pair")
@@ -919,7 +2263,7 @@ Rectangle {
 
         for (let itemIndex = 0; itemIndex < carouselDocument.canvasItems.length; ++itemIndex) {
             const item = carouselDocument.canvasItems[itemIndex]
-            if (String(item.itemId || "") === String(selection.itemId || ""))
+            if ((selection.selectedItemIds || []).indexOf(String(item.itemId || "")) >= 0)
                 continue
             if (!root.itemIntersectsSlide(item, rect))
                 continue
@@ -927,17 +2271,35 @@ Rectangle {
             const y = Number(item.y || 0)
             const width = Number(item.width || 0)
             const height = Number(item.height || 0)
-            pushGuide(guides, "vertical", x, "Layer")
-            pushGuide(guides, "vertical", x + width / 2, "Layer")
-            pushGuide(guides, "vertical", x + width, "Layer")
-            pushGuide(guides, "horizontal", y, "Layer")
-            pushGuide(guides, "horizontal", y + height / 2, "Layer")
-            pushGuide(guides, "horizontal", y + height, "Layer")
+            horizontalPeers.push({ start: x, end: x + width })
+            verticalPeers.push({ start: y, end: y + height })
+            pushGuide(guides, "vertical", x, "Layer", 5)
+            pushGuide(guides, "vertical", x + width / 2, "Layer", 5)
+            pushGuide(guides, "vertical", x + width, "Layer", 5)
+            pushGuide(guides, "horizontal", y, "Layer", 5)
+            pushGuide(guides, "horizontal", y + height / 2, "Layer", 5)
+            pushGuide(guides, "horizontal", y + height, "Layer", 5)
+        }
+
+        horizontalPeers.sort(function(a, b) { return a.start - b.start })
+        verticalPeers.sort(function(a, b) { return a.start - b.start })
+        const selectedBounds = selectionBounds()
+        for (let peerIndex = 0; peerIndex + 1 < horizontalPeers.length; ++peerIndex) {
+            const left = horizontalPeers[peerIndex]
+            const right = horizontalPeers[peerIndex + 1]
+            if (right.start - left.end >= selectedBounds.width)
+                pushGuide(guides, "vertical", (left.end + right.start) / 2, "Equal gap", 6, true)
+        }
+        for (let peerIndex = 0; peerIndex + 1 < verticalPeers.length; ++peerIndex) {
+            const top = verticalPeers[peerIndex]
+            const bottom = verticalPeers[peerIndex + 1]
+            if (bottom.start - top.end >= selectedBounds.height)
+                pushGuide(guides, "horizontal", (top.end + bottom.start) / 2, "Equal gap", 6, true)
         }
 
         for (let gi = 0; gi < root.customGuides.length; ++gi) {
             const cg = root.customGuides[gi]
-            pushGuide(guides, cg.orientation, cg.position, "Custom")
+            pushGuide(guides, cg.orientation, cg.position, "Custom", 6)
         }
 
         return guides
@@ -950,7 +2312,7 @@ Rectangle {
             guide: null,
             distance: threshold + 1
         }
-        const anchors = [
+        const allAnchors = [
             { value: center - halfSpan, offset: halfSpan },
             { value: center, offset: 0 },
             { value: center + halfSpan, offset: -halfSpan }
@@ -960,13 +2322,20 @@ Rectangle {
             const guide = candidates[candidateIndex]
             if (guide.orientation !== orientation)
                 continue
+            const anchors = guide.centerOnly ? [{ value: center, offset: 0 }] : allAnchors
             for (let anchorIndex = 0; anchorIndex < anchors.length; ++anchorIndex) {
                 const anchor = anchors[anchorIndex]
                 const distance = Math.abs(anchor.value - guide.position)
-                if (distance < best.distance) {
+                if (distance < best.distance - 0.01 ||
+                        (Math.abs(distance - best.distance) <= 0.01 && Number(guide.priority || 0) > Number(best.guide ? best.guide.priority : -1))) {
                     best = {
                         value: guide.position + anchor.offset,
-                        guide: guide,
+                        guide: {
+                            orientation: guide.orientation,
+                            position: guide.position,
+                            label: guide.label + "  " + distance.toFixed(1) + " px",
+                            priority: guide.priority
+                        },
                         distance: distance
                     }
                 }
@@ -990,14 +2359,20 @@ Rectangle {
 
         for (let candidateIndex = 0; candidateIndex < candidates.length; ++candidateIndex) {
             const guide = candidates[candidateIndex]
-            if (guide.orientation !== orientation)
+            if (guide.orientation !== orientation || guide.centerOnly)
                 continue
             const snappedHalfSpan = Math.abs(guide.position - center)
             const distance = Math.abs(snappedHalfSpan - halfSpan)
-            if (distance < best.distance) {
+            if (distance < best.distance - 0.01 ||
+                    (Math.abs(distance - best.distance) <= 0.01 && Number(guide.priority || 0) > Number(best.guide ? best.guide.priority : -1))) {
                 best = {
                     halfSpan: snappedHalfSpan,
-                    guide: guide,
+                    guide: {
+                        orientation: guide.orientation,
+                        position: guide.position,
+                        label: guide.label + "  " + distance.toFixed(1) + " px",
+                        priority: guide.priority
+                    },
                     distance: distance
                 }
             }
@@ -1014,7 +2389,8 @@ Rectangle {
         if (a.length !== b.length) return false
         for (let i = 0; i < a.length; ++i) {
             if (a[i].orientation !== b[i].orientation ||
-                Math.abs(a[i].position - b[i].position) > 0.01)
+                Math.abs(a[i].position - b[i].position) > 0.01 ||
+                String(a[i].label || "") !== String(b[i].label || ""))
                 return false
         }
         return true
@@ -1039,37 +2415,28 @@ Rectangle {
         const position = orientation === "vertical"
             ? slide.x + slide.width / 2
             : slide.y + slide.height / 2
-        const id = nextGuideId++
-        const updated = customGuides.slice()
-        updated.push({ guideId: id, orientation: orientation, position: position })
-        customGuides = updated
+        carouselDocument.addLayoutGuide(orientation, position)
     }
 
     function removeCustomGuide(guideId) {
-        customGuides = customGuides.filter(function(g) { return g.guideId !== guideId })
+        carouselDocument.removeLayoutGuide(guideId)
     }
 
     function moveCustomGuide(guideId, newPosition) {
-        const updated = customGuides.slice()
-        for (let i = 0; i < updated.length; ++i) {
-            if (updated[i].guideId === guideId) {
-                updated[i] = { guideId: guideId, orientation: updated[i].orientation, position: newPosition }
-                break
-            }
-        }
-        customGuides = updated
+        carouselDocument.moveLayoutGuide(guideId, newPosition)
     }
 
     function clearAllCustomGuides() {
-        customGuides = []
+        carouselDocument.clearLayoutGuides()
     }
 
     function beginCarouselSetup() {
-        setupCarouselName = catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
-            ? catalogAssets.projectFilter + " Carousel"
-            : "Untitled Carousel"
-        setupFormat = "4x5"
-        setupSlideCount = 1
+        if (!setupInitialized) {
+            setupCarouselName = catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                ? catalogAssets.projectFilter + " Carousel"
+                : "Untitled Carousel"
+            setupInitialized = true
+        }
         recentCarouselRecords = carouselDocument.recentDocuments()
     }
 
@@ -1077,7 +2444,15 @@ Rectangle {
         carouselDocument.createCarouselWithSettings({
             "carouselName": setupCarouselName,
             "documentFormat": setupFormat,
-            "slideCount": Math.max(1, Math.min(20, setupSlideCount))
+            "customPixelWidth": Math.max(64, Math.min(16384, setupCustomWidth)),
+            "customPixelHeight": Math.max(64, Math.min(16384, setupCustomHeight)),
+            "slideCount": Math.max(1, Math.min(20, setupSlideCount)),
+            "colorSpace": setupColorSpace,
+            "backgroundColor": String(setupBackgroundColor),
+            "templateKind": setupTemplateKind,
+            "primaryMediaPath": setupUseSelectedMedia ? catalogAssets.selectedFilePath : "",
+            "primaryMediaLabel": setupUseSelectedMedia ? catalogAssets.selectedCameraLabel : "",
+            "primaryMediaRecipeJson": setupUseSelectedMedia ? catalogAssets.selectedAdjustmentPatchJson : ""
         })
     }
 
@@ -1159,7 +2534,9 @@ Rectangle {
 
     Component.onCompleted: {
         refreshMediaPickerAssets()
-        if (!carouselDocument.hasActiveCarousel)
+        if (carouselDocument.recoveryState.available)
+            carouselRecoveryDialog.open()
+        else if (!carouselDocument.hasActiveCarousel)
             beginCarouselSetup()
     }
 
@@ -1167,30 +2544,89 @@ Rectangle {
         target: carouselDocument
 
         function onDocumentStateChanged() {
-            if (!carouselDocument.hasActiveCarousel)
+            if (!carouselDocument.hasActiveCarousel && !carouselDocument.recoveryState.available)
                 root.beginCarouselSetup()
+        }
+
+        function onRecoveryChanged() {
+            if (carouselDocument.recoveryState.available)
+                carouselRecoveryDialog.open()
         }
     }
 
     Shortcut {
         sequences: [StandardKey.Delete]
-        enabled: carouselDocument.hasActiveCarousel
-        onActivated: carouselDocument.removeSelectedItem()
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("arrange.delete")
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: carouselDocument.undo()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Redo]
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: carouselDocument.redo()
     }
 
     Shortcut {
         sequences: [StandardKey.Copy]
-        onActivated: carouselDocument.duplicateSelectedItem()
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: {
+            if (selection.hasSelection)
+                carouselDocument.copySelectedItems()
+            else
+                carouselDocument.copySelectedBoards()
+        }
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Cut]
+        enabled: carouselDocument.hasActiveCarousel && selection.hasSelection && !root.editableTextControlHasFocus()
+        onActivated: carouselDocument.cutSelectedItems()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.Paste]
+        enabled: carouselDocument.hasActiveCarousel && carouselDocument.canPaste && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("add.paste")
     }
 
     Shortcut {
         sequence: "Ctrl+D"
-        onActivated: carouselDocument.duplicateSelectedItem()
+        onActivated: root.runCarouselCommand("arrange.duplicate")
     }
 
     Shortcut {
         sequence: "Meta+D"
-        onActivated: carouselDocument.duplicateSelectedItem()
+        onActivated: root.runCarouselCommand("arrange.duplicate")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+G"
+        enabled: selection.selectedCount > 1 && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("arrange.group")
+    }
+
+    Shortcut {
+        sequence: "Meta+G"
+        enabled: selection.selectedCount > 1 && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("arrange.group")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+G"
+        enabled: selection.isObjectGroup && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("arrange.ungroup")
+    }
+
+    Shortcut {
+        sequence: "Meta+Shift+G"
+        enabled: selection.isObjectGroup && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("arrange.ungroup")
     }
 
     Shortcut {
@@ -1219,109 +2655,200 @@ Rectangle {
     }
 
     Shortcut {
+        sequence: "B"
+        onActivated: {
+            root.brushEraser = false
+            root.setActiveTool("brush")
+        }
+    }
+
+    Shortcut {
+        sequence: "E"
+        onActivated: {
+            root.brushEraser = true
+            root.setActiveTool("brush")
+        }
+    }
+
+    Shortcut {
         sequence: "Shift+T"
-        onActivated: carouselDocument.addTextItem("New Text")
+        onActivated: root.runCarouselCommand("add.text")
     }
 
     Shortcut {
         sequence: "Shift+U"
-        onActivated: carouselDocument.addShapeItem("rectangle")
+        onActivated: root.runCarouselCommand("add.shape")
     }
 
     Shortcut {
         sequence: "Shift+M"
-        onActivated: openMediaPicker("layer")
+        onActivated: root.runCarouselCommand("add.media")
     }
 
     Shortcut {
         sequence: "]"
-        onActivated: carouselDocument.bringSelectedForward()
+        onActivated: root.runCarouselCommand("arrange.forward")
     }
 
     Shortcut {
         sequence: "["
-        onActivated: carouselDocument.sendSelectedBackward()
+        onActivated: root.runCarouselCommand("arrange.backward")
     }
 
     Shortcut {
         sequence: "="
-        onActivated: zoomIn()
+        onActivated: root.runCarouselCommand("transform.zoom-in")
     }
 
     Shortcut {
         sequence: "-"
-        onActivated: zoomOut()
+        onActivated: root.runCarouselCommand("transform.zoom-out")
     }
 
     Shortcut {
         sequence: "0"
-        onActivated: resetZoomToFit()
+        onActivated: root.runCarouselCommand("transform.zoom-fit")
     }
 
     Shortcut {
         sequence: "Left"
-        onActivated: root.nudgeSelected(-1, 0)
+        onActivated: root.runCarouselCommand("transform.nudge-left")
     }
 
     Shortcut {
         sequence: "Right"
-        onActivated: root.nudgeSelected(1, 0)
+        onActivated: root.runCarouselCommand("transform.nudge-right")
     }
 
     Shortcut {
         sequence: "Up"
-        onActivated: root.nudgeSelected(0, -1)
+        onActivated: root.runCarouselCommand("transform.nudge-up")
     }
 
     Shortcut {
         sequence: "Down"
-        onActivated: root.nudgeSelected(0, 1)
+        onActivated: root.runCarouselCommand("transform.nudge-down")
     }
 
     Shortcut {
         sequence: "Shift+Left"
-        onActivated: root.nudgeSelected(-10, 0)
+        onActivated: root.nudgeSelected(-Number(root.layoutSettings.largeNudgeStep || 10), 0)
     }
 
     Shortcut {
         sequence: "Shift+Right"
-        onActivated: root.nudgeSelected(10, 0)
+        onActivated: root.nudgeSelected(Number(root.layoutSettings.largeNudgeStep || 10), 0)
     }
 
     Shortcut {
         sequence: "Shift+Up"
-        onActivated: root.nudgeSelected(0, -10)
+        onActivated: root.nudgeSelected(0, -Number(root.layoutSettings.largeNudgeStep || 10))
     }
 
     Shortcut {
         sequence: "Shift+Down"
-        onActivated: root.nudgeSelected(0, 10)
+        onActivated: root.nudgeSelected(0, Number(root.layoutSettings.largeNudgeStep || 10))
     }
 
     Shortcut {
         sequence: "Ctrl+Left"
-        onActivated: {
-            if (carouselDocument.currentIndex > 0)
-                carouselDocument.selectSlide(carouselDocument.currentIndex - 1)
-        }
+        onActivated: root.runCarouselCommand("board.previous")
     }
 
     Shortcut {
         sequence: "Ctrl+Right"
+        onActivated: root.runCarouselCommand("board.next")
+    }
+
+    Shortcut {
+        sequence: "Meta+Left"
+        enabled: !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("board.previous")
+    }
+
+    Shortcut {
+        sequence: "Meta+Right"
+        enabled: !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("board.next")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+Left"
+        enabled: !root.editableTextControlHasFocus() && carouselDocument.currentIndex > 0
+        onActivated: root.runCarouselCommand("board.move-backward")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+Right"
+        enabled: !root.editableTextControlHasFocus() && carouselDocument.currentIndex < carouselDocument.slideCount - 1
+        onActivated: root.runCarouselCommand("board.move-forward")
+    }
+
+    Shortcut {
+        sequence: "Alt+Up"
+        enabled: !root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0
+        onActivated: carouselDocument.selectAdjacentLayer(-1)
+    }
+
+    Shortcut {
+        sequence: "Alt+Down"
+        enabled: !root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0
+        onActivated: carouselDocument.selectAdjacentLayer(1)
+    }
+
+    Shortcut {
+        sequence: "Alt+Shift+Up"
+        enabled: selection.hasSelection && !root.editableTextControlHasFocus()
+        onActivated: carouselDocument.bringSelectedForward()
+    }
+
+    Shortcut {
+        sequence: "Alt+Shift+Down"
+        enabled: selection.hasSelection && !root.editableTextControlHasFocus()
+        onActivated: carouselDocument.sendSelectedBackward()
+    }
+
+    Shortcut {
+        sequence: "Return"
+        enabled: selection.isText && !root.editableTextControlHasFocus()
         onActivated: {
-            if (carouselDocument.currentIndex < carouselDocument.slideCount - 1)
-                carouselDocument.selectSlide(carouselDocument.currentIndex + 1)
+            textEditor.forceActiveFocus()
+            textEditor.cursorPosition = textEditor.text.length
         }
     }
 
     Shortcut {
+        sequence: "Ctrl+Alt+I"
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: carouselInspectorScroll.forceActiveFocus()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+P"
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("preflight.open")
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Alt+P"
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: carouselCopyProofDialog.open()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Shift+E"
+        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        onActivated: root.runCarouselCommand("export.open")
+    }
+
+    Shortcut {
         sequence: "Ctrl+S"
-        onActivated: carouselDocument.saveDocument()
+        onActivated: root.runCarouselCommand("save.document")
     }
 
     Shortcut {
         sequence: "Meta+S"
-        onActivated: carouselDocument.saveDocument()
+        onActivated: root.runCarouselCommand("save.document")
     }
 
     Shortcut {
@@ -1335,7 +2862,7 @@ Rectangle {
 
     ColumnLayout {
         objectName: "carouselSetupSurface"
-        readonly property string surfaceContract: "carousel-setup-surface:v1|create-carousel:primary|recent:secondary|format-slide-count-visible:true|no-elide:true|no-overlap:true"
+        readonly property string surfaceContract: "carousel-setup-surface:v2|create-carousel:direct|ratios:4|custom-pixels:true|board-count:1-20|color-space:true|background:true|template:true|selected-media:true|remember-last:true|recent:secondary|no-elide:true|no-overlap:true"
         anchors.fill: parent
         visible: !carouselDocument.hasActiveCarousel
         spacing: 0
@@ -1389,18 +2916,44 @@ Rectangle {
                             font.pixelSize: 10
                         }
 
-                        FilterChip {
+                        Repeater {
+                            model: root.formatButtons.concat([{ label: "Custom", value: "custom", size: "Exact pixels" }])
+
+                            delegate: FilterChip {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: modelData.label
+                                active: root.setupFormat === modelData.value
+                                onClicked: root.setupFormat = modelData.value
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.setupFormat === "custom"
+                        spacing: 6
+
+                        ToneTextField {
                             Layout.fillWidth: true
-                            text: "4:5"
-                            active: root.setupFormat === "4x5"
-                            onClicked: root.setupFormat = "4x5"
+                            text: String(root.setupCustomWidth)
+                            placeholderText: "Width px"
+                            validator: IntValidator { bottom: 64; top: 16384 }
+                            onEditingFinished: root.setupCustomWidth = Math.max(64, Math.min(16384, Number(text)))
                         }
 
-                        FilterChip {
+                        Label {
+                            text: "×"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                        }
+
+                        ToneTextField {
                             Layout.fillWidth: true
-                            text: "5:4"
-                            active: root.setupFormat === "5x4"
-                            onClicked: root.setupFormat = "5x4"
+                            text: String(root.setupCustomHeight)
+                            placeholderText: "Height px"
+                            validator: IntValidator { bottom: 64; top: 16384 }
+                            onEditingFinished: root.setupCustomHeight = Math.max(64, Math.min(16384, Number(text)))
                         }
                     }
 
@@ -1442,13 +2995,127 @@ Rectangle {
                             active: root.setupSlideCount === 10
                             onClicked: root.setupSlideCount = 10
                         }
+
+                        ActionButton {
+                            objectName: "carouselDecreaseBoardCountButton"
+                            compact: true
+                            showText: false
+                            text: "Decrease board count"
+                            iconName: "minus"
+                            tooltipText: "Decrease board count"
+                            enabled: root.setupSlideCount > 1
+                            onClicked: root.setupSlideCount -= 1
+                        }
+
+                        ActionButton {
+                            objectName: "carouselIncreaseBoardCountButton"
+                            compact: true
+                            showText: false
+                            text: "Increase board count"
+                            iconName: "plus"
+                            tooltipText: "Increase board count"
+                            enabled: root.setupSlideCount < 20
+                            onClicked: root.setupSlideCount += 1
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Profile"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "sRGB"
+                            active: root.setupColorSpace === "sRGB"
+                            onClicked: root.setupColorSpace = "sRGB"
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "Display P3"
+                            active: root.setupColorSpace === "Display P3"
+                            onClicked: root.setupColorSpace = "Display P3"
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Background"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        Repeater {
+                            model: ["#fbf7f1", "#ffffff", "#101418", "#1e1a17"]
+
+                            delegate: ColorSwatchButton {
+                                required property string modelData
+                                swatchColor: modelData
+                                selected: String(root.setupBackgroundColor) === modelData
+                                label: "New carousel background " + modelData
+                                onPicked: function(swatchColor) { root.setupBackgroundColor = swatchColor }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Template"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        Repeater {
+                            model: [
+                                { label: "Full", value: "single" },
+                                { label: "Pair", value: "split-pair" },
+                                { label: "Stack", value: "stacked-triptych" }
+                            ]
+
+                            delegate: FilterChip {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: modelData.label
+                                active: root.setupTemplateKind === modelData.value
+                                onClicked: root.setupTemplateKind = modelData.value
+                            }
+                        }
+                    }
+
+                    FilterChip {
+                        Layout.fillWidth: true
+                        text: catalogAssets.selectedFilePath.length > 0
+                              ? "Use selected library media"
+                              : "No library media selected"
+                        enabled: catalogAssets.selectedFilePath.length > 0
+                        active: root.setupUseSelectedMedia && enabled
+                        onClicked: root.setupUseSelectedMedia = !root.setupUseSelectedMedia
                     }
 
                     Label {
                         Layout.fillWidth: true
                         text: {
-                            const w = root.setupFormat === "5x4" ? 1350 : 1080
-                            const h = root.setupFormat === "5x4" ? 1080 : 1350
+                            const w = root.setupFormat === "5x4" ? 1350
+                                    : root.setupFormat === "custom" ? root.setupCustomWidth : 1080
+                            const h = root.setupFormat === "5x4" ? 1080
+                                    : root.setupFormat === "1x1" ? 1080
+                                    : root.setupFormat === "9x16" ? 1920
+                                    : root.setupFormat === "custom" ? root.setupCustomHeight : 1350
                             return root.setupSlideCount + " slide" + (root.setupSlideCount !== 1 ? "s" : "")
                                    + "  •  " + (w * root.setupSlideCount) + " x " + h + " px"
                         }
@@ -1549,8 +3216,9 @@ Rectangle {
     }
 
     RowLayout {
+        id: carouselActiveWorkspace
         objectName: "carouselActiveWorkspace"
-        readonly property string surfaceContract: "carousel-active-workspace:v1|tool-rail:always|composer:dominant|inspector:always|board-strip:always|selection-contextual:true|no-elide:true|no-overlap:true"
+        readonly property string surfaceContract: "carousel-active-workspace:v2|tool-rail:always|composer:dominant|inspector:inline-standard-wide-drawer-compact|board-strip:always|selection-contextual:true|modes:compact-standard-wide|no-elide:true|no-overlap:true"
         anchors.fill: parent
         visible: carouselDocument.hasActiveCarousel
         spacing: 6
@@ -1578,6 +3246,7 @@ Rectangle {
 
                         Layout.fillWidth: true
                         Layout.preferredHeight: 40
+                        compactLabelMode: false
                         toolData: modelData
                         activeTool: root.activeTool
                         menuItems: root.carouselToolMenuItems(modelData.value)
@@ -1619,7 +3288,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.snappingEnabled = !root.snappingEnabled
+                        onClicked: carouselDocument.setLayoutSetting("snappingEnabled", !root.snappingEnabled)
                     }
 
                     ToolTip {
@@ -1652,7 +3321,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.guidesEnabled = !root.guidesEnabled
+                        onClicked: carouselDocument.setLayoutSetting("guidesEnabled", !root.guidesEnabled)
                     }
 
                     ToolTip {
@@ -1673,7 +3342,7 @@ Rectangle {
             readonly property string surfaceContract: "carousel-composer-panel:v1|header:always|artboard:dominant|zoom:contextual|board-strip:always|empty-slot:contextual|drag-handles:hover-focus|no-overlap:true"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumWidth: 420
+            Layout.minimumWidth: root.responsiveComposerMinimumWidth
             radius: theme.radius12
             color: theme.alpha(theme.ink900, 0.9)
             border.width: 1
@@ -1681,8 +3350,8 @@ Rectangle {
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: theme.panelPadding
-                spacing: theme.gapPanel
+                anchors.margins: root.compactWorkspace ? 6 : theme.panelPadding
+                spacing: root.compactWorkspace ? 6 : theme.gapPanel
 
                 RowLayout {
                     objectName: "carouselHeaderBar"
@@ -1692,8 +3361,11 @@ Rectangle {
 
                     TextField {
                         id: documentNameField
+                        objectName: "carouselDocumentNameField"
+                        visible: !root.compactWorkspace
                         Layout.fillWidth: true
-                        Layout.maximumWidth: 280
+                        Layout.minimumWidth: visible ? 160 : 0
+                        Layout.maximumWidth: visible ? (root.wideWorkspace ? 320 : 240) : 0
                         text: carouselDocument.documentName
                         color: theme.textStrong
                         font.family: theme.fontDisplay
@@ -1717,6 +3389,7 @@ Rectangle {
                     }
 
                     Label {
+                        visible: root.width >= 860
                         text: carouselDocument.documentFormat.toUpperCase() + "  " + documentPixelLabel()
                         color: theme.textFaint
                         font.family: theme.fontMono
@@ -1724,6 +3397,51 @@ Rectangle {
                     }
 
                     Item { Layout.fillWidth: true }
+
+                    StatusChip {
+                        objectName: "carouselDocumentSaveState"
+                        visible: carouselDocument.hasActiveCarousel
+                        compact: true
+                        text: carouselDocument.saveState
+                        tone: carouselDocument.saveState === "Save failed" ? "error"
+                              : carouselDocument.saveState === "Unsaved" ? "warning"
+                              : carouselDocument.saveState === "Saved" ||
+                                carouselDocument.saveState === "Autosaved" ? "success"
+                              : "info"
+                        busy: carouselDocument.saveState === "Saving"
+                        detailText: carouselDocument.saveError.length > 0
+                                    ? carouselDocument.saveError
+                                    : carouselDocument.lastSavedAt.length > 0
+                                      ? (carouselDocument.saveState === "Autosaved" ? "Last autosaved " : "Last saved ") + carouselDocument.lastSavedAt
+                                      : "This document has not been saved yet."
+                        minimumReadableWidth: 78
+                        maximumReadableWidth: 116
+                    }
+
+                    ActionButton {
+                        objectName: "carouselRelinkMissingMediaButton"
+                        visible: carouselDocument.missingMediaCount > 0
+                        compact: true
+                        showText: !root.compactWorkspace
+                        iconName: "source"
+                        tone: "warning"
+                        text: "Relink " + carouselDocument.missingMediaCount + " Missing"
+                        tooltipText: "Compare stored source metadata and batch relink missing media."
+                        onClicked: carouselRelinkDialog.open()
+                    }
+
+                    ActionButton {
+                        objectName: "carouselResolveMissingFontsButton"
+                        visible: carouselDocument.missingFontEntries.length > 0
+                        compact: true
+                        showText: !root.compactWorkspace
+                        iconName: "edit"
+                        tone: "warning"
+                        text: "Resolve " + carouselDocument.missingFontEntries.length + " Font Layer" +
+                              (carouselDocument.missingFontEntries.length === 1 ? "" : "s")
+                        tooltipText: "Inspect exact affected layers and preview an installed replacement."
+                        onClicked: carouselFontRecoveryDialog.open()
+                    }
 
                     Rectangle {
                         visible: carouselDocument.exportBusy
@@ -1741,13 +3459,79 @@ Rectangle {
 
                     ActionButton {
                         compact: true
+                        showText: false
+                        iconName: "undo"
+                        enabled: carouselDocument.canUndo
+                        tooltipText: carouselDocument.canUndo ? "Undo " + carouselDocument.undoText : "Nothing to undo"
+                        disabledReason: "Nothing to undo"
+                        onClicked: carouselDocument.undo()
+                    }
+
+                    ActionButton {
+                        compact: true
+                        showText: false
+                        iconName: "redo"
+                        enabled: carouselDocument.canRedo
+                        tooltipText: carouselDocument.canRedo ? "Redo " + carouselDocument.redoText : "Nothing to redo"
+                        disabledReason: "Nothing to redo"
+                        onClicked: carouselDocument.redo()
+                    }
+
+                    MenuButton {
+                        objectName: "carouselColorInspectionMenu"
+                        compact: true
+                        text: root.condensedHeader ? "Inspect"
+                              : root.carouselInspectionModeActive
+                              ? "Inspect: " + root.carouselInspectionModeLabel(root.carouselInspectionMode)
+                              : "Inspect"
+                        iconName: "visible"
+                        tone: root.carouselInspectionModeActive ? "warning" : "secondary"
+                        active: root.carouselInspectionModeActive
+                        primaryOpensMenu: true
+                        tooltipText: root.carouselInspectionModeActive
+                                     ? "Canvas-only " + root.carouselInspectionModeLabel(root.carouselInspectionMode) + " inspection is active. This never exports."
+                                     : "Inspect authored artwork with color-vision or grayscale simulation."
+                        menuTooltipText: "Choose a canvas inspection mode"
+                        menuItems: root.carouselInspectionMenuItems()
+                        menuWidth: 250
+                        onMenuItemTriggered: root.runCarouselCommand(key)
+                    }
+
+                    ActionButton {
+                        objectName: "carouselCommandPaletteButton"
+                        compact: true
+                        showText: !root.condensedHeader
+                        text: "Commands"
+                        iconName: "search"
+                        tooltipText: "Search Carousel commands (Ctrl/Meta+K)."
+                        onClicked: root.openCarouselCommandPalette()
+                    }
+
+                    ActionButton {
+                        id: carouselCompactInspectorButton
+                        objectName: "carouselCompactInspectorButton"
+                        visible: root.compactWorkspace
+                        compact: true
+                        showText: false
+                        text: "Inspector"
+                        iconName: "settings"
+                        active: carouselCompactInspectorDrawer.opened
+                        tooltipText: "Open the Carousel inspector."
+                        onClicked: carouselCompactInspectorDrawer.open()
+                    }
+
+                    ActionButton {
+                        compact: true
+                        showText: !root.compactWorkspace
+                        iconName: "save"
                         text: "Save"
                         tooltipText: "Save the current carousel document."
-                        onClicked: carouselDocument.saveDocument()
+                        onClicked: root.runCarouselCommand("save.document")
                     }
 
                     MenuButton {
                         compact: true
+                        showText: !root.compactWorkspace
                         text: "Export"
                         iconName: "export"
                         tone: "primary"
@@ -1755,8 +3539,51 @@ Rectangle {
                         tooltipText: carouselDocument.exportBusy ? "Export is already running." : "Export this carousel."
                         menuItems: root.carouselExportMenuItems()
                         menuWidth: 190
-                        onClicked: carouselDocument.exportCarousel()
+                        onClicked: root.runCarouselCommand("export.open")
                         onMenuItemTriggered: root.handleCarouselExportMenuAction(key)
+                    }
+                }
+
+                Rectangle {
+                    objectName: "carouselStatusSurface"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: statusMessageLabel.implicitHeight + 12
+                    visible: carouselDocument.status.length > 0 &&
+                             carouselDocument.status !== "Carousel ready."
+                    radius: theme.radius6
+                    color: carouselDocument.saveState === "Save failed"
+                           ? theme.alpha(theme.error, 0.1)
+                           : theme.alpha(theme.ink850, 0.66)
+                    border.width: 1
+                    border.color: carouselDocument.saveState === "Save failed"
+                                  ? theme.alpha(theme.error, 0.5)
+                                  : theme.alpha(theme.lineSoft, 0.32)
+
+                    Label {
+                        id: statusMessageLabel
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: carouselDocument.statusNotices.length > 0 ? 104 : 10
+                        text: carouselDocument.status
+                        color: carouselDocument.saveState === "Save failed" ? theme.error : theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
+                    }
+
+                    ActionButton {
+                        objectName: "carouselStatusDetailsButton"
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: carouselDocument.statusNotices.length > 0
+                        compact: true
+                        text: carouselDocument.statusNotices.length + " Details"
+                        tooltipText: "Open retained Carousel failures and recovery actions."
+                        onClicked: carouselStatusNoticesDialog.open()
                     }
                 }
 
@@ -1775,7 +3602,10 @@ Rectangle {
                         objectName: "carouselArtboardViewport"
                         readonly property string visibilityRole: "always-visible|pan-zoom-canvas-tools"
                         anchors.fill: parent
-                        anchors.margins: theme.panelPadding
+                        anchors.margins: root.compactWorkspace ? 6 : theme.panelPadding
+                        anchors.topMargin: boardNavigationSurface.visible
+                                           ? boardNavigationSurface.height + 16
+                                           : (root.compactWorkspace ? 6 : theme.panelPadding)
                         contentWidth: Math.max(width, stripSurface.width + 40)
                         contentHeight: Math.max(height, stripSurface.height + 40)
                         boundsBehavior: Flickable.StopAtBounds
@@ -1801,6 +3631,8 @@ Rectangle {
 
                         Rectangle {
                             id: stripSurface
+                            LayoutMirroring.enabled: false
+                            LayoutMirroring.childrenInherit: false
                             objectName: "carouselStripSurface"
                             readonly property string visibilityRole: "always-visible|slides-media-objects-selection-guides"
                             x: Math.max(20, (artboardFlick.width - width) / 2)
@@ -1812,6 +3644,11 @@ Rectangle {
                             border.width: 2
                             border.color: theme.alpha("#c5b6a6", 0.92)
                             clip: true
+                            layer.enabled: root.carouselInspectionModeActive
+                            layer.smooth: true
+                            layer.effect: CarouselColorVisionEffect {
+                                simulationMode: root.carouselInspectionModeIndex()
+                            }
 
                             MouseArea {
                                 anchors.fill: parent
@@ -1841,6 +3678,81 @@ Rectangle {
                                     width: root.slideWidthOnStrip()
                                     height: stripSurface.height
                                     z: modelData.selected ? 2 : 1
+
+                                    DropArea {
+                                        id: boardMediaDropArea
+                                        objectName: "carouselBoardMediaDropArea"
+                                        anchors.fill: parent
+                                        z: 120
+                                        keys: ["application/x-carousel-media", "text/uri-list"]
+                                        onEntered: function(drag) {
+                                            const slot = root.slotNameForDrop(
+                                                        slideDelegate.modelData,
+                                                        width,
+                                                        height,
+                                                        drag.x,
+                                                        drag.y)
+                                            root.showMediaDropPreview(slideDelegate.index, "slot", slot)
+                                            drag.accepted = true
+                                        }
+                                        onPositionChanged: function(drag) {
+                                            const slot = root.slotNameForDrop(
+                                                        slideDelegate.modelData,
+                                                        width,
+                                                        height,
+                                                        drag.x,
+                                                        drag.y)
+                                            root.showMediaDropPreview(slideDelegate.index, "slot", slot)
+                                        }
+                                        onExited: root.clearMediaDropPreview()
+                                        onDropped: function(drop) {
+                                            const slot = root.slotNameForDrop(
+                                                        slideDelegate.modelData,
+                                                        width,
+                                                        height,
+                                                        drop.x,
+                                                        drop.y)
+                                            root.applyMediaDrop(
+                                                        drop,
+                                                        slideDelegate.index,
+                                                        "slot",
+                                                        slot,
+                                                        drop.x / Math.max(1, width),
+                                                        drop.y / Math.max(1, height))
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        readonly property var exactDropRegion: root.slotRegionForName(
+                                                                                    slideDelegate.modelData,
+                                                                                    slideDelegate.width,
+                                                                                    slideDelegate.height,
+                                                                                    root.carouselDropPreview.slotName)
+                                        x: Number(exactDropRegion.x || 0)
+                                        y: Number(exactDropRegion.y || 0)
+                                        width: Number(exactDropRegion.width || slideDelegate.width)
+                                        height: Number(exactDropRegion.height || slideDelegate.height)
+                                        z: 119
+                                        visible: root.carouselDropPreview.active &&
+                                                 root.carouselDropPreview.boardIndex === slideDelegate.index &&
+                                                 root.carouselDropPreview.targetKind === "slot"
+                                        color: theme.alpha(theme.accentCool400, 0.14)
+                                        border.width: 4
+                                        border.color: theme.accentCool400
+
+                                        Label {
+                                            anchors.centerIn: parent
+                                            width: Math.max(80, parent.width - 28)
+                                            text: String(root.carouselDropPreview.label || "Drop media")
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 12
+                                            font.weight: Font.DemiBold
+                                            horizontalAlignment: Text.AlignHCenter
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
 
                                     Rectangle {
                                         anchors.fill: parent
@@ -1911,12 +3823,32 @@ Rectangle {
                                             property real handleStartY: 0
                                             property bool scaleArmed: false
                                             readonly property real slotLabelReserveHeight: 36
+                                            objectName: "carouselCanvasSlot" +
+                                                        String(modelData.name || "slot") + "Control"
 
                                             x: Number(modelData.x || 0)
                                             y: Number(modelData.y || 0)
                                             width: Number(modelData.width || 0)
                                             height: Number(modelData.height || 0)
                                             visible: slideDelegate.modelData.selected && !root.selection.hasSelection
+                                            activeFocusOnTab: visible
+                                            Accessible.name: "Media slot " + String(modelData.label || modelData.name || "slot")
+                                            Accessible.description: (slotRegion.isActive ? "Selected. " : "") +
+                                                                    (Boolean(modelData.hasMedia)
+                                                                     ? "Contains media. Arrow keys adjust the selected slot media."
+                                                                     : "Empty. Press Enter to add media.")
+                                            Accessible.role: Accessible.Button
+                                            Accessible.checked: slotRegion.isActive
+                                            Keys.onReturnPressed: {
+                                                carouselDocument.setActiveSlot(String(modelData.name || "primary"))
+                                                root.openMediaPicker("slot")
+                                            }
+                                            Keys.onEnterPressed: {
+                                                carouselDocument.setActiveSlot(String(modelData.name || "primary"))
+                                                root.openMediaPicker("slot")
+                                            }
+                                            Keys.onSpacePressed: carouselDocument.setActiveSlot(
+                                                                     String(modelData.name || "primary"))
 
                                             Rectangle {
                                                 anchors.fill: parent
@@ -1999,10 +3931,15 @@ Rectangle {
                                                 Accessible.description: compactPrompt
                                                                         ? "Compact add media button. Full label is available in the tooltip."
                                                                         : "Add media button with full visible label."
-                                                ToolTip.visible: visible && slotHitArea.containsMouse
+                                                ToolTip.visible: visible && emptyPromptHover.hovered
                                                 ToolTip.text: promptAccessibleName
                                                 ToolTip.delay: 350
                                                 ToolTip.timeout: 3600
+
+                                                HoverHandler {
+                                                    id: emptyPromptHover
+                                                    cursorShape: Qt.PointingHandCursor
+                                                }
 
                                                 RowLayout {
                                                     id: emptySlotPromptContent
@@ -2097,6 +4034,7 @@ Rectangle {
                                                     slotRegion.lastX = p.x
                                                     slotRegion.lastY = p.y
                                                     slotRegion.dragArmed = true
+                                                    carouselDocument.beginHistoryTransaction("Position media")
                                                 }
 
                                                 onPositionChanged: function(mouse) {
@@ -2139,7 +4077,8 @@ Rectangle {
                                                     carouselDocument.selectSlide(slideDelegate.index)
                                                     carouselDocument.setActiveSlot(modelData.name)
                                                     carouselDocument.clearSelection()
-                                                    openMediaPicker("slot")
+                                                    if (!modelData.hasMedia || !root.editSelectedPhoto())
+                                                        openMediaPicker("slot")
                                                 }
                                             }
 
@@ -2167,6 +4106,7 @@ Rectangle {
                                                         carouselDocument.clearSelection()
                                                         slotRegion.scaleArmed = true
                                                         slotRegion.startScale = Number(selection.scale || 1)
+                                                        carouselDocument.beginHistoryTransaction("Scale media")
                                                         const p = slotScaleHandle.mapToItem(stripSurface, mouse.x, mouse.y)
                                                         slotRegion.handleStartX = p.x
                                                         slotRegion.handleStartY = p.y
@@ -2187,6 +4127,7 @@ Rectangle {
 
                                                     onReleased: {
                                                         slotRegion.scaleArmed = false
+                                                        carouselDocument.commitMediaTransformState()
                                                         root.clearSnapGuides()
                                                     }
                                                 }
@@ -2194,9 +4135,134 @@ Rectangle {
                                         }
                                     }
 
+                                    Rectangle {
+                                        id: emptyBoardStartCard
+                                        objectName: "carouselEmptyBoardStartCard"
+                                        readonly property string emptyStateContract: "carousel-empty-board:v2|chrome:compact-command-surface|commands:add-media-add-text-add-shape-paste-apply-template|instruction-copy:none|direct:true|keyboard:true|no-elide:true|no-overlap:true"
+                                        anchors.centerIn: parent
+                                        readonly property bool responsiveCompactCard: parent.width < 360
+                                        width: Math.max(
+                                                   220,
+                                                   Math.min(parent.width - 24, 420))
+                                        height: emptyBoardStartColumn.implicitHeight + 20
+                                        visible: modelData.selected && !root.currentBoardHasContent()
+                                        z: 30
+                                        radius: theme.radius10
+                                        color: theme.alpha(theme.ink950, 0.9)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.54)
+
+                                        ColumnLayout {
+                                            id: emptyBoardStartColumn
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.margins: 10
+                                            spacing: 8
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: "Empty board"
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 9
+                                                font.weight: Font.DemiBold
+                                                font.capitalization: Font.AllUppercase
+                                                horizontalAlignment: Text.AlignHCenter
+                                            }
+
+                                            GridLayout {
+                                                Layout.fillWidth: true
+                                                columns: emptyBoardStartCard.responsiveCompactCard ? 2 : 3
+                                                columnSpacing: 6
+                                                rowSpacing: 6
+
+                                                Repeater {
+                                                    model: [
+                                                        { label: "Add media", icon: "media", action: "media" },
+                                                        { label: "Add text", icon: "edit", action: "text" },
+                                                        { label: "Add shape", icon: "geometry", action: "shape" },
+                                                        { label: "Paste", icon: "paste", action: "paste" },
+                                                        { label: "Apply template", icon: "grid", action: "template" }
+                                                    ]
+
+                                                    delegate: ActionButton {
+                                                        required property var modelData
+                                                        objectName: "carouselEmptyBoard" +
+                                                                    modelData.action.charAt(0).toUpperCase() +
+                                                                    modelData.action.slice(1) + "Action"
+                                                        Layout.fillWidth: true
+                                                        compact: true
+                                                        showText: true
+                                                        text: modelData.label
+                                                        iconName: modelData.icon
+                                                        tooltipText: modelData.label
+                                                        tone: modelData.action === "media" ? "primary" : "secondary"
+                                                        enabled: modelData.action !== "paste" || carouselDocument.canPaste
+                                                        disabledReason: modelData.action === "paste"
+                                                                        ? "Copy a Carousel board or component before pasting."
+                                                                        : ""
+                                                        onClicked: {
+                                                            if (modelData.action === "media")
+                                                                root.openMediaPicker("slot")
+                                                            else if (modelData.action === "text")
+                                                                carouselDocument.addTextItem("New Text")
+                                                            else if (modelData.action === "shape")
+                                                                carouselDocument.addShapeItem("rectangle")
+                                                            else if (modelData.action === "paste")
+                                                                root.runCarouselCommand("add.paste")
+                                                            else
+                                                                root.openCarouselTemplateLibrary()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     Item {
+                                        id: slideGuideOverlay
+                                        readonly property int slideIndex: index
+                                        readonly property var boardData: root.slideData(slideIndex)
                                         anchors.fill: parent
                                         visible: root.guidesEnabled && modelData.selected
+
+                                        Repeater {
+                                            model: root.gridEnabled ? root.layoutGridForSlide(slideGuideOverlay.slideIndex).vertical : []
+
+                                            delegate: Rectangle {
+                                                required property real modelData
+                                                x: (modelData - root.slideGeometry(slideGuideOverlay.slideIndex).x) * root.stripScale
+                                                y: 0
+                                                width: 1
+                                                height: parent.height
+                                                color: theme.alpha(root.guideColor, root.guideOpacity * 0.55)
+                                            }
+                                        }
+
+                                        Repeater {
+                                            model: root.gridEnabled ? root.layoutGridForSlide(slideGuideOverlay.slideIndex).horizontal : []
+
+                                            delegate: Rectangle {
+                                                required property real modelData
+                                                x: 0
+                                                y: (modelData - root.slideGeometry(slideGuideOverlay.slideIndex).y) * root.stripScale
+                                                width: parent.width
+                                                height: 1
+                                                color: theme.alpha(root.guideColor, root.guideOpacity * 0.55)
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            visible: root.gridEnabled
+                                            x: Number(slideGuideOverlay.boardData ? slideGuideOverlay.boardData.layoutMarginX : 72) * root.stripScale
+                                            y: Number(slideGuideOverlay.boardData ? slideGuideOverlay.boardData.layoutMarginY : 72) * root.stripScale
+                                            width: Math.max(1, parent.width - x * 2)
+                                            height: Math.max(1, parent.height - y * 2)
+                                            color: "transparent"
+                                            border.width: 1
+                                            border.color: theme.alpha(root.guideColor, root.guideOpacity * 0.9)
+                                        }
 
                                         Rectangle {
                                             x: parent.width / 2
@@ -2252,14 +4318,328 @@ Rectangle {
 
                                         Rectangle {
                                             visible: root.safeGuidesEnabled
-                                            anchors.fill: parent
-                                            anchors.margins: Math.round(Math.min(parent.width, parent.height) * 0.08)
+                                            x: parent.width * Number(root.layoutSettings.safeInset || 0.08)
+                                            y: parent.height * Number(root.layoutSettings.safeInset || 0.08)
+                                            width: Math.max(1, parent.width - x * 2)
+                                            height: Math.max(1, parent.height - y * 2)
                                             color: "transparent"
                                             border.width: 1
                                             border.color: theme.alpha("#7bd0bf", 0.7)
                                         }
+
+                                        Rectangle {
+                                            visible: root.bleedGuidesEnabled
+                                            x: Number(root.layoutSettings.bleed || 0) * root.stripScale
+                                            y: Number(root.layoutSettings.bleed || 0) * root.stripScale
+                                            width: Math.max(1, parent.width - x * 2)
+                                            height: Math.max(1, parent.height - y * 2)
+                                            color: "transparent"
+                                            border.width: 1
+                                            border.color: theme.alpha("#ff8f70", 0.8)
+                                        }
                                     }
 
+                                }
+                            }
+
+                            Repeater {
+                                model: root.platformPreviewProfileId === "none" ? 0 : carouselDocument.slideCount
+
+                                delegate: Item {
+                                    id: platformPreviewOverlay
+                                    required property int index
+                                    readonly property var profile: root.platformPreviewProfile
+                                    readonly property real squareSize: Math.min(width, height)
+                                    x: index * root.slideWidthOnStrip()
+                                    y: 0
+                                    width: root.slideWidthOnStrip()
+                                    height: stripSurface.height
+                                    z: 105
+
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "center-square" && parent.height > parent.width
+                                        x: 0
+                                        y: 0
+                                        width: parent.width
+                                        height: Math.max(0, (parent.height - platformPreviewOverlay.squareSize) / 2)
+                                        color: theme.alpha(theme.ink950, 0.68)
+                                    }
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "center-square" && parent.height > parent.width
+                                        x: 0
+                                        y: (parent.height + platformPreviewOverlay.squareSize) / 2
+                                        width: parent.width
+                                        height: Math.max(0, (parent.height - platformPreviewOverlay.squareSize) / 2)
+                                        color: theme.alpha(theme.ink950, 0.68)
+                                    }
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "center-square" && parent.width > parent.height
+                                        x: 0
+                                        y: 0
+                                        width: Math.max(0, (parent.width - platformPreviewOverlay.squareSize) / 2)
+                                        height: parent.height
+                                        color: theme.alpha(theme.ink950, 0.68)
+                                    }
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "center-square" && parent.width > parent.height
+                                        x: (parent.width + platformPreviewOverlay.squareSize) / 2
+                                        y: 0
+                                        width: Math.max(0, (parent.width - platformPreviewOverlay.squareSize) / 2)
+                                        height: parent.height
+                                        color: theme.alpha(theme.ink950, 0.68)
+                                    }
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "center-square"
+                                        anchors.centerIn: parent
+                                        width: platformPreviewOverlay.squareSize
+                                        height: platformPreviewOverlay.squareSize
+                                        color: "transparent"
+                                        border.width: 2
+                                        border.color: theme.warning
+                                        Label {
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.margins: 6
+                                            text: "FEED GRID CROP"
+                                            color: theme.warning
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        visible: Boolean(platformPreviewOverlay.profile.showsProfileHeader)
+                                        x: 0
+                                        y: parent.height * Number(platformPreviewOverlay.profile.headerTop || 0.12)
+                                        width: parent.width
+                                        height: parent.height * Number(platformPreviewOverlay.profile.headerHeight || 0.32)
+                                        color: theme.alpha(theme.selectionAccent, 0.08)
+                                        border.width: 2
+                                        border.color: theme.selectionAccent
+                                        Label {
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.margins: 6
+                                            text: "PROFILE HEADER CROP"
+                                            color: theme.selectionAccent
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                        }
+                                    }
+                                    Rectangle {
+                                        visible: Boolean(platformPreviewOverlay.profile.showsProfileHeader)
+                                        width: parent.width * Number(platformPreviewOverlay.profile.avatarObstructionRatio || 0.16)
+                                        height: width
+                                        radius: width / 2
+                                        x: parent.width * 0.08
+                                        y: parent.height * (Number(platformPreviewOverlay.profile.headerTop || 0.12) +
+                                                           Number(platformPreviewOverlay.profile.headerHeight || 0.32)) - height / 2
+                                        color: theme.alpha(theme.ink950, 0.72)
+                                        border.width: 2
+                                        border.color: theme.selectionAccent
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: "AVATAR"
+                                            color: theme.textStrong
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 7
+                                            font.weight: Font.Bold
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        visible: Number(platformPreviewOverlay.profile.captionBand || 0) > 0
+                                        x: parent.width * 0.04
+                                        y: parent.height * (1 - Number(platformPreviewOverlay.profile.captionBand || 0))
+                                        width: parent.width * (0.88 - Number(platformPreviewOverlay.profile.controlsRail || 0))
+                                        height: parent.height * Number(platformPreviewOverlay.profile.captionBand || 0) - parent.height * 0.04
+                                        radius: 6
+                                        color: theme.alpha(theme.ink950, 0.62)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.warning, 0.72)
+                                        Label {
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.margins: 7
+                                            width: parent.width - 14
+                                            text: "CAPTION / ACCOUNT / AUDIO"
+                                            color: theme.warning
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        visible: Number(platformPreviewOverlay.profile.controlsRail || 0) > 0
+                                        x: parent.width * (1 - Number(platformPreviewOverlay.profile.controlsRail || 0))
+                                        y: parent.height * 0.28
+                                        width: parent.width * Number(platformPreviewOverlay.profile.controlsRail || 0)
+                                        height: parent.height * 0.54
+                                        radius: width / 2
+                                        color: theme.alpha(theme.ink950, 0.62)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.warning, 0.72)
+                                        ColumnLayout {
+                                            anchors.centerIn: parent
+                                            spacing: Math.max(3, parent.height * 0.05)
+                                            Repeater {
+                                                model: ["♥", "●", "↗"]
+                                                delegate: Label {
+                                                    required property string modelData
+                                                    Layout.alignment: Qt.AlignHCenter
+                                                    text: modelData
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: Math.max(8, platformPreviewOverlay.width * 0.05)
+                                                }
+                                            }
+                                        }
+                                        Label {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            anchors.bottom: parent.top
+                                            anchors.bottomMargin: 3
+                                            text: "LIKE / COMMENT"
+                                            color: theme.warning
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 7
+                                            font.weight: Font.Bold
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        visible: String(platformPreviewOverlay.profile.progressEdge || "none") !== "none"
+                                        x: parent.width * 0.04
+                                        y: String(platformPreviewOverlay.profile.progressEdge || "none") === "top"
+                                           ? parent.height * 0.018 : parent.height * 0.972
+                                        width: parent.width * 0.92
+                                        height: Math.max(2, parent.height * 0.006)
+                                        radius: height / 2
+                                        color: theme.alpha(theme.textStrong, 0.84)
+                                    }
+
+                                    Rectangle {
+                                        visible: Number(platformPreviewOverlay.profile.deviceCornerRatio || 0) > 0
+                                        anchors.fill: parent
+                                        radius: Math.min(width, height) * Number(platformPreviewOverlay.profile.deviceCornerRatio || 0)
+                                        color: "transparent"
+                                        border.width: Math.max(2, Math.round(Math.min(width, height) * 0.018))
+                                        border.color: theme.alpha(theme.warning, 0.86)
+                                    }
+
+                                    Label {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        anchors.top: parent.top
+                                        anchors.topMargin: 8
+                                        visible: String(platformPreviewOverlay.profile.cropKind || "") === "full-frame"
+                                        text: "REFERENCE UI — NOT EXPORTED"
+                                        color: theme.warning
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        font.weight: Font.Bold
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                id: horizontalRuler
+                                visible: root.rulersEnabled
+                                x: 0
+                                y: 0
+                                width: stripSurface.width
+                                height: 20
+                                z: 90
+                                color: theme.alpha(theme.ink950, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(root.guideColor, 0.45)
+
+                                Repeater {
+                                    model: Math.min(160, Math.ceil(carouselDocument.documentPixelWidth / root.rulerStep()) + 1)
+
+                                    delegate: Item {
+                                        required property int index
+                                        x: index * root.rulerStep() * root.stripScale
+                                        width: 1
+                                        height: horizontalRuler.height
+
+                                        Rectangle {
+                                            anchors.bottom: parent.bottom
+                                            width: 1
+                                            height: 6
+                                            color: theme.alpha(root.guideColor, 0.8)
+                                        }
+
+                                        Label {
+                                            x: 4
+                                            y: 1
+                                            text: index * root.rulerStep()
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.SplitHCursor
+                                    onPressed: function(mouse) {
+                                        carouselDocument.addLayoutGuide("vertical", mouse.x / root.stripScale)
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                id: verticalRuler
+                                visible: root.rulersEnabled
+                                x: 0
+                                y: 0
+                                width: 20
+                                height: stripSurface.height
+                                z: 91
+                                color: theme.alpha(theme.ink950, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(root.guideColor, 0.45)
+
+                                Repeater {
+                                    model: Math.min(160, Math.ceil(carouselDocument.documentPixelHeight / root.rulerStep()) + 1)
+
+                                    delegate: Item {
+                                        required property int index
+                                        y: index * root.rulerStep() * root.stripScale
+                                        width: verticalRuler.width
+                                        height: 1
+
+                                        Rectangle {
+                                            anchors.right: parent.right
+                                            width: 6
+                                            height: 1
+                                            color: theme.alpha(root.guideColor, 0.8)
+                                        }
+
+                                        Label {
+                                            x: 2
+                                            y: 3
+                                            text: index === 0 ? "" : index * root.rulerStep()
+                                            rotation: -90
+                                            transformOrigin: Item.TopLeft
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.SplitVCursor
+                                    onPressed: function(mouse) {
+                                        carouselDocument.addLayoutGuide("horizontal", mouse.y / root.stripScale)
+                                    }
                                 }
                             }
 
@@ -2304,6 +4684,7 @@ Rectangle {
 
                             Repeater {
                                 model: root.customGuides
+                                visible: root.guidesEnabled
 
                                 delegate: Item {
                                     id: customGuideItem
@@ -2386,6 +4767,304 @@ Rectangle {
                                 }
                             }
 
+                            Canvas {
+                                id: brushCanvas
+                                anchors.fill: parent
+                                z: 80
+                                readonly property real backingScale: Math.min(1, 2048 / Math.max(1, width, height))
+                                canvasSize: Qt.size(Math.max(1, Math.round(width * backingScale)),
+                                                    Math.max(1, Math.round(height * backingScale)))
+                                renderStrategy: Canvas.Cooperative
+
+                                function paintStroke(ctx, points, color, widthValue, opacityValue, styleValue, eraserValue) {
+                                    if (!points || points.length < 2)
+                                        return
+                                    ctx.save()
+                                    ctx.globalCompositeOperation = eraserValue ? "destination-out" : "source-over"
+                                    ctx.globalAlpha = eraserValue ? opacityValue : (styleValue === "highlighter" ? Math.min(0.42, opacityValue) : opacityValue)
+                                    ctx.strokeStyle = eraserValue ? "#000000" : color
+                                    ctx.lineWidth = Math.max(1, widthValue)
+                                    ctx.lineCap = "round"
+                                    ctx.lineJoin = "round"
+                                    if (styleValue === "glow" && !eraserValue) {
+                                        ctx.shadowColor = color
+                                        ctx.shadowBlur = Math.max(4, widthValue * 1.4)
+                                    }
+                                    ctx.beginPath()
+                                    ctx.moveTo(points[0].x, points[0].y)
+                                    for (let i = 1; i < points.length; ++i)
+                                        ctx.lineTo(points[i].x, points[i].y)
+                                    ctx.stroke()
+                                    ctx.restore()
+                                }
+
+                                onPaint: {
+                                    const ctx = getContext("2d")
+                                    ctx.reset()
+                                    ctx.scale(backingScale, backingScale)
+                                    const items = carouselDocument.canvasItems
+                                    for (let i = 0; i < items.length; ++i) {
+                                        const item = items[i]
+                                        if (item.type !== "brush" || item.hidden)
+                                            continue
+                                        const sourceWidth = Math.max(1, Number(item.brushSourceWidth || item.width || 1))
+                                        const sourceHeight = Math.max(1, Number(item.brushSourceHeight || item.height || 1))
+                                        const sx = Number(item.width || 1) / sourceWidth
+                                        const sy = Number(item.height || 1) / sourceHeight
+                                        const angle = Number(item.rotation || 0) * Math.PI / 180
+                                        const cosAngle = Math.cos(angle)
+                                        const sinAngle = Math.sin(angle)
+                                        const centerX = Number(item.x) + Number(item.width) / 2
+                                        const centerY = Number(item.y) + Number(item.height) / 2
+                                        const points = []
+                                        for (let p = 0; p < item.brushPoints.length; ++p) {
+                                            const rawX = Number(item.x) + Number(item.brushPoints[p].x) * sx
+                                            const rawY = Number(item.y) + Number(item.brushPoints[p].y) * sy
+                                            const dx = rawX - centerX
+                                            const dy = rawY - centerY
+                                            points.push({
+                                                x: (centerX + dx * cosAngle - dy * sinAngle) * root.stripScale,
+                                                y: (centerY + dx * sinAngle + dy * cosAngle) * root.stripScale
+                                            })
+                                        }
+                                        paintStroke(ctx, points, String(item.brushColor),
+                                                    Number(item.brushWidth) * root.stripScale,
+                                                    Number(item.opacity), String(item.brushStyle), Boolean(item.brushEraser))
+                                    }
+                                    if (root.liveBrushPoints.length > 1) {
+                                        paintStroke(ctx, root.liveBrushPoints, String(root.brushColor),
+                                                    root.brushWidth * root.stripScale, root.brushOpacity,
+                                                    root.brushStyle, root.brushEraser)
+                                    }
+                                }
+
+                                Connections {
+                                    target: carouselDocument
+                                    function onItemsChanged() { brushCanvas.requestPaint() }
+                                }
+                            }
+
+                            MouseArea {
+                                id: brushInputArea
+                                anchors.fill: parent
+                                z: 90
+                                enabled: root.activeTool === "brush"
+                                hoverEnabled: true
+                                preventStealing: true
+                                cursorShape: Qt.CrossCursor
+
+                                onPressed: function(mouse) {
+                                    root.liveBrushPoints = [{ x: mouse.x, y: mouse.y }]
+                                    root.brushDrawing = true
+                                    brushCanvas.requestPaint()
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (!pressed || !root.brushDrawing || root.liveBrushPoints.length >= 2048)
+                                        return
+                                    const last = root.liveBrushPoints[root.liveBrushPoints.length - 1]
+                                    const dx = mouse.x - last.x
+                                    const dy = mouse.y - last.y
+                                    if ((dx * dx + dy * dy) < 4)
+                                        return
+                                    const next = root.liveBrushPoints.slice(0)
+                                    next.push({ x: mouse.x, y: mouse.y })
+                                    root.liveBrushPoints = next
+                                    brushCanvas.requestPaint()
+                                }
+                                onReleased: root.finishBrushStroke()
+                                onCanceled: {
+                                    root.brushDrawing = false
+                                    root.liveBrushPoints = []
+                                    brushCanvas.requestPaint()
+                                }
+                            }
+
+                            Rectangle {
+                                id: constraintStackOutline
+                                objectName: "carouselConstraintStackOutline"
+                                visible: root.activeTool === "select" && Boolean(selection.isConstraintStack)
+                                x: Number(selection.constraintStackX || 0) * root.stripScale
+                                y: Number(selection.constraintStackY || 0) * root.stripScale
+                                width: Math.max(1, Number(selection.constraintStackWidth || 0) * root.stripScale)
+                                height: Math.max(1, Number(selection.constraintStackHeight || 0) * root.stripScale)
+                                z: 139
+                                color: "transparent"
+                                border.width: 1
+                                border.color: theme.alpha(theme.success, 0.9)
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.bottom: parent.top
+                                    anchors.bottomMargin: 5
+                                    implicitWidth: stackOutlineLabel.implicitWidth + 12
+                                    implicitHeight: 20
+                                    radius: 6
+                                    color: theme.alpha(theme.ink950, 0.9)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.success, 0.6)
+
+                                    Label {
+                                        id: stackOutlineLabel
+                                        anchors.centerIn: parent
+                                        text: (selection.constraintStackAxis === "horizontal" ? "Horizontal" : "Vertical") +
+                                              " stack · " + Number(selection.constraintStackCount || 0)
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        elide: Text.ElideNone
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                id: multiSelectionOverlay
+                                visible: root.activeTool === "select" && selection.hasMultipleSelection
+                                x: Number(selection.selectionX || 0) * root.stripScale +
+                                   (root.anyItemDragging ? root.globalDragOffsetX : 0)
+                                y: Number(selection.selectionY || 0) * root.stripScale +
+                                   (root.anyItemDragging ? root.globalDragOffsetY : 0)
+                                width: Math.max(1, Number(selection.selectionWidth || 0) * root.stripScale)
+                                height: Math.max(1, Number(selection.selectionHeight || 0) * root.stripScale)
+                                z: 140
+                                color: "transparent"
+                                border.width: 2
+                                border.color: selection.isObjectGroup ? theme.accentWarm400 : theme.accentCool400
+                                property real dragLastX: 0
+                                property real dragLastY: 0
+                                property real resizeStartX: 0
+                                property real resizeStartY: 0
+                                property real resizeStartWidth: 0
+                                property real resizeStartHeight: 0
+                                property real rotateCenterX: 0
+                                property real rotateCenterY: 0
+                                property real dragTotalX: 0
+                                property real dragTotalY: 0
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.bottom: parent.top
+                                    anchors.bottomMargin: 6
+                                    implicitWidth: groupSelectionLabel.implicitWidth + 14
+                                    implicitHeight: 22
+                                    radius: 7
+                                    color: theme.alpha(theme.ink950, 0.9)
+                                    border.width: 1
+                                    border.color: theme.alpha(parent.border.color, 0.7)
+
+                                    Label {
+                                        id: groupSelectionLabel
+                                        anchors.centerIn: parent
+                                        text: (selection.isObjectGroup ? "Group" : "Selection") + " · " + selection.selectedCount
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: pressed ? Qt.ClosedHandCursor : Qt.SizeAllCursor
+                                    preventStealing: true
+                                    onPressed: function(mouse) {
+                                        const p = multiSelectionOverlay.mapToItem(stripSurface, mouse.x, mouse.y)
+                                        multiSelectionOverlay.dragLastX = p.x
+                                        multiSelectionOverlay.dragLastY = p.y
+                                        multiSelectionOverlay.dragTotalX = 0
+                                        multiSelectionOverlay.dragTotalY = 0
+                                        root.globalDragOffsetX = 0
+                                        root.globalDragOffsetY = 0
+                                        root.anyItemDragging = true
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed)
+                                            return
+                                        const p = multiSelectionOverlay.mapToItem(stripSurface, mouse.x, mouse.y)
+                                        carouselDocument.moveSelectedItemByPixelsSilent(
+                                                    (p.x - multiSelectionOverlay.dragLastX) / root.stripScale,
+                                                    (p.y - multiSelectionOverlay.dragLastY) / root.stripScale)
+                                        multiSelectionOverlay.dragTotalX += p.x - multiSelectionOverlay.dragLastX
+                                        multiSelectionOverlay.dragTotalY += p.y - multiSelectionOverlay.dragLastY
+                                        root.globalDragOffsetX = multiSelectionOverlay.dragTotalX
+                                        root.globalDragOffsetY = multiSelectionOverlay.dragTotalY
+                                        multiSelectionOverlay.dragLastX = p.x
+                                        multiSelectionOverlay.dragLastY = p.y
+                                    }
+                                    onReleased: {
+                                        carouselDocument.commitTransformState()
+                                        root.anyItemDragging = false
+                                        root.globalDragOffsetX = 0
+                                        root.globalDragOffsetY = 0
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    anchors.margins: -9
+                                    color: theme.accentWarm500
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.ink950, 0.35)
+                                    z: 2
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.SizeFDiagCursor
+                                        preventStealing: true
+                                        onPressed: function(mouse) {
+                                            const p = parent.mapToItem(stripSurface, mouse.x, mouse.y)
+                                            multiSelectionOverlay.resizeStartX = p.x
+                                            multiSelectionOverlay.resizeStartY = p.y
+                                            multiSelectionOverlay.resizeStartWidth = Number(selection.selectionWidth || 0)
+                                            multiSelectionOverlay.resizeStartHeight = Number(selection.selectionHeight || 0)
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            if (!pressed)
+                                                return
+                                            const p = parent.mapToItem(stripSurface, mouse.x, mouse.y)
+                                            carouselDocument.setSelectedItemSizeSilent(
+                                                        Math.max(36, multiSelectionOverlay.resizeStartWidth + (p.x - multiSelectionOverlay.resizeStartX) / root.stripScale),
+                                                        Math.max(36, multiSelectionOverlay.resizeStartHeight + (p.y - multiSelectionOverlay.resizeStartY) / root.stripScale))
+                                        }
+                                        onReleased: carouselDocument.commitTransformState()
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    anchors.bottom: parent.top
+                                    anchors.bottomMargin: 12
+                                    color: theme.accentCool400
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.ink950, 0.35)
+                                    z: 2
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.CrossCursor
+                                        preventStealing: true
+                                        onPressed: function(mouse) {
+                                            multiSelectionOverlay.rotateCenterX = Number(selection.selectionCenterX || 0) * root.stripScale
+                                            multiSelectionOverlay.rotateCenterY = Number(selection.selectionCenterY || 0) * root.stripScale
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            if (!pressed)
+                                                return
+                                            const p = parent.mapToItem(stripSurface, mouse.x, mouse.y)
+                                            const angle = Math.atan2(p.y - multiSelectionOverlay.rotateCenterY,
+                                                                   p.x - multiSelectionOverlay.rotateCenterX) * 180 / Math.PI + 90
+                                            carouselDocument.setSelectedItemRotationSilent(angle)
+                                        }
+                                        onReleased: carouselDocument.commitTransformState()
+                                    }
+                                }
+                            }
+
                             Repeater {
                                 model: carouselDocument.canvasItems
 
@@ -2417,6 +5096,7 @@ Rectangle {
                                     property real dragOriginCY: 0
                                     property real stableSourceW: Number(modelData.width || 0)
                                     property real stableSourceH: Number(modelData.height || 0)
+                                    objectName: "carouselCanvasObject" + String(modelData.itemId || "")
 
                                     x: (Number(modelData.x || 0) * root.stripScale) +
                                        (layerItem.selected && !Boolean(modelData.locked) && root.anyItemDragging
@@ -2431,6 +5111,22 @@ Rectangle {
                                     z: layerItem.index + 10
                                     visible: !Boolean(modelData.hidden)
                                     opacity: (Boolean(modelData.locked) ? 0.82 : 1.0) * Number(modelData.opacity || 1.0)
+                                    activeFocusOnTab: visible
+                                    Accessible.name: String(modelData.label || modelData.type || "Canvas object")
+                                    Accessible.description: (layerItem.primarySelected ? "Primary selected. "
+                                                                                       : layerItem.selected ? "Selected. " : "") +
+                                                                    (Boolean(modelData.locked) ? "Locked. " : "Unlocked. ") +
+                                                                    "Position " + Math.round(Number(modelData.centerX || 0)) +
+                                                                    ", " + Math.round(Number(modelData.centerY || 0)) +
+                                                                    "; size " + Math.round(Number(modelData.width || 0)) +
+                                                                    " by " + Math.round(Number(modelData.height || 0)) +
+                                                                    ". Arrow keys move; Shift plus arrows uses the large nudge."
+                                    Accessible.role: Accessible.Button
+                                    Accessible.checked: layerItem.selected
+                                    Keys.onReturnPressed: root.focusLayerItem(String(modelData.itemId || ""), false)
+                                    Keys.onEnterPressed: root.focusLayerItem(String(modelData.itemId || ""), false)
+                                    Keys.onSpacePressed: carouselDocument.toggleItemSelection(
+                                                             String(modelData.itemId || ""))
 
                                     onModelDataChanged: {
                                         if (!layerItem.interacting) {
@@ -2473,6 +5169,7 @@ Rectangle {
                                         }
 
                                         Rectangle {
+                                            id: layerFrame
                                             anchors.fill: parent
                                             radius: (modelData.type === "image" || modelData.type === "video")
                                                     && String(modelData.mediaMaskShape || "rectangle") === "ellipse"
@@ -2483,9 +5180,11 @@ Rectangle {
                                             color: modelData.type === "image" ? theme.alpha(theme.ink950, 0.05) : "transparent"
                                             border.width: layerItem.primarySelected ? 2 : layerItem.selected ? 1 : 0
                                             border.color: theme.alpha(theme.accentWarm500, 0.96)
-                                            clip: true
+                                            clip: !(root.focusedCropMode && layerItem.primarySelected &&
+                                                    (modelData.type === "image" || modelData.type === "video"))
 
                                             Image {
+                                                id: cropSourceImage
                                                 property var cropRect: root.layerMediaDrawRect(modelData, parent.width, parent.height)
                                                 x: cropRect.x
                                                 y: cropRect.y
@@ -2500,6 +5199,109 @@ Rectangle {
                                                 mipmap: true
                                                 sourceSize.width: Math.max(1, Math.round(width))
                                                 sourceSize.height: Math.max(1, Math.round(height))
+                                                opacity: root.focusedCropMode && layerItem.primarySelected ? 0.28 : 1.0
+                                            }
+
+                                            Item {
+                                                anchors.fill: parent
+                                                visible: root.focusedCropMode && layerItem.primarySelected &&
+                                                         modelData.type === "image"
+                                                clip: true
+                                                z: 8
+
+                                                Image {
+                                                    x: cropSourceImage.cropRect.x
+                                                    y: cropSourceImage.cropRect.y
+                                                    width: cropSourceImage.cropRect.width
+                                                    height: cropSourceImage.cropRect.height
+                                                    source: modelData.sourceUrl
+                                                    fillMode: Image.Stretch
+                                                    cache: true
+                                                    asynchronous: true
+                                                    smooth: true
+                                                    mipmap: true
+                                                    sourceSize.width: Math.max(1, Math.round(width))
+                                                    sourceSize.height: Math.max(1, Math.round(height))
+                                                }
+                                            }
+
+                                            FocusScope {
+                                                objectName: "carouselFocusedCropOverlay"
+                                                anchors.fill: parent
+                                                visible: root.focusedCropMode && layerItem.primarySelected &&
+                                                         (modelData.type === "image" || modelData.type === "video")
+                                                focus: visible
+                                                z: 12
+                                                onVisibleChanged: {
+                                                    if (visible)
+                                                        forceActiveFocus()
+                                                }
+                                                Keys.onPressed: function(event) {
+                                                    const distance = (event.modifiers & Qt.ShiftModifier) ? 10 : 1
+                                                    if (event.key === Qt.Key_Left)
+                                                        carouselDocument.nudgeSelectedItemMediaByPixels(-distance, 0)
+                                                    else if (event.key === Qt.Key_Right)
+                                                        carouselDocument.nudgeSelectedItemMediaByPixels(distance, 0)
+                                                    else if (event.key === Qt.Key_Up)
+                                                        carouselDocument.nudgeSelectedItemMediaByPixels(0, -distance)
+                                                    else if (event.key === Qt.Key_Down)
+                                                        carouselDocument.nudgeSelectedItemMediaByPixels(0, distance)
+                                                    else if (event.key === Qt.Key_Escape)
+                                                        root.focusedCropMode = false
+                                                    else
+                                                        return
+                                                    event.accepted = true
+                                                }
+
+                                                Rectangle {
+                                                    anchors.fill: parent
+                                                    color: "transparent"
+                                                    border.width: Math.max(2, root.stripScale * 3)
+                                                    border.color: theme.accentWarm400
+                                                }
+
+                                                Repeater {
+                                                    model: root.cropRuleOverlay === "thirds" ? [1 / 3, 2 / 3]
+                                                           : root.cropRuleOverlay === "golden" ? [0.382, 0.618]
+                                                                                              : [0.5]
+                                                    delegate: Rectangle {
+                                                        required property real modelData
+                                                        x: (parent ? parent.width : 0) * modelData
+                                                        y: 0
+                                                        width: 1
+                                                        height: parent ? parent.height : 0
+                                                        color: theme.alpha("#ffffff", 0.72)
+                                                    }
+                                                }
+
+                                                Repeater {
+                                                    model: root.cropRuleOverlay === "thirds" ? [1 / 3, 2 / 3]
+                                                           : root.cropRuleOverlay === "golden" ? [0.382, 0.618]
+                                                                                              : [0.5]
+                                                    delegate: Rectangle {
+                                                        required property real modelData
+                                                        x: 0
+                                                        y: (parent ? parent.height : 0) * modelData
+                                                        width: parent ? parent.width : 0
+                                                        height: 1
+                                                        color: theme.alpha("#ffffff", 0.72)
+                                                    }
+                                                }
+
+                                                Label {
+                                                    anchors.left: parent.left
+                                                    anchors.top: parent.top
+                                                    anchors.margins: 8
+                                                    text: "Crop · arrows 1 px · Shift + arrows 10 px · Esc done"
+                                                    color: "#ffffff"
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: Math.max(9, 10 * root.stripScale)
+                                                    padding: 5
+                                                    background: Rectangle {
+                                                        radius: 4
+                                                        color: theme.alpha(theme.ink950, 0.78)
+                                                    }
+                                                }
                                             }
 
                                             Rectangle {
@@ -2625,23 +5427,105 @@ Rectangle {
                                                          && Number(modelData.textBackgroundOpacity || 0) > 0
                                                 color: theme.alpha(String(modelData.textBackgroundColor || "#ffffff"),
                                                                    Math.max(0, Math.min(1, Number(modelData.textBackgroundOpacity || 0))))
+                                                radius: Math.max(0, Number(modelData.textBackgroundRadius || 0) * root.stripScale)
                                             }
 
-                                            Text {
+                                            Item {
                                                 anchors.fill: parent
                                                 visible: modelData.type === "text"
-                                                text: modelData.text
-                                                color: modelData.textColor
-                                                font.family: root.textFontFamily(modelData.textFontFamily)
-                                                font.pixelSize: Math.max(10, Number(modelData.textPointSize || 0) * root.stripScale)
-                                                font.weight: root.textFontWeight(modelData.textWeight)
-                                                font.italic: Boolean(modelData.textItalic)
-                                                font.letterSpacing: Math.max(0, Number(modelData.textLetterSpacing || 0) * root.stripScale)
-                                                wrapMode: Text.WordWrap
-                                                horizontalAlignment: root.textHorizontalAlignment(modelData.textHorizontalAlignment)
-                                                verticalAlignment: root.textVerticalAlignment(modelData.textVerticalAlignment)
-                                                style: Number(modelData.textStrokeWidth || 0) > 0 ? Text.Outline : Text.Normal
-                                                styleColor: String(modelData.textStrokeColor || "#000000")
+                                                clip: true
+
+                                                Repeater {
+                                                    model: layerItem.modelData.textLayoutLines || []
+
+                                                    delegate: Item {
+                                                        id: richTextLine
+                                                        required property var modelData
+                                                        readonly property var segments: modelData.segments || []
+                                                        x: 0
+                                                        y: Number(modelData.y || 0) * root.stripScale
+                                                        width: parent ? parent.width : 0
+                                                        height: Number(modelData.height || 0) * root.stripScale
+
+                                                        Repeater {
+                                                            model: richTextLine.segments
+
+                                                            delegate: Text {
+                                                                required property var modelData
+                                                                x: Number(modelData.x || 0) * root.stripScale
+                                                                y: Number(modelData.baselineShift || 0) * root.stripScale
+                                                                width: Math.max(1, Number(modelData.width || 0) * root.stripScale + 2)
+                                                                height: richTextLine.height
+                                                                text: String(modelData.text || "")
+                                                                color: String(modelData.color || layerItem.modelData.textColor)
+                                                                font.family: root.textFontFamily(layerItem.modelData.textFontFamily)
+                                                                font.pixelSize: Math.max(
+                                                                    1,
+                                                                    Number(layerItem.modelData.textPointSize || 0) *
+                                                                    Number(modelData.pointSizeScale || 1) * root.stripScale)
+                                                                font.weight: root.textFontWeight(
+                                                                    String(modelData.fontWeight || layerItem.modelData.textWeight))
+                                                                font.italic: Boolean(modelData.italic)
+                                                                font.underline: Boolean(modelData.underline)
+                                                                font.strikeout: Boolean(modelData.strikethrough)
+                                                                font.letterSpacing: Math.max(
+                                                                    0,
+                                                                    Number(layerItem.modelData.textLetterSpacing || 0) * root.stripScale)
+                                                                wrapMode: Text.NoWrap
+                                                                horizontalAlignment: Text.AlignLeft
+                                                                verticalAlignment: root.textVerticalAlignment(
+                                                                    layerItem.modelData.textVerticalAlignment)
+                                                                style: Number(layerItem.modelData.textStrokeWidth || 0) > 0
+                                                                       ? Text.Outline : Text.Normal
+                                                                styleColor: String(layerItem.modelData.textStrokeColor || "#000000")
+                                                                elide: Text.ElideNone
+                                                            }
+                                                        }
+
+                                                        Text {
+                                                            visible: richTextLine.segments.length === 0
+                                                            x: Number(richTextLine.modelData.x || 0) * root.stripScale
+                                                            width: Math.max(0, parent.width - x)
+                                                            height: parent.height
+                                                            text: String(richTextLine.modelData.text || "")
+                                                            color: layerItem.modelData.textColor
+                                                            font.family: root.textFontFamily(layerItem.modelData.textFontFamily)
+                                                            font.pixelSize: Math.max(1, Number(layerItem.modelData.textPointSize || 0) * root.stripScale)
+                                                            font.weight: root.textFontWeight(layerItem.modelData.textWeight)
+                                                            font.italic: Boolean(layerItem.modelData.textItalic)
+                                                            font.underline: Boolean(layerItem.modelData.textUnderline)
+                                                            font.strikeout: Boolean(layerItem.modelData.textStrikethrough)
+                                                            font.letterSpacing: Math.max(0, Number(layerItem.modelData.textLetterSpacing || 0) * root.stripScale)
+                                                            wrapMode: Text.NoWrap
+                                                            horizontalAlignment: root.textHorizontalAlignment(layerItem.modelData.textHorizontalAlignment)
+                                                            verticalAlignment: Text.AlignVCenter
+                                                            style: Number(layerItem.modelData.textStrokeWidth || 0) > 0 ? Text.Outline : Text.Normal
+                                                            styleColor: String(layerItem.modelData.textStrokeColor || "#000000")
+                                                            elide: Text.ElideNone
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: modelData.type === "text" &&
+                                                         Boolean(modelData.textVerticalOverflow) &&
+                                                         Boolean(modelData.selected)
+                                                color: "transparent"
+                                                border.width: Math.max(1, root.stripScale * 2)
+                                                border.color: theme.warning
+
+                                                Label {
+                                                    anchors.left: parent.left
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.margins: 4
+                                                    text: "Text overflow"
+                                                    color: theme.warning
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideNone
+                                                }
                                             }
 
                                             Rectangle {
@@ -2731,11 +5615,17 @@ Rectangle {
                                                 carouselDocument.commitTransformState()
                                                 root.clearSnapGuides()
                                             }
+
+                                            onDoubleClicked: function() {
+                                                root.focusLayerItem(modelData.itemId, false)
+                                                if (modelData.type === "image")
+                                                    root.editSelectedPhoto()
+                                            }
                                         }
 
                                         Rectangle {
                                             id: rotateHandle
-                                            visible: root.activeTool === "select" && layerItem.primarySelected && !Boolean(modelData.locked)
+                                            visible: root.activeTool === "select" && layerItem.primarySelected && !selection.hasMultipleSelection && !Boolean(modelData.locked)
                                             width: 18
                                             height: 18
                                             radius: 9
@@ -2778,7 +5668,7 @@ Rectangle {
 
                                         Rectangle {
                                             id: resizeHandle
-                                            visible: root.activeTool === "select" && layerItem.primarySelected && !Boolean(modelData.locked)
+                                            visible: root.activeTool === "select" && layerItem.primarySelected && !selection.hasMultipleSelection && !Boolean(modelData.locked)
                                             width: 18
                                             height: 18
                                             radius: 9
@@ -2867,14 +5757,83 @@ Rectangle {
                             }
                         }
                     }
+
+                    Rectangle {
+                        id: boardNavigationSurface
+                        anchors.top: parent.top
+                        anchors.topMargin: 8
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        z: 200
+                        visible: carouselDocument.slideCount > 1
+                        width: boardNavigation.implicitWidth + 8
+                        height: boardNavigation.implicitHeight + 8
+                        color: theme.ink850
+                        radius: theme.radiusControl
+
+                        Row {
+                            id: boardNavigation
+                            anchors.centerIn: parent
+                            spacing: 4
+                            ActionButton {
+                                objectName: "carouselPreviousBoardOverlay"
+                                visible: carouselDocument.slideCount > 1
+                                enabled: carouselDocument.currentIndex > 0
+                                compact: true
+                                iconName: "chevron-left"
+                                text: "Previous"
+                                tooltipText: "Open the previous board (Command/Ctrl + Left)."
+                                onClicked: carouselDocument.selectAdjacentSlide(-1)
+                            }
+
+                            ActionButton {
+                                objectName: "carouselNextBoardOverlay"
+                                visible: carouselDocument.slideCount > 1
+                                enabled: carouselDocument.currentIndex < carouselDocument.slideCount - 1
+                                compact: true
+                                iconName: "chevron-right"
+                                text: "Next"
+                                tooltipText: "Open the next board (Command/Ctrl + Right)."
+                                onClicked: carouselDocument.selectAdjacentSlide(1)
+                            }
+
+                            ActionButton {
+                                objectName: "carouselCompareNeighborOverlay"
+                                visible: carouselDocument.slideCount > 1
+                                enabled: Boolean(root.neighborComparison.available)
+                                compact: true
+                                iconName: "compare"
+                                text: "Compare neighbor"
+                                tooltipText: "Open a temporary live two-board comparison. It never exports."
+                                onClicked: carouselNeighborComparisonDialog.open()
+                            }
+
+                        }
+                    }
+
+                    ActionButton {
+                        objectName: "carouselReturnToNormalColorButton"
+                        anchors.top: parent.top
+                        anchors.topMargin: 12
+                        anchors.right: parent.right
+                        anchors.rightMargin: 12
+                        z: 210
+                        visible: root.carouselInspectionModeActive
+                        compact: true
+                        iconName: "reset"
+                        text: "Return to Normal Color"
+                        tone: "warning"
+                        tooltipText: root.carouselInspectionModeLabel(root.carouselInspectionMode) +
+                                     " is a canvas-only inspection. Export remains authored color."
+                        onClicked: root.runCarouselCommand("inspect.normal")
+                    }
                 }
 
                 Rectangle {
                     Layout.alignment: Qt.AlignRight
                     Layout.topMargin: -42
                     Layout.rightMargin: 10
-                    width: zoomRow.implicitWidth + 16
-                    height: 28
+                    Layout.preferredWidth: zoomRow.implicitWidth + 16
+                    Layout.preferredHeight: 28
                     radius: 14
                     color: theme.alpha(theme.ink950, 0.72)
                     border.width: 1
@@ -2920,7 +5879,7 @@ Rectangle {
                     objectName: "carouselBoardStrip"
                     readonly property string visibilityRole: "always-visible|board-thumbs-add-select-duplicate"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 104
+                    Layout.preferredHeight: root.responsiveBoardStripHeight
                     radius: theme.radius8
                     color: theme.alpha(theme.ink950, 0.68)
                     border.width: 1
@@ -2933,7 +5892,10 @@ Rectangle {
                         spacing: 8
 
                         ColumnLayout {
-                            Layout.preferredWidth: 64
+                            visible: !root.compactWorkspace
+                            Layout.preferredWidth: visible ? 120 : 0
+                            Layout.minimumWidth: visible ? 120 : 0
+                            Layout.maximumWidth: visible ? 120 : 0
                             Layout.fillHeight: true
                             spacing: 4
 
@@ -2948,7 +5910,9 @@ Rectangle {
 
                             Label {
                                 Layout.fillWidth: true
-                                text: carouselDocument.slideCount + " total"
+                                text: carouselDocument.selectedSlideCount > 1
+                                      ? carouselDocument.selectedSlideCount + " selected"
+                                      : carouselDocument.slideCount + " total"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -2957,10 +5921,59 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "+"
+                                text: "Add board"
+                                iconName: "plus"
                                 enabled: carouselDocument.canAddSlide
-                                onClicked: carouselDocument.addSlide()
+                                onClicked: root.runCarouselCommand("board.add")
                             }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Overview"
+                                iconName: "grid"
+                                onClicked: carouselStoryboardDialog.open()
+                            }
+                        }
+
+                        ColumnLayout {
+                            visible: root.compactWorkspace
+                            Layout.preferredWidth: visible ? 36 : 0
+                            Layout.minimumWidth: visible ? 36 : 0
+                            Layout.maximumWidth: visible ? 36 : 0
+                            Layout.fillHeight: true
+                            spacing: 4
+
+                            Label {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: carouselDocument.slideCount
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                showText: false
+                                text: "Add board"
+                                iconName: "plus"
+                                tooltipText: "Add board"
+                                enabled: carouselDocument.canAddSlide
+                                onClicked: root.runCarouselCommand("board.add")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                showText: false
+                                text: "Board overview"
+                                iconName: "grid"
+                                tooltipText: "Open board overview"
+                                onClicked: carouselStoryboardDialog.open()
+                            }
+
+                            Item { Layout.fillHeight: true }
                         }
 
                         ListView {
@@ -2968,6 +5981,7 @@ Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             orientation: ListView.Horizontal
+                            layoutDirection: root.uiRightToLeft ? Qt.RightToLeft : Qt.LeftToRight
                             spacing: 8
                             clip: true
                             model: carouselDocument.slides
@@ -2975,8 +5989,90 @@ Rectangle {
 
                             delegate: CarouselBoardThumb {
                                 height: boardFilmstrip.height
-                                onSelectedRequested: function(index) { carouselDocument.selectSlide(index) }
-                                onDuplicateRequested: function(index) { carouselDocument.duplicateCurrentSlide() }
+                                onSelectedRequested: function(index, modifiers) {
+                                    if (root.hasRangeSelectModifier(modifiers))
+                                        carouselDocument.selectSlideRange(index)
+                                    else if (root.hasMultiSelectModifier(modifiers))
+                                        carouselDocument.toggleSlideSelection(index)
+                                    else
+                                        carouselDocument.selectSlide(index)
+                                }
+                                onDuplicateRequested: function(index) {
+                                    carouselDocument.selectSlide(index)
+                                    Qt.callLater(function() { carouselDocument.duplicateCurrentSlide() })
+                                }
+                                onReorderRequested: function(fromIndex, toIndex) {
+                                    carouselDocument.moveSlide(
+                                                fromIndex,
+                                                Math.min(carouselDocument.slideCount - 1, toIndex))
+                                }
+                                onReorderPreviewRequested: function(fromIndex, toIndex, active) {
+                                    root.boardDropIndex = active
+                                            ? Math.min(carouselDocument.slideCount, Math.max(0, toIndex))
+                                            : -1
+                                }
+                                onMediaDropRequested: function(boardIndex, drop) {
+                                    root.applyMediaDrop(drop, boardIndex, "thumbnail", "primary", 0.5, 0.5)
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "carouselBoardDropMarker"
+                                parent: boardFilmstrip.contentItem
+                                visible: root.boardDropIndex >= 0
+                                x: Math.max(0, root.boardDropIndex * 112 - 3)
+                                y: 4
+                                width: 3
+                                height: Math.max(24, boardFilmstrip.height - 8)
+                                radius: 2
+                                color: theme.accentWarm400
+                                z: 100
+                            }
+
+                            footer: Rectangle {
+                                width: 104
+                                height: boardFilmstrip.height
+                                radius: theme.radius8
+                                color: addBoardHover.hovered
+                                       ? theme.alpha(theme.accentWarm500, 0.14)
+                                       : theme.alpha(theme.ink900, 0.62)
+                                border.width: 1
+                                border.color: carouselDocument.canAddSlide
+                                              ? theme.alpha(theme.accentWarm400, 0.58)
+                                              : theme.alpha(theme.lineSoft, 0.3)
+                                opacity: carouselDocument.canAddSlide ? 1.0 : 0.55
+                                Accessible.name: "Add board"
+                                Accessible.role: Accessible.Button
+
+                                ColumnLayout {
+                                    anchors.centerIn: parent
+                                    spacing: 5
+
+                                    AppIcon {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        Layout.preferredWidth: 18
+                                        Layout.preferredHeight: 18
+                                        name: "plus"
+                                        color: theme.textStrong
+                                    }
+
+                                    Label {
+                                        text: "Add board"
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                    }
+                                }
+
+                                HoverHandler {
+                                    id: addBoardHover
+                                    cursorShape: carouselDocument.canAddSlide ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                }
+
+                                TapHandler {
+                                    enabled: carouselDocument.canAddSlide
+                                    onTapped: root.runCarouselCommand("board.add")
+                                }
                             }
                         }
                     }
@@ -2984,32 +6080,152 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            objectName: "carouselInspectorPanel"
-            readonly property string surfaceContract: "carousel-inspector:v1|board-settings:when-no-object|selection-settings:contextual|layers:always|media:one-expansion|actions:menus|no-elide:true|no-overlap:true"
-            Layout.preferredWidth: root.compactWorkspace ? 248 : 268
-            Layout.minimumWidth: 228
+        Item {
+            id: carouselInspectorInlineHost
+            objectName: "carouselInspectorInlineHost"
+            visible: !root.compactWorkspace
+            Layout.preferredWidth: visible ? root.responsiveInspectorWidth : 0
+            Layout.minimumWidth: visible ? root.responsiveInspectorWidth : 0
+            Layout.maximumWidth: visible ? root.responsiveInspectorWidth : 0
             Layout.fillHeight: true
-            radius: theme.radius8
-            color: theme.alpha(theme.ink900, 0.92)
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.36)
 
-            ScrollView {
+            Rectangle {
+                objectName: "carouselInspectorPanel"
+                readonly property string surfaceContract: "carousel-inspector:v1|board-settings:when-no-object|selection-settings:contextual|layers:always|media:one-expansion|actions:menus|no-elide:true|no-overlap:true"
+                parent: root.compactWorkspace ? carouselCompactInspectorHost : carouselInspectorInlineHost
                 anchors.fill: parent
-                clip: true
-                contentWidth: availableWidth
+                visible: !root.compactWorkspace || carouselCompactInspectorDrawer.position > 0
+                radius: theme.radius8
+                color: theme.alpha(theme.ink900, 0.92)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.36)
 
-                Column {
-                    x: theme.panelPadding
-                    y: theme.panelPadding
-                    width: Math.max(parent.width - theme.panelPadding * 2, 0)
-                    spacing: 8
+                ScrollView {
+                    id: carouselInspectorScroll
+                    objectName: "carouselInspectorScroll"
+                    anchors.fill: parent
+                    focus: true
+                    clip: true
+                    contentWidth: availableWidth
+
+                    Column {
+                        x: theme.panelPadding
+                        y: theme.panelPadding
+                        width: Math.max(parent.width - theme.panelPadding * 2, 0)
+                        spacing: 8
+
+                    RowLayout {
+                        objectName: "carouselInspectorSurfaceSwitcher"
+                        width: parent.width
+                        spacing: 4
+
+                        FilterChip {
+                            objectName: "carouselBoardPropertiesSurfaceButton"
+                            Layout.fillWidth: true
+                            text: "Board"
+                            active: root.inspectorPrimarySurface === "board"
+                            onClicked: root.inspectorPrimarySurface = "board"
+                        }
+
+                        FilterChip {
+                            objectName: "carouselReusableDesignsSurfaceButton"
+                            Layout.fillWidth: true
+                            text: "Designs"
+                            active: root.inspectorPrimarySurface === "designs"
+                            onClicked: root.inspectorPrimarySurface = "designs"
+                        }
+                    }
 
                     InspectorSection {
+                        objectName: "carouselReusableDesignLibrarySurface"
+                        readonly property bool surfaceActive: root.inspectorPrimarySurface === "designs"
                         width: parent.width
-                        visible: !selection.hasSelection
-                        title: "Boards"
+                        visible: surfaceActive
+                        title: "Reusable Designs"
+                        subtitle: "Saved boards and editable components"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        expandable: true
+                        expanded: true
+
+                        TextField {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            placeholderText: "Design name"
+                            text: root.templateNameDraft
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            onTextEdited: root.templateNameDraft = text
+                            background: Rectangle {
+                                radius: 5
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                objectName: "carouselSaveBoardDesignButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Save board"
+                                tooltipText: "Save this board and its editable layers to Reusable Designs."
+                                onClicked: {
+                                    if (carouselDocument.saveCurrentBoardAsTemplate(root.templateNameDraft))
+                                        root.templateNameDraft = ""
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "carouselSaveSelectionDesignButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Save selection"
+                                enabled: selection.hasSelection
+                                disabledReason: "Select one or more layers first."
+                                tooltipText: "Save selected layers as a reusable editable component."
+                                onClicked: {
+                                    if (carouselDocument.saveSelectionAsTemplate(root.templateNameDraft))
+                                        root.templateNameDraft = ""
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            objectName: "carouselOpenReusableDesignLibraryButton"
+                            Layout.fillWidth: true
+                            compact: true
+                            text: "Browse reusable designs"
+                            iconName: "grid"
+                            tooltipText: "Search saved boards, components, installed templates, and brand-aware starting points."
+                            onClicked: root.openCarouselTemplateLibrary()
+                        }
+                    }
+
+                    InspectorSection {
+                        objectName: "carouselBoardPropertiesSurface"
+                        readonly property bool surfaceActive: root.inspectorPrimarySurface === "board"
+                        width: parent.width
+                        visible: surfaceActive
+                        title: "Board Properties"
+                        menuObjectName: "carouselBoardActionsMenu"
+                        menuTooltip: "Board range and document structure actions"
+                        menuActions: [
+                            { key: "range", label: "Apply to board range…", iconName: "layers" },
+                            { key: "structure", label: "Inspect document structure", iconName: "inspect" }
+                        ]
+                        onMenuItemTriggered: function(key) {
+                            if (key === "range") root.openBoardRangeCommand()
+                            else if (key === "structure") root.openDocumentStructureInspector()
+                        }
                         showAccentMarker: false
                         uppercaseTitle: false
                         titleFontFamily: theme.fontDisplay
@@ -3024,23 +6240,104 @@ Rectangle {
                             spacing: 4
 
                             ActionButton {
+                                objectName: "carouselInspectorAddBoardButton"
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "+"
+                                text: "Add board"
+                                iconName: "plus"
+                                tooltipText: "Add board"
                                 enabled: carouselDocument.canAddSlide
-                                onClicked: carouselDocument.addSlide()
+                                onClicked: root.runCarouselCommand("board.add")
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "Duplicate"
+                                text: carouselDocument.selectedSlideCount > 1
+                                      ? "Duplicate " + carouselDocument.selectedSlideCount
+                                      : "Duplicate"
                                 enabled: carouselDocument.canAddSlide
-                                onClicked: carouselDocument.duplicateCurrentSlide()
+                                onClicked: root.runCarouselCommand("board.duplicate")
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                objectName: "carouselCopyBoardsButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: carouselDocument.selectedSlideCount > 1
+                                      ? "Copy " + carouselDocument.selectedSlideCount + " boards"
+                                      : "Copy board"
+                                iconName: "copy"
+                                tooltipText: "Copy selected boards for paste into another Carousel document."
+                                onClicked: carouselDocument.copySelectedBoards()
                             }
 
                             ActionButton {
+                                objectName: "carouselReviewClipboardPasteButton"
                                 Layout.fillWidth: true
+                                compact: true
+                                text: "Paste…"
+                                iconName: "paste"
+                                enabled: carouselDocument.canPaste
+                                disabledReason: "Copy Carousel boards or layers first."
+                                onClicked: root.openClipboardPasteReview()
+                            }
+                        }
+
+                        TextField {
+                            id: boardNameField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            placeholderText: "Board name"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            selectByMouse: true
+                            background: Rectangle {
+                                radius: 5
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: boardNameField.activeFocus
+                                              ? theme.alpha(theme.accentWarm400, 0.78)
+                                              : theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: carouselDocument.setCurrentSlideName(text)
+                        }
+
+                        Binding {
+                            target: boardNameField
+                            property: "text"
+                            value: selection.boardName
+                            when: !boardNameField.activeFocus
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.boardRoleButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    text: modelData.label
+                                    active: selection.boardRole === modelData.value
+                                    onClicked: carouselDocument.setCurrentSlideRole(modelData.value)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.preferredWidth: 34
                                 compact: true
                                 iconName: "chevron-left"
                                 showText: false
@@ -3058,7 +6355,7 @@ Rectangle {
                             }
 
                             ActionButton {
-                                Layout.fillWidth: true
+                                Layout.preferredWidth: 34
                                 compact: true
                                 iconName: "chevron-right"
                                 showText: false
@@ -3067,12 +6364,24 @@ Rectangle {
                             }
 
                             ConfirmActionButton {
-                                Layout.fillWidth: true
+                                objectName: "carouselDeleteBoardButton"
+                                Layout.preferredWidth: 44
                                 compact: true
-                                text: "x"
+                                showText: false
+                                text: carouselDocument.selectedSlideCount > 1
+                                      ? "Delete selected boards"
+                                      : "Delete board"
+                                iconName: "delete"
                                 enabled: carouselDocument.slideCount > 1
-                                helperText: "Remove board"
-                                onConfirmed: carouselDocument.removeCurrentSlide()
+                                helperText: carouselDocument.selectedSlideCount > 1
+                                            ? "Remove selected boards"
+                                            : "Remove board"
+                                onConfirmed: {
+                                    if (carouselDocument.selectedSlideCount > 1)
+                                        carouselDocument.removeSelectedSlides()
+                                    else
+                                        carouselDocument.removeCurrentSlide()
+                                }
                             }
                         }
 
@@ -3104,9 +6413,11 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            columns: 2
+                            columnSpacing: 4
+                            rowSpacing: 4
 
                             Repeater {
                                 model: root.templateButtons
@@ -3114,9 +6425,209 @@ Rectangle {
                                 delegate: FilterChip {
                                     required property var modelData
                                     Layout.fillWidth: true
-                                    text: modelData.label
+                                    text: modelData.shortLabel
                                     active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
+                                    ToolTip.visible: templateHover.hovered
+                                    ToolTip.delay: 350
+                                    ToolTip.text: modelData.label + " — " + modelData.description
                                     onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
+
+                                    HoverHandler {
+                                        id: templateHover
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: Boolean(root.continuityPreview.available)
+                            spacing: 6
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Preview actual seam"
+                                iconName: "compare"
+                                tone: "primary"
+                                onClicked: carouselContinuityPreviewDialog.open()
+                            }
+
+                            StatusChip {
+                                text: root.continuityPreview.hasCriticalSeamContent
+                                      ? root.continuityPreview.criticalSeamCount + " crossing"
+                                      : "Seam clear"
+                                tone: root.continuityPreview.hasCriticalSeamContent ? "warning" : "success"
+                                compact: true
+                                detailText: root.continuityPreview.hasCriticalSeamContent
+                                            ? "Critical layer content crosses the exported board cut."
+                                            : "No freeform layer crosses the exported board cut."
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            visible: false
+                            color: theme.alpha(theme.lineSoft, 0.25)
+                        }
+
+                        TextField {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 28
+                            visible: false
+                            placeholderText: "Template name"
+                            text: root.templateNameDraft
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            onTextEdited: root.templateNameDraft = text
+                            background: Rectangle {
+                                radius: 5
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: false
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Save Board"
+                                tooltipText: "Save this board and its editable layers to My Templates."
+                                onClicked: {
+                                    if (carouselDocument.saveCurrentBoardAsTemplate(root.templateNameDraft))
+                                        root.templateNameDraft = ""
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Save Selection"
+                                enabled: selection.hasSelection
+                                disabledReason: "Select one or more layers first."
+                                tooltipText: "Save selected layers as a reusable component."
+                                onClicked: {
+                                    if (carouselDocument.saveSelectionAsTemplate(root.templateNameDraft))
+                                        root.templateNameDraft = ""
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+                            visible: false
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "MY TEMPLATES · " + carouselDocument.userTemplates.length
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+
+                            Repeater {
+                                model: carouselDocument.userTemplates
+
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    implicitHeight: 54
+                                    radius: 7
+                                    color: theme.alpha(theme.ink850, 0.7)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.3)
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 5
+                                        spacing: 6
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 34
+                                            Layout.fillHeight: true
+                                            radius: 5
+                                            color: theme.alpha(theme.ink950, 0.7)
+                                            clip: true
+
+                                            Image {
+                                                anchors.fill: parent
+                                                source: String(modelData.previewSource || "")
+                                                sourceSize: Qt.size(160, 200)
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                                cache: false
+                                            }
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                visible: String(modelData.previewSource || "").length === 0
+                                                text: String(modelData.kind || "board") === "component" ? "C" : "T"
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 11
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 1
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.name || "Template")
+                                                color: theme.textStrong
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 10
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.category || "My Templates") + " · " + Number(modelData.itemCount || 0) + " layers"
+                                                color: theme.textFaint
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                            }
+                                        }
+
+                                        ActionButton {
+                                            Layout.preferredWidth: 42
+                                            compact: true
+                                            text: "Add"
+                                            tooltipText: "Add this template without removing current layers."
+                                            onClicked: carouselDocument.applyUserTemplate(String(modelData.templateId || ""), false)
+                                        }
+
+                                        ActionButton {
+                                            Layout.preferredWidth: 38
+                                            compact: true
+                                            text: "Name"
+                                            enabled: root.templateNameDraft.trim().length > 0
+                                            disabledReason: "Enter the new name above first."
+                                            tooltipText: "Rename this template using the name field above."
+                                            onClicked: {
+                                                carouselDocument.renameUserTemplate(
+                                                            String(modelData.templateId || ""),
+                                                            root.templateNameDraft)
+                                                root.templateNameDraft = ""
+                                            }
+                                        }
+
+                                        ConfirmActionButton {
+                                            Layout.preferredWidth: 34
+                                            compact: true
+                                            text: "×"
+                                            helperText: "Delete template"
+                                            onConfirmed: carouselDocument.deleteUserTemplate(String(modelData.templateId || ""))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3144,7 +6655,8 @@ Rectangle {
                                     accent: theme.accentWarm400
                                     label: "Background " + modelData
                                     onPicked: function(swatchColor) {
-                                        if (selection.backgroundKind === "solid") {
+                                        if (selection.backgroundKind === "solid" ||
+                                                selection.backgroundKind === "transparent") {
                                             carouselDocument.setCurrentSlideBackgroundColor(swatchColor)
                                         } else {
                                             carouselDocument.setCurrentSlideBackgroundGradient(
@@ -3157,9 +6669,11 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
-                            spacing: 3
+                            columns: 2
+                            columnSpacing: 6
+                            rowSpacing: 4
 
                             Repeater {
                                 model: root.backgroundGradientButtons
@@ -3180,6 +6694,13 @@ Rectangle {
                                         }
                                     }
                                 }
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Transparent"
+                                active: selection.backgroundKind === "transparent"
+                                onClicked: carouselDocument.setCurrentSlideBackgroundTransparent()
                             }
                         }
 
@@ -3248,8 +6769,1097 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        objectName: "carouselBrandTokenInspector"
                         width: parent.width
-                        visible: !selection.hasSelection
+                        visible: root.inspectorPrimarySurface === "board" &&
+                                 selection.hasSelection && !selection.hasMultipleSelection &&
+                                 (selection.isText || selection.isShape || selection.isBrush)
+                        title: "Brand Tokens"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Color token"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideNone
+                        }
+
+                        ToneComboBox {
+                            objectName: "carouselBrandColorTokenCombo"
+                            Layout.fillWidth: true
+                            model: carouselDocument.brandColorTokens
+                            textRole: "name"
+                            valueRole: "bindingId"
+                            currentIndex: indexOfValue(
+                                String(selection.brandColorKitId || "") + "|" +
+                                String(selection.brandColorTokenId || ""))
+                            onActivated: carouselDocument.bindSelectedLayerToBrandColorToken(
+                                             String(currentValue || ""))
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: selection.followsBrandColorToken
+                                      ? "Following " + String(selection.brandColorTokenId || "")
+                                      : "Local color"
+                                color: selection.followsBrandColorToken ? theme.accentCool300 : theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
+                            ActionButton {
+                                objectName: "carouselDetachBrandColorTokenButton"
+                                compact: true
+                                text: "Detach color"
+                                enabled: Boolean(selection.followsBrandColorToken)
+                                disabledReason: "The selected layer already uses a local color."
+                                onClicked: carouselDocument.detachSelectedBrandColorToken()
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: selection.isText
+                            text: "Typography token"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideNone
+                        }
+
+                        ToneComboBox {
+                            objectName: "carouselBrandTypographyTokenCombo"
+                            Layout.fillWidth: true
+                            visible: selection.isText
+                            model: carouselDocument.brandTypographyTokens
+                            textRole: "name"
+                            valueRole: "bindingId"
+                            currentIndex: indexOfValue(
+                                String(selection.brandTypographyKitId || "") + "|" +
+                                String(selection.brandTypographyTokenId || ""))
+                            onActivated: carouselDocument.bindSelectedTextToBrandTypographyToken(
+                                             String(currentValue || ""))
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: selection.isText
+                            spacing: 4
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: selection.followsBrandTypographyToken
+                                      ? "Following " + String(selection.brandTypographyTokenId || "")
+                                      : "Local typography"
+                                color: selection.followsBrandTypographyToken ? theme.accentCool300 : theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
+                            ActionButton {
+                                objectName: "carouselDetachBrandTypographyTokenButton"
+                                compact: true
+                                text: "Detach type"
+                                enabled: Boolean(selection.followsBrandTypographyToken)
+                                disabledReason: "The selected text already uses local typography."
+                                onClicked: carouselDocument.detachSelectedBrandTypographyToken()
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board" && !selection.hasSelection
+                        title: "Board Notes"
+                        subtitle: "Saved as metadata · never rendered"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: false
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Message"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                        }
+
+                        ToneTextArea {
+                            id: boardMessageNoteField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 66
+                            placeholderText: "What this board needs to communicate"
+                            onActiveFocusChanged: {
+                                if (!activeFocus) {
+                                    carouselDocument.setCurrentSlideNotes(
+                                                text,
+                                                boardMediaIntentNoteField.text,
+                                                boardSourceReferenceNoteField.text)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardMessageNoteField
+                            property: "text"
+                            value: selection.messageNote
+                            when: !boardMessageNoteField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Media intent"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                        }
+
+                        ToneTextArea {
+                            id: boardMediaIntentNoteField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 66
+                            placeholderText: "Subject, framing, or image requirement"
+                            onActiveFocusChanged: {
+                                if (!activeFocus) {
+                                    carouselDocument.setCurrentSlideNotes(
+                                                boardMessageNoteField.text,
+                                                text,
+                                                boardSourceReferenceNoteField.text)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardMediaIntentNoteField
+                            property: "text"
+                            value: selection.mediaIntentNote
+                            when: !boardMediaIntentNoteField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Source or caption reference"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                        }
+
+                        ToneTextArea {
+                            id: boardSourceReferenceNoteField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 66
+                            placeholderText: "Credit, URL, caption source, or review note"
+                            onActiveFocusChanged: {
+                                if (!activeFocus) {
+                                    carouselDocument.setCurrentSlideNotes(
+                                                boardMessageNoteField.text,
+                                                boardMediaIntentNoteField.text,
+                                                text)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardSourceReferenceNoteField
+                            property: "text"
+                            value: selection.sourceReferenceNote
+                            when: !boardSourceReferenceNoteField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Alt text"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                        }
+
+                        ToneTextArea {
+                            id: boardAltTextField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 66
+                            placeholderText: "Concise description for platform accessibility fields"
+                            onActiveFocusChanged: {
+                                if (!activeFocus) {
+                                    carouselDocument.setCurrentSlideAccessibilityText(
+                                                text,
+                                                boardPlainLanguageDescriptionField.text)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardAltTextField
+                            property: "text"
+                            value: selection.altText
+                            when: !boardAltTextField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Plain-language board description"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                        }
+
+                        ToneTextArea {
+                            id: boardPlainLanguageDescriptionField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 66
+                            placeholderText: "Describe the board's message and meaningful visual content"
+                            onActiveFocusChanged: {
+                                if (!activeFocus) {
+                                    carouselDocument.setCurrentSlideAccessibilityText(
+                                                boardAltTextField.text,
+                                                text)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardPlainLanguageDescriptionField
+                            property: "text"
+                            value: selection.plainLanguageDescription
+                            when: !boardPlainLanguageDescriptionField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: Number(carouselDocument.readingOrderState.meaningfulEntryCount || 0) +
+                                  " meaningful of " +
+                                  Number(carouselDocument.readingOrderState.entryCount || 0) +
+                                  " readable elements"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        ActionButton {
+                            id: carouselReadingOrderButton
+                            objectName: "carouselReadingOrderButton"
+                            Layout.fillWidth: true
+                            text: "Edit Reading Order"
+                            iconName: "menu"
+                            enabled: Number(carouselDocument.readingOrderState.entryCount || 0) > 0
+                            disabledReason: "Add visible text or imagery before editing reading order."
+                            Accessible.name: "Edit accessibility reading order for this board"
+                            onClicked: root.openCarouselReadingOrderEditor()
+                        }
+                    }
+
+                    InspectorSection {
+                        id: carouselTemplateLibraryPanel
+                        objectName: "carouselReusableDesignTemplatesSection"
+                        readonly property bool surfaceActive: root.inspectorPrimarySurface === "designs"
+                        width: parent.width
+                        visible: surfaceActive
+                        title: "Templates"
+                        subtitle: "Editable starting points"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 7
+
+                            ToneTextField {
+                                id: carouselTemplateLibrarySearchField
+                                objectName: "carouselTemplateLibrarySearchField"
+                                Layout.fillWidth: true
+                                placeholderText: "Search templates by name, goal, or category"
+                                text: root.templateLibrarySearchText
+                                onTextEdited: root.templateLibrarySearchText = text
+                                Accessible.name: "Search template library"
+                            }
+
+                            Rectangle {
+                                objectName: "carouselTemplatePackUpdateBanner"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 82
+                                visible: Boolean(carouselDocument.templatePackUpdateState.updateAvailable)
+                                radius: 8
+                                color: theme.alpha(theme.accentWarm400, 0.10)
+                                border.width: 1
+                                border.color: theme.alpha(theme.accentWarm400, 0.55)
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 7
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 2
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(carouselDocument.templatePackUpdateState.templateName || "Template")
+                                                  + " update available · v"
+                                                  + Number(carouselDocument.templatePackUpdateState.sourceVersion || 0)
+                                                  + " → v"
+                                                  + Number(carouselDocument.templatePackUpdateState.currentVersion || 0)
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Your document stays unchanged until you review and approve the component migration."
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 9
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
+                                    ActionButton {
+                                        objectName: "carouselReviewTemplatePackUpdateButton"
+                                        compact: true
+                                        tone: "primary"
+                                        text: "Review update"
+                                        onClicked: {
+                                            if (carouselDocument.previewTemplatePackUpdate())
+                                                carouselTemplatePackUpdateDialog.open()
+                                        }
+                                    }
+                                }
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "All", value: "all" },
+                                        { label: "Favorites", value: "favorites" },
+                                        { label: "Recent", value: "recent" },
+                                        { label: "Installed", value: "installed" },
+                                        { label: "Custom", value: "custom" }
+                                    ]
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        text: String(modelData.label) + " ("
+                                              + root.templateLibrarySectionCount(String(modelData.value)) + ")"
+                                        active: root.templateLibrarySection === String(modelData.value)
+                                        onClicked: root.templateLibrarySection = String(modelData.value)
+                                    }
+                                }
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: root.templateLibraryCategories()
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        text: String(modelData.label)
+                                        active: root.templateLibraryCategory === String(modelData.value)
+                                        onClicked: root.templateLibraryCategory = String(modelData.value)
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.filteredTemplateLibraryEntries().length + " matching"
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    elide: Text.ElideNone
+                                }
+
+                                FilterChip {
+                                    objectName: "carouselTemplateLibraryCompactDensityButton"
+                                    text: "Compact"
+                                    active: root.templateLibraryDensity === "compact"
+                                    onClicked: root.templateLibraryDensity = "compact"
+                                }
+
+                                FilterChip {
+                                    objectName: "carouselTemplateLibraryComfortableDensityButton"
+                                    text: "Comfortable"
+                                    active: root.templateLibraryDensity === "comfortable"
+                                    onClicked: root.templateLibraryDensity = "comfortable"
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "carouselClearRecentTemplatesButton"
+                                Layout.fillWidth: true
+                                visible: root.templateLibrarySection === "recent"
+                                         && carouselDocument.recentTemplateIds.length > 0
+                                compact: true
+                                text: "Clear recent templates"
+                                onClicked: carouselDocument.clearRecentTemplates()
+                            }
+
+                            Repeater {
+                                model: root.filteredTemplateLibraryEntries()
+
+                                delegate: Rectangle {
+                                    id: templateLibraryCard
+                                    objectName: "carouselTemplateLibraryCard"
+                                    required property var modelData
+                                    readonly property string interactionStateContract: theme.interactionStateContract
+                                    Layout.fillWidth: true
+                                    implicitHeight: root.templateLibraryDensity === "compact" ? 96 : 136
+                                    radius: 8
+                                    color: templateCardTap.pressed
+                                           ? theme.alpha(theme.accentWarm500, 0.16)
+                                           : templateCardHover.hovered
+                                             ? theme.alpha(theme.editorControlHover, 0.82)
+                                             : theme.alpha(theme.ink850, 0.78)
+                                    border.width: activeFocus || Boolean(modelData.isFavorite) ? 2 : 1
+                                    border.color: activeFocus
+                                                  ? theme.focusRing
+                                                  : Boolean(modelData.isFavorite)
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.38)
+                                    activeFocusOnTab: true
+                                    Accessible.name: String(modelData.name || "Template")
+                                    Accessible.description: "Reusable design card. Press Enter to preview."
+                                    Accessible.role: Accessible.Button
+                                    Keys.onReturnPressed: root.openTemplateLibraryEntry(modelData)
+                                    Keys.onEnterPressed: root.openTemplateLibraryEntry(modelData)
+                                    Keys.onSpacePressed: root.openTemplateLibraryEntry(modelData)
+
+                                    HoverHandler {
+                                        id: templateCardHover
+                                        cursorShape: Qt.PointingHandCursor
+                                    }
+
+                                    TapHandler {
+                                        id: templateCardTap
+                                        onTapped: root.openTemplateLibraryEntry(templateLibraryCard.modelData)
+                                    }
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 8
+                                        spacing: 4
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.name || "Sequence")
+                                                color: theme.textStrong
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 11
+                                                font.weight: Font.DemiBold
+                                                wrapMode: Text.WordWrap
+                                                elide: Text.ElideNone
+                                            }
+                                            StatusChip {
+                                                text: String(modelData.sourceSection) === "installed"
+                                                      ? "Installed · v" + Number(modelData.packVersion || 1)
+                                                      : "Custom"
+                                                compact: true
+                                            }
+                                            ActionButton {
+                                                Layout.preferredWidth: 34
+                                                compact: true
+                                                text: Boolean(modelData.isFavorite) ? "★" : "☆"
+                                                tooltipText: Boolean(modelData.isFavorite)
+                                                             ? "Remove from favorites"
+                                                             : "Add to favorites"
+                                                Accessible.name: tooltipText + ": " + String(modelData.name || "Template")
+                                                onClicked: carouselDocument.toggleFavoriteTemplate(
+                                                               String(modelData.templateId || ""))
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: root.templateLibraryDensity === "comfortable"
+                                            text: String(modelData.purpose || "")
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 9
+                                            maximumLineCount: 2
+                                            wrapMode: Text.WordWrap
+                                            elide: Text.ElideNone
+                                        }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 3
+
+                                            Rectangle {
+                                                Layout.preferredWidth: 44
+                                                Layout.preferredHeight: root.templateLibraryDensity === "compact" ? 20 : 34
+                                                visible: String(modelData.sourceSection) === "custom"
+                                                radius: 4
+                                                color: theme.alpha(theme.ink950, 0.7)
+                                                clip: true
+
+                                                Image {
+                                                    anchors.fill: parent
+                                                    source: String(modelData.previewSource || "")
+                                                    sourceSize: Qt.size(160, 200)
+                                                    fillMode: Image.PreserveAspectCrop
+                                                    asynchronous: true
+                                                    cache: false
+                                                }
+
+                                                Label {
+                                                    anchors.centerIn: parent
+                                                    visible: String(modelData.previewSource || "").length === 0
+                                                    text: String(modelData.entryKind) === "component" ? "C" : "B"
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                }
+                                            }
+
+                                            Repeater {
+                                                model: String(modelData.sourceSection) === "installed"
+                                                       ? (modelData.previewRoles || []) : []
+                                                delegate: Rectangle {
+                                                    id: sequenceRolePreview
+                                                    required property int index
+                                                    required property var modelData
+                                                    Layout.fillWidth: true
+                                                    Layout.preferredHeight: root.templateLibraryDensity === "compact" ? 20 : 34
+                                                    radius: 3
+                                                    color: index % 3 === 0 ? "#d8c8b3"
+                                                         : index % 3 === 1 ? "#243038" : "#dce8e5"
+                                                    Label {
+                                                        anchors.centerIn: parent
+                                                        text: sequenceRolePreview.index + 1
+                                                        color: sequenceRolePreview.index % 3 === 1 ? "#ffffff" : "#171717"
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                    }
+                                                    ToolTip.visible: roleHover.hovered
+                                                    ToolTip.text: String(sequenceRolePreview.modelData)
+                                                    HoverHandler { id: roleHover }
+                                                }
+                                            }
+                                        }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.sourceSection) === "installed"
+                                                      ? Number(modelData.requiredMedia || 0) + " media · "
+                                                        + String(modelData.category || "")
+                                                      : Number(modelData.itemCount || 0) + " layers · "
+                                                        + String(modelData.category || "Custom")
+                                                color: theme.textFaint
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                wrapMode: Text.WordWrap
+                                                elide: Text.ElideNone
+                                            }
+                                            ActionButton {
+                                                compact: true
+                                                text: "Preview"
+                                                onClicked: root.openTemplateLibraryEntry(modelData)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 68
+                                visible: root.filteredTemplateLibraryEntries().length === 0
+                                radius: 8
+                                color: theme.alpha(theme.ink850, 0.55)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.3)
+
+                                Label {
+                                    anchors.fill: parent
+                                    anchors.margins: 10
+                                    text: "No templates match the current search and filters."
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Installed packs use metadata previews. Custom cards decode only bounded 320 × 400 thumbnails; full-resolution media stays unloaded until application."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    InspectorSection {
+                        objectName: "carouselReusableDesignComponentsSection"
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "designs"
+                        title: "Components"
+                        subtitle: "Reusable editable blocks"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        ColumnLayout {
+                            objectName: "carouselReusableComponentLibrary"
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            ActionButton {
+                                objectName: "carouselImportDesignPackageButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Import design package"
+                                tooltipText: "Review a versioned brand-kit or component package before importing it."
+                                onClicked: {
+                                    if (carouselDocument.chooseDesignPackageImport())
+                                        carouselDesignPackageImportDialog.open()
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "carouselComponentInstanceState"
+                                Layout.fillWidth: true
+                                implicitHeight: componentInstanceColumn.implicitHeight + 14
+                                visible: Boolean(carouselDocument.componentInstanceState.attached)
+                                radius: 8
+                                color: theme.alpha(theme.accentWarm400, 0.08)
+                                border.width: 1
+                                border.color: theme.alpha(theme.accentWarm400, 0.45)
+
+                                ColumnLayout {
+                                    id: componentInstanceColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 7
+                                    spacing: 4
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(carouselDocument.componentInstanceState.definitionName || "Component")
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideNone
+                                        }
+                                        StatusChip {
+                                            text: Boolean(carouselDocument.componentInstanceState.updateAvailable)
+                                                  ? "v" + Number(carouselDocument.componentInstanceState.version || 0)
+                                                    + " → v" + Number(carouselDocument.componentInstanceState.currentVersion || 0)
+                                                  : "v" + Number(carouselDocument.componentInstanceState.version || 1)
+                                            tone: Boolean(carouselDocument.componentInstanceState.updateAvailable)
+                                                  ? "warning" : "neutral"
+                                            compact: true
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: Number(carouselDocument.componentInstanceState.layerCount || 0)
+                                              + " layers · "
+                                              + Number(carouselDocument.componentInstanceState.localOverrideCount || 0)
+                                              + " locally changed"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Instances never update automatically. Applying an update retains local field overrides."
+                                        color: theme.textFaint
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 8
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+                                        ActionButton {
+                                            objectName: "carouselUpdateComponentDefinitionButton"
+                                            Layout.fillWidth: true
+                                            visible: Boolean(carouselDocument.componentInstanceState.canUpdateDefinition)
+                                            compact: true
+                                            text: "Update saved component"
+                                            tooltipText: "Create a new definition version from this instance without changing other instances."
+                                            onClicked: carouselDocument.updateSelectedComponentDefinition()
+                                        }
+                                        ActionButton {
+                                            objectName: "carouselApplyComponentUpdateButton"
+                                            Layout.fillWidth: true
+                                            visible: Boolean(carouselDocument.componentInstanceState.canApplyUpdate)
+                                            compact: true
+                                            tone: "primary"
+                                            text: "Apply update"
+                                            tooltipText: "Update this instance while retaining its local field overrides."
+                                            onClicked: carouselDocument.applySelectedComponentUpdate()
+                                        }
+                                        ActionButton {
+                                            objectName: "carouselDetachComponentButton"
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: "Detach"
+                                            tooltipText: "Keep these layers and geometry but stop following the saved component."
+                                            onClicked: carouselDocument.detachSelectedComponentInstance()
+                                        }
+                                    }
+                                }
+                            }
+
+                            Repeater {
+                                model: carouselDocument.componentLibraryEntries
+
+                                delegate: Rectangle {
+                                    id: reusableComponentCard
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    implicitHeight: 82
+                                    radius: 8
+                                    color: theme.alpha(theme.ink850, 0.72)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.35)
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 6
+                                        spacing: 7
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 94
+                                            Layout.preferredHeight: 62
+                                            radius: 5
+                                            color: theme.alpha(theme.ink950, 0.72)
+                                            clip: true
+
+                                            Image {
+                                                objectName: "carouselReusableComponentThumbnail"
+                                                anchors.fill: parent
+                                                source: String(reusableComponentCard.modelData.previewSource || "")
+                                                sourceSize: Qt.size(
+                                                                Math.min(240, Number(reusableComponentCard.modelData.previewMaximumPixelWidth || 240)),
+                                                                Math.min(400, Number(reusableComponentCard.modelData.previewMaximumPixelHeight || 160)))
+                                                fillMode: Image.PreserveAspectFit
+                                                asynchronous: true
+                                                cache: false
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 1
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(reusableComponentCard.modelData.name || "Component")
+                                                color: theme.textStrong
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 10
+                                                font.weight: Font.DemiBold
+                                                wrapMode: Text.WordWrap
+                                                elide: Text.ElideNone
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(reusableComponentCard.modelData.description || "Editable component")
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 8
+                                                maximumLineCount: 2
+                                                wrapMode: Text.WordWrap
+                                                elide: Text.ElideNone
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: Number(reusableComponentCard.modelData.layerCount || 0)
+                                                      + " editable layers · "
+                                                      + String(reusableComponentCard.modelData.category || "Custom")
+                                                color: theme.textFaint
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                elide: Text.ElideNone
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            spacing: 3
+                                            ActionButton {
+                                                objectName: "carouselAddReusableComponentButton"
+                                                compact: true
+                                                text: "Add"
+                                                tooltipText: "Add this component as ordinary editable layers."
+                                                onClicked: {
+                                                    if (String(reusableComponentCard.modelData.source || "") === "built-in") {
+                                                        carouselDocument.applyBuiltInComponent(
+                                                                    String(reusableComponentCard.modelData.componentId || ""))
+                                                    } else {
+                                                        carouselDocument.applyUserTemplate(
+                                                                    String(reusableComponentCard.modelData.componentId || ""), false)
+                                                    }
+                                                }
+                                            }
+                                            ActionButton {
+                                                objectName: "carouselExportComponentPackageButton"
+                                                visible: String(reusableComponentCard.modelData.source || "") === "custom"
+                                                compact: true
+                                                text: "Export"
+                                                tooltipText: "Export this component as a checked versioned package."
+                                                onClicked: carouselDocument.exportDesignPackageInteractive(
+                                                               "component",
+                                                               String(reusableComponentCard.modelData.componentId || ""))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        objectName: "carouselReusableDesignBrandKitsSection"
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "designs"
+                        title: "Brand Kits"
+                        subtitle: "Colors and typography"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: carouselDocument.brandKits.length > 0
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            compact: true
+                            text: "New Brand Kit"
+                            tone: "primary"
+                            tooltipText: "Build palettes, text roles, logo assets, and design-token scales."
+                            onClicked: {
+                                carouselDocument.beginBrandKitEditor("")
+                                carouselBrandKitEditorDialog.open()
+                            }
+                        }
+
+                        Repeater {
+                            model: carouselDocument.brandKits
+
+                            delegate: Rectangle {
+                                id: brandKitCard
+                                required property var modelData
+                                Layout.fillWidth: true
+                                implicitHeight: 154
+                                radius: 7
+                                color: theme.alpha(theme.ink850, 0.7)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.3)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 4
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.name || "Brand")
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Repeater {
+                                            model: [String(modelData.backgroundColor || "#fbf7f1"),
+                                                    String(modelData.textColor || "#1e1a17"),
+                                                    String(modelData.accentColor || "#36f2a6")]
+                                            delegate: Rectangle {
+                                                required property string modelData
+                                                width: 15
+                                                height: 15
+                                                radius: 4
+                                                color: modelData
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.lineSoft, 0.5)
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        objectName: "carouselBrandThemeScopeControls"
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Repeater {
+                                            model: [
+                                                { label: "Current", value: "current", enabled: true },
+                                                { label: "Selected", value: "selected", enabled: carouselDocument.selectedSlideCount > 1 },
+                                                { label: "All boards", value: "all", enabled: true }
+                                            ]
+
+                                            delegate: FilterChip {
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                text: modelData.label
+                                                active: root.brandThemeScope === modelData.value
+                                                enabled: Boolean(modelData.enabled)
+                                                onClicked: root.brandThemeScope = modelData.value
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        objectName: "carouselBrandThemeVariantControls"
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        Repeater {
+                                            model: [
+                                                { label: "Light", value: "light" },
+                                                { label: "Dark", value: "dark" },
+                                                { label: "Campaign", value: "campaign" }
+                                            ]
+
+                                            delegate: ActionButton {
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                compact: true
+                                                text: modelData.label
+                                                tone: String(selection.brandThemeKitId || "") ===
+                                                      String(brandKitCard.modelData.brandId || "") &&
+                                                      String(selection.brandThemeVariantId || "") === modelData.value
+                                                      ? "primary" : "secondary"
+                                                onClicked: carouselDocument.applyBrandThemeVariant(
+                                                               String(brandKitCard.modelData.brandId || ""),
+                                                               modelData.value,
+                                                               root.brandThemeScope)
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 3
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: "Board"
+                                            onClicked: root.openBrandApplicationPreview(String(modelData.brandId || ""), "current")
+                                        }
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: carouselDocument.selectedSlideCount > 1 ? "Selected" : "All"
+                                            onClicked: root.openBrandApplicationPreview(
+                                                           String(modelData.brandId || ""),
+                                                           carouselDocument.selectedSlideCount > 1 ? "selected" : "all")
+                                        }
+                                        ActionButton {
+                                            compact: true
+                                            text: "Lint"
+                                            onClicked: {
+                                                carouselDocument.setActiveBrandKitForLint(String(modelData.brandId || ""))
+                                                carouselBrandLintDialog.open()
+                                            }
+                                        }
+                                        ActionButton {
+                                            compact: true
+                                            text: "Edit"
+                                            onClicked: {
+                                                carouselDocument.beginBrandKitEditor(String(modelData.brandId || ""))
+                                                carouselBrandKitEditorDialog.open()
+                                            }
+                                        }
+                                        ConfirmActionButton {
+                                            Layout.preferredWidth: 32
+                                            compact: true
+                                            text: "×"
+                                            helperText: "Delete brand kit"
+                                            onConfirmed: carouselDocument.deleteBrandKit(String(modelData.brandId || ""))
+                                        }
+                                    }
+                                    ActionButton {
+                                        objectName: "carouselExportBrandPackageButton"
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: "Export brand package"
+                                        tooltipText: "Export this brand kit with checksummed brand assets and no project media."
+                                        onClicked: carouselDocument.exportDesignPackageInteractive(
+                                                       "brand-kit", String(modelData.brandId || ""))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board" && !selection.hasSelection
                         title: "Media"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -3295,7 +7905,8 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "Choose"
+                                text: selection.hasMedia ? "Replace" : "Add media"
+                                iconName: "media"
                                 tone: "primary"
                                 onClicked: openMediaPicker("slot")
                             }
@@ -3312,6 +7923,53 @@ Rectangle {
                                         carouselDocument.clearCurrentSlot()
                                 }
                             }
+                        }
+
+                        ActionButton {
+                            objectName: "carouselMediaUsageButton"
+                            Layout.fillWidth: true
+                            compact: true
+                            text: "Media usage"
+                            iconName: "inspect"
+                            onClicked: root.openMediaUsageReport()
+                        }
+
+                        ActionButton {
+                            objectName: "editCarouselSlotPhotoButton"
+                            Layout.fillWidth: true
+                            visible: selection.hasMedia && selection.mediaType === "image"
+                            compact: true
+                            text: "Edit Photo"
+                            iconName: "edit"
+                            tone: "primary"
+                            tooltipText: "Open this photo and its current recipe in Edit. Carousel framing stays separate."
+                            onClicked: root.editSelectedPhoto()
+                        }
+
+                        Loader {
+                            objectName: "carouselSlotCutoutLoader"
+                            Layout.fillWidth: true
+                            active: selection.hasMedia && selection.mediaType === "image"
+                            visible: active
+                            sourceComponent: carouselCutoutControls
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !selection.hasMedia
+                            text: "Choose a photo or video for the " + root.slotLabel().toLowerCase() + " slot. Crop and positioning controls will appear after placement."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Loader {
+                            objectName: "carouselSlotVideoCompositionLoader"
+                            Layout.fillWidth: true
+                            active: selection.hasMedia && selection.mediaType === "video"
+                            visible: active
+                            sourceComponent: carouselVideoCompositionControls
                         }
 
                         ColumnLayout {
@@ -3336,6 +7994,28 @@ Rectangle {
                                     compact: true
                                     text: "More"
                                     onClicked: root.openMediaPicker("slot")
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Autofill"
+                                    enabled: root.mediaPickerAssets.some(function(asset) {
+                                        return String(asset.mediaType || "photo") === "photo" &&
+                                               String(asset.filePath || asset.path || "").length > 0
+                                    })
+                                    onClicked: {
+                                        const paths = []
+                                        for (let index = 0; index < root.mediaPickerAssets.length; ++index) {
+                                            const asset = root.mediaPickerAssets[index]
+                                            if (String(asset.mediaType || "photo") !== "photo")
+                                                continue
+                                            const path = String(asset.filePath || asset.path || "")
+                                            if (path.length > 0)
+                                                paths.push(path)
+                                        }
+                                        if (carouselDocument.previewMediaAutofill(paths))
+                                            carouselMediaAutofillDialog.open()
+                                    }
                                 }
                             }
 
@@ -3362,9 +8042,12 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
+                            visible: selection.hasMedia
 
                             FilterChip {
                                 Layout.fillWidth: true
@@ -3381,8 +8064,118 @@ Rectangle {
                             }
                         }
 
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
+                            visible: selection.hasMedia
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Smart focal crop"
+                                active: String(selection.cropMode || "smart") === "smart"
+                                onClicked: carouselDocument.setCurrentMediaCropMode("smart")
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Manual crop"
+                                active: String(selection.cropMode || "smart") === "manual"
+                                onClicked: carouselDocument.setCurrentMediaCropMode("manual")
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselCropOwnership"
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Label {
+                                text: "Photographic crop source"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "Use Edit crop", value: "edit" },
+                                        { label: "Use original", value: "original" },
+                                        { label: "Use Carousel crop", value: "carousel" }
+                                    ]
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: modelData.label
+                                        active: String(selection.cropSource || "edit") === modelData.value
+                                        onClicked: carouselDocument.setCurrentMediaCropSource(modelData.value)
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: String(selection.cropSource || "edit") === "original"
+                                      ? "Original pixels are used; saved photo edits and their crop remain untouched."
+                                      : String(selection.cropSource || "edit") === "carousel"
+                                        ? "Photo adjustments stay active, the Edit crop is bypassed, and Carousel framing is authoritative."
+                                        : "The Edit crop and photo adjustments feed Carousel; layout framing remains non-destructive."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
+                            visible: selection.hasMedia
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Focal X"
+                                valueText: Math.round(Number(selection.focalX || 0.5) * 100) + "%"
+                                from: 0
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.focalX
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setCurrentMediaFocalPoint(value, selection.focalY)
+                                }
+                                onResetRequested: carouselDocument.setCurrentMediaFocalPoint(0.5, selection.focalY)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Focal Y"
+                                valueText: Math.round(Number(selection.focalY || 0.5) * 100) + "%"
+                                from: 0
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.focalY
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setCurrentMediaFocalPoint(selection.focalX, value)
+                                }
+                                onResetRequested: carouselDocument.setCurrentMediaFocalPoint(selection.focalX, 0.5)
+                            }
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
+                            visible: selection.hasMedia
                             label: "Scale"
                             valueText: selection.scale.toFixed(2) + "x"
                             from: 0.6
@@ -3390,6 +8183,8 @@ Rectangle {
                             stepSize: 0.01
                             value: selection.scale
                             accent: theme.accentWarm400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Scale media")
+                            onInteractionFinished: carouselDocument.commitMediaTransformState()
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentScale(value)
                             }
@@ -3398,6 +8193,7 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
+                            visible: selection.hasMedia
                             label: "Offset X"
                             valueText: Math.round(selection.offsetX * 100) + "%"
                             from: -1.0
@@ -3405,6 +8201,8 @@ Rectangle {
                             stepSize: 0.01
                             value: selection.offsetX
                             accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Position media")
+                            onInteractionFinished: carouselDocument.commitMediaTransformState()
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentOffsetX(value)
                             }
@@ -3413,6 +8211,7 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
+                            visible: selection.hasMedia
                             label: "Offset Y"
                             valueText: Math.round(selection.offsetY * 100) + "%"
                             from: -1.0
@@ -3420,6 +8219,8 @@ Rectangle {
                             stepSize: 0.01
                             value: selection.offsetY
                             accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Position media")
+                            onInteractionFinished: carouselDocument.commitMediaTransformState()
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentOffsetY(value)
                             }
@@ -3429,8 +8230,8 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: !selection.hasSelection
-                        title: "Guides"
+                        visible: root.inspectorPrimarySurface === "board"
+                        title: "Layout & Guides"
                         showAccentMarker: false
                         uppercaseTitle: false
                         titleFontFamily: theme.fontDisplay
@@ -3440,6 +8241,242 @@ Rectangle {
                         expandable: true
                         expanded: false
 
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 4
+                            rowSpacing: 4
+
+                            Repeater {
+                                model: [
+                                    { label: "Editorial", key: "editorial" },
+                                    { label: "Social Safe", key: "social-safe" },
+                                    { label: "Dense", key: "dense" },
+                                    { label: "Minimal", key: "minimal" }
+                                ]
+
+                                delegate: ActionButton {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: modelData.label
+                                    onClicked: carouselDocument.applyLayoutPreset(modelData.key)
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselLayoutRecipeControls"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Layout recipes"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideNone
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                ToneTextField {
+                                    objectName: "carouselLayoutRecipeNameField"
+                                    Layout.fillWidth: true
+                                    placeholderText: "Recipe name"
+                                    text: root.layoutRecipeName
+                                    onTextEdited: root.layoutRecipeName = text
+                                    onAccepted: {
+                                        if (carouselDocument.saveCurrentLayoutRecipe(text))
+                                            root.layoutRecipeName = ""
+                                    }
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselSaveLayoutRecipeButton"
+                                    compact: true
+                                    text: "Save layout"
+                                    enabled: root.layoutRecipeName.trim().length > 0
+                                    disabledReason: "Enter a recipe name."
+                                    onClicked: {
+                                        if (carouselDocument.saveCurrentLayoutRecipe(root.layoutRecipeName))
+                                            root.layoutRecipeName = ""
+                                    }
+                                }
+                            }
+
+                            Repeater {
+                                model: carouselDocument.layoutRecipes
+
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.name || "Layout") + " · " +
+                                              Number(modelData.columns || 4) + "×" +
+                                              Number(modelData.rows || 4) + " · " +
+                                              Number(modelData.guideCount || 0) + " guides"
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    ActionButton {
+                                        compact: true
+                                        text: "Preview"
+                                        onClicked: root.openLayoutRecipePreview(
+                                                       String(parent.modelData.recipeId || ""))
+                                    }
+
+                                    ActionButton {
+                                        compact: true
+                                        showText: false
+                                        iconName: "delete"
+                                        tone: "danger"
+                                        tooltipText: "Delete layout recipe"
+                                        onClicked: carouselDocument.deleteLayoutRecipe(
+                                                       String(parent.modelData.recipeId || ""))
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Recipes store only layout geometry and preview overlays—never colors, type, media, or layer content."
+                                color: theme.textFaint
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselVariantComparisonControls"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Design variants"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideNone
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                ToneTextField {
+                                    objectName: "carouselVariantComparisonNameField"
+                                    Layout.fillWidth: true
+                                    placeholderText: "Left variant name"
+                                    text: root.variantComparisonName
+                                    onTextEdited: root.variantComparisonName = text
+                                    onAccepted: carouselDocument.captureVariantComparisonBaseline(text)
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselCaptureVariantButton"
+                                    compact: true
+                                    text: "Capture left"
+                                    enabled: root.variantComparisonName.trim().length > 0
+                                    disabledReason: "Name the left variant."
+                                    onClicked: carouselDocument.captureVariantComparisonBaseline(
+                                                   root.variantComparisonName)
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: Boolean(carouselDocument.variantComparisonState.active)
+                                spacing: 4
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(carouselDocument.variantComparisonState.leftName || "Captured variant") +
+                                          " captured. Edit the document, then compare it with the current variant."
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselOpenVariantComparisonButton"
+                                    compact: true
+                                    tone: "primary"
+                                    text: "Compare variants"
+                                    onClicked: {
+                                        if (carouselDocument.refreshVariantComparison())
+                                            carouselVariantComparisonDialog.open()
+                                    }
+                                }
+                            }
+
+                            Repeater {
+                                model: carouselDocument.savedDesignVersions
+
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(parent.modelData.name || "Saved variant") + " · " +
+                                              Number(parent.modelData.boardCount || 0) + " boards"
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    ActionButton {
+                                        compact: true
+                                        text: "Restore"
+                                        onClicked: carouselDocument.restoreSavedDesignVersion(
+                                                       String(parent.modelData.versionId || ""))
+                                    }
+
+                                    ActionButton {
+                                        compact: true
+                                        showText: false
+                                        iconName: "delete"
+                                        tone: "danger"
+                                        tooltipText: "Delete saved design version"
+                                        onClicked: carouselDocument.deleteSavedDesignVersion(
+                                                       String(parent.modelData.versionId || ""))
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: carouselDocument.savedDesignVersions.length > 0
+                                text: "Saved variants are full document versions. Restore and delete are undoable."
+                                color: theme.textFaint
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 4
@@ -3448,15 +8485,282 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: "Thirds"
                                 active: root.thirdsGuidesEnabled
-                                onClicked: root.thirdsGuidesEnabled = !root.thirdsGuidesEnabled
+                                onClicked: carouselDocument.setLayoutSetting("thirdsEnabled", !root.thirdsGuidesEnabled)
                             }
 
                             FilterChip {
                                 Layout.fillWidth: true
                                 text: "Safe"
                                 active: root.safeGuidesEnabled
-                                onClicked: root.safeGuidesEnabled = !root.safeGuidesEnabled
+                                onClicked: carouselDocument.setLayoutSetting("safeEnabled", !root.safeGuidesEnabled)
                             }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Bleed"
+                                active: root.bleedGuidesEnabled
+                                onClicked: carouselDocument.setLayoutSetting("bleedEnabled", !root.bleedGuidesEnabled)
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Safe-area preview preset"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 4
+                            rowSpacing: 4
+
+                            Repeater {
+                                model: [
+                                    { label: "Instagram Feed", key: "instagram-feed" },
+                                    { label: "Reels / Stories", key: "reels-stories" },
+                                    { label: "TikTok", key: "tiktok" },
+                                    { label: "Generic Device UI", key: "device-ui" }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: String(root.layoutSettings.safePreset || "custom") === modelData.key &&
+                                            root.safeGuidesEnabled
+                                    onClicked: carouselDocument.applySafeAreaPreset(modelData.key)
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Preview overlay only — safe-area guides never bake into exported files."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Platform crop & obstruction preview"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 4
+                            rowSpacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Off"
+                                active: root.platformPreviewProfileId === "none"
+                                onClicked: root.platformPreviewProfileId = "none"
+                            }
+
+                            Repeater {
+                                model: carouselDocument.platformPreviewProfiles
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: String(modelData.label || "Reference preview")
+                                    active: root.platformPreviewProfileId === String(modelData.profileId || "")
+                                    onClicked: root.platformPreviewProfileId = String(modelData.profileId || "none")
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.platformPreviewProfileId !== "none"
+                            text: String(root.platformPreviewProfile.disclaimer || "")
+                            color: theme.warning
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Grid"
+                                active: root.gridEnabled
+                                onClicked: carouselDocument.setLayoutSetting("gridEnabled", !root.gridEnabled)
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Rulers"
+                                active: root.rulersEnabled
+                                onClicked: carouselDocument.setLayoutSetting("rulersEnabled", !root.rulersEnabled)
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Snap Grid"
+                                active: Boolean(root.layoutSettings.snapToGrid)
+                                onClicked: carouselDocument.setLayoutSetting("snapToGrid", !Boolean(root.layoutSettings.snapToGrid))
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Board-local layout — this grid belongs only to canvas " + (carouselDocument.currentIndex + 1) + "."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Columns"
+                            valueText: Math.round(Number(root.selection.layoutColumns || 4)).toString()
+                            from: 1
+                            to: 12
+                            stepSize: 1
+                            value: Number(root.selection.layoutColumns || 4)
+                            defaultValue: 4
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("columns", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("columns", 4)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Rows"
+                            valueText: Math.round(Number(root.selection.layoutRows || 4)).toString()
+                            from: 1
+                            to: 12
+                            stepSize: 1
+                            value: Number(root.selection.layoutRows || 4)
+                            defaultValue: 4
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("rows", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("rows", 4)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Margin X"
+                            valueText: Math.round(Number(root.selection.layoutMarginX || 0)) + " px"
+                            from: 0
+                            to: 320
+                            stepSize: 2
+                            value: Number(root.selection.layoutMarginX || 0)
+                            defaultValue: 72
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("marginX", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("marginX", 72)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Margin Y"
+                            valueText: Math.round(Number(root.selection.layoutMarginY || 0)) + " px"
+                            from: 0
+                            to: 320
+                            stepSize: 2
+                            value: Number(root.selection.layoutMarginY || 0)
+                            defaultValue: 72
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("marginY", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("marginY", 72)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Gutter X"
+                            valueText: Math.round(Number(root.selection.layoutGutterX || 0)) + " px"
+                            from: 0
+                            to: 160
+                            stepSize: 2
+                            value: Number(root.selection.layoutGutterX || 0)
+                            defaultValue: 24
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("gutterX", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("gutterX", 24)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Gutter Y"
+                            valueText: Math.round(Number(root.selection.layoutGutterY || 0)) + " px"
+                            from: 0
+                            to: 160
+                            stepSize: 2
+                            value: Number(root.selection.layoutGutterY || 0)
+                            defaultValue: 24
+                            accent: theme.accentCool400
+                            onInteractionStarted: carouselDocument.beginHistoryTransaction("Change board layout tokens")
+                            onInteractionFinished: carouselDocument.commitHistoryTransaction()
+                            onValueDragged: function(value) { root.setCurrentBoardLayoutToken("gutterY", value) }
+                            onResetRequested: root.setCurrentBoardLayoutToken("gutterY", 24)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Snap Range"
+                            valueText: Math.round(Number(root.layoutSettings.snapThreshold || 12)) + " px"
+                            from: 2
+                            to: 40
+                            stepSize: 1
+                            value: Number(root.layoutSettings.snapThreshold || 12)
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) { carouselDocument.setLayoutSetting("snapThreshold", value) }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Arrow Nudge"
+                            valueText: Number(root.layoutSettings.nudgeStep || 1).toFixed(1) + " px"
+                            from: 0.5
+                            to: 20
+                            stepSize: 0.5
+                            value: Number(root.layoutSettings.nudgeStep || 1)
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) { carouselDocument.setLayoutSetting("nudgeStep", value) }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Shift Nudge"
+                            valueText: Math.round(Number(root.layoutSettings.largeNudgeStep || 10)) + " px"
+                            from: 2
+                            to: 100
+                            stepSize: 1
+                            value: Number(root.layoutSettings.largeNudgeStep || 10)
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) { carouselDocument.setLayoutSetting("largeNudgeStep", value) }
                         }
 
                         InspectorSlider {
@@ -3469,7 +8773,7 @@ Rectangle {
                             value: root.guideOpacity
                             accent: theme.accentCool400
                             onValueDragged: function(value) {
-                                root.guideOpacity = value
+                                carouselDocument.setLayoutSetting("guideOpacity", value)
                             }
                         }
 
@@ -3500,6 +8804,27 @@ Rectangle {
                             }
                         }
 
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Reset Layout"
+                                onClicked: carouselDocument.resetLayoutSettings()
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Arrow " + Number(root.layoutSettings.nudgeStep || 1) + " px  •  Shift " + Number(root.layoutSettings.largeNudgeStep || 10) + " px"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 8
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+
                         Label {
                             visible: root.customGuides.length > 0
                             Layout.fillWidth: true
@@ -3513,6 +8838,7 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
+                        visible: root.inspectorPrimarySurface === "board"
                         title: "Layers"
                         subtitle: currentSlideLayers.length + " on board " + (carouselDocument.currentIndex + 1)
                         showAccentMarker: false
@@ -3525,6 +8851,8 @@ Rectangle {
                         expanded: true
 
                         Rectangle {
+                            id: carouselLayerStackDropSurface
+                            objectName: "carouselLayerStackDropSurface"
                             Layout.fillWidth: true
                             radius: theme.radiusControl
                             color: theme.alpha(theme.ink850, 0.88)
@@ -3553,6 +8881,7 @@ Rectangle {
                                     primarySelected: Boolean(modelData.primarySelected)
                                     hidden: Boolean(modelData.hidden)
                                     locked: Boolean(modelData.locked)
+                                    grouped: Boolean(modelData.grouped)
                                     accent: theme.accentCool400
                                     onActivated: function(modifiers) {
                                         if (root.hasMultiSelectModifier(modifiers))
@@ -3570,6 +8899,54 @@ Rectangle {
                                 color: theme.textFaint
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
+                            }
+
+                            DropArea {
+                                id: carouselLayerStackDropArea
+                                objectName: "carouselLayerStackDropArea"
+                                anchors.fill: parent
+                                z: 40
+                                keys: ["application/x-carousel-media", "text/uri-list"]
+                                onEntered: function(drag) {
+                                    root.showMediaDropPreview(
+                                                carouselDocument.currentIndex,
+                                                "layer-stack",
+                                                "primary")
+                                    drag.accepted = true
+                                }
+                                onExited: root.clearMediaDropPreview()
+                                onDropped: function(drop) {
+                                    root.applyMediaDrop(
+                                                drop,
+                                                carouselDocument.currentIndex,
+                                                "layer-stack",
+                                                "primary",
+                                                0.5,
+                                                0.5)
+                                }
+                            }
+
+                            Rectangle {
+                                anchors.fill: parent
+                                z: 39
+                                visible: root.carouselDropPreview.active &&
+                                         root.carouselDropPreview.targetKind === "layer-stack"
+                                radius: parent.radius
+                                color: theme.alpha(theme.accentCool400, 0.18)
+                                border.width: 3
+                                border.color: theme.accentCool400
+                                Label {
+                                    anchors.centerIn: parent
+                                    width: Math.max(80, parent.width - 20)
+                                    text: String(root.carouselDropPreview.label || "Add as layer")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
                             }
                         }
 
@@ -3605,9 +8982,12 @@ Rectangle {
                             }
 
                             ConfirmActionButton {
+                                objectName: "carouselDeleteLayerButton"
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "Del"
+                                showText: false
+                                text: "Delete layer"
+                                iconName: "delete"
                                 enabled: selection.hasSelection
                                 helperText: "Remove layer"
                                 onConfirmed: carouselDocument.removeSelectedItem()
@@ -3617,7 +8997,7 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.hasSelection
+                        visible: root.inspectorPrimarySurface === "board" && selection.hasSelection
                         title: "Transform"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -3630,10 +9010,41 @@ Rectangle {
 
                         RowLayout {
                             Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                text: selection.hasMultipleSelection ? selection.selectedCount + " layers" : "Anchor"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+
+                            MenuButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: root.transformAnchor.replace("-", " ")
+                                menuWidth: 156
+                                menuItems: [
+                                    { key: "top-left", label: "Top Left" },
+                                    { key: "top", label: "Top" },
+                                    { key: "top-right", label: "Top Right" },
+                                    { key: "left", label: "Left" },
+                                    { key: "center", label: "Center" },
+                                    { key: "right", label: "Right" },
+                                    { key: "bottom-left", label: "Bottom Left" },
+                                    { key: "bottom", label: "Bottom" },
+                                    { key: "bottom-right", label: "Bottom Right" }
+                                ]
+                                onMenuItemTriggered: function(key) { root.transformAnchor = key }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
                             spacing: 4
 
                             Label {
-                                text: "X"
+                                text: "X px"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -3643,14 +9054,13 @@ Rectangle {
                                 id: transformXField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                validator: DoubleValidator { decimals: 1 }
+                                placeholderText: "+24, *1.2, =-10"
                                 background: Rectangle {
                                     radius: 4
                                     color: theme.alpha(theme.ink850, 0.9)
@@ -3658,14 +9068,12 @@ Rectangle {
                                     border.color: transformXField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
                                 }
                                 onEditingFinished: {
-                                    const value = Number(text)
-                                    if (Number.isFinite(value))
-                                        carouselDocument.setSelectedItemCenter(value + Number(selection.width || 0) / 2, Number(selection.centerY || 0))
+                                    root.applyTransformField("x", text)
                                 }
                             }
 
                             Label {
-                                text: "Y"
+                                text: "Y px"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -3675,14 +9083,13 @@ Rectangle {
                                 id: transformYField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                validator: DoubleValidator { decimals: 1 }
+                                placeholderText: "+24, *1.2, =-10"
                                 background: Rectangle {
                                     radius: 4
                                     color: theme.alpha(theme.ink850, 0.9)
@@ -3690,14 +9097,12 @@ Rectangle {
                                     border.color: transformYField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
                                 }
                                 onEditingFinished: {
-                                    const value = Number(text)
-                                    if (Number.isFinite(value))
-                                        carouselDocument.setSelectedItemCenter(Number(selection.centerX || 0), value + Number(selection.height || 0) / 2)
+                                    root.applyTransformField("y", text)
                                 }
                             }
 
                             Label {
-                                text: "R"
+                                text: "R °"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -3707,14 +9112,13 @@ Rectangle {
                                 id: transformRotationField
                                 Layout.preferredWidth: 54
                                 Layout.preferredHeight: 26
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                validator: DoubleValidator { decimals: 1 }
+                                placeholderText: "+15, *2, =-45"
                                 background: Rectangle {
                                     radius: 4
                                     color: theme.alpha(theme.ink850, 0.9)
@@ -3722,9 +9126,7 @@ Rectangle {
                                     border.color: transformRotationField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
                                 }
                                 onEditingFinished: {
-                                    const value = Number(text)
-                                    if (Number.isFinite(value))
-                                        carouselDocument.setSelectedItemRotation(value)
+                                    root.applyTransformField("rotation", text)
                                 }
                             }
                         }
@@ -3734,7 +9136,7 @@ Rectangle {
                             spacing: 4
 
                             Label {
-                                text: "W"
+                                text: "W px"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -3744,14 +9146,13 @@ Rectangle {
                                 id: transformWidthField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                validator: DoubleValidator { bottom: 1; decimals: 1 }
+                                placeholderText: "+24, *1.2"
                                 background: Rectangle {
                                     radius: 4
                                     color: theme.alpha(theme.ink850, 0.9)
@@ -3759,25 +9160,25 @@ Rectangle {
                                     border.color: transformWidthField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
                                 }
                                 onEditingFinished: {
-                                    const value = Number(text)
-                                    root.resizeSelectedFromTransformField("width", value)
+                                    root.applyTransformField("width", text)
                                 }
                             }
 
                             ActionButton {
-                                Layout.preferredWidth: 28
+                                Layout.preferredWidth: 68
                                 Layout.preferredHeight: 26
                                 compact: true
                                 iconName: "link"
-                                showText: false
+                                showText: true
+                                text: root.transformAspectLocked ? "Locked" : "Free"
                                 active: root.transformAspectLocked
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 tooltipText: root.transformAspectLocked ? "Aspect ratio locked" : "Aspect ratio unlocked"
-                                onClicked: root.transformAspectLocked = !root.transformAspectLocked
+                                onClicked: carouselDocument.setLayoutSetting("aspectLocked", !root.transformAspectLocked)
                             }
 
                             Label {
-                                text: "H"
+                                text: "H px"
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -3787,14 +9188,13 @@ Rectangle {
                                 id: transformHeightField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
-                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
                                 horizontalAlignment: Text.AlignRight
                                 selectByMouse: true
-                                inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                validator: DoubleValidator { bottom: 1; decimals: 1 }
+                                placeholderText: "+24, *1.2"
                                 background: Rectangle {
                                     radius: 4
                                     color: theme.alpha(theme.ink850, 0.9)
@@ -3802,8 +9202,7 @@ Rectangle {
                                     border.color: transformHeightField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
                                 }
                                 onEditingFinished: {
-                                    const value = Number(text)
-                                    root.resizeSelectedFromTransformField("height", value)
+                                    root.applyTransformField("height", text)
                                 }
                             }
                         }
@@ -3811,14 +9210,14 @@ Rectangle {
                         Binding {
                             target: transformXField
                             property: "text"
-                            value: Math.round(selection.x).toString()
+                            value: root.selectionAnchorPosition().x.toFixed(1)
                             when: selection.hasSelection && !transformXField.activeFocus
                         }
 
                         Binding {
                             target: transformYField
                             property: "text"
-                            value: Math.round(selection.y).toString()
+                            value: root.selectionAnchorPosition().y.toFixed(1)
                             when: selection.hasSelection && !transformYField.activeFocus
                         }
 
@@ -3832,15 +9231,46 @@ Rectangle {
                         Binding {
                             target: transformWidthField
                             property: "text"
-                            value: Math.round(selection.width).toString()
+                            value: root.selectionBounds().width.toFixed(1)
                             when: selection.hasSelection && !transformWidthField.activeFocus
                         }
 
                         Binding {
                             target: transformHeightField
                             property: "text"
-                            value: Math.round(selection.height).toString()
+                            value: root.selectionBounds().height.toFixed(1)
                             when: selection.hasSelection && !transformHeightField.activeFocus
+                        }
+
+                        RowLayout {
+                            objectName: "carouselTransformFieldState"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            StatusChip {
+                                compact: true
+                                tone: "info"
+                                text: "Board coordinates · px / °"
+                            }
+
+                            StatusChip {
+                                compact: true
+                                visible: selection.hasMultipleSelection && root.transformMixedLabel().length > 0
+                                tone: "warning"
+                                text: "Mixed · " + root.transformMixedLabel()
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Type +24, -10, *1.2, or /2 for a relative change. Prefix = for an exact negative value."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
                         }
 
                         RowLayout {
@@ -3955,9 +9385,11 @@ Rectangle {
                             onResetRequested: carouselDocument.setSelectedItemShadowOpacity(0)
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
 
                             InspectorSlider {
                                 Layout.fillWidth: true
@@ -4042,6 +9474,310 @@ Rectangle {
                             }
                         }
 
+                        ColumnLayout {
+                            objectName: "carouselSelectionBatchCommands"
+                            Layout.fillWidth: true
+                            visible: selection.hasMultipleSelection
+                            spacing: 4
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Batch from anchor · " + String(selection.displayLabel || "selected layer")
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                                StatusChip {
+                                    compact: true
+                                    tone: "neutral"
+                                    text: selection.selectedCount + " selected"
+                                }
+                            }
+
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 3
+                                columnSpacing: 3
+                                rowSpacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "Match size", operation: "match-size" },
+                                        { label: "Match width", operation: "match-width" },
+                                        { label: "Match height", operation: "match-height" },
+                                        { label: "Match style", operation: "match-style" },
+                                        { label: "Swap position", operation: "swap-position", exactTwo: true },
+                                        { label: "Replace content", operation: "replace-content" }
+                                    ]
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: modelData.label
+                                        enabled: selection.hasUnlockedSelection &&
+                                                 (!Boolean(modelData.exactTwo) || selection.editableSelectionCount === 2)
+                                        disabledReason: Boolean(modelData.exactTwo)
+                                                        ? "Select exactly two unlocked layers."
+                                                        : "Select at least two unlocked layers."
+                                        onClicked: root.openSelectionBatchPreview(modelData.operation)
+                                    }
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            objectName: "carouselRepeatGridButton"
+                            Layout.fillWidth: true
+                            compact: true
+                            text: "Repeat grid"
+                            iconName: "grid"
+                            enabled: selection.hasSelection && selection.hasUnlockedSelection
+                            onClicked: root.openRepeatGridPreview()
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselConstraintStackControls"
+                            Layout.fillWidth: true
+                            spacing: 5
+                            visible: selection.selectedCount > 1 || Boolean(selection.isConstraintStack)
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: !Boolean(selection.isConstraintStack)
+                                spacing: 4
+
+                                ActionButton {
+                                    objectName: "carouselCreateVerticalStackButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Stack vertically"
+                                    enabled: selection.selectedCount > 1 &&
+                                             selection.editableSelectionCount === selection.selectedCount
+                                    disabledReason: "Select at least two unlocked layers on one board."
+                                    onClicked: carouselDocument.createConstraintStack("vertical", 24, 16)
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselCreateHorizontalStackButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Stack horizontally"
+                                    enabled: selection.selectedCount > 1 &&
+                                             selection.editableSelectionCount === selection.selectedCount
+                                    disabledReason: "Select at least two unlocked layers on one board."
+                                    onClicked: carouselDocument.createConstraintStack("horizontal", 24, 16)
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: Boolean(selection.isConstraintStack)
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: (selection.constraintStackAxis === "horizontal" ? "Horizontal" : "Vertical") +
+                                          " stack · " + Number(selection.constraintStackCount || 0) + " layers"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                StatusChip {
+                                    compact: true
+                                    tone: "success"
+                                    text: "Explicit"
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: Boolean(selection.isConstraintStack)
+                                spacing: 4
+
+                                FilterChip {
+                                    Layout.fillWidth: true
+                                    text: "Vertical"
+                                    active: selection.constraintStackAxis !== "horizontal"
+                                    onClicked: carouselDocument.updateSelectedConstraintStack(
+                                                   "vertical",
+                                                   Number(selection.constraintStackPadding || 0),
+                                                   Number(selection.constraintStackGap || 0))
+                                }
+
+                                FilterChip {
+                                    Layout.fillWidth: true
+                                    text: "Horizontal"
+                                    active: selection.constraintStackAxis === "horizontal"
+                                    onClicked: carouselDocument.updateSelectedConstraintStack(
+                                                   "horizontal",
+                                                   Number(selection.constraintStackPadding || 0),
+                                                   Number(selection.constraintStackGap || 0))
+                                }
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                visible: Boolean(selection.isConstraintStack)
+                                label: "Stack padding"
+                                valueText: Math.round(value) + " px"
+                                from: 0
+                                to: 240
+                                stepSize: 1
+                                value: Number(selection.constraintStackPadding || 0)
+                                accent: theme.accentCool400
+                                onValueDragged: function(nextValue) {
+                                    carouselDocument.updateSelectedConstraintStack(
+                                                String(selection.constraintStackAxis || "vertical"),
+                                                nextValue,
+                                                Number(selection.constraintStackGap || 0))
+                                }
+                                onResetRequested: carouselDocument.updateSelectedConstraintStack(
+                                                      String(selection.constraintStackAxis || "vertical"),
+                                                      24,
+                                                      Number(selection.constraintStackGap || 0))
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                visible: Boolean(selection.isConstraintStack)
+                                label: "Item gap"
+                                valueText: Math.round(value) + " px"
+                                from: 0
+                                to: 240
+                                stepSize: 1
+                                value: Number(selection.constraintStackGap || 0)
+                                accent: theme.accentWarm400
+                                onValueDragged: function(nextValue) {
+                                    carouselDocument.updateSelectedConstraintStack(
+                                                String(selection.constraintStackAxis || "vertical"),
+                                                Number(selection.constraintStackPadding || 0),
+                                                nextValue)
+                                }
+                                onResetRequested: carouselDocument.updateSelectedConstraintStack(
+                                                      String(selection.constraintStackAxis || "vertical"),
+                                                      Number(selection.constraintStackPadding || 0),
+                                                      16)
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: Boolean(selection.isConstraintStack)
+                                spacing: 4
+
+                                ActionButton {
+                                    objectName: "carouselReflowConstraintStackButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Reflow now"
+                                    onClicked: carouselDocument.reflowSelectedConstraintStack()
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselDetachConstraintStackButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Detach stack"
+                                    onClicked: carouselDocument.detachSelectedConstraintStack()
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselRepeatedElementControls"
+                            Layout.fillWidth: true
+                            spacing: 4
+                            visible: selection.hasSelection
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: Boolean(root.selectedRepeatedElementLink.linked)
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(root.selectedRepeatedElementLink.name || "Repeated element")
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                StatusChip {
+                                    compact: true
+                                    tone: "success"
+                                    text: Number(root.selectedRepeatedElementLink.instanceCount || 0) + " boards"
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "carouselCreateRepeatedElementLinkButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Link across boards"
+                                iconName: "link"
+                                visible: !Boolean(root.selectedRepeatedElementLink.linked)
+                                enabled: selection.hasUnlockedSelection && carouselDocument.slideCount > 1
+                                disabledReason: "Select unlocked layers in a carousel with at least two boards."
+                                onClicked: root.openRepeatedElementLinkDialog()
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+                                visible: Boolean(root.selectedRepeatedElementLink.linked)
+
+                                ActionButton {
+                                    objectName: "carouselDetachRepeatedElementButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Detach this board"
+                                    enabled: Boolean(root.selectedRepeatedElementLink.canDetach)
+                                    onClicked: carouselDocument.detachSelectedRepeatedElement()
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselUnlinkRepeatedElementButton"
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Unlink all"
+                                    onClicked: carouselDocument.removeRepeatedElementLink(
+                                                   String(root.selectedRepeatedElementLink.linkId || ""))
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: selection.isObjectGroup ? "Grouped " + selection.objectGroupCount : "Group"
+                                enabled: selection.selectedCount > 1 && !selection.isObjectGroup
+                                tooltipText: "Group selected layers (Cmd/Ctrl+G)"
+                                onClicked: carouselDocument.groupSelectedItems()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Ungroup"
+                                enabled: selection.isObjectGroup
+                                tooltipText: "Ungroup selected layers (Cmd/Ctrl+Shift+G)"
+                                onClicked: carouselDocument.ungroupSelectedItems()
+                            }
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 3
@@ -4077,10 +9813,38 @@ Rectangle {
                                 onClicked: carouselDocument.alignSelectionRight()
                             }
 
-                            Rectangle {
-                                Layout.preferredWidth: 1
-                                Layout.preferredHeight: 18
-                                color: theme.alpha(theme.lineSoft, 0.24)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Copy"
+                                enabled: selection.hasSelection
+                                tooltipText: "Copy selected layers (Cmd/Ctrl+C)"
+                                onClicked: carouselDocument.copySelectedItems()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Cut"
+                                enabled: selection.hasSelection
+                                tooltipText: "Cut selected layers (Cmd/Ctrl+X)"
+                                onClicked: carouselDocument.cutSelectedItems()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Paste"
+                                enabled: carouselDocument.canPaste
+                                disabledReason: "Copy or cut a layer first."
+                                tooltipText: "Paste layers onto this board (Cmd/Ctrl+V)"
+                                onClicked: root.openClipboardPasteReview()
                             }
 
                             ActionButton {
@@ -4088,6 +9852,7 @@ Rectangle {
                                 compact: true
                                 text: "Duplicate"
                                 enabled: selection.hasSelection
+                                tooltipText: "Duplicate selected layers (Cmd/Ctrl+D)"
                                 onClicked: carouselDocument.duplicateSelectedItem()
                             }
                         }
@@ -4127,17 +9892,25 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "carouselDistributeHorizontallyButton"
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "Dist H"
+                                showText: false
+                                text: "Distribute horizontally"
+                                iconName: "distribute-horizontal"
+                                tooltipText: "Distribute selected layers horizontally"
                                 enabled: selection.selectedCount > 2 && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.distributeSelectionHorizontally()
                             }
 
                             ActionButton {
+                                objectName: "carouselDistributeVerticallyButton"
                                 Layout.fillWidth: true
                                 compact: true
-                                text: "Dist V"
+                                showText: false
+                                text: "Distribute vertically"
+                                iconName: "distribute-vertical"
+                                tooltipText: "Distribute selected layers vertically"
                                 enabled: selection.selectedCount > 2 && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.distributeSelectionVertically()
                             }
@@ -4214,7 +9987,144 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.isShape && !selection.hasMultipleSelection
+                        visible: root.inspectorPrimarySurface === "board" &&
+                                 (root.activeTool === "brush" || selection.isBrush)
+                        title: selection.isBrush ? "Brush Stroke" : "Brush"
+                        subtitle: root.brushEraser ? "Non-destructive eraser" : "Editable vector strokes"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: [
+                                    { label: "Marker", value: "marker" },
+                                    { label: "Highlight", value: "highlighter" },
+                                    { label: "Glow", value: "glow" }
+                                ]
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    enabled: !root.brushEraser && !(selection.isBrush && selection.brushEraser)
+                                    active: (selection.isBrush ? selection.brushStyle : root.brushStyle) === modelData.value
+                                    onClicked: {
+                                        root.brushStyle = modelData.value
+                                        root.brushEraser = false
+                                        if (selection.isBrush)
+                                            carouselDocument.setSelectedBrushStyle(modelData.value)
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Draw (B)"
+                                active: !root.brushEraser
+                                onClicked: { root.brushEraser = false; root.setActiveTool("brush") }
+                            }
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Erase (E)"
+                                active: root.brushEraser
+                                onClicked: { root.brushEraser = true; root.setActiveTool("brush") }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Size"
+                            valueText: Math.round(selection.isBrush ? selection.brushWidth : root.brushWidth) + " px"
+                            from: 1
+                            to: 320
+                            stepSize: 1
+                            value: selection.isBrush ? selection.brushWidth : root.brushWidth
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                root.brushWidth = value
+                                if (selection.isBrush)
+                                    carouselDocument.setSelectedBrushWidth(value)
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: !selection.isBrush
+                            label: "Opacity"
+                            valueText: Math.round(root.brushOpacity * 100) + "%"
+                            from: 0.05
+                            to: 1
+                            stepSize: 0.01
+                            value: root.brushOpacity
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) { root.brushOpacity = value }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: !selection.isBrush && !root.brushEraser
+                            label: "Smoothing"
+                            valueText: Math.round(root.brushSmoothing * 100) + "%"
+                            from: 0
+                            to: 0.9
+                            stepSize: 0.05
+                            value: root.brushSmoothing
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) { root.brushSmoothing = value }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: !selection.isBrush && root.brushEraser
+                            label: "Hardness"
+                            valueText: Math.round(root.brushHardness * 100) + "%"
+                            from: 0.1
+                            to: 1
+                            stepSize: 0.05
+                            value: root.brushHardness
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) { root.brushHardness = value }
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: !root.brushEraser && !(selection.isBrush && selection.brushEraser)
+                            spacing: 3
+                            Repeater {
+                                model: root.textColorPresets
+                                delegate: ColorSwatchButton {
+                                    required property string modelData
+                                    swatchColor: modelData
+                                    selected: String(selection.isBrush ? selection.brushColor : root.brushColor) === modelData
+                                    accent: theme.accentWarm400
+                                    label: "Brush " + modelData
+                                    onPicked: function(swatchColor) {
+                                        root.brushColor = swatchColor
+                                        if (selection.isBrush)
+                                            carouselDocument.setSelectedBrushColor(swatchColor)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board" &&
+                                 selection.isShape && !selection.hasMultipleSelection
                         title: "Shape"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -4431,7 +10341,8 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: (selection.isImage || selection.isVideo) && !selection.hasMultipleSelection
+                        visible: root.inspectorPrimarySurface === "board" &&
+                                 (selection.isImage || selection.isVideo) && !selection.hasMultipleSelection
                         title: selection.isVideo ? "Video" : "Photo"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -4441,6 +10352,136 @@ Rectangle {
                         titleLetterSpacing: 0
                         expandable: true
                         expanded: true
+
+                        ActionButton {
+                            objectName: "editCarouselLayerPhotoButton"
+                            Layout.fillWidth: true
+                            visible: selection.isImage
+                            compact: true
+                            text: "Edit Photo"
+                            iconName: "edit"
+                            tone: "primary"
+                            tooltipText: "Edit the source photo non-destructively. Position, frame, and mask stay in Carousel."
+                            onClicked: root.editSelectedPhoto()
+                        }
+
+                        Loader {
+                            objectName: "carouselLayerCutoutLoader"
+                            Layout.fillWidth: true
+                            active: selection.isImage
+                            visible: active
+                            sourceComponent: carouselCutoutControls
+                        }
+
+                        Loader {
+                            objectName: "carouselLayerVideoCompositionLoader"
+                            Layout.fillWidth: true
+                            active: selection.isVideo
+                            visible: active
+                            sourceComponent: carouselVideoCompositionControls
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselPhotoFrameComponents"
+                            Layout.fillWidth: true
+                            visible: selection.isImage
+                            spacing: 4
+
+                            Label {
+                                text: "Editable photo frames"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 2
+                                columnSpacing: 4
+                                rowSpacing: 4
+
+                                Repeater {
+                                    model: carouselDocument.photoFramePresets
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: String(modelData.name || "Photo frame")
+                                        tooltipText: String(modelData.description || "Editable grouped composition")
+                                        onClicked: carouselDocument.applyPhotoFramePreset(
+                                                       String(modelData.presetId || ""))
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            objectName: "carouselFocusedCropControls"
+                            Layout.fillWidth: true
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                tone: root.focusedCropMode ? "primary" : "neutral"
+                                text: root.focusedCropMode ? "Done cropping" : "Open focused crop"
+                                onClicked: {
+                                    root.focusedCropMode = !root.focusedCropMode
+                                    if (root.focusedCropMode)
+                                        carouselDocument.setCurrentMediaCropMode("manual")
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+                            visible: root.focusedCropMode
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Previous media"
+                                onClicked: carouselDocument.selectAdjacentMediaItem(-1)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Reset crop"
+                                onClicked: carouselDocument.resetSelectedItemMediaCrop()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Next media"
+                                onClicked: carouselDocument.selectAdjacentMediaItem(1)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+                            visible: root.focusedCropMode
+
+                            Repeater {
+                                model: [
+                                    { label: "Rule of thirds", value: "thirds" },
+                                    { label: "Golden ratio", value: "golden" },
+                                    { label: "Center", value: "center" }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: root.cropRuleOverlay === modelData.value
+                                    onClicked: root.cropRuleOverlay = modelData.value
+                                }
+                            }
+                        }
 
                         RowLayout {
                             Layout.fillWidth: true
@@ -4480,6 +10521,81 @@ Rectangle {
                             }
                         }
 
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Smart focal crop"
+                                active: String(selection.cropMode || "smart") === "smart"
+                                onClicked: carouselDocument.setCurrentMediaCropMode("smart")
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Manual crop"
+                                active: String(selection.cropMode || "smart") === "manual"
+                                onClicked: carouselDocument.setCurrentMediaCropMode("manual")
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: [
+                                    { label: "Use Edit crop", value: "edit" },
+                                    { label: "Use original", value: "original" },
+                                    { label: "Use Carousel crop", value: "carousel" }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: String(selection.cropSource || "edit") === modelData.value
+                                    onClicked: carouselDocument.setCurrentMediaCropSource(modelData.value)
+                                }
+                            }
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Focal X"
+                                valueText: Math.round(Number(selection.focalX || 0.5) * 100) + "%"
+                                from: 0
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.focalX
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setCurrentMediaFocalPoint(value, selection.focalY)
+                                }
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Focal Y"
+                                valueText: Math.round(Number(selection.focalY || 0.5) * 100) + "%"
+                                from: 0
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.focalY
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setCurrentMediaFocalPoint(selection.focalX, value)
+                                }
+                            }
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Crop"
@@ -4495,9 +10611,11 @@ Rectangle {
                             onResetRequested: carouselDocument.resetSelectedItemMediaCrop()
                         }
 
-                        RowLayout {
+                        GridLayout {
                             Layout.fillWidth: true
-                            spacing: 4
+                            columns: theme.interfaceScale > 1.2 ? 1 : 2
+                            rowSpacing: 4
+                            columnSpacing: 4
 
                             InspectorSlider {
                                 Layout.fillWidth: true
@@ -4558,7 +10676,8 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.isText && !selection.hasMultipleSelection
+                        visible: root.inspectorPrimarySurface === "board" &&
+                                 selection.isText && !selection.hasMultipleSelection
                         title: "Text"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -4592,11 +10711,664 @@ Rectangle {
                             }
                         }
 
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textRoleButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    text: modelData.label
+                                    active: selection.textRole === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextRole(modelData.value)
+                                }
+                            }
+                        }
+
                         Binding {
                             target: textEditor
                             property: "text"
                             value: selection.text
                             when: selection.isText && !textEditor.activeFocus
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselRichTextSpanControls"
+                            Layout.fillWidth: true
+                            spacing: 5
+                            readonly property bool hasRange: textEditor.selectionStart !==
+                                                                     textEditor.selectionEnd
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Span formatting"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideNone
+                                }
+
+                                StatusChip {
+                                    compact: true
+                                    tone: parent.parent.hasRange ? "accent" : "neutral"
+                                    text: parent.parent.hasRange
+                                          ? Math.abs(textEditor.selectionEnd - textEditor.selectionStart) + " selected"
+                                          : Number((selection.textSpans || []).length) + " styled runs"
+                                }
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "Emphasis", attributes: { emphasis: true } },
+                                        { label: "No emphasis", attributes: { emphasis: false } },
+                                        { label: "Italic", attributes: { italic: true } },
+                                        { label: "Roman", attributes: { italic: false } },
+                                        { label: "Superscript", attributes: { superscript: true } },
+                                        { label: "Baseline", attributes: { superscript: false } }
+                                    ]
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        compact: true
+                                        text: modelData.label
+                                        enabled: parent.parent.hasRange
+                                        disabledReason: "Select a text range."
+                                        onClicked: root.applyRichTextSpan(modelData.attributes)
+                                    }
+                                }
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "Regular", value: "normal" },
+                                        { label: "Semibold", value: "demibold" },
+                                        { label: "Bold", value: "bold" },
+                                        { label: "Black", value: "black" }
+                                    ]
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        compact: true
+                                        text: modelData.label
+                                        enabled: parent.parent.hasRange
+                                        disabledReason: "Select a text range."
+                                        onClicked: root.applyRichTextSpan({ weight: modelData.value })
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                ToneTextField {
+                                    objectName: "carouselRichTextColorField"
+                                    Layout.fillWidth: true
+                                    placeholderText: "Span color"
+                                    text: root.richTextColorDraft
+                                    onTextEdited: root.richTextColorDraft = text
+                                    onAccepted: root.applyRichTextSpan({ color: text })
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Apply color"
+                                    enabled: parent.parent.hasRange
+                                    disabledReason: "Select a text range."
+                                    onClicked: root.applyRichTextSpan({ color: root.richTextColorDraft })
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Inherit color"
+                                    enabled: parent.parent.hasRange
+                                    disabledReason: "Select a text range."
+                                    onClicked: root.applyRichTextSpan({ color: "" })
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                ToneTextField {
+                                    objectName: "carouselRichTextLinkField"
+                                    Layout.fillWidth: true
+                                    placeholderText: "https://example.com"
+                                    text: root.richTextLinkDraft
+                                    onTextEdited: root.richTextLinkDraft = text
+                                    onAccepted: root.applyRichTextSpan({ link: text })
+                                }
+
+                                ActionButton {
+                                    objectName: "carouselApplyRichTextLinkButton"
+                                    compact: true
+                                    text: "Apply link"
+                                    enabled: parent.parent.hasRange && root.richTextLinkDraft.trim().length > 0
+                                    disabledReason: parent.parent.hasRange
+                                                    ? "Enter a link."
+                                                    : "Select a text range."
+                                    onClicked: root.applyRichTextSpan({ link: root.richTextLinkDraft })
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Remove link"
+                                    enabled: parent.parent.hasRange
+                                    disabledReason: "Select a text range."
+                                    onClicked: root.applyRichTextSpan({ link: "" })
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "carouselClearRichTextSpanButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Clear selected span formatting"
+                                enabled: parent.hasRange
+                                disabledReason: "Select a text range."
+                                onClicked: root.clearRichTextSpan()
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselDocumentVariables"
+                            readonly property string documentVariablesContract: "carousel-document-variables:v1|keys:title,client,campaign,date,url,handle,board_number,total_boards|raw-tokens:true|resolved-layout:true|resolved-preview:true|board-aware:true|snippets:true|detach-to-text:true|undo:true|persistence:true"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Document copy"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                }
+
+                                StatusChip {
+                                    compact: true
+                                    tone: String(selection.text || "") === String(selection.resolvedText || "")
+                                          ? "neutral" : "success"
+                                    text: String(selection.text || "") === String(selection.resolvedText || "")
+                                          ? "Plain text" : "Variables resolved"
+                                }
+                            }
+
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 2
+                                columnSpacing: 5
+                                rowSpacing: 4
+
+                                Repeater {
+                                    model: [
+                                        { key: "title", label: "Title" },
+                                        { key: "client", label: "Client" },
+                                        { key: "campaign", label: "Campaign" },
+                                        { key: "date", label: "Date" },
+                                        { key: "url", label: "URL" },
+                                        { key: "handle", label: "Handle" }
+                                    ]
+
+                                    delegate: ColumnLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 2
+
+                                        Label {
+                                            text: modelData.label
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 9
+                                        }
+
+                                        TextField {
+                                            id: documentVariableField
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 25
+                                            placeholderText: "Set " + modelData.label.toLowerCase()
+                                            selectByMouse: true
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            background: Rectangle {
+                                                radius: 4
+                                                color: theme.alpha(theme.ink850, 0.9)
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                                            }
+                                            onEditingFinished: carouselDocument.setDocumentVariable(
+                                                                   modelData.key, text)
+
+                                            Binding {
+                                                target: documentVariableField
+                                                property: "text"
+                                                value: String(carouselDocument.documentVariables[modelData.key] || "")
+                                                when: !documentVariableField.activeFocus
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Label {
+                                text: "Insert variable"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: carouselDocument.documentVariableKeys
+
+                                    delegate: ActionButton {
+                                        required property string modelData
+                                        compact: true
+                                        text: "{{" + modelData + "}}"
+                                        onClicked: {
+                                            textEditor.focus = false
+                                            carouselDocument.insertDocumentVariable(
+                                                        modelData, textEditor.cursorPosition)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: resolvedCopyColumn.implicitHeight + 14
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink850, 0.82)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.45)
+
+                                ColumnLayout {
+                                    id: resolvedCopyColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 7
+                                    spacing: 3
+
+                                    Label {
+                                        text: "Resolved on board " + Number(selection.slideNumber || 1)
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(selection.resolvedText || "")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    ActionButton {
+                                        Layout.alignment: Qt.AlignRight
+                                        compact: true
+                                        text: "Detach variables to text"
+                                        enabled: String(selection.text || "") !== String(selection.resolvedText || "")
+                                        onClicked: carouselDocument.detachSelectedTextVariables()
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                TextField {
+                                    id: copySnippetNameField
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 25
+                                    placeholderText: "Snippet name"
+                                    selectByMouse: true
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Save snippet"
+                                    enabled: copySnippetNameField.text.trim().length > 0 &&
+                                             String(selection.text || "").length > 0
+                                    onClicked: {
+                                        if (carouselDocument.saveSelectedTextAsSnippet(
+                                                    copySnippetNameField.text))
+                                            copySnippetNameField.clear()
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+                                visible: carouselDocument.copySnippets.length > 0
+
+                                Repeater {
+                                    model: carouselDocument.copySnippets
+
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        spacing: 3
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: String(modelData.name || "Copy snippet")
+                                            onClicked: {
+                                                textEditor.focus = false
+                                                carouselDocument.insertCopySnippet(
+                                                            String(modelData.snippetId || ""),
+                                                            textEditor.cursorPosition)
+                                            }
+                                        }
+
+                                        ActionButton {
+                                            compact: true
+                                            text: "Delete"
+                                            tone: "danger"
+                                            onClicked: carouselDocument.deleteCopySnippet(
+                                                           String(modelData.snippetId || ""))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselListsAndNumbering"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Label {
+                                text: "Lists and automatic numbers"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: [
+                                        { label: "Plain", value: "none" },
+                                        { label: "Bullets", value: "bullets" },
+                                        { label: "Numbered", value: "numbering" }
+                                    ]
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: modelData.label
+                                        active: selection.textListStyle === modelData.value
+                                        enabled: selection.textAutoNumberSource === "none"
+                                        onClicked: carouselDocument.setSelectedTextListStyle(modelData.value)
+                                    }
+                                }
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Hanging indent"
+                                valueText: Math.round(Number(selection.textHangingIndent || 0)) + " px"
+                                from: 0
+                                to: 240
+                                stepSize: 2
+                                value: Number(selection.textHangingIndent || 0)
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedTextHangingIndent(value)
+                                }
+                                onResetRequested: carouselDocument.setSelectedTextHangingIndent(0)
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Label {
+                                    text: "Number field"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                }
+
+                                Repeater {
+                                    model: [
+                                        { label: "Manual", value: "none" },
+                                        { label: "Board order", value: "board" },
+                                        { label: "Step order", value: "step" }
+                                    ]
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: modelData.label
+                                        active: selection.textAutoNumberSource === modelData.value
+                                        onClicked: carouselDocument.setSelectedTextAutoNumberSource(modelData.value)
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: selection.textAutoNumberSource !== "none"
+                                text: "Visible value: " + String(selection.resolvedText || "") +
+                                      " · updates when boards are reordered"
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        ColumnLayout {
+                            objectName: "carouselNamedTextStyles"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Label {
+                                    text: "Named text styles"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    Layout.fillWidth: true
+                                }
+
+                                StatusChip {
+                                    text: carouselDocument.textStyles.length + " styles"
+                                    tone: "neutral"
+                                    compact: true
+                                }
+                            }
+
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Repeater {
+                                    model: carouselDocument.textStyles
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        text: String(modelData.name || "Text style")
+                                        compact: true
+                                        active: selection.textStyleId === String(modelData.styleId || "")
+                                        onClicked: carouselDocument.previewTextStyleApplication(
+                                                       String(modelData.styleId || ""), "selected")
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Update style · selected boards"
+                                    enabled: String(selection.textStyleId || "").length > 0
+                                    onClicked: carouselDocument.previewTextStyleUpdate(
+                                                   String(selection.textStyleId || ""), "selected")
+                                }
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Update style · all boards"
+                                    enabled: String(selection.textStyleId || "").length > 0
+                                    onClicked: carouselDocument.previewTextStyleUpdate(
+                                                   String(selection.textStyleId || ""), "all")
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                TextField {
+                                    id: newTextStyleNameField
+                                    Layout.fillWidth: true
+                                    placeholderText: "New style name"
+                                    selectByMouse: true
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "Save current style"
+                                    enabled: newTextStyleNameField.text.trim().length > 0
+                                    onClicked: {
+                                        if (carouselDocument.createTextStyleFromSelection(
+                                                    newTextStyleNameField.text))
+                                            newTextStyleNameField.clear()
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: textStylePreviewColumn.implicitHeight + 14
+                                visible: Boolean(carouselDocument.textStylePreview.available)
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink850, 0.82)
+                                border.width: 1
+                                border.color: theme.alpha(theme.accentCool400, 0.55)
+
+                                ColumnLayout {
+                                    id: textStylePreviewColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 7
+                                    spacing: 5
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Preview · " + String(carouselDocument.textStylePreview.styleName || "") +
+                                              " · " + Number(carouselDocument.textStylePreview.affectedLayerCount || 0) +
+                                              " layer" + (Number(carouselDocument.textStylePreview.affectedLayerCount || 0) === 1 ? "" : "s") +
+                                              " on boards " + (carouselDocument.textStylePreview.affectedBoardNumbers || []).join(", ")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String((carouselDocument.textStylePreview.style || {}).fontFamily || "") + " · " +
+                                              Math.round(Number((carouselDocument.textStylePreview.style || {}).pointSize || 0)) + " pt · " +
+                                              String((carouselDocument.textStylePreview.style || {}).fontWeight || "") + " · " +
+                                              String((carouselDocument.textStylePreview.style || {}).color || "")
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 4
+
+                                        Item { Layout.fillWidth: true }
+
+                                        ActionButton {
+                                            compact: true
+                                            text: "Cancel preview"
+                                            onClicked: carouselDocument.clearTextStylePreview()
+                                        }
+
+                                        ActionButton {
+                                            compact: true
+                                            tone: "primary"
+                                            text: "Apply style"
+                                            onClicked: carouselDocument.applyTextStylePreview()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            ActionButton {
+                                objectName: "carouselOpenCopyProofButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Proof copy"
+                                iconName: "check"
+                                tone: carouselDocument.copyProofIssues.length > 0 ? "primary" : "neutral"
+                                onClicked: carouselCopyProofDialog.open()
+                            }
+
+                            StatusChip {
+                                text: carouselDocument.copyProofIssues.length > 0
+                                      ? carouselDocument.copyProofIssues.length + " issue" +
+                                        (carouselDocument.copyProofIssues.length === 1 ? "" : "s")
+                                      : "Copy clear"
+                                tone: carouselDocument.copyProofIssues.length > 0 ? "warning" : "success"
+                                compact: true
+                                detailText: "Proofing never rewrites authored text."
+                            }
                         }
 
                         Flow {
@@ -4645,6 +11417,78 @@ Rectangle {
                             when: selection.isText && !textColorField.activeFocus
                         }
 
+                        Rectangle {
+                            objectName: "carouselLiveContrastCard"
+                            Layout.fillWidth: true
+                            implicitHeight: liveContrastContent.implicitHeight + 18
+                            radius: 8
+                            color: String(root.selectedTextContrast.status || "uncertain") === "pass"
+                                   ? theme.alpha(theme.success, 0.08)
+                                   : String(root.selectedTextContrast.status || "uncertain") === "fail"
+                                     ? theme.alpha(theme.error, 0.09)
+                                     : theme.alpha(theme.warning, 0.09)
+                            border.width: 1
+                            border.color: String(root.selectedTextContrast.status || "uncertain") === "pass"
+                                          ? theme.alpha(theme.success, 0.38)
+                                          : String(root.selectedTextContrast.status || "uncertain") === "fail"
+                                            ? theme.alpha(theme.error, 0.42)
+                                            : theme.alpha(theme.warning, 0.42)
+
+                            ColumnLayout {
+                                id: liveContrastContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 9
+                                spacing: 4
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Live contrast"
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.Bold
+                                    }
+                                    StatusChip {
+                                        compact: true
+                                        tone: String(root.selectedTextContrast.status || "uncertain") === "pass"
+                                              ? "success"
+                                              : String(root.selectedTextContrast.status || "uncertain") === "fail"
+                                                ? "error" : "warning"
+                                        text: Number(root.selectedTextContrast.minimumRatio || 0).toFixed(2) + ":1 / " +
+                                              Number(root.selectedTextContrast.threshold || 4.5).toFixed(1) + ":1"
+                                        detailText: "Minimum measured ratio and the WCAG-style size threshold."
+                                    }
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(root.selectedTextContrast.backgroundType || "unknown") + " · " +
+                                          Number(root.selectedTextContrast.sampleCount || 0) + " sample" +
+                                          (Number(root.selectedTextContrast.sampleCount || 0) === 1 ? "" : "s") + " · " +
+                                          "text opacity " + Math.round(Number(root.selectedTextContrast.textOpacity || 0) * 100) + "% · " +
+                                          "box " + Math.round(Number(root.selectedTextContrast.backgroundTreatmentOpacity || 0) * 100) + "% · " +
+                                          "stroke " + Number(root.selectedTextContrast.strokeWidth || 0).toFixed(1) + " px"
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: Boolean(root.selectedTextContrast.uncertain)
+                                    text: (root.selectedTextContrast.uncertaintyReasons || []).join(" ")
+                                    color: theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Box"
@@ -4658,6 +11502,37 @@ Rectangle {
                                 carouselDocument.setSelectedTextBackgroundOpacity(value)
                             }
                             onResetRequested: carouselDocument.setSelectedTextBackgroundOpacity(0)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Padding"
+                                valueText: Math.round(selection.textPadding) + " px"
+                                from: 0
+                                to: 160
+                                stepSize: 1
+                                value: selection.textPadding
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) { carouselDocument.setSelectedTextPadding(value) }
+                                onResetRequested: carouselDocument.setSelectedTextPadding(0)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Radius"
+                                valueText: Math.round(selection.textBackgroundRadius) + " px"
+                                from: 0
+                                to: 160
+                                stepSize: 1
+                                value: selection.textBackgroundRadius
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) { carouselDocument.setSelectedTextBackgroundRadius(value) }
+                                onResetRequested: carouselDocument.setSelectedTextBackgroundRadius(0)
+                            }
                         }
 
                         Flow {
@@ -4711,6 +11586,91 @@ Rectangle {
                             }
                         }
 
+                        ColumnLayout {
+                            objectName: "carouselTextFittingControls"
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Label {
+                                text: "Text fitting"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                Repeater {
+                                    model: [
+                                        { label: "Content height", value: "content" },
+                                        { label: "Auto size", value: "auto" },
+                                        { label: "Fixed + warn", value: "fixed" }
+                                    ]
+
+                                    delegate: FilterChip {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: modelData.label
+                                        active: selection.textFitMode === modelData.value
+                                        onClicked: carouselDocument.setSelectedTextFitSettings(
+                                                       modelData.value,
+                                                       selection.textFitMinPointSize,
+                                                       selection.textFitMaxPointSize)
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+                                visible: selection.textFitMode === "auto"
+
+                                InspectorSlider {
+                                    Layout.fillWidth: true
+                                    label: "Minimum"
+                                    valueText: Math.round(selection.textFitMinPointSize) + " pt"
+                                    from: 12
+                                    to: Math.max(12, selection.textFitMaxPointSize)
+                                    stepSize: 1
+                                    value: selection.textFitMinPointSize
+                                    accent: theme.warning
+                                    onValueDragged: function(value) {
+                                        carouselDocument.setSelectedTextFitSettings(
+                                                    "auto", value,
+                                                    Math.max(value, selection.textFitMaxPointSize))
+                                    }
+                                }
+
+                                InspectorSlider {
+                                    Layout.fillWidth: true
+                                    label: "Maximum"
+                                    valueText: Math.round(selection.textFitMaxPointSize) + " pt"
+                                    from: Math.max(12, selection.textFitMinPointSize)
+                                    to: 240
+                                    stepSize: 1
+                                    value: selection.textFitMaxPointSize
+                                    accent: theme.success
+                                    onValueDragged: function(value) {
+                                        carouselDocument.setSelectedTextFitSettings(
+                                                    "auto", selection.textFitMinPointSize, value)
+                                    }
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: String(selection.textFitState || "")
+                                color: selection.textVerticalOverflow ? theme.warning : theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 3
@@ -4728,6 +11688,36 @@ Rectangle {
                             }
                         }
 
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            ActionButton {
+                                objectName: "carouselOpenFontBrowserButton"
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Browse installed fonts"
+                                iconName: "search"
+                                tone: "primary"
+                                onClicked: {
+                                    root.fontBrowserSearchText = ""
+                                    root.fontBrowserSection = "all"
+                                    carouselFontBrowserDialog.open()
+                                }
+                            }
+
+                            StatusChip {
+                                text: selection.textFontAvailable
+                                      ? String(selection.resolvedTextFontFamily || selection.textFontFamily)
+                                      : "Missing: " + String(selection.resolvedTextFontFamily || selection.textFontFamily)
+                                tone: selection.textFontAvailable ? "neutral" : "error"
+                                compact: true
+                                detailText: selection.textFontAvailable
+                                            ? "Current installed face"
+                                            : "Choose a fallback to preview; Looksy never substitutes silently."
+                            }
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Tracking"
@@ -4741,6 +11731,79 @@ Rectangle {
                                 carouselDocument.setSelectedTextLetterSpacing(value)
                             }
                             onResetRequested: carouselDocument.setSelectedTextLetterSpacing(0)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Line height"
+                                valueText: Number(selection.textLineHeight || 1.2).toFixed(2) + "×"
+                                from: 0.7
+                                to: 3.0
+                                stepSize: 0.05
+                                value: Number(selection.textLineHeight || 1.2)
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) { carouselDocument.setSelectedTextLineHeight(value) }
+                                onResetRequested: carouselDocument.setSelectedTextLineHeight(1.2)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Paragraph"
+                                valueText: Math.round(Number(selection.textParagraphSpacing || 0)) + " px"
+                                from: 0
+                                to: 160
+                                stepSize: 2
+                                value: Number(selection.textParagraphSpacing || 0)
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) { carouselDocument.setSelectedTextParagraphSpacing(value) }
+                                onResetRequested: carouselDocument.setSelectedTextParagraphSpacing(0)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Text inset"
+                                valueText: Math.round(Number(selection.textInset || 0)) + " px"
+                                from: 0
+                                to: 160
+                                stepSize: 2
+                                value: Number(selection.textInset || 0)
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) { carouselDocument.setSelectedTextInset(value) }
+                                onResetRequested: carouselDocument.setSelectedTextInset(0)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Maximum lines"
+                                valueText: Number(selection.textMaximumLineCount || 0) === 0
+                                           ? "Unlimited"
+                                           : Math.round(Number(selection.textMaximumLineCount)).toString()
+                                from: 0
+                                to: 20
+                                stepSize: 1
+                                value: Number(selection.textMaximumLineCount || 0)
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedTextMaximumLineCount(Math.round(value))
+                                }
+                                onResetRequested: carouselDocument.setSelectedTextMaximumLineCount(0)
+                            }
+                        }
+
+                        StatusChip {
+                            Layout.fillWidth: true
+                            visible: Boolean(selection.textVerticalOverflow)
+                            text: "Text exceeds this frame or its maximum line count"
+                            tone: "warning"
                         }
 
                         InspectorSlider {
@@ -4804,6 +11867,42 @@ Rectangle {
                                 active: selection.textItalic
                                 onClicked: carouselDocument.setSelectedTextItalic(!selection.textItalic)
                             }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Underline"
+                                active: selection.textUnderline
+                                onClicked: carouselDocument.setSelectedTextUnderline(!selection.textUnderline)
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Strike"
+                                active: selection.textStrikethrough
+                                onClicked: carouselDocument.setSelectedTextStrikethrough(!selection.textStrikethrough)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: [
+                                    { label: "Normal", value: "none" },
+                                    { label: "UPPER", value: "uppercase" },
+                                    { label: "lower", value: "lowercase" },
+                                    { label: "Title", value: "title" }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.textCase === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextCase(modelData.value)
+                                }
+                            }
                         }
 
                         RowLayout {
@@ -4839,6 +11938,8257 @@ Rectangle {
                                 }
                             }
                         }
+                    }
+
+                    InspectorSection {
+                        id: carouselPreflightPanel
+                        objectName: "carouselPreflightPanel"
+                        readonly property string preflightContract: "carousel-preflight:v2|required-slots:true|missing-media:true|hidden-off-canvas:true|text-overflow:true|unsafe-seams:true|contrast:true|video-composition:true|fonts:true|duplicate-names:true|previous-next:true|board-counts:true|severity-filters:true|ignore-with-reason:true|live-revalidation:true|no-elide:true"
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board"
+                        title: "Preflight"
+                        showAccentMarker: carouselDocument.preflightBlockingCount > 0
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: carouselDocument.preflightBlockingCount > 0
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            StatusChip {
+                                text: carouselDocument.preflightBlockingCount > 0
+                                      ? carouselDocument.preflightBlockingCount + " blocking"
+                                      : "Ready"
+                                tone: carouselDocument.preflightBlockingCount > 0 ? "error" : "success"
+                                compact: true
+                                detailText: carouselDocument.preflightBlockingCount > 0
+                                            ? "Resolve blocking issues before export."
+                                            : "No blocking export issues."
+                            }
+
+                            StatusChip {
+                                visible: carouselDocument.preflightWarningCount > 0
+                                text: carouselDocument.preflightWarningCount + " check" +
+                                      (carouselDocument.preflightWarningCount === 1 ? "" : "s")
+                                tone: "warning"
+                                compact: true
+                                detailText: "Review non-blocking output risks."
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                compact: true
+                                text: "Previous"
+                                enabled: Boolean(carouselDocument.preflightIssueState.hasPrevious)
+                                onClicked: carouselDocument.navigatePreflightIssue(-1)
+                            }
+
+                            ActionButton {
+                                compact: true
+                                text: "Next"
+                                enabled: Boolean(carouselDocument.preflightIssueState.hasNext)
+                                onClicked: carouselDocument.navigatePreflightIssue(1)
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignRight
+                                text: Number(carouselDocument.preflightIssueState.currentIndex || 0) + 1 + " / " +
+                                      Number(carouselDocument.preflightIssueState.totalCount || 0)
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: [
+                                    { label: "All", value: "all" },
+                                    { label: "Blocking", value: "error" },
+                                    { label: "Warnings", value: "warning" }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: String(carouselDocument.preflightIssueState.severityFilter || "all") === modelData.value
+                                    onClicked: carouselDocument.setPreflightSeverityFilter(modelData.value)
+                                }
+                            }
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: carouselDocument.preflightIssueState.boardCounts || []
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    visible: Number(modelData.totalCount || 0) > 0
+                                    text: "Board " + Number(modelData.boardNumber || 0) + " · " + Number(modelData.totalCount || 0)
+                                    active: Number(modelData.boardIndex || 0) === carouselDocument.currentIndex
+                                    onClicked: carouselDocument.focusPreflightIssue(Number(modelData.boardIndex || 0), "")
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: Number(carouselDocument.preflightIssueState.totalCount || 0) === 0
+                            text: "All boards satisfy the current export constraints."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        Repeater {
+                            model: carouselDocument.preflightIssueState.issues || []
+
+                            delegate: ExportPreflightIssueRow {
+                                required property var modelData
+                                issue: modelData
+                                currentIssue: String(modelData.issueId || "") ===
+                                              String(carouselDocument.preflightIssueState.currentIssueId || "")
+                                showTextResolutionActions: modelData.code === "text-overflow" ||
+                                                           modelData.code === "text-too-small"
+                                onInspectRequested: carouselDocument.resolveTextPreflightIssue(
+                                                        String(modelData.itemId || ""),
+                                                        String(modelData.code || ""),
+                                                        "inspect")
+                                onResizeFrameRequested: carouselDocument.resolveTextPreflightIssue(
+                                                            String(modelData.itemId || ""),
+                                                            String(modelData.code || ""),
+                                                            "resize-frame")
+                                onFitTextRequested: carouselDocument.resolveTextPreflightIssue(
+                                                       String(modelData.itemId || ""),
+                                                       String(modelData.code || ""),
+                                                       "fit-text")
+                                onIgnoreRequested: root.openPreflightIgnore(modelData)
+
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                TapHandler {
+                                    onTapped: carouselDocument.focusPreflightIssueById(String(modelData.issueId || ""))
+                                }
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        objectName: "carouselPreviewDiagnostics"
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board"
+                        title: "Preview performance"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: false
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Revision " + Number(carouselDocument.previewDiagnostics.revision || 0) +
+                                  " · " + String(carouselDocument.previewDiagnostics.reason || "none") +
+                                  " · " + Number(carouselDocument.previewDiagnostics.boardsRendered || 0) +
+                                  " board(s)"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Decode " + Number(carouselDocument.previewDiagnostics.decodeMs || 0).toFixed(2) +
+                                  " ms · Layout " + Number(carouselDocument.previewDiagnostics.layoutMs || 0).toFixed(2) +
+                                  " ms · Render " + Number(carouselDocument.previewDiagnostics.renderMs || 0).toFixed(2) +
+                                  " ms · Publish " + Number(carouselDocument.previewDiagnostics.publishMs || 0).toFixed(2) + " ms"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Cache " + Number(carouselDocument.previewDiagnostics.cacheEntries || 0) +
+                                  " entries · " +
+                                  (Number(carouselDocument.previewDiagnostics.cacheBytes || 0) / 1048576).toFixed(1) +
+                                  " / " +
+                                  (Number(carouselDocument.previewDiagnostics.cacheBudgetBytes || 1) / 1048576).toFixed(0) +
+                                  " MB · stale requests dropped " +
+                                  Number(carouselDocument.previewDiagnostics.staleRequestsDropped || 0)
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+                    }
+                }
+            }
+        }
+    }
+
+    Drawer {
+        id: carouselCompactInspectorDrawer
+        objectName: "carouselCompactInspectorDrawer"
+        readonly property string presentationContract: "carousel-compact-inspector:v1|edge:right|modal:true|width:280-360|same-inspector-instance:true|editing-context-preserved:true|focus-restored:true|no-overlap-with-layout:true"
+        parent: Overlay.overlay
+        edge: Qt.RightEdge
+        modal: true
+        interactive: root.compactWorkspace
+        enabled: root.compactWorkspace && carouselDocument.hasActiveCarousel
+        width: Math.min(360, Math.max(280, root.width - 56))
+        height: root.height
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onEnabledChanged: {
+            if (!enabled)
+                close()
+        }
+        onClosed: carouselCompactInspectorButton.forceActiveFocus()
+
+        background: Rectangle {
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.55)
+        }
+
+        contentItem: Item {
+            id: carouselCompactInspectorHost
+            anchors.fill: parent
+        }
+    }
+
+    Dialog {
+        id: carouselVariantComparisonDialog
+        objectName: "carouselVariantComparisonDialog"
+        readonly property var comparison: carouselDocument.variantComparisonState || ({})
+        readonly property var leftSources: comparison.leftPreviewSources || []
+        readonly property var rightSources: comparison.rightPreviewSources || []
+        readonly property int boardIndex: Number(comparison.boardIndex || 0)
+        readonly property int sharedBoardCount: Math.min(Number(comparison.leftBoardCount || 0),
+                                                         Number(comparison.rightBoardCount || 0))
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(940, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: carouselDocument.refreshVariantComparison()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Compare design variants"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: carouselVariantComparisonDialog.comparison.different
+                              ? "The variants differ. Review each board before choosing which state to keep."
+                              : "The rendered variants currently match."
+                        color: carouselVariantComparisonDialog.comparison.different
+                               ? theme.accentWarm300 : theme.success
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                StatusChip {
+                    compact: true
+                    tone: carouselVariantComparisonDialog.comparison.different ? "warning" : "success"
+                    text: carouselVariantComparisonDialog.comparison.different ? "Different" : "Matching"
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 8
+
+                Label {
+                    Layout.fillWidth: true
+                    text: String(carouselVariantComparisonDialog.comparison.leftName || "Left variant")
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    elide: Text.ElideNone
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: String(carouselVariantComparisonDialog.comparison.rightName || "Current variant")
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    elide: Text.ElideNone
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 300
+                    radius: theme.radius8
+                    color: theme.ink950
+                    border.width: 1
+                    border.color: theme.lineSoft
+
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        source: carouselVariantComparisonDialog.boardIndex <
+                                carouselVariantComparisonDialog.leftSources.length
+                                ? carouselVariantComparisonDialog.leftSources[
+                                      carouselVariantComparisonDialog.boardIndex] : ""
+                        cache: false
+                        asynchronous: true
+                        fillMode: Image.PreserveAspectFit
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 300
+                    radius: theme.radius8
+                    color: theme.ink950
+                    border.width: 1
+                    border.color: carouselVariantComparisonDialog.comparison.different
+                                  ? theme.accentWarm400 : theme.lineSoft
+
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        source: carouselVariantComparisonDialog.boardIndex <
+                                carouselVariantComparisonDialog.rightSources.length
+                                ? carouselVariantComparisonDialog.rightSources[
+                                      carouselVariantComparisonDialog.boardIndex] : ""
+                        cache: false
+                        asynchronous: true
+                        fillMode: Image.PreserveAspectFit
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    compact: true
+                    text: "Previous board"
+                    enabled: carouselVariantComparisonDialog.boardIndex > 0
+                    disabledReason: "Already on the first shared board."
+                    onClicked: carouselDocument.setVariantComparisonBoardIndex(
+                                   carouselVariantComparisonDialog.boardIndex - 1)
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Board " + (carouselVariantComparisonDialog.boardIndex + 1) + " of " +
+                          carouselVariantComparisonDialog.sharedBoardCount
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideNone
+                }
+
+                ActionButton {
+                    compact: true
+                    text: "Next board"
+                    enabled: carouselVariantComparisonDialog.boardIndex + 1 <
+                             carouselVariantComparisonDialog.sharedBoardCount
+                    disabledReason: "Already on the last shared board."
+                    onClicked: carouselDocument.setVariantComparisonBoardIndex(
+                                   carouselVariantComparisonDialog.boardIndex + 1)
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: Number(carouselVariantComparisonDialog.comparison.leftBoardCount || 0) !==
+                         Number(carouselVariantComparisonDialog.comparison.rightBoardCount || 0)
+                text: "Board counts differ. Navigation covers the boards shared by both variants; the chosen document version keeps its complete board set."
+                color: theme.accentWarm300
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Keep left"
+                    onClicked: {
+                        if (carouselDocument.resolveVariantComparison("keep-left"))
+                            carouselVariantComparisonDialog.close()
+                    }
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Keep right"
+                    onClicked: {
+                        if (carouselDocument.resolveVariantComparison("keep-right"))
+                            carouselVariantComparisonDialog.close()
+                    }
+                }
+
+                ActionButton {
+                    objectName: "carouselKeepBothVariantsButton"
+                    Layout.fillWidth: true
+                    tone: "primary"
+                    text: "Keep both as versions"
+                    onClicked: {
+                        if (carouselDocument.resolveVariantComparison("keep-both"))
+                            carouselVariantComparisonDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselLayoutRecipeDialog
+        objectName: "carouselLayoutRecipeDialog"
+        readonly property var preview: carouselDocument.layoutRecipePreview || ({})
+        readonly property var beforeBoard: preview.beforeBoard || ({})
+        readonly property var afterBoard: preview.afterBoard || ({})
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(620, root.width - 48)
+        height: Math.min(470, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearLayoutRecipePreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                text: "Apply layout recipe"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 20
+                font.weight: Font.Bold
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: String(carouselLayoutRecipeDialog.preview.name || "Layout") +
+                      " → board " + Number(carouselLayoutRecipeDialog.preview.boardNumber || 1)
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                elide: Text.ElideNone
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 8
+                rowSpacing: 8
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: beforeLayoutColumn.implicitHeight + 20
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink950, 0.55)
+                    ColumnLayout {
+                        id: beforeLayoutColumn
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        Label { text: "Before"; color: theme.textMuted; font.family: theme.fontUi; font.weight: Font.DemiBold }
+                        Label {
+                            Layout.fillWidth: true
+                            text: Number(carouselLayoutRecipeDialog.beforeBoard.columns || 4) + " × " +
+                                  Number(carouselLayoutRecipeDialog.beforeBoard.rows || 4) +
+                                  " · margins " + Number(carouselLayoutRecipeDialog.beforeBoard.marginX || 0) +
+                                  "/" + Number(carouselLayoutRecipeDialog.beforeBoard.marginY || 0) + " px"
+                            color: theme.textMain
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: afterLayoutColumn.implicitHeight + 20
+                    radius: theme.radius8
+                    color: theme.alpha(theme.accentCool400, 0.08)
+                    border.width: 1
+                    border.color: theme.alpha(theme.accentCool400, 0.35)
+                    ColumnLayout {
+                        id: afterLayoutColumn
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        Label { text: "Result"; color: theme.accentCool300; font.family: theme.fontUi; font.weight: Font.DemiBold }
+                        Label {
+                            Layout.fillWidth: true
+                            text: Number(carouselLayoutRecipeDialog.afterBoard.columns || 4) + " × " +
+                                  Number(carouselLayoutRecipeDialog.afterBoard.rows || 4) +
+                                  " · margins " + Number(carouselLayoutRecipeDialog.afterBoard.marginX || 0) +
+                                  "/" + Number(carouselLayoutRecipeDialog.afterBoard.marginY || 0) + " px"
+                            color: theme.textStrong
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                StatusChip { compact: true; tone: "accent"; text: Number(carouselLayoutRecipeDialog.preview.guideCount || 0) + " guides" }
+                StatusChip { compact: true; tone: "success"; text: "0 style changes" }
+                StatusChip { compact: true; tone: "success"; text: "0 content changes" }
+                Item { Layout.fillWidth: true }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Applies grid, margins, gutters, repeated spacing, snapping, guides, safe areas, and bleed as one undoable layout change. Exported visual pixels stay unchanged."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            Item { Layout.fillHeight: true }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselLayoutRecipeDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplyLayoutRecipeButton"
+                    Layout.fillWidth: true
+                    tone: "primary"
+                    text: "Apply layout only"
+                    enabled: Boolean(carouselLayoutRecipeDialog.preview.canApply)
+                    onClicked: {
+                        if (carouselDocument.applyPreviewedLayoutRecipe())
+                            carouselLayoutRecipeDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselClipboardPasteDialog
+        objectName: "carouselClipboardPasteDialog"
+        readonly property var preview: carouselDocument.clipboardPastePreview || ({})
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(680, root.width - 48)
+        height: Math.min(620, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearClipboardPastePreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Paste Carousel content"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: String(carouselClipboardPasteDialog.preview.sourceDocumentName || "Another Carousel") +
+                              " · " + String(carouselClipboardPasteDialog.preview.sourceFormat || "custom")
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Cancel paste"
+                    onClicked: carouselClipboardPasteDialog.close()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                implicitHeight: pasteSummaryColumn.implicitHeight + 20
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.58)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.45)
+
+                ColumnLayout {
+                    id: pasteSummaryColumn
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        StatusChip {
+                            compact: true
+                            tone: "accent"
+                            text: String(carouselClipboardPasteDialog.preview.kind || "components") === "boards"
+                                  ? Number(carouselClipboardPasteDialog.preview.boardCount || 0) + " boards"
+                                  : Number(carouselClipboardPasteDialog.preview.itemCount || 0) + " layers"
+                        }
+
+                        StatusChip {
+                            compact: true
+                            tone: "success"
+                            text: "Fresh identities"
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Label {
+                            text: Number(carouselClipboardPasteDialog.preview.itemCount || 0) + " total layers"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Groups, explicit stacks, board order, and complete repeated-element links are retained with destination-safe IDs. Geometry adapts to this document's board size."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 10
+
+                    InspectorSection {
+                        Layout.fillWidth: true
+                        title: "Resources"
+                        expandable: true
+                        expanded: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
+                                  Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            StatusChip {
+                                compact: true
+                                tone: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) > 0
+                                      ? "warning" : "success"
+                                text: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
+                                      " missing assets"
+                            }
+                            StatusChip {
+                                compact: true
+                                tone: Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
+                                      ? "warning" : "success"
+                                text: Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) +
+                                      " missing fonts"
+                            }
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Repeater {
+                            model: carouselClipboardPasteDialog.preview.missingAssets || []
+                            delegate: Label {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: "Missing asset · " + String(modelData.name || modelData.path || "Unknown file")
+                                color: theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        Repeater {
+                            model: carouselClipboardPasteDialog.preview.missingFonts || []
+                            delegate: Label {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                text: "Missing font · " + String(modelData.family || "Unknown face")
+                                color: theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
+                                     Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
+                            text: "Missing resources remain attached to their exact layers so preflight and relink/font recovery can resolve them after paste."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    InspectorSection {
+                        objectName: "carouselClipboardStyleMappingSection"
+                        Layout.fillWidth: true
+                        title: "Destination styling"
+                        expandable: false
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Preserve source"
+                                active: root.clipboardPasteStylePolicy === "preserve"
+                                onClicked: root.clipboardPasteStylePolicy = "preserve"
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Map brand roles"
+                                active: root.clipboardPasteStylePolicy === "map-brand"
+                                enabled: Boolean(carouselClipboardPasteDialog.preview.canMapBrand)
+                                onClicked: root.clipboardPasteStylePolicy = "map-brand"
+                            }
+                        }
+
+                        ToneComboBox {
+                            objectName: "carouselClipboardBrandTargetCombo"
+                            Layout.fillWidth: true
+                            visible: root.clipboardPasteStylePolicy === "map-brand"
+                            model: carouselClipboardPasteDialog.preview.brandTargets || []
+                            textRole: "name"
+                            valueRole: "brandId"
+                            onCurrentValueChanged: root.clipboardPasteBrandId = String(currentValue || "")
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.clipboardPasteStylePolicy === "map-brand"
+                                  ? "Map text roles, accent shapes, brush colors, and pasted board backgrounds to the selected destination kit."
+                                  : "Keep the source typography, colors, and board backgrounds unchanged."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselClipboardPasteDialog.close()
+                }
+
+                ActionButton {
+                    objectName: "carouselApplyClipboardPasteButton"
+                    Layout.fillWidth: true
+                    tone: "primary"
+                    text: String(carouselClipboardPasteDialog.preview.kind || "components") === "boards"
+                          ? "Paste boards"
+                          : "Paste layers"
+                    enabled: Boolean(carouselClipboardPasteDialog.preview.canApply) &&
+                             (root.clipboardPasteStylePolicy !== "map-brand" ||
+                              root.clipboardPasteBrandId.length > 0)
+                    disabledReason: Boolean(carouselClipboardPasteDialog.preview.enoughBoardCapacity)
+                                    ? "Choose a destination brand kit."
+                                    : "This paste would exceed the 20-board limit."
+                    onClicked: {
+                        if (carouselDocument.applyClipboardPaste(
+                                    root.clipboardPasteStylePolicy,
+                                    root.clipboardPasteBrandId))
+                            carouselClipboardPasteDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselRepeatedElementLinkDialog
+        objectName: "carouselRepeatedElementLinkDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(560, root.width - 48)
+        height: Math.min(390, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Link repeated element"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 20
+                    font.weight: Font.Bold
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Cancel repeated-element link"
+                    onClicked: carouselRepeatedElementLinkDialog.close()
+                }
+            }
+
+            ToneTextField {
+                id: carouselRepeatedElementLinkNameField
+                objectName: "carouselRepeatedElementLinkNameField"
+                Layout.fillWidth: true
+                placeholderText: "Element name"
+                text: root.repeatedElementLinkName
+                onTextEdited: root.repeatedElementLinkName = text
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Boards"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 4
+
+                Repeater {
+                    model: [
+                        { label: "Selected", value: "selected" },
+                        { label: "Following", value: "following" },
+                        { label: "All boards", value: "all" }
+                    ]
+
+                    delegate: FilterChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.label
+                        active: root.repeatedElementLinkScope === modelData.value
+                        onClicked: root.repeatedElementLinkScope = modelData.value
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: root.repeatedElementTargetCount() + " target board" +
+                      (root.repeatedElementTargetCount() === 1 ? "" : "s") +
+                      " · " + Number(selection.selectedCount || 0) + " linked layer" +
+                      (Number(selection.selectedCount || 0) === 1 ? "" : "s")
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Geometry, content, style, and media stay synchronized. Detach any board for a local override."
+                color: theme.textFaint
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            Item { Layout.fillHeight: true }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselRepeatedElementLinkDialog.close()
+                }
+
+                ActionButton {
+                    objectName: "carouselApplyRepeatedElementLinkButton"
+                    Layout.fillWidth: true
+                    text: "Create link"
+                    tone: "primary"
+                    enabled: root.repeatedElementLinkName.trim().length > 0 &&
+                             root.repeatedElementTargetCount() > 1
+                    disabledReason: "Name the element and choose at least two target boards."
+                    onClicked: {
+                        if (carouselDocument.createRepeatedElementLink(
+                                    root.repeatedElementLinkName,
+                                    root.repeatedElementLinkScope))
+                            carouselRepeatedElementLinkDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselCommandPalette
+        objectName: "carouselCommandPalette"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(680, root.width - 48)
+        height: Math.min(650, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.max(24, Math.round((root.height - height) * 0.22))
+        closePolicy: Popup.CloseOnEscape
+
+        onClosed: {
+            const restoreItem = root.carouselCommandRestoreFocusItem
+            const restoreFocus = !root.carouselCommandSuppressFocusRestore
+            root.carouselCommandRestoreFocusItem = null
+            root.carouselCommandSuppressFocusRestore = false
+            root.carouselCommandSearchText = ""
+            root.carouselCommandIndex = 0
+            if (restoreFocus && restoreItem)
+                Qt.callLater(function() { restoreItem.forceActiveFocus() })
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.accentWarm400, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+            Accessible.name: "Carousel command palette"
+            Accessible.description: "Search and run the same Carousel commands used by menus and keyboard shortcuts."
+            Accessible.role: Accessible.Pane
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Commands"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 22
+                    font.weight: Font.Bold
+                    elide: Text.ElideNone
+                }
+
+                Label {
+                    text: "Ctrl/Meta+K"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    elide: Text.ElideNone
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Close command palette"
+                    onClicked: carouselCommandPalette.close()
+                }
+            }
+
+            ToneTextField {
+                id: carouselCommandSearchField
+                objectName: "carouselCommandSearchField"
+                Layout.fillWidth: true
+                placeholderText: "Search add, transform, arrange, board, template, preflight, save, or export"
+                text: root.carouselCommandSearchText
+                Accessible.name: "Search Carousel commands"
+                onTextEdited: {
+                    root.carouselCommandSearchText = text
+                    root.carouselCommandIndex = 0
+                    carouselCommandResultList.positionViewAtBeginning()
+                }
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Down) {
+                        root.carouselCommandIndex = Math.min(carouselCommandResultList.count - 1,
+                                                             root.carouselCommandIndex + 1)
+                        carouselCommandResultList.positionViewAtIndex(root.carouselCommandIndex,
+                                                                      ListView.Contain)
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Up) {
+                        root.carouselCommandIndex = Math.max(0, root.carouselCommandIndex - 1)
+                        carouselCommandResultList.positionViewAtIndex(root.carouselCommandIndex,
+                                                                      ListView.Contain)
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                        const matches = root.filteredCarouselCommands()
+                        if (root.carouselCommandIndex >= 0 && root.carouselCommandIndex < matches.length)
+                            root.runCarouselCommand(String(matches[root.carouselCommandIndex].commandId))
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Escape) {
+                        carouselCommandPalette.close()
+                        event.accepted = true
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.36)
+            }
+
+            ListView {
+                id: carouselCommandResultList
+                objectName: "carouselCommandResultList"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 4
+                model: root.filteredCarouselCommands()
+                currentIndex: root.carouselCommandIndex
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: ItemDelegate {
+                    id: commandResultDelegate
+                    required property var modelData
+                    required property int index
+                    width: ListView.view.width
+                    height: modelData.enabled ? 58 : 72
+                    hoverEnabled: true
+                    enabled: Boolean(modelData.enabled)
+                    Accessible.name: String(modelData.label)
+                    Accessible.description: modelData.enabled
+                                            ? String(modelData.category) + " command"
+                                            : String(modelData.disabledReason)
+                    onClicked: root.runCarouselCommand(String(modelData.commandId))
+
+                    background: Rectangle {
+                        radius: theme.radius8
+                        color: commandResultDelegate.index === root.carouselCommandIndex
+                               ? theme.alpha(theme.accentWarm400, commandResultDelegate.enabled ? 0.17 : 0.09)
+                               : commandResultDelegate.hovered
+                                 ? theme.alpha(theme.glassBase, 0.28)
+                                 : "transparent"
+                        border.width: commandResultDelegate.index === root.carouselCommandIndex ? 1 : 0
+                        border.color: theme.alpha(theme.accentWarm400, commandResultDelegate.enabled ? 0.62 : 0.28)
+                    }
+
+                    contentItem: RowLayout {
+                        spacing: 12
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: String(commandResultDelegate.modelData.label)
+                                color: commandResultDelegate.enabled ? theme.textStrong : theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: commandResultDelegate.enabled
+                                      ? String(commandResultDelegate.modelData.category)
+                                      : String(commandResultDelegate.modelData.category) + " · " +
+                                        String(commandResultDelegate.modelData.disabledReason)
+                                color: commandResultDelegate.enabled ? theme.textMuted : theme.warning
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                        }
+
+                        Label {
+                            visible: String(commandResultDelegate.modelData.shortcut || "").length > 0
+                            text: String(commandResultDelegate.modelData.shortcut || "")
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            elide: Text.ElideNone
+                        }
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: carouselCommandResultList.count === 0
+                text: "No commands match this search."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: carouselCommandResultList.count + " command" +
+                      (carouselCommandResultList.count === 1 ? "" : "s") +
+                      " · Up/Down to navigate · Enter to run · Escape to close"
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselPreflightIgnoreDialog
+        objectName: "carouselPreflightIgnoreDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(520, root.width - 48)
+        height: Math.min(320, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.warning, 0.48)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+            Label {
+                text: "Ignore preflight warning"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 20
+                font.weight: Font.Bold
+            }
+            Label {
+                Layout.fillWidth: true
+                text: String(root.pendingPreflightIgnoreIssue.message || "Warning")
+                color: theme.warning
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+            ToneTextField {
+                id: carouselPreflightIgnoreReasonField
+                objectName: "carouselPreflightIgnoreReasonField"
+                Layout.fillWidth: true
+                placeholderText: "Required reason for this exception"
+                text: root.preflightIgnoreReason
+                onTextEdited: root.preflightIgnoreReason = text
+            }
+            Label {
+                Layout.fillWidth: true
+                text: "The reason is saved with this carousel. Artwork is not changed."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+            Item { Layout.fillHeight: true }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    compact: true
+                    text: "Cancel"
+                    onClicked: carouselPreflightIgnoreDialog.close()
+                }
+                ActionButton {
+                    compact: true
+                    tone: "warning"
+                    text: "Ignore with Reason"
+                    enabled: root.preflightIgnoreReason.trim().length > 0
+                    disabledReason: "A reason is required for an ignored delivery warning."
+                    onClicked: {
+                        if (carouselDocument.ignorePreflightIssue(
+                                    String(root.pendingPreflightIgnoreIssue.issueId || ""),
+                                    root.preflightIgnoreReason))
+                            carouselPreflightIgnoreDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselBrandApplicationDialog
+        objectName: "carouselBrandApplicationDialog"
+        readonly property var diff: carouselDocument.brandApplicationPreview
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(860, root.width - 48)
+        height: Math.min(740, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearBrandApplicationPreview()
+
+        function styleSummary(style) {
+            if (!style)
+                return "None"
+            const values = []
+            const keys = ["color", "fillColor", "fontFamily", "fontWeight"]
+            for (let index = 0; index < keys.length; ++index) {
+                const key = keys[index]
+                if (String(style[key] || "").length > 0)
+                    values.push(String(style[key]))
+            }
+            return values.length > 0 ? values.join(" · ") : "Unchanged"
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Review brand application"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        text: String(carouselBrandApplicationDialog.diff.brandName || "Brand") + " · " +
+                              Number(carouselBrandApplicationDialog.diff.boardCount || 0) + " board" +
+                              (Number(carouselBrandApplicationDialog.diff.boardCount || 0) === 1 ? "" : "s") + " · " +
+                              Number(carouselBrandApplicationDialog.diff.layerCount || 0) + " styled layer" +
+                              (Number(carouselBrandApplicationDialog.diff.layerCount || 0) === 1 ? "" : "s")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                    }
+                }
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Cancel brand application"
+                    onClicked: carouselBrandApplicationDialog.close()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 12
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.margins: 18
+                        spacing: 8
+                        Label {
+                            text: "Local overrides"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                tone: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain" ? "primary" : "secondary"
+                                text: "Retain local values"
+                                onClicked: carouselDocument.previewBrandKitApplication(
+                                               String(carouselBrandApplicationDialog.diff.brandId || ""),
+                                               String(carouselBrandApplicationDialog.diff.scope || "current"), "retain")
+                            }
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                tone: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "replace" ? "primary" : "secondary"
+                                text: "Replace with brand"
+                                onClicked: carouselDocument.previewBrandKitApplication(
+                                               String(carouselBrandApplicationDialog.diff.brandId || ""),
+                                               String(carouselBrandApplicationDialog.diff.scope || "current"), "replace")
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain"
+                                  ? "Board styling changes; existing layer values remain local."
+                                  : "Every listed local layer value is replaced by its mapped brand role."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        visible: Number(carouselBrandApplicationDialog.diff.missingMappings
+                                        ? carouselBrandApplicationDialog.diff.missingMappings.length : 0) > 0 ||
+                                 Number(carouselBrandApplicationDialog.diff.contrastRegressions
+                                        ? carouselBrandApplicationDialog.diff.contrastRegressions.length : 0) > 0
+                        implicitHeight: reviewWarnings.implicitHeight + 20
+                        radius: 8
+                        color: theme.alpha(theme.warning, 0.09)
+                        border.width: 1
+                        border.color: theme.alpha(theme.warning, 0.42)
+
+                        ColumnLayout {
+                            id: reviewWarnings
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 10
+                            spacing: 6
+                            Label {
+                                text: "Review exceptions"
+                                color: theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                            }
+                            Repeater {
+                                model: carouselBrandApplicationDialog.diff.missingMappings || []
+                                delegate: ActionButton {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.message || "Missing mapping")
+                                    tooltipText: text
+                                    onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
+                                }
+                            }
+                            Repeater {
+                                model: carouselBrandApplicationDialog.diff.contrastRegressions || []
+                                delegate: ActionButton {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.message || "Contrast regression")
+                                    tooltipText: text
+                                    onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        text: "Boards"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                    }
+                    Repeater {
+                        model: carouselBrandApplicationDialog.diff.affectedBoards || []
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 18
+                            Layout.rightMargin: 18
+                            implicitHeight: 48
+                            radius: 7
+                            color: theme.alpha(theme.ink850, 0.74)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.32)
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Board " + Number(modelData.boardNumber || 0) +
+                                          (String(modelData.boardName || "").length > 0 ? " · " + String(modelData.boardName) : "")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                }
+                                Label {
+                                    text: String(modelData.beforeBackground || "") + " → " + String(modelData.afterBackground || "")
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        text: "Layer diff"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                    }
+                    Repeater {
+                        model: carouselBrandApplicationDialog.diff.affectedLayers || []
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 18
+                            Layout.rightMargin: 18
+                            implicitHeight: layerDiffContent.implicitHeight + 16
+                            radius: 7
+                            color: theme.alpha(theme.ink850, 0.74)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.32)
+                            ColumnLayout {
+                                id: layerDiffContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 8
+                                spacing: 4
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.label || modelData.kind || "Layer")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Select"
+                                        onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
+                                    }
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Before: " + carouselBrandApplicationDialog.styleSummary(modelData.before) +
+                                          "\nBrand: " + carouselBrandApplicationDialog.styleSummary(modelData.target) +
+                                          "\nResult: " + carouselBrandApplicationDialog.styleSummary(modelData.result) +
+                                          " · " + String(modelData.overrideAction || "match")
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+                    }
+                    Item { Layout.preferredHeight: 8 }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                spacing: 8
+                Label {
+                    Layout.fillWidth: true
+                    text: Number(carouselBrandApplicationDialog.diff.localOverrideCount || 0) +
+                          " local override" +
+                          (Number(carouselBrandApplicationDialog.diff.localOverrideCount || 0) === 1 ? "" : "s") +
+                          " will be " +
+                          (String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain"
+                           ? "retained." : "replaced.")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+                ActionButton {
+                    compact: true
+                    text: "Cancel"
+                    onClicked: carouselBrandApplicationDialog.close()
+                }
+                ActionButton {
+                    compact: true
+                    tone: "primary"
+                    text: "Apply Reviewed Changes"
+                    onClicked: {
+                        if (carouselDocument.applyPreviewedBrandKit())
+                            carouselBrandApplicationDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselBrandLintDialog
+        objectName: "carouselBrandLintDialog"
+        readonly property var lint: carouselDocument.brandLintState
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(700, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Brand lint"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        text: String(carouselBrandLintDialog.lint.brandName || "Brand") + " · " +
+                              Number(carouselBrandLintDialog.lint.issueCount || 0) + " active issue" +
+                              (Number(carouselBrandLintDialog.lint.issueCount || 0) === 1 ? "" : "s") + " · " +
+                              Number(carouselBrandLintDialog.lint.ignoredCount || 0) + " ignored"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                    }
+                }
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Close brand lint"
+                    onClicked: carouselBrandLintDialog.close()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: 18
+                Layout.rightMargin: 18
+                Layout.topMargin: 14
+                visible: Number(carouselBrandLintDialog.lint.issueCount || 0) === 0
+                implicitHeight: 74
+                radius: 8
+                color: theme.alpha(theme.success, 0.09)
+                border.width: 1
+                border.color: theme.alpha(theme.success, 0.4)
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    Label {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: "No active brand exceptions"
+                        color: theme.success
+                        font.family: theme.fontUi
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: "Lint updates whenever the document styling changes."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                    }
+                }
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 8
+                    Item { Layout.preferredHeight: 8 }
+                    Repeater {
+                        model: carouselBrandLintDialog.lint.issues || []
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.leftMargin: 18
+                            Layout.rightMargin: 18
+                            implicitHeight: lintIssueContent.implicitHeight + 18
+                            radius: 8
+                            color: theme.alpha(theme.ink850, 0.76)
+                            border.width: 1
+                            border.color: String(modelData.severity || "info") === "warning"
+                                          ? theme.alpha(theme.warning, 0.45)
+                                          : theme.alpha(theme.lineSoft, 0.34)
+
+                            ColumnLayout {
+                                id: lintIssueContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 9
+                                spacing: 5
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.code || "brand-issue").split("-").join(" ").toUpperCase() +
+                                              (Number(modelData.boardNumber || 0) > 0
+                                               ? " · BOARD " + Number(modelData.boardNumber) : "")
+                                        color: String(modelData.severity || "info") === "warning" ? theme.warning : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        font.weight: Font.Bold
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Select"
+                                        enabled: Boolean(modelData.canFocus)
+                                        disabledReason: "This document-wide issue has no single layer to select."
+                                        onClicked: carouselDocument.focusBrandLintIssue(String(modelData.issueId || ""))
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Ignore"
+                                        tooltipText: "Keep this exact exception ignored in this carousel."
+                                        onClicked: carouselDocument.ignoreBrandLintIssue(String(modelData.issueId || ""))
+                                    }
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.message || "Brand exception")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.details || "")
+                                    visible: text.length > 0
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+                    }
+                    Item { Layout.preferredHeight: 10 }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                Label {
+                    Layout.fillWidth: true
+                    text: "Ignored exceptions are document-specific and persist after save."
+                    color: theme.textFaint
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                }
+                ActionButton {
+                    compact: true
+                    text: "Done"
+                    onClicked: carouselBrandLintDialog.close()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselBrandKitEditorDialog
+        objectName: "carouselBrandKitEditorDialog"
+        readonly property var draft: carouselDocument.brandKitDraft
+        readonly property var validation: carouselDocument.brandKitValidation
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(920, root.width - 48)
+        height: Math.min(780, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: {
+            if (carouselDocument.brandKitEditorActive)
+                carouselDocument.cancelBrandKitEditor()
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: String(carouselBrandKitEditorDialog.draft.brandId || "").length > 0
+                              ? "Edit brand kit" : "New brand kit"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        text: "Define the reusable system. Nothing is written until Save."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                    }
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Discard brand kit changes"
+                    onClicked: carouselBrandKitEditorDialog.close()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                RowLayout {
+                    width: parent.width
+                    spacing: 16
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.margins: 18
+                        Layout.maximumWidth: 560
+                        spacing: 12
+
+                        Label {
+                            text: "Identity"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        ToneTextField {
+                            Layout.fillWidth: true
+                            placeholderText: "Brand kit name"
+                            text: String(carouselBrandKitEditorDialog.draft.name || "")
+                            onTextEdited: carouselDocument.setBrandKitDraftField("name", text)
+                        }
+
+                        Label {
+                            text: "Named palette"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Repeater {
+                            model: [
+                                { label: "Primary", nameKey: "primaryName", colorKey: "primaryColor",
+                                  name: String(carouselBrandKitEditorDialog.draft.primaryName || ""),
+                                  color: String(carouselBrandKitEditorDialog.draft.primaryColor || "#fbf7f1") },
+                                { label: "Secondary", nameKey: "secondaryName", colorKey: "secondaryColor",
+                                  name: String(carouselBrandKitEditorDialog.draft.secondaryName || ""),
+                                  color: String(carouselBrandKitEditorDialog.draft.secondaryColor || "#ffffff") },
+                                { label: "Accent", nameKey: "accentName", colorKey: "accentColor",
+                                  name: String(carouselBrandKitEditorDialog.draft.accentName || ""),
+                                  color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6") },
+                                { label: "Text", nameKey: "", colorKey: "textColor", name: "Primary Text",
+                                  color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17") }
+                            ]
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle {
+                                    Layout.preferredWidth: 30
+                                    Layout.preferredHeight: 30
+                                    radius: 6
+                                    color: modelData.color
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.55)
+                                }
+                                ToneTextField {
+                                    Layout.fillWidth: true
+                                    enabled: modelData.nameKey.length > 0
+                                    placeholderText: modelData.label + " token name"
+                                    text: modelData.name
+                                    onTextEdited: {
+                                        if (modelData.nameKey.length > 0)
+                                            carouselDocument.setBrandKitDraftField(modelData.nameKey, text)
+                                    }
+                                }
+                                ToneTextField {
+                                    Layout.preferredWidth: 112
+                                    placeholderText: "#RRGGBB"
+                                    text: modelData.color
+                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.colorKey, text)
+                                }
+                            }
+                        }
+
+                        Label {
+                            text: "Theme variants"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Light follows the named palette. Define the dark and campaign surfaces, text, and accent tokens here."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                        }
+                        Repeater {
+                            objectName: "carouselBrandThemeVariantEditor"
+                            model: [
+                                { label: "Dark surface", key: "darkBackgroundColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.darkBackgroundColor || "#12161c") },
+                                { label: "Dark text", key: "darkTextColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.darkTextColor || "#f7f3ec") },
+                                { label: "Dark accent", key: "darkAccentColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.darkAccentColor || "#36f2a6") },
+                                { label: "Campaign surface", key: "campaignBackgroundColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.campaignBackgroundColor || "#36f2a6") },
+                                { label: "Campaign text", key: "campaignTextColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.campaignTextColor || "#1e1a17") },
+                                { label: "Campaign accent", key: "campaignAccentColor",
+                                  color: String(carouselBrandKitEditorDialog.draft.campaignAccentColor || "#1e1a17") }
+                            ]
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Rectangle {
+                                    Layout.preferredWidth: 30
+                                    Layout.preferredHeight: 30
+                                    radius: 6
+                                    color: modelData.color
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.55)
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                }
+                                ToneTextField {
+                                    Layout.preferredWidth: 112
+                                    placeholderText: "#RRGGBB"
+                                    text: modelData.color
+                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.key, text)
+                                }
+                            }
+                        }
+
+                        Label {
+                            text: "Typography roles"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Repeater {
+                            model: [
+                                { label: "Titles", fontKey: "titleFont", weightKey: "titleWeight",
+                                  family: String(carouselBrandKitEditorDialog.draft.titleFont || "display"),
+                                  weight: String(carouselBrandKitEditorDialog.draft.titleWeight || "bold") },
+                                { label: "Body", fontKey: "bodyFont", weightKey: "bodyWeight",
+                                  family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system"),
+                                  weight: String(carouselBrandKitEditorDialog.draft.bodyWeight || "regular") }
+                            ]
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    Layout.preferredWidth: 52
+                                    text: modelData.label
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                }
+                                ToneTextField {
+                                    Layout.fillWidth: true
+                                    placeholderText: "Font family"
+                                    text: modelData.family
+                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.fontKey, text)
+                                }
+                                ToneTextField {
+                                    Layout.preferredWidth: 112
+                                    placeholderText: "Weight"
+                                    text: modelData.weight
+                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.weightKey, text)
+                                }
+                            }
+                        }
+                        ToneTextField {
+                            Layout.fillWidth: true
+                            placeholderText: "Font license, source, renewal, or handoff reminder"
+                            text: String(carouselBrandKitEditorDialog.draft.fontLicenseNotes || "")
+                            onTextEdited: carouselDocument.setBrandKitDraftField("fontLicenseNotes", text)
+                        }
+
+                        Label {
+                            text: "Logo asset"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            ToneTextField {
+                                Layout.fillWidth: true
+                                placeholderText: "Logo name"
+                                text: String(carouselBrandKitEditorDialog.draft.logoName || "Primary Logo")
+                                onTextEdited: carouselDocument.setBrandKitDraftField("logoName", text)
+                            }
+                            ToolOptionToggle {
+                                label: "Required"
+                                checked: Boolean(carouselBrandKitEditorDialog.draft.logoRequired)
+                                helperText: "Required assets block saving when their file is missing."
+                                onToggled: checked => carouselDocument.setBrandKitDraftField("logoRequired", checked)
+                            }
+                        }
+                        Repeater {
+                            objectName: "carouselBrandLogoVariantEditor"
+                            model: [
+                                { label: "Primary", key: "logoPath",
+                                  path: String(carouselBrandKitEditorDialog.draft.logoPath || "") },
+                                { label: "Light on dark", key: "logoLightPath",
+                                  path: String(carouselBrandKitEditorDialog.draft.logoLightPath || "") },
+                                { label: "Dark on light", key: "logoDarkPath",
+                                  path: String(carouselBrandKitEditorDialog.draft.logoDarkPath || "") },
+                                { label: "Monochrome", key: "logoMonochromePath",
+                                  path: String(carouselBrandKitEditorDialog.draft.logoMonochromePath || "") }
+                            ]
+
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 3
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideNone
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 5
+                                    ToneTextField {
+                                        Layout.fillWidth: true
+                                        placeholderText: "/path/to/logo.png"
+                                        text: modelData.path
+                                        onTextEdited: carouselDocument.setBrandKitDraftField(modelData.key, text)
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Choose"
+                                        onClicked: {
+                                            root.brandLogoDraftField = modelData.key
+                                            root.openMediaPicker("brand-logo")
+                                        }
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Clear"
+                                        enabled: modelData.path.length > 0
+                                        onClicked: carouselDocument.setBrandKitDraftField(modelData.key, "")
+                                    }
+                                }
+                            }
+                        }
+
+                        Label {
+                            text: "Logo usage rules"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Repeater {
+                            objectName: "carouselBrandLogoRuleEditor"
+                            model: [
+                                { label: "Clear space (%)", key: "logoSafeAreaPercent",
+                                  value: Number(carouselBrandKitEditorDialog.draft.logoSafeAreaPercent || 10) },
+                                { label: "Minimum width (px)", key: "logoMinimumWidth",
+                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumWidth || 96) },
+                                { label: "Minimum height (px)", key: "logoMinimumHeight",
+                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumHeight || 32) },
+                                { label: "Minimum contrast", key: "logoMinimumContrast",
+                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumContrast || 3) }
+                            ]
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    elide: Text.ElideNone
+                                }
+                                ToneTextField {
+                                    Layout.preferredWidth: 112
+                                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                    text: String(modelData.value)
+                                    onTextEdited: carouselDocument.setBrandKitDraftField(
+                                                      modelData.key, Number(text))
+                                }
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Logo checks only warn. They never resize, move, recolor, or swap placed artwork."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+
+                        Label {
+                            text: "Design-token scales"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Repeater {
+                            model: [
+                                { label: "Radius small", key: "cornerSmall", value: Number(carouselBrandKitEditorDialog.draft.cornerSmall || 0) },
+                                { label: "Radius medium", key: "cornerMedium", value: Number(carouselBrandKitEditorDialog.draft.cornerMedium || 0) },
+                                { label: "Radius large", key: "cornerLarge", value: Number(carouselBrandKitEditorDialog.draft.cornerLarge || 0) },
+                                { label: "Stroke hairline", key: "strokeHairline", value: Number(carouselBrandKitEditorDialog.draft.strokeHairline || 0) },
+                                { label: "Stroke standard", key: "strokeStandard", value: Number(carouselBrandKitEditorDialog.draft.strokeStandard || 0) },
+                                { label: "Stroke strong", key: "strokeStrong", value: Number(carouselBrandKitEditorDialog.draft.strokeStrong || 0) },
+                                { label: "Space XS", key: "spacingXs", value: Number(carouselBrandKitEditorDialog.draft.spacingXs || 0) },
+                                { label: "Space S", key: "spacingSm", value: Number(carouselBrandKitEditorDialog.draft.spacingSm || 0) },
+                                { label: "Space M", key: "spacingMd", value: Number(carouselBrandKitEditorDialog.draft.spacingMd || 0) },
+                                { label: "Space L", key: "spacingLg", value: Number(carouselBrandKitEditorDialog.draft.spacingLg || 0) },
+                                { label: "Space XL", key: "spacingXl", value: Number(carouselBrandKitEditorDialog.draft.spacingXl || 0) }
+                            ]
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                }
+                                ToneTextField {
+                                    Layout.preferredWidth: 92
+                                    text: String(modelData.value)
+                                    validator: DoubleValidator { bottom: 0 }
+                                    onEditingFinished: carouselDocument.setBrandKitDraftField(modelData.key, Number(text))
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.alignment: Qt.AlignTop
+                        Layout.preferredWidth: 280
+                        Layout.rightMargin: 18
+                        Layout.topMargin: 18
+                        spacing: 10
+
+                        Label {
+                            text: "Live preview"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 250
+                            radius: Number(carouselBrandKitEditorDialog.draft.cornerMedium || 12)
+                            color: String(carouselBrandKitEditorDialog.draft.primaryColor || "#fbf7f1")
+                            border.width: Number(carouselBrandKitEditorDialog.draft.strokeHairline || 1)
+                            border.color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
+                            clip: true
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 20
+                                spacing: 10
+                                Rectangle {
+                                    Layout.preferredWidth: 54
+                                    Layout.preferredHeight: 8
+                                    radius: 4
+                                    color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Build a distinct point of view."
+                                    color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
+                                    font.family: String(carouselBrandKitEditorDialog.draft.titleFont || "display")
+                                    font.pixelSize: 25
+                                    font.weight: Font.Bold
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Title and body roles, real palette tokens, and a reusable visual system."
+                                    color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
+                                    font.family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system")
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Item { Layout.fillHeight: true }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 42
+                                    radius: Number(carouselBrandKitEditorDialog.draft.cornerSmall || 4)
+                                    color: String(carouselBrandKitEditorDialog.draft.secondaryColor || "#ffffff")
+                                    border.width: Number(carouselBrandKitEditorDialog.draft.strokeStandard || 1)
+                                    border.color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: "Primary action"
+                                        color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
+                                        font.family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system")
+                                        font.pixelSize: 11
+                                        font.weight: Font.Bold
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: validationContent.implicitHeight + 20
+                            radius: 8
+                            color: carouselBrandKitEditorDialog.validation.canSave
+                                   ? theme.alpha(theme.accentCool400, 0.08)
+                                   : theme.alpha(theme.error, 0.1)
+                            border.width: 1
+                            border.color: carouselBrandKitEditorDialog.validation.canSave
+                                          ? theme.alpha(theme.accentCool400, 0.35)
+                                          : theme.alpha(theme.error, 0.4)
+
+                            ColumnLayout {
+                                id: validationContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 10
+                                spacing: 5
+                                Label {
+                                    text: carouselBrandKitEditorDialog.validation.canSave ? "Required checks pass" : "Required checks need attention"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                }
+                                Repeater {
+                                    model: carouselBrandKitEditorDialog.validation.blockingIssues || []
+                                    delegate: Label {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: "Blocking: " + String(modelData)
+                                        color: theme.error
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+                                Repeater {
+                                    model: carouselBrandKitEditorDialog.validation.warnings || []
+                                    delegate: Label {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        text: "Reminder: " + String(modelData)
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                        elide: Text.ElideNone
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    compact: true
+                    text: "Cancel"
+                    onClicked: carouselBrandKitEditorDialog.close()
+                }
+                ActionButton {
+                    compact: true
+                    tone: "primary"
+                    text: "Save Brand Kit"
+                    enabled: Boolean(carouselBrandKitEditorDialog.validation.canSave)
+                    disabledReason: "Resolve required asset and naming checks before saving."
+                    onClicked: {
+                        if (carouselDocument.saveBrandKitDraft())
+                            carouselBrandKitEditorDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselReadingOrderDialog
+        objectName: "carouselReadingOrderDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(820, root.width - 48)
+        height: Math.min(700, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: Qt.callLater(function() {
+            if (carouselReadingOrderList.count > 0)
+                carouselReadingOrderList.forceActiveFocus()
+            else
+                carouselReadingOrderCloseButton.forceActiveFocus()
+        })
+        onClosed: {
+            const restoreItem = root.carouselReadingOrderRestoreFocusItem
+            root.carouselReadingOrderRestoreFocusItem = null
+            if (restoreItem && typeof restoreItem.forceActiveFocus === "function")
+                Qt.callLater(function() { restoreItem.forceActiveFocus() })
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+            Accessible.name: "Accessibility reading order editor"
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Reading order · Board " +
+                              Number(carouselDocument.readingOrderState.boardNumber || 1)
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Set the narrative sequence for visible text and meaningful imagery. Decorative imagery stays in the artwork but is excluded from the delivery manifest."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+                StatusChip {
+                    text: Number(carouselDocument.readingOrderState.meaningfulEntryCount || 0) +
+                          " exported"
+                    tone: "info"
+                    compact: true
+                }
+                ActionButton {
+                    id: carouselReadingOrderCloseButton
+                    compact: true
+                    text: "Close"
+                    Accessible.name: "Close reading order editor"
+                    onClicked: carouselReadingOrderDialog.close()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.52)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                ListView {
+                    id: carouselReadingOrderList
+                    objectName: "carouselReadingOrderList"
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 7
+                    clip: true
+                    focus: true
+                    activeFocusOnTab: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: carouselDocument.readingOrderState.entries || []
+                    Accessible.name: "Ordered readable elements"
+
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: ListView.view.width
+                        height: Math.max(94, readingOrderEntryLabel.implicitHeight + 58)
+                        radius: theme.radius6
+                        color: theme.alpha(theme.ink850, 0.78)
+                        border.width: 1
+                        border.color: theme.alpha(modelData.meaningful ? theme.selectionAccent : theme.lineSoft, 0.42)
+                        Accessible.name: "Reading order position " + Number(modelData.position) +
+                                         ", " + String(modelData.kind) + ", " +
+                                         String(modelData.label)
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 8
+
+                            Label {
+                                Layout.preferredWidth: 28
+                                text: String(modelData.position)
+                                horizontalAlignment: Text.AlignHCenter
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 15
+                                font.weight: Font.Bold
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    StatusChip {
+                                        text: String(modelData.kind).charAt(0).toUpperCase() +
+                                              String(modelData.kind).slice(1)
+                                        tone: modelData.kind === "text" ? "info" : "neutral"
+                                        compact: true
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData.sourceType === "slot"
+                                              ? String(modelData.slot) + " board slot"
+                                              : "Canvas layer"
+                                        color: theme.textFaint
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        elide: Text.ElideNone
+                                    }
+                                }
+                                Label {
+                                    id: readingOrderEntryLabel
+                                    Layout.fillWidth: true
+                                    text: String(modelData.label || "Readable element")
+                                    color: modelData.meaningful ? theme.textMain : theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: Boolean(modelData.canToggleMeaningful)
+                                    text: modelData.meaningful
+                                          ? "Included in accessible delivery order"
+                                          : "Decorative · excluded from accessible delivery order"
+                                    color: modelData.meaningful ? theme.success : theme.textFaint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                            }
+
+                            ColumnLayout {
+                                spacing: 5
+                                RowLayout {
+                                    spacing: 5
+                                    ActionButton {
+                                        objectName: "carouselReadingOrderMoveEarlierButton"
+                                        compact: true
+                                        text: "Up"
+                                        enabled: Number(modelData.position) > 1
+                                        disabledReason: "This is already the first readable element."
+                                        Accessible.name: "Move " + String(modelData.label) + " earlier"
+                                        onClicked: carouselDocument.moveReadingOrderEntry(
+                                                       String(modelData.key), -1)
+                                    }
+                                    ActionButton {
+                                        objectName: "carouselReadingOrderMoveLaterButton"
+                                        compact: true
+                                        text: "Down"
+                                        enabled: Number(modelData.position) <
+                                                 Number(carouselDocument.readingOrderState.entryCount || 0)
+                                        disabledReason: "This is already the last readable element."
+                                        Accessible.name: "Move " + String(modelData.label) + " later"
+                                        onClicked: carouselDocument.moveReadingOrderEntry(
+                                                       String(modelData.key), 1)
+                                    }
+                                }
+                                RowLayout {
+                                    spacing: 5
+                                    ActionButton {
+                                        visible: Boolean(modelData.canToggleMeaningful)
+                                        compact: true
+                                        text: modelData.meaningful ? "Meaningful" : "Decorative"
+                                        tone: modelData.meaningful ? "primary" : "neutral"
+                                        Accessible.name: (modelData.meaningful
+                                                          ? "Mark decorative: "
+                                                          : "Mark meaningful: ") +
+                                                         String(modelData.label)
+                                        onClicked: carouselDocument.setReadingOrderEntryMeaningful(
+                                                       String(modelData.key),
+                                                       !Boolean(modelData.meaningful))
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        text: "Focus"
+                                        Accessible.name: "Focus " + String(modelData.label) + " on the canvas"
+                                        onClicked: {
+                                            if (carouselDocument.focusReadingOrderEntry(
+                                                        String(modelData.key))) {
+                                                root.carouselReadingOrderRestoreFocusItem = null
+                                                carouselReadingOrderDialog.close()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: carouselReadingOrderList.count === 0
+                        width: Math.min(420, parent.width - 32)
+                        text: "Add visible text or imagery to this board before setting reading order."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselDocumentStructureDialog
+        objectName: "carouselDocumentStructureDialog"
+        readonly property var filteredIssues: {
+            const source = root.documentStructureIssueState || []
+            if (root.documentStructureCategory === "all")
+                return source
+            const result = []
+            for (let index = 0; index < source.length; ++index) {
+                if (String(source[index].category || "") === root.documentStructureCategory)
+                    result.push(source[index])
+            }
+            return result
+        }
+
+        function categoryCount(category) {
+            const source = root.documentStructureIssueState || []
+            if (category === "all")
+                return source.length
+            let count = 0
+            for (let index = 0; index < source.length; ++index) {
+                if (String(source[index].category || "") === category)
+                    ++count
+            }
+            return count
+        }
+
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(820, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: root.refreshDocumentStructureIssues()
+
+        Connections {
+            target: carouselDocument
+            function onItemsChanged() {
+                if (carouselDocumentStructureDialog.visible)
+                    root.refreshDocumentStructureIssues()
+            }
+            function onSlidesChanged() {
+                if (carouselDocumentStructureDialog.visible)
+                    root.refreshDocumentStructureIssues()
+            }
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Document structure"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Structural findings are read-only. Jump opens the exact board or layer for correction."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+                StatusChip {
+                    text: carouselDocumentStructureDialog.categoryCount("all") + " findings"
+                    tone: carouselDocumentStructureDialog.categoryCount("broken-links") > 0 ||
+                          carouselDocumentStructureDialog.categoryCount("empty-slots") > 0
+                          ? "error" : carouselDocumentStructureDialog.categoryCount("all") > 0
+                            ? "warning" : "success"
+                    compact: true
+                }
+                ActionButton {
+                    compact: true
+                    text: "Close"
+                    onClicked: carouselDocumentStructureDialog.close()
+                }
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: [
+                        { label: "All", value: "all" },
+                        { label: "Empty slots", value: "empty-slots" },
+                        { label: "Duplicate copy", value: "duplicate-copy" },
+                        { label: "Unmatched components", value: "unmatched-components" },
+                        { label: "Broken links", value: "broken-links" },
+                        { label: "Style outliers", value: "style-outliers" }
+                    ]
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: modelData.label + " " + carouselDocumentStructureDialog.categoryCount(modelData.value)
+                        active: root.documentStructureCategory === modelData.value
+                        onClicked: root.documentStructureCategory = modelData.value
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.52)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                ListView {
+                    id: carouselDocumentStructureList
+                    objectName: "carouselDocumentStructureList"
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
+                    clip: true
+                    model: carouselDocumentStructureDialog.filteredIssues
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: ListView.view.width
+                        height: Math.max(64, structureIssueMessage.implicitHeight + 32)
+                        radius: theme.radius6
+                        color: theme.alpha(theme.ink850, 0.74)
+                        border.width: 1
+                        border.color: theme.alpha(modelData.severity === "error" ? theme.error : theme.warning, 0.34)
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 8
+
+                            StatusChip {
+                                text: String(modelData.category || "structure").replaceAll("-", " ")
+                                tone: modelData.severity === "error" ? "error" : "warning"
+                                compact: true
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                Label {
+                                    id: structureIssueMessage
+                                    Layout.fillWidth: true
+                                    text: String(modelData.message || "Structural finding")
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: Number(modelData.boardNumber || 0) > 0
+                                          ? "Board " + Number(modelData.boardNumber) : "Document"
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                }
+                            }
+
+                            ActionButton {
+                                objectName: "carouselDocumentStructureJumpButton"
+                                compact: true
+                                text: String(modelData.itemId || "").length > 0 ? "Jump to layer" : "Jump to board"
+                                enabled: Boolean(modelData.canJump)
+                                onClicked: {
+                                    if (carouselDocument.focusDocumentStructureIssue(String(modelData.issueId || "")))
+                                        carouselDocumentStructureDialog.close()
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: carouselDocumentStructureList.count === 0
+                        text: root.documentStructureCategory === "all"
+                              ? "No structural findings" : "No findings in this category"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    compact: true
+                    iconName: "refresh"
+                    text: "Refresh"
+                    onClicked: root.refreshDocumentStructureIssues()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselBoardRangeCommandDialog
+        objectName: "carouselBoardRangeCommandDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(690, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: root.refreshBoardRangePreview()
+
+        Connections {
+            target: carouselDocument
+            function onSelectionChanged() {
+                if (carouselBoardRangeCommandDialog.visible)
+                    root.refreshBoardRangePreview()
+            }
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Apply to board range"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "One operation, one exact range, one undo step."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+                ActionButton {
+                    compact: true
+                    text: "Close"
+                    onClicked: carouselBoardRangeCommandDialog.close()
+                }
+            }
+
+            Label {
+                text: "Operation"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: [
+                        { label: "Background", value: "background" },
+                        { label: "Layout", value: "template" },
+                        { label: "Brand style", value: "brand" },
+                        { label: "Spacing", value: "spacing" },
+                        { label: "Text style", value: "text-style" }
+                    ]
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: modelData.label
+                        active: root.boardRangeOperation === modelData.value
+                        onClicked: root.setBoardRangeOperation(modelData.value)
+                    }
+                }
+            }
+
+            Label {
+                text: "Range"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Repeater {
+                    model: [
+                        { label: "Current", value: "current" },
+                        { label: "Selected", value: "selected" },
+                        { label: "Following", value: "following" },
+                        { label: "All boards", value: "all" }
+                    ]
+                    delegate: FilterChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.label
+                        active: root.boardRangeScope === modelData.value
+                        onClicked: {
+                            root.boardRangeScope = modelData.value
+                            root.refreshBoardRangePreview()
+                        }
+                    }
+                }
+            }
+
+            Label {
+                text: "Value"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 126
+                clip: true
+                contentWidth: availableWidth
+
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    Repeater {
+                        model: root.boardRangeValueOptions(root.boardRangeOperation)
+                        delegate: FilterChip {
+                            required property var modelData
+                            text: modelData.label
+                            active: root.boardRangeValue === modelData.value
+                            onClicked: {
+                                root.boardRangeValue = modelData.value
+                                root.refreshBoardRangePreview()
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                objectName: "carouselBoardRangePreview"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 150
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.72)
+                border.width: 1
+                border.color: Boolean(root.boardRangePreview.available)
+                              ? theme.alpha(theme.success, 0.46)
+                              : theme.alpha(theme.warning, 0.42)
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Label {
+                            Layout.fillWidth: true
+                            text: Number(root.boardRangePreview.affectedBoardCount || 0) +
+                                  " board" +
+                                  (Number(root.boardRangePreview.affectedBoardCount || 0) === 1 ? "" : "s") +
+                                  " targeted"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                        }
+                        StatusChip {
+                            text: Boolean(root.boardRangePreview.available) ? "Ready" : "No change"
+                            tone: Boolean(root.boardRangePreview.available) ? "success" : "warning"
+                            compact: true
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Boards · " + ((root.boardRangePreview.boardNumbers || []).join(" · "))
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: Number(root.boardRangePreview.changedBoardCount || 0) + " boards will change" +
+                              (Number(root.boardRangePreview.affectedLayerCount || 0) > 0
+                               ? " · " + Number(root.boardRangePreview.affectedLayerCount || 0) + " layers affected"
+                               : "")
+                        color: theme.textMain
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: !Boolean(root.boardRangePreview.available)
+                        text: String(root.boardRangePreview.failureReason || "Choose an operation and value.")
+                        color: theme.warning
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    compact: true
+                    text: "Cancel"
+                    onClicked: carouselBoardRangeCommandDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplyBoardRangeCommandButton"
+                    compact: true
+                    tone: "primary"
+                    text: "Apply to " + Number(root.boardRangePreview.affectedBoardCount || 0) + " boards"
+                    enabled: Boolean(root.boardRangePreview.available)
+                    disabledReason: String(root.boardRangePreview.failureReason || "Choose a range command.")
+                    onClicked: {
+                        if (carouselDocument.applyBoardRangeCommand(
+                                    root.boardRangeOperation,
+                                    root.boardRangeValue,
+                                    root.boardRangeScope))
+                            carouselBoardRangeCommandDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselNeighborComparisonDialog
+        objectName: "carouselNeighborComparisonDialog"
+
+        function openBoard(boardIndex) {
+            carouselDocument.selectSlide(boardIndex)
+            close()
+        }
+
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(940, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Left) {
+                event.accepted = carouselDocument.selectAdjacentSlide(-1)
+            } else if (event.key === Qt.Key_Right) {
+                event.accepted = carouselDocument.selectAdjacentSlide(1)
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                openBoard(Number(root.neighborComparison.currentIndex || 0))
+                event.accepted = true
+            }
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Neighbor comparison"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Live board previews · temporary comparison · never exports"
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ActionButton {
+                    objectName: "carouselNeighborComparisonPreviousButton"
+                    compact: true
+                    iconName: "chevron-left"
+                    text: "Previous"
+                    enabled: Boolean(root.neighborComparison.previousAvailable)
+                    onClicked: carouselDocument.selectAdjacentSlide(-1)
+                }
+
+                ActionButton {
+                    objectName: "carouselNeighborComparisonNextButton"
+                    compact: true
+                    iconName: "chevron-right"
+                    text: "Next"
+                    enabled: Boolean(root.neighborComparison.nextAvailable)
+                    onClicked: carouselDocument.selectAdjacentSlide(1)
+                }
+
+                ActionButton {
+                    compact: true
+                    text: "Close"
+                    onClicked: carouselNeighborComparisonDialog.close()
+                }
+            }
+
+            RowLayout {
+                objectName: "carouselNeighborComparisonSurface"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 12
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumWidth: 260
+                    radius: theme.radius10
+                    color: theme.alpha(theme.ink950, 0.78)
+                    border.width: root.neighborComparison.focusedSide === "left" ? 2 : 1
+                    border.color: root.neighborComparison.focusedSide === "left"
+                                  ? theme.accentWarm500 : theme.alpha(theme.lineSoft, 0.46)
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: Number(root.neighborComparison.leftBoardNumber || 0) + " · " +
+                                      String(root.neighborComparison.leftName || "")
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                            StatusChip {
+                                text: root.neighborComparison.focusedSide === "left"
+                                      ? "Current" : String(root.neighborComparison.leftRole || "content")
+                                tone: root.neighborComparison.focusedSide === "left" ? "accent" : "neutral"
+                                compact: true
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            radius: theme.radius8
+                            color: "#fbf7f1"
+                            clip: true
+
+                            Image {
+                                objectName: "carouselNeighborComparisonLeftPreview"
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                source: String(root.neighborComparison.leftPreviewSource || "")
+                                sourceSize.width: Number(root.neighborComparison.boardPixelWidth || 1080)
+                                sourceSize.height: Number(root.neighborComparison.boardPixelHeight || 1350)
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                                cache: false
+                            }
+                        }
+
+                        ActionButton {
+                            Layout.alignment: Qt.AlignRight
+                            compact: true
+                            text: "Open board " + Number(root.neighborComparison.leftBoardNumber || 0)
+                            tone: root.neighborComparison.focusedSide === "left" ? "primary" : "neutral"
+                            onClicked: carouselNeighborComparisonDialog.openBoard(
+                                           Number(root.neighborComparison.leftBoardIndex || 0))
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumWidth: 260
+                    radius: theme.radius10
+                    color: theme.alpha(theme.ink950, 0.78)
+                    border.width: root.neighborComparison.focusedSide === "right" ? 2 : 1
+                    border.color: root.neighborComparison.focusedSide === "right"
+                                  ? theme.accentWarm500 : theme.alpha(theme.lineSoft, 0.46)
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: Number(root.neighborComparison.rightBoardNumber || 0) + " · " +
+                                      String(root.neighborComparison.rightName || "")
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                            StatusChip {
+                                text: root.neighborComparison.focusedSide === "right"
+                                      ? "Current" : String(root.neighborComparison.rightRole || "content")
+                                tone: root.neighborComparison.focusedSide === "right" ? "accent" : "neutral"
+                                compact: true
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            radius: theme.radius8
+                            color: "#fbf7f1"
+                            clip: true
+
+                            Image {
+                                objectName: "carouselNeighborComparisonRightPreview"
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                source: String(root.neighborComparison.rightPreviewSource || "")
+                                sourceSize.width: Number(root.neighborComparison.boardPixelWidth || 1080)
+                                sourceSize.height: Number(root.neighborComparison.boardPixelHeight || 1350)
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                                cache: false
+                            }
+                        }
+
+                        ActionButton {
+                            Layout.alignment: Qt.AlignRight
+                            compact: true
+                            text: "Open board " + Number(root.neighborComparison.rightBoardNumber || 0)
+                            tone: root.neighborComparison.focusedSide === "right" ? "primary" : "neutral"
+                            onClicked: carouselNeighborComparisonDialog.openBoard(
+                                           Number(root.neighborComparison.rightBoardIndex || 0))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselContinuityPreviewDialog
+        objectName: "carouselContinuityPreviewDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(960, root.width - 48)
+        height: Math.min(760, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Continuity preview"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 22
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Rendered boards " + (Number(root.continuityPreview.leftBoardIndex || 0) + 1) +
+                              " and " + (Number(root.continuityPreview.rightBoardIndex || 1) + 1) +
+                              " · actual export cut at " + Number(root.continuityPreview.actualCutX || 0) + " px"
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                StatusChip {
+                    text: root.continuityPreview.hasCriticalSeamContent
+                          ? root.continuityPreview.criticalSeamCount + " seam warning" +
+                            (root.continuityPreview.criticalSeamCount === 1 ? "" : "s")
+                          : "Cut clear"
+                    tone: root.continuityPreview.hasCriticalSeamContent ? "warning" : "success"
+                    compact: true
+                    detailText: root.continuityPreview.hasCriticalSeamContent
+                                ? "One or more editable layers cross the exact exported cut."
+                                : "No editable layer crosses the exact exported cut."
+                }
+
+                ActionButton {
+                    compact: true
+                    text: "Close"
+                    onClicked: carouselContinuityPreviewDialog.close()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Label {
+                    text: "Simulated platform gutter"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+
+                Repeater {
+                    model: [
+                        { label: "None", pixels: 0 },
+                        { label: "Tight 8 px", pixels: 8 },
+                        { label: "Standard 16 px", pixels: 16 },
+                        { label: "Wide 24 px", pixels: 24 }
+                    ]
+
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: modelData.label
+                        active: root.continuityGutterPixels === modelData.pixels
+                        onClicked: root.continuityGutterPixels = modelData.pixels
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Label {
+                    text: "Simulation only · never exported"
+                    color: theme.textFaint
+                    font.family: theme.fontMono
+                    font.pixelSize: 9
+                }
+            }
+
+            Rectangle {
+                id: continuityPreviewStage
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 300
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.86)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.4)
+                clip: true
+
+                Row {
+                    id: continuityBoardRow
+                    anchors.centerIn: parent
+                    spacing: root.continuityGutterPixels
+                    readonly property real boardAspect: Number(root.continuityPreview.boardPixelWidth || 1080) /
+                                                        Math.max(1, Number(root.continuityPreview.boardPixelHeight || 1350))
+                    height: Math.min(parent.height - 42,
+                                     (parent.width - spacing - 42) / Math.max(0.1, boardAspect * 2))
+                    width: height * boardAspect * 2 + spacing
+
+                    Repeater {
+                        model: [
+                            {
+                                source: String(root.continuityPreview.leftPreviewSource || ""),
+                                boardNumber: Number(root.continuityPreview.leftBoardIndex || 0) + 1,
+                                side: "left"
+                            },
+                            {
+                                source: String(root.continuityPreview.rightPreviewSource || ""),
+                                boardNumber: Number(root.continuityPreview.rightBoardIndex || 1) + 1,
+                                side: "right"
+                            }
+                        ]
+
+                        delegate: Item {
+                            id: continuityBoard
+                            required property var modelData
+                            width: continuityBoardRow.height * continuityBoardRow.boardAspect
+                            height: continuityBoardRow.height
+
+                            Rectangle {
+                                anchors.fill: parent
+                                color: "#0a0a0a"
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.72)
+                            }
+
+                            Image {
+                                anchors.fill: parent
+                                source: continuityBoard.modelData.source
+                                fillMode: Image.PreserveAspectFit
+                                cache: false
+                                asynchronous: true
+                                smooth: true
+                                sourceSize.width: Number(root.continuityPreview.boardPixelWidth || 1080)
+                                sourceSize.height: Number(root.continuityPreview.boardPixelHeight || 1350)
+                            }
+
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.right: continuityBoard.modelData.side === "left" ? parent.right : undefined
+                                anchors.left: continuityBoard.modelData.side === "right" ? parent.left : undefined
+                                width: Math.max(3, Number(root.continuityPreview.unsafeBandPixels || 48) /
+                                                Math.max(1, Number(root.continuityPreview.boardPixelWidth || 1080)) * parent.width)
+                                color: theme.alpha(theme.warning, root.continuityPreview.hasCriticalSeamContent ? 0.22 : 0.10)
+                                border.width: 1
+                                border.color: theme.alpha(theme.warning, 0.72)
+                            }
+
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.right: continuityBoard.modelData.side === "left" ? parent.right : undefined
+                                anchors.left: continuityBoard.modelData.side === "right" ? parent.left : undefined
+                                width: 2
+                                color: root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success
+                            }
+
+                            StatusChip {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.margins: 8
+                                text: "Board " + continuityBoard.modelData.boardNumber
+                                compact: true
+                                detailText: "Exact rendered board preview"
+                            }
+                        }
+                    }
+                }
+
+                Label {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 10
+                    text: root.continuityGutterPixels === 0
+                          ? "Exact exported edges touching"
+                          : root.continuityGutterPixels + " px simulated feed gutter between exact exported edges"
+                    color: theme.textFaint
+                    font.family: theme.fontMono
+                    font.pixelSize: 9
+                    elide: Text.ElideNone
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: continuityWarningContent.implicitHeight + 20
+                radius: theme.radius8
+                color: theme.alpha(root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success, 0.10)
+                border.width: 1
+                border.color: theme.alpha(root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success, 0.42)
+
+                ColumnLayout {
+                    id: continuityWarningContent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.margins: 10
+                    spacing: 5
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.continuityPreview.hasCriticalSeamContent
+                              ? "Critical content crosses the unsafe seam"
+                              : "No editable content crosses the unsafe seam"
+                        color: root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    Repeater {
+                        model: root.continuityPreview.seamWarnings || []
+
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: String(modelData.message || "Layer crosses the exported cut.")
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
+                            ActionButton {
+                                compact: true
+                                text: "Select layer"
+                                onClicked: {
+                                    carouselDocument.focusPreflightIssue(
+                                                Number(modelData.boardIndex || 0),
+                                                String(modelData.itemId || ""))
+                                    carouselContinuityPreviewDialog.close()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselStatusNoticesDialog
+        objectName: "carouselStatusNoticesDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(620, root.width - 48)
+        height: Math.min(520, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Carousel Status Details"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideNone
+                }
+
+                ActionButton {
+                    text: "Clear All"
+                    compact: true
+                    onClicked: carouselDocument.clearStatusNotices()
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Failures stay here until dismissed, even after later operations replace the live status line."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+
+                ColumnLayout {
+                    width: Math.max(0, carouselStatusNoticesDialog.width - 32)
+                    spacing: 8
+
+                    Repeater {
+                        model: carouselDocument.statusNotices
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: noticeContent.implicitHeight + 18
+                            radius: theme.radius6
+                            color: theme.alpha(theme.ink850, 0.76)
+                            border.width: 1
+                            border.color: modelData.severity === "error"
+                                          ? theme.alpha(theme.error, 0.5)
+                                          : theme.alpha(theme.warning, 0.46)
+
+                            ColumnLayout {
+                                id: noticeContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.margins: 9
+                                spacing: 6
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+
+                                    StatusChip {
+                                        text: String(modelData.category || "details")
+                                        tone: modelData.severity === "error" ? "error" : "warning"
+                                        compact: true
+                                        detailText: String(modelData.message || "")
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.createdAt || "")
+                                        color: theme.textFaint
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        horizontalAlignment: Text.AlignRight
+                                        elide: Text.ElideNone
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.message || "")
+                                    color: modelData.severity === "error" ? theme.error : theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+
+                                    Item { Layout.fillWidth: true }
+
+                                    ActionButton {
+                                        text: "Dismiss"
+                                        compact: true
+                                        onClicked: carouselDocument.dismissStatusNotice(
+                                                       Number(modelData.noticeId || 0))
+                                    }
+
+                                    ActionButton {
+                                        text: String(modelData.actionLabel || "Inspect")
+                                        compact: true
+                                        tone: "primary"
+                                        enabled: String(modelData.actionKey || "") !== "inspect"
+                                        disabledReason: "Use the visible message and affected surface for inspection."
+                                        onClicked: {
+                                            root.handleStatusNoticeAction(String(modelData.actionKey || ""))
+                                            carouselStatusNoticesDialog.close()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            ActionButton {
+                Layout.alignment: Qt.AlignRight
+                text: "Close"
+                compact: true
+                onClicked: carouselStatusNoticesDialog.close()
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselRecoveryDialog
+        objectName: "carouselRecoveryDialog"
+        readonly property var recovery: carouselDocument.recoveryState
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(520, root.width - 48)
+        height: 300
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.NoAutoClose
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.warning, 0.58)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                text: "Recover Carousel"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 22
+                font.weight: Font.DemiBold
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "A crash-safe snapshot exists for “" + String(carouselRecoveryDialog.recovery.documentName || "Untitled Carousel") + "”."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 12
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: (carouselRecoveryDialog.recovery.usingLastGood ? "Using last good snapshot  " : "Snapshot  ") +
+                      String(carouselRecoveryDialog.recovery.capturedAt || "time unavailable")
+                color: carouselRecoveryDialog.recovery.usingLastGood ? theme.warning : theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            Item { Layout.fillHeight: true }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    text: "Discard"
+                    tone: "danger"
+                    compact: true
+                    onClicked: {
+                        carouselDocument.discardRecovery()
+                        carouselRecoveryDialog.close()
+                        if (!carouselDocument.hasActiveCarousel)
+                            root.beginCarouselSetup()
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                ActionButton {
+                    text: "Open Saved Version"
+                    compact: true
+                    visible: Boolean(carouselRecoveryDialog.recovery.hasCurrentSavedVersion)
+                    onClicked: {
+                        if (carouselDocument.openCurrentSavedVersion())
+                            carouselRecoveryDialog.close()
+                    }
+                }
+
+                ActionButton {
+                    text: "Open As Copy"
+                    compact: true
+                    onClicked: {
+                        if (carouselDocument.openRecoveryCopy())
+                            carouselRecoveryDialog.close()
+                    }
+                }
+
+                ActionButton {
+                    text: "Restore"
+                    tone: "primary"
+                    compact: true
+                    onClicked: {
+                        if (carouselDocument.restoreRecovery())
+                            carouselRecoveryDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselRelinkDialog
+        objectName: "carouselRelinkDialog"
+        readonly property var missingEntries: carouselDocument.missingMediaEntries
+        readonly property var plan: carouselDocument.relinkPlan
+        readonly property int verifiedCount: {
+            let count = 0
+            for (let index = 0; index < plan.length; ++index) {
+                if (Boolean(plan[index].safeToApply))
+                    ++count
+            }
+            return count
+        }
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(680, root.width - 48)
+        height: Math.min(640, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearRelinkPlan()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 76
+                color: "transparent"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 4
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Relink Missing Media"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: carouselRelinkDialog.missingEntries.length + " missing instance" +
+                              (carouselRelinkDialog.missingEntries.length === 1 ? "" : "s") +
+                              ". Only unique metadata matches can be applied."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+
+                ColumnLayout {
+                    width: Math.max(0, carouselRelinkDialog.width - 32)
+                    spacing: 8
+
+                    Repeater {
+                        model: carouselRelinkDialog.plan.length > 0
+                               ? carouselRelinkDialog.plan
+                               : carouselRelinkDialog.missingEntries
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: relinkEntryContent.implicitHeight + 18
+                            radius: theme.radius6
+                            color: theme.alpha(theme.ink850, 0.76)
+                            border.width: 1
+                            border.color: Boolean(modelData.safeToApply)
+                                          ? theme.alpha(theme.success, 0.5)
+                                          : modelData.matchState === "ambiguous" ||
+                                            modelData.matchState === "metadata-mismatch"
+                                            ? theme.alpha(theme.warning, 0.52)
+                                            : theme.alpha(theme.lineSoft, 0.34)
+
+                            ColumnLayout {
+                                id: relinkEntryContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.margins: 9
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Board " + (Number(modelData.boardIndex || 0) + 1) +
+                                              "  •  " + String(modelData.displayLabel || "Missing media")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    StatusChip {
+                                        compact: true
+                                        text: Boolean(modelData.safeToApply) ? "Verified"
+                                              : modelData.matchState === "ambiguous" ? "Ambiguous"
+                                              : modelData.matchState === "metadata-mismatch" ? "Mismatch"
+                                              : "Missing"
+                                        tone: Boolean(modelData.safeToApply) ? "success"
+                                              : modelData.matchState === "not-found" ? "error" : "warning"
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.originalPath || "")
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: String(modelData.candidatePath || "").length > 0
+                                    text: "Candidate  " + String(modelData.candidatePath || "")
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: String(modelData.matchReason || "").length > 0
+                                    text: String(modelData.matchReason || "") +
+                                          "  Source " + Number(modelData.sourceWidth || 0) + "×" + Number(modelData.sourceHeight || 0) +
+                                          ", " + Number(modelData.sourceFileSize || 0) + " bytes."
+                                    color: Boolean(modelData.safeToApply) ? theme.success : theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 66
+                color: theme.alpha(theme.ink850, 0.72)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.32)
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+
+                    ActionButton {
+                        text: "Cancel"
+                        compact: true
+                        onClicked: carouselRelinkDialog.close()
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    ActionButton {
+                        text: "Scan Folder"
+                        compact: true
+                        onClicked: carouselDocument.chooseRelinkDirectory()
+                    }
+
+                    ActionButton {
+                        text: "Relink " + carouselRelinkDialog.verifiedCount + " Verified"
+                        compact: true
+                        tone: "primary"
+                        enabled: carouselRelinkDialog.verifiedCount > 0
+                        disabledReason: "Scan a folder and resolve ambiguous or mismatched candidates first."
+                        onClicked: {
+                            if (carouselDocument.applyRelinkPlan())
+                                carouselRelinkDialog.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselCopyProofDialog
+        objectName: "carouselCopyProofDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(700, root.width - 48)
+        height: Math.min(650, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Copy proof"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 21
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Reviews spelling, repeated words, and spacing. It never changes authored copy."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                StatusChip {
+                    text: carouselDocument.copyProofIssues.length > 0
+                          ? carouselDocument.copyProofIssues.length + " open"
+                          : "Clear"
+                    tone: carouselDocument.copyProofIssues.length > 0 ? "warning" : "success"
+                    compact: true
+                    detailText: "Review only; no automatic rewriting."
+                }
+
+                ActionButton {
+                    text: "Close"
+                    compact: true
+                    onClicked: carouselCopyProofDialog.close()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Label {
+                    text: "Language"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+
+                Repeater {
+                    model: carouselDocument.copyProofLanguageOptions
+
+                    delegate: FilterChip {
+                        required property string modelData
+                        text: modelData
+                        active: carouselDocument.copyProofLanguage === modelData
+                        onClicked: carouselDocument.setCopyProofLanguage(modelData)
+                    }
+                }
+
+                Item { Layout.fillWidth: true }
+
+                ActionButton {
+                    objectName: "carouselNextCopyProofIssueButton"
+                    text: "Next issue"
+                    compact: true
+                    enabled: carouselDocument.copyProofIssues.length > 0
+                    disabledReason: "No copy proof issues remain."
+                    onClicked: carouselDocument.nextCopyProofIssue()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.52)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                ListView {
+                    id: carouselCopyProofIssueList
+                    objectName: "carouselCopyProofIssueList"
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    spacing: 6
+                    model: carouselDocument.copyProofIssues
+                    reuseItems: true
+
+                    delegate: Rectangle {
+                        id: copyProofIssueRow
+                        required property var modelData
+                        width: ListView.view ? ListView.view.width : 600
+                        height: copyProofIssueContent.implicitHeight + 18
+                        radius: theme.radius6
+                        color: theme.alpha(theme.ink850, 0.8)
+                        border.width: 1
+                        border.color: theme.alpha(theme.warning, 0.36)
+
+                        ColumnLayout {
+                            id: copyProofIssueContent
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: 9
+                            spacing: 5
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 7
+
+                                StatusChip {
+                                    text: String(copyProofIssueRow.modelData.code || "copy")
+                                    tone: "warning"
+                                    compact: true
+                                    detailText: "Board " + (Number(copyProofIssueRow.modelData.boardIndex || 0) + 1) +
+                                                " · " + String(copyProofIssueRow.modelData.layerLabel || "Text layer")
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(copyProofIssueRow.modelData.message || "Review this copy.")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: (copyProofIssueRow.modelData.suggestions || []).length > 0
+                                text: "Suggestion: " + (copyProofIssueRow.modelData.suggestions || []).join(", ")
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                ActionButton {
+                                    text: "Select layer"
+                                    compact: true
+                                    onClicked: carouselDocument.focusPreflightIssue(
+                                                   Number(copyProofIssueRow.modelData.boardIndex || 0),
+                                                   String(copyProofIssueRow.modelData.itemId || ""))
+                                }
+
+                                Item { Layout.fillWidth: true }
+
+                                ActionButton {
+                                    visible: Boolean(copyProofIssueRow.modelData.canAddToDictionary)
+                                    text: "Add word"
+                                    compact: true
+                                    onClicked: carouselDocument.addCopyProofWord(
+                                                   String(copyProofIssueRow.modelData.word || ""))
+                                }
+
+                                ActionButton {
+                                    text: "Ignore"
+                                    compact: true
+                                    onClicked: carouselDocument.ignoreCopyProofIssue(
+                                                   String(copyProofIssueRow.modelData.issueId || ""))
+                                }
+                            }
+                        }
+
+                        TapHandler {
+                            onTapped: carouselDocument.focusPreflightIssue(
+                                          Number(copyProofIssueRow.modelData.boardIndex || 0),
+                                          String(copyProofIssueRow.modelData.itemId || ""))
+                        }
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        width: Math.max(120, parent.width - 40)
+                        visible: carouselCopyProofIssueList.count === 0
+                        text: "No copy proof issues in visible text layers."
+                        color: theme.textFaint
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Ignored issues stay with this document. Added words persist in your Carousel dictionary."
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselFontBrowserDialog
+        objectName: "carouselFontBrowserDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Installed fonts"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 21
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: selection.textFontAvailable
+                              ? "Choose an installed family for this text layer."
+                              : "“" + String(selection.resolvedTextFontFamily || selection.textFontFamily) +
+                                "” is missing. Choosing a face below opens a layout-diff preview before substitution."
+                        color: selection.textFontAvailable ? theme.textMuted : theme.warning
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                StatusChip {
+                    text: selection.textFontAvailable ? "Installed" : "Missing font"
+                    tone: selection.textFontAvailable ? "success" : "error"
+                    compact: true
+                    detailText: selection.textFontAvailable
+                                ? String(selection.resolvedTextFontFamily || selection.textFontFamily)
+                                : "No silent fallback is applied."
+                }
+
+                ActionButton {
+                    text: "Close"
+                    compact: true
+                    onClicked: carouselFontBrowserDialog.close()
+                }
+            }
+
+            TextField {
+                id: carouselFontSearchField
+                objectName: "carouselFontSearchField"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 34
+                placeholderText: "Search installed font names"
+                text: root.fontBrowserSearchText
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                selectByMouse: true
+                onTextEdited: root.fontBrowserSearchText = text
+                background: Rectangle {
+                    radius: theme.radius6
+                    color: theme.alpha(theme.ink850, 0.9)
+                    border.width: 1
+                    border.color: carouselFontSearchField.activeFocus
+                                  ? theme.alpha(theme.accentCool400, 0.72)
+                                  : theme.alpha(theme.lineSoft, 0.45)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: [
+                        { label: "All installed", value: "all", count: carouselDocument.installedFontFamilies.length },
+                        { label: "Favorites", value: "favorites", count: carouselDocument.favoriteFontFamilies.length },
+                        { label: "Recent", value: "recent", count: carouselDocument.recentFontFamilies.length }
+                    ]
+
+                    delegate: FilterChip {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.label + "  " + modelData.count
+                        active: root.fontBrowserSection === modelData.value
+                        onClicked: root.fontBrowserSection = modelData.value
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: theme.radius8
+                color: theme.alpha(theme.ink950, 0.52)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                ListView {
+                    id: carouselFontFamilyList
+                    objectName: "carouselFontFamilyList"
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    clip: true
+                    spacing: 5
+                    model: root.fontBrowserFamilies()
+                    reuseItems: true
+
+                    delegate: Rectangle {
+                        id: fontFamilyRow
+                        required property string modelData
+                        width: ListView.view ? ListView.view.width : 600
+                        height: 78
+                        radius: theme.radius6
+                        color: fontRowHover.hovered
+                               ? theme.alpha(theme.accentCool400, 0.12)
+                               : selection.textFontAvailable &&
+                                 String(selection.resolvedTextFontFamily || selection.textFontFamily).toLowerCase() ===
+                                 modelData.toLowerCase()
+                                 ? theme.alpha(theme.accentWarm400, 0.12)
+                                 : theme.alpha(theme.ink850, 0.78)
+                        border.width: 1
+                        border.color: selection.textFontAvailable &&
+                                      String(selection.resolvedTextFontFamily || selection.textFontFamily).toLowerCase() ===
+                                      modelData.toLowerCase()
+                                      ? theme.alpha(theme.accentWarm400, 0.68)
+                                      : theme.alpha(theme.lineSoft, 0.32)
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 9
+                            spacing: 10
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: fontFamilyRow.modelData
+                                    color: theme.textStrong
+                                    font.family: fontFamilyRow.modelData
+                                    font.pixelSize: 16
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(selection.text || "Aa Bb Cc 0123 — Live font preview")
+                                    color: theme.textMuted
+                                    font.family: fontFamilyRow.modelData
+                                    font.pixelSize: 14
+                                    maximumLineCount: 2
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                            }
+
+                            ActionButton {
+                                compact: true
+                                text: root.fontFamilyInList(
+                                          fontFamilyRow.modelData,
+                                          carouselDocument.favoriteFontFamilies) ? "★" : "☆"
+                                tooltipText: root.fontFamilyInList(
+                                                 fontFamilyRow.modelData,
+                                                 carouselDocument.favoriteFontFamilies)
+                                             ? "Remove from favorite fonts"
+                                             : "Add to favorite fonts"
+                                onClicked: carouselDocument.toggleFavoriteFontFamily(fontFamilyRow.modelData)
+                            }
+
+                            ActionButton {
+                                compact: true
+                                text: selection.textFontAvailable ? "Use font" : "Preview fallback"
+                                tone: "primary"
+                                onClicked: root.chooseFontBrowserFamily(fontFamilyRow.modelData)
+                            }
+                        }
+
+                        HoverHandler {
+                            id: fontRowHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+
+                        TapHandler {
+                            onTapped: root.chooseFontBrowserFamily(fontFamilyRow.modelData)
+                        }
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        width: Math.max(120, parent.width - 40)
+                        visible: carouselFontFamilyList.count === 0
+                        text: root.fontBrowserSearchText.length > 0
+                              ? "No installed fonts match this search."
+                              : root.fontBrowserSection === "favorites"
+                                ? "No favorite fonts yet. Star any installed family."
+                                : "No recent fonts yet. Choosing a font adds it here."
+                        color: theme.textFaint
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: selection.textFontAvailable
+                      ? "Favorites and the last 12 chosen faces persist in the Carousel library."
+                      : "Fallback remains unapplied until the next screen's exact layout preview is accepted."
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselFontRecoveryDialog
+        objectName: "carouselFontRecoveryDialog"
+        readonly property var missingEntries: carouselDocument.missingFontEntries
+        readonly property var previewEntries: carouselDocument.fontSubstitutionPreview
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(650, root.width - 48)
+        height: Math.min(580, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearFontSubstitutionPreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: "Resolve Missing Fonts"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 20
+                font.weight: Font.DemiBold
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Export stays blocked until each unavailable face is installed or an explicit layout preview is accepted."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ToneComboBox {
+                    id: missingFontCombo
+                    Layout.fillWidth: true
+                    model: carouselFontRecoveryDialog.missingEntries
+                    textRole: "resolvedFontFamily"
+                    valueRole: "fontFamily"
+                }
+
+                Label {
+                    text: "→"
+                    color: theme.textFaint
+                    font.family: theme.fontUi
+                }
+
+                ToneComboBox {
+                    id: replacementFontCombo
+                    Layout.fillWidth: true
+                    editable: true
+                    model: carouselDocument.installedFontFamilies
+                }
+
+                ActionButton {
+                    text: "Preview"
+                    compact: true
+                    enabled: missingFontCombo.currentIndex >= 0 && replacementFontCombo.currentText.length > 0
+                    disabledReason: "Choose a missing face and an installed replacement."
+                    onClicked: carouselDocument.previewFontSubstitution(
+                                   String(missingFontCombo.currentValue || ""),
+                                   replacementFontCombo.currentText)
+                }
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+
+                ColumnLayout {
+                    width: Math.max(0, carouselFontRecoveryDialog.width - 32)
+                    spacing: 7
+
+                    Repeater {
+                        model: carouselFontRecoveryDialog.previewEntries.length > 0
+                               ? carouselFontRecoveryDialog.previewEntries
+                               : carouselFontRecoveryDialog.missingEntries
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: fontRecoveryRow.implicitHeight + 18
+                            radius: theme.radius6
+                            color: theme.alpha(theme.ink850, 0.76)
+                            border.width: 1
+                            border.color: Boolean(modelData.overflowAfter)
+                                          ? theme.alpha(theme.error, 0.55)
+                                          : Boolean(modelData.layoutChanged)
+                                            ? theme.alpha(theme.warning, 0.5)
+                                            : theme.alpha(theme.lineSoft, 0.34)
+
+                            ColumnLayout {
+                                id: fontRecoveryRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.margins: 9
+                                spacing: 4
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Board " + (Number(modelData.boardIndex || 0) + 1) +
+                                          "  •  " + String(modelData.layerLabel || "Text layer")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: carouselFontRecoveryDialog.previewEntries.length > 0
+                                          ? String(modelData.sourceFontFamily) + " → " + String(modelData.replacementFontFamily) +
+                                            "  •  height " + Number(modelData.beforeHeight || 0).toFixed(1) + " → " +
+                                            Number(modelData.afterHeight || 0).toFixed(1) +
+                                            (Boolean(modelData.overflowAfter) ? "  •  OVERFLOW" : "")
+                                          : "Missing “" + String(modelData.resolvedFontFamily || modelData.fontFamily) +
+                                            "”  •  " + Number(modelData.pointSize || 0) + " pt"
+                                    color: Boolean(modelData.overflowAfter) ? theme.error
+                                          : Boolean(modelData.layoutChanged) ? theme.warning : theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.text || "")
+                                    color: theme.textFaint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    text: "Open Font Book"
+                    compact: true
+                    onClicked: carouselDocument.openFontManagement()
+                }
+
+                Item { Layout.fillWidth: true }
+
+                ActionButton {
+                    text: "Cancel"
+                    compact: true
+                    onClicked: carouselFontRecoveryDialog.close()
+                }
+
+                ActionButton {
+                    text: "Apply Previewed Substitution"
+                    compact: true
+                    tone: "primary"
+                    enabled: carouselFontRecoveryDialog.previewEntries.length > 0
+                    disabledReason: "Preview the exact layout effect before applying a replacement."
+                    onClicked: {
+                        if (carouselDocument.applyFontSubstitution())
+                            carouselFontRecoveryDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselExportSheet
+        objectName: "carouselExportSheet"
+        readonly property var summary: carouselDocument.exportSummary
+        readonly property var presetState: carouselDocument.exportPresetState
+        readonly property var progress: carouselDocument.exportProgress
+        readonly property var preflightIssues: carouselDocument.exportPreflightIssues
+        property string inspectedPresetId: ""
+        property bool preservePresetOverrides: true
+        readonly property var inspectedPreset: {
+            const presets = carouselDocument.exportPresets
+            const requestedId = inspectedPresetId.length > 0
+                              ? inspectedPresetId
+                              : String(presetState.activePresetId || "")
+            for (let index = 0; index < presets.length; ++index) {
+                if (String(presets[index].presetId) === requestedId)
+                    return presets[index]
+            }
+            return presets.length > 0 ? presets[0] : ({})
+        }
+        readonly property var boardReview: {
+            const entries = carouselDocument.exportOutputPreview
+            const boards = []
+            for (let index = 0; index < entries.length; ++index) {
+                if (Number(entries[index].boardIndex) >= 0)
+                    boards.push(entries[index])
+            }
+            return boards
+        }
+        readonly property string exportSheetContract: "carousel-export-sheet:v3|scope:current-selected-all|exact-ordered-thumbnail-review:true|board-count-order:true|ratio-pixels:true|file-types:true|color-space:true|destination:true|estimated-output:true|presets:versioned-resolved-override-aware-dated-guidance|blocking-preflight:true|controlled-start:true|no-elide:true"
+        readonly property string exportPresetContract: "carousel-export-presets:v1|built-ins:tiktok-vertical,tiktok-square,youtube-square,review,archive|versioned:true|compatibility:strict-no-stretch|apply:one-undo-step|overrides:preserve-reset-visible|resolved-settings:all-visible|persistence:document-schema-11|manifest:identity-version-override-count|guidance:first-party-source-last-reviewed-review-due-stale-state|no-elide:true"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(620, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: {
+            if (inspectedPresetId.length === 0 && String(presetState.activePresetId || "").length > 0)
+                inspectedPresetId = String(presetState.activePresetId)
+        }
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 70
+                color: "transparent"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 20
+                    anchors.rightMargin: 14
+                    spacing: 12
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Label {
+                            text: "Export Carousel"
+                            color: theme.textStrong
+                            font.family: theme.fontDisplay
+                            font.pixelSize: 20
+                            font.weight: Font.Bold
+                        }
+
+                        Label {
+                            text: carouselExportSheet.summary.boardCount + " ordered board" +
+                                  (carouselExportSheet.summary.boardCount === 1 ? "" : "s")
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    ActionButton {
+                        compact: true
+                        showText: false
+                        iconName: "close"
+                        tooltipText: "Close export sheet"
+                        onClicked: carouselExportSheet.close()
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.45)
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                enabled: !carouselDocument.exportBusy
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 14
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        Layout.topMargin: 18
+                        columns: 2
+                        columnSpacing: 22
+                        rowSpacing: 9
+
+                        Label { text: "Boards"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
+                        Label { text: carouselExportSheet.summary.boardCount + " · order " + carouselExportSheet.summary.boardOrder; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
+                        Label { text: "Canvas"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
+                        Label { text: carouselExportSheet.summary.ratio + " · " + carouselExportSheet.summary.pixelSize + " px per board"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
+                        Label { text: "Files"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
+                        Label { text: carouselExportSheet.summary.fileTypes; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
+                        Label { text: "Color"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
+                        Label { text: carouselExportSheet.summary.colorSpace; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
+                        Label { text: "Estimate"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
+                        Label { text: carouselExportSheet.summary.estimatedOutput; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
+                    }
+
+                    ColumnLayout {
+                        id: carouselExportPresetSection
+                        objectName: "carouselExportPresetSection"
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: "Delivery presets"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                                Layout.fillWidth: true
+                            }
+
+                            StatusChip {
+                                visible: Boolean(carouselExportSheet.presetState.hasActivePreset)
+                                text: String(carouselExportSheet.presetState.activePresetName || "Custom") +
+                                      " · v" + Number(carouselExportSheet.presetState.activePresetVersion || 0) +
+                                      (Number(carouselExportSheet.presetState.overrideCount || 0) > 0
+                                       ? " · " + Number(carouselExportSheet.presetState.overrideCount) + " overridden"
+                                       : " · exact")
+                                tone: Number(carouselExportSheet.presetState.overrideCount || 0) > 0
+                                      ? "warning" : "success"
+                                compact: true
+                            }
+                        }
+
+                        ListView {
+                            objectName: "carouselExportPresetBrowser"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 132
+                            orientation: ListView.Horizontal
+                            spacing: 8
+                            clip: true
+                            model: carouselDocument.exportPresets
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 184
+                                height: 128
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: String(carouselExportSheet.presetState.activePresetId || "") ===
+                                              String(modelData.presetId || "") ? 2 : 1
+                                border.color: String(carouselExportSheet.presetState.activePresetId || "") ===
+                                              String(modelData.presetId || "")
+                                              ? theme.accentWarm400
+                                              : carouselExportSheet.inspectedPresetId === String(modelData.presetId || "")
+                                                ? theme.alpha(theme.accentCool400, 0.75)
+                                                : theme.alpha(theme.lineSoft, 0.5)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 3
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.name || "Preset")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.category || "") + " · v" +
+                                              Number(modelData.presetVersion || 0) + " · " +
+                                              String(modelData.requiredRatio || "")
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.compatibilityMessage || "")
+                                        color: Boolean(modelData.compatible) ? theme.textFaint : theme.warning
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 8
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Item { Layout.fillHeight: true }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: String(carouselExportSheet.presetState.activePresetId || "") ===
+                                              String(modelData.presetId || "") ? "Reapply" : "Apply"
+                                        compact: true
+                                        tone: String(carouselExportSheet.presetState.activePresetId || "") ===
+                                              String(modelData.presetId || "") ? "secondary" : "primary"
+                                        enabled: Boolean(modelData.compatible)
+                                        disabledReason: String(modelData.compatibilityMessage || "This preset is incompatible.")
+                                        onClicked: {
+                                            carouselExportSheet.inspectedPresetId = String(modelData.presetId || "")
+                                            carouselDocument.applyExportPreset(
+                                                String(modelData.presetId || ""),
+                                                carouselExportSheet.preservePresetOverrides)
+                                        }
+                                    }
+                                }
+
+                                TapHandler {
+                                    onTapped: carouselExportSheet.inspectedPresetId =
+                                                  String(parent.modelData.presetId || "")
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            FilterChip {
+                                text: "Preserve existing overrides when applying"
+                                active: carouselExportSheet.preservePresetOverrides
+                                onClicked: carouselExportSheet.preservePresetOverrides =
+                                               !carouselExportSheet.preservePresetOverrides
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            ActionButton {
+                                objectName: "carouselResetExportPresetOverridesButton"
+                                text: "Reset Overrides"
+                                compact: true
+                                enabled: Boolean(carouselExportSheet.presetState.hasActivePreset) &&
+                                         Number(carouselExportSheet.presetState.overrideCount || 0) > 0
+                                disabledReason: "The active preset has no user overrides."
+                                onClicked: carouselDocument.resetExportPresetOverrides()
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: exportPresetGuidance.implicitHeight + 16
+                            radius: theme.radius6
+                            color: theme.alpha(theme.ink800, 0.72)
+                            border.width: 1
+                            border.color: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
+                                          ? theme.alpha(theme.warning, 0.72)
+                                          : theme.alpha(theme.lineSoft, 0.38)
+
+                            ColumnLayout {
+                                id: exportPresetGuidance
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.margins: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(carouselExportSheet.inspectedPreset.name || "Preset") +
+                                              " guidance · last reviewed " +
+                                              String(carouselExportSheet.inspectedPreset.guidanceLastReviewed || "not dated")
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    StatusChip {
+                                        visible: Boolean(carouselExportSheet.inspectedPreset.timeSensitive)
+                                        text: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
+                                              ? "Review overdue" : "Review current"
+                                        tone: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
+                                              ? "warning" : "success"
+                                        compact: true
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(carouselExportSheet.inspectedPreset.guidanceSummary || "")
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(carouselExportSheet.inspectedPreset.appChosenDefaults || "")
+                                    color: theme.textFaint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 8
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: String(carouselExportSheet.inspectedPreset.guidanceSourceUrl || "").length > 0
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Source updated " +
+                                              String(carouselExportSheet.inspectedPreset.guidanceSourceUpdated || "unknown") +
+                                              " · review due " +
+                                              String(carouselExportSheet.inspectedPreset.guidanceReviewDue || "not scheduled")
+                                        color: theme.textFaint
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    ActionButton {
+                                        text: "Open First-Party Source"
+                                        compact: true
+                                        onClicked: Qt.openUrlExternally(
+                                                       String(carouselExportSheet.inspectedPreset.guidanceSourceUrl || ""))
+                                    }
+                                }
+                            }
+                        }
+
+                        Label {
+                            text: "Resolved settings"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                        }
+
+                        GridLayout {
+                            objectName: "carouselExportPresetResolvedSettings"
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 14
+                            rowSpacing: 4
+
+                            Repeater {
+                                model: carouselExportSheet.presetState.resolvedRows || []
+
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    Layout.columnSpan: 2
+                                    spacing: 7
+
+                                    Label {
+                                        Layout.preferredWidth: 138
+                                        text: String(modelData.label || "Setting")
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.value || "")
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+
+                                    StatusChip {
+                                        visible: Boolean(modelData.overridden)
+                                        text: "Override"
+                                        tone: "warning"
+                                        compact: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 7
+
+                        Label {
+                            text: "Boards to export"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Repeater {
+                                model: carouselDocument.exportBoardScopeOptions
+
+                                delegate: FilterChip {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData === "current" ? "Current board" :
+                                          modelData === "selected" ? "Selected (" + carouselDocument.selectedSlideCount + ")" :
+                                          "All boards"
+                                    active: carouselDocument.exportBoardScope === modelData
+                                    onClicked: carouselDocument.setExportBoardScope(modelData)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            Label {
+                                text: "Exact ordered output · boards " + carouselExportSheet.summary.boardOrder
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                Layout.fillWidth: true
+                            }
+
+                            StatusChip {
+                                text: carouselExportSheet.summary.boardCount + " file" +
+                                      (carouselExportSheet.summary.boardCount === 1 ? "" : "s")
+                                tone: "neutral"
+                                compact: true
+                            }
+                        }
+
+                        ListView {
+                            objectName: "carouselExportOrderedBoardReview"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 154
+                            orientation: ListView.Horizontal
+                            spacing: 8
+                            clip: true
+                            model: carouselExportSheet.boardReview
+
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: 126
+                                height: 150
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: modelData.collision
+                                              ? theme.alpha(theme.warning, 0.8)
+                                              : theme.alpha(theme.lineSoft, 0.5)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 4
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 92
+                                        radius: theme.radius4
+                                        color: String(modelData.backgroundColor || "#fbf7f1")
+                                        clip: true
+
+                                        Image {
+                                            anchors.fill: parent
+                                            source: String(modelData.previewSource || "")
+                                            fillMode: Image.PreserveAspectFit
+                                            asynchronous: true
+                                            cache: false
+                                            visible: source.toString().length > 0
+                                        }
+
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.margins: 4
+                                            width: boardNumberLabel.implicitWidth + 8
+                                            height: boardNumberLabel.implicitHeight + 4
+                                            radius: height / 2
+                                            color: theme.alpha(theme.ink950, 0.82)
+
+                                            Label {
+                                                id: boardNumberLabel
+                                                anchors.centerIn: parent
+                                                text: String(modelData.boardNumber || "")
+                                                color: theme.textStrong
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 9
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        text: String(modelData.boardName || "").length > 0
+                                              ? String(modelData.boardName)
+                                              : "Board " + String(modelData.boardNumber || "")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                        maximumLineCount: 2
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Label {
+                                        text: String(modelData.resolvedName || "")
+                                        color: modelData.collision ? theme.warning : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                        maximumLineCount: 2
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 6
+
+                        Label {
+                            text: "Export resolution"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Repeater {
+                                model: carouselDocument.exportSizeModeOptions
+
+                                delegate: FilterChip {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData === "1x" ? "1×" :
+                                          modelData === "2x" ? "2×" : "Custom"
+                                    active: carouselDocument.exportSizeSettings.mode === modelData
+                                    onClicked: carouselDocument.setExportSizeMode(modelData)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Composer preview · " + carouselDocument.exportSizeSettings.previewResolution + " px"
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+
+                            Label {
+                                text: "Rendered export · " + carouselDocument.exportSizeSettings.exportResolution + " px"
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            visible: carouselDocument.exportSizeSettings.mode === "custom"
+
+                            TextField {
+                                id: exportCustomWidthField
+                                Layout.fillWidth: true
+                                placeholderText: "Width"
+                                selectByMouse: true
+                                validator: IntValidator { bottom: 64; top: 16384 }
+                                onEditingFinished: carouselDocument.setExportCustomPixelSize(
+                                                       Number(text),
+                                                       Number(carouselDocument.exportSizeSettings.customHeight))
+                            }
+
+                            Label {
+                                text: "×"
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            TextField {
+                                id: exportCustomHeightField
+                                Layout.fillWidth: true
+                                placeholderText: "Height"
+                                selectByMouse: true
+                                validator: IntValidator { bottom: 64; top: 16384 }
+                                onEditingFinished: carouselDocument.setExportCustomPixelSize(
+                                                       Number(carouselDocument.exportSizeSettings.customWidth),
+                                                       Number(text))
+                            }
+
+                            FilterChip {
+                                text: carouselDocument.exportSizeSettings.aspectLocked
+                                      ? "Aspect locked" : "Aspect unlocked"
+                                active: carouselDocument.exportSizeSettings.aspectLocked
+                                onClicked: carouselDocument.setExportAspectLocked(
+                                               !carouselDocument.exportSizeSettings.aspectLocked)
+                            }
+                        }
+
+                        Binding {
+                            target: exportCustomWidthField
+                            property: "text"
+                            value: String(carouselDocument.exportSizeSettings.customWidth)
+                            when: !exportCustomWidthField.activeFocus
+                        }
+
+                        Binding {
+                            target: exportCustomHeightField
+                            property: "text"
+                            value: String(carouselDocument.exportSizeSettings.customHeight)
+                            when: !exportCustomHeightField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: String(carouselDocument.exportSizeSettings.warning || "").length > 0
+                            text: String(carouselDocument.exportSizeSettings.warning || "")
+                            color: theme.warning
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 6
+
+                        Label {
+                            text: "File naming"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        TextField {
+                            id: exportFilenameField
+                            Layout.fillWidth: true
+                            selectByMouse: true
+                            color: theme.textStrong
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            background: Rectangle {
+                                radius: theme.radius6
+                                color: theme.alpha(theme.ink850, 0.85)
+                                border.width: 1
+                                border.color: exportFilenameField.activeFocus
+                                              ? theme.alpha(theme.accentWarm400, 0.75)
+                                              : theme.alpha(theme.lineSoft, 0.45)
+                            }
+                            onEditingFinished: carouselDocument.setExportFilenamePattern(text)
+                        }
+
+                        Binding {
+                            target: exportFilenameField
+                            property: "text"
+                            value: carouselDocument.exportFilenamePattern
+                            when: !exportFilenameField.activeFocus
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: ["{document}", "{board_number}", "{board_role}", "{ratio}", "{version}", "{date}"]
+
+                                delegate: ActionButton {
+                                    required property string modelData
+                                    text: modelData
+                                    compact: true
+                                    onClicked: {
+                                        exportFilenameField.insert(exportFilenameField.cursorPosition, modelData)
+                                        carouselDocument.setExportFilenamePattern(exportFilenameField.text)
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                text: "Version"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                            }
+
+                            ActionButton {
+                                objectName: "carouselDecreaseExportVersionButton"
+                                text: "Decrease export version"
+                                showText: false
+                                iconName: "minus"
+                                tooltipText: "Decrease export version"
+                                compact: true
+                                enabled: carouselDocument.exportVersion > 1
+                                onClicked: carouselDocument.setExportVersion(carouselDocument.exportVersion - 1)
+                            }
+
+                            Label {
+                                text: "v" + carouselDocument.exportVersion
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            ActionButton {
+                                objectName: "carouselIncreaseExportVersionButton"
+                                text: "Increase export version"
+                                showText: false
+                                iconName: "plus"
+                                tooltipText: "Increase export version"
+                                compact: true
+                                enabled: carouselDocument.exportVersion < 999
+                                onClicked: carouselDocument.setExportVersion(carouselDocument.exportVersion + 1)
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
+                        Label {
+                            text: "If a file exists"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 5
+
+                            Repeater {
+                                model: carouselDocument.exportCollisionPolicyOptions
+
+                                delegate: FilterChip {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                                    active: carouselDocument.exportCollisionPolicy === modelData
+                                    onClicked: carouselDocument.setExportCollisionPolicy(modelData)
+                                }
+                            }
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "Delivery manifest"
+                            active: carouselDocument.exportManifestEnabled
+                            onClicked: carouselDocument.setExportManifestEnabled(
+                                           !carouselDocument.exportManifestEnabled)
+                            ToolTip.visible: manifestHover.hovered
+                            ToolTip.delay: 350
+                            ToolTip.text: "Include ordered output metadata, hashes, profiles, board roles, accessibility text, warnings, and export time."
+
+                            HoverHandler { id: manifestHover }
+                        }
+
+                        FilterChip {
+                            id: carouselPdfProofToggle
+                            objectName: "carouselPdfProofToggle"
+                            Layout.fillWidth: true
+                            text: "PDF Review Contact Sheet"
+                            active: carouselDocument.exportProofSheetEnabled
+                            onClicked: carouselDocument.setExportProofSheetEnabled(
+                                           !carouselDocument.exportProofSheetEnabled)
+                            ToolTip.visible: pdfProofHover.hovered
+                            ToolTip.delay: 350
+                            ToolTip.text: "Create a separate A4 landscape review PDF with four color-managed board thumbnails per page."
+
+                            HoverHandler { id: pdfProofHover }
+                        }
+
+                        FilterChip {
+                            id: carouselPdfProofNotesToggle
+                            objectName: "carouselPdfProofNotesToggle"
+                            Layout.fillWidth: true
+                            visible: carouselDocument.exportProofSheetEnabled
+                            text: "Include Board Notes"
+                            active: carouselDocument.exportProofIncludeNotes
+                            onClicked: carouselDocument.setExportProofIncludeNotes(
+                                           !carouselDocument.exportProofIncludeNotes)
+                        }
+
+                        Label {
+                            objectName: "carouselPdfProofResolvedSettings"
+                            Layout.fillWidth: true
+                            visible: carouselDocument.exportProofSheetEnabled
+                            text: "A4 landscape · 4 boards per page · board number, name, role, and resolved file name · " +
+                                  (carouselDocument.exportProofIncludeNotes
+                                   ? "notes included · " : "notes omitted · ") +
+                                  carouselDocument.exportColorSpace + " thumbnails converted to sRGB proof space · review only"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: carouselDocument.exportOutputPreview
+
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: String(modelData.resolvedName || "")
+                                        color: modelData.collision ? theme.warning : theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                        Layout.fillWidth: true
+                                    }
+
+                                    StatusChip {
+                                        visible: Boolean(modelData.collision)
+                                        text: String(modelData.action || "write")
+                                        tone: "warning"
+                                        compact: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 6
+
+                        Label {
+                            text: "Image output"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Repeater {
+                                model: carouselDocument.exportImageFormatOptions
+
+                                delegate: FilterChip {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData === "jpeg" ? "JPEG" : modelData.toUpperCase()
+                                    active: carouselDocument.exportImageFormat === modelData
+                                    onClicked: carouselDocument.setExportImageFormat(modelData)
+                                }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Quality"
+                            valueText: carouselDocument.exportImageQuality + "%"
+                            from: 1
+                            to: 100
+                            stepSize: 1
+                            value: carouselDocument.exportImageQuality
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                carouselDocument.setExportImageQuality(Math.round(value))
+                            }
+                            onResetRequested: carouselDocument.setExportImageQuality(92)
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: carouselDocument.exportImageFormat === "jpeg"
+                                  ? "Transparency unavailable in JPEG"
+                                  : "Preserve transparency"
+                            active: carouselDocument.exportImageFormat !== "jpeg" &&
+                                    carouselDocument.exportPreserveTransparency
+                            enabled: carouselDocument.exportImageFormat !== "jpeg"
+                            onClicked: carouselDocument.setExportPreserveTransparency(
+                                           !carouselDocument.exportPreserveTransparency)
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: carouselExportSheet.summary.formatWarning
+                            color: carouselDocument.exportImageFormat === "png"
+                                   ? theme.textMuted
+                                   : theme.warning
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 6
+
+                        Label {
+                            text: "Output color profile"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Repeater {
+                                model: carouselDocument.exportColorSpaceOptions
+
+                                delegate: FilterChip {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData
+                                    active: carouselDocument.exportColorSpace === modelData
+                                    onClicked: carouselDocument.setExportColorSpace(modelData)
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "The selected profile is embedded in every image and verified after writing."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        spacing: 6
+
+                        Label {
+                            text: "Destination"
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            TextField {
+                                Layout.fillWidth: true
+                                readOnly: true
+                                selectByMouse: true
+                                text: carouselDocument.exportDirectory
+                                placeholderText: "Choose a folder"
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                background: Rectangle {
+                                    radius: theme.radius6
+                                    color: theme.alpha(theme.ink850, 0.85)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.45)
+                                }
+                            }
+
+                            ActionButton {
+                                text: "Choose Folder"
+                                compact: true
+                                onClicked: carouselDocument.chooseExportDirectory()
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 20
+                        Layout.rightMargin: 20
+                        Layout.bottomMargin: 18
+                        spacing: 7
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Preflight"
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            StatusChip {
+                                text: carouselExportSheet.summary.blockingIssueCount > 0
+                                      ? carouselExportSheet.summary.blockingIssueCount + " blocking"
+                                      : "Ready"
+                                tone: carouselExportSheet.summary.blockingIssueCount > 0 ? "error" : "success"
+                                compact: true
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: carouselExportSheet.preflightIssues.length === 0
+                            text: "No export issues detected."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                        }
+
+                        Repeater {
+                            model: carouselExportSheet.preflightIssues
+
+                            delegate: ExportPreflightIssueRow {
+                                required property var modelData
+                                issue: modelData
+                                showTextResolutionActions: modelData.code === "text-overflow" ||
+                                                           modelData.code === "text-too-small"
+                                onInspectRequested: carouselDocument.resolveTextPreflightIssue(
+                                                        String(modelData.itemId || ""),
+                                                        String(modelData.code || ""),
+                                                        "inspect")
+                                onResizeFrameRequested: carouselDocument.resolveTextPreflightIssue(
+                                                            String(modelData.itemId || ""),
+                                                            String(modelData.code || ""),
+                                                            "resize-frame")
+                                onFitTextRequested: carouselDocument.resolveTextPreflightIssue(
+                                                       String(modelData.itemId || ""),
+                                                       String(modelData.code || ""),
+                                                       "fit-text")
+                                onIgnoreRequested: carouselDocument.resolveTextPreflightIssue(
+                                                      String(modelData.itemId || ""),
+                                                      String(modelData.code || ""),
+                                                      "ignore")
+                                TapHandler {
+                                    onTapped: {
+                                        carouselDocument.focusPreflightIssue(
+                                                    Number(modelData.boardIndex || 0),
+                                                    String(modelData.itemId || ""))
+                                        carouselExportSheet.close()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                id: carouselExportProgressSurface
+                objectName: "carouselExportProgressSurface"
+                Layout.fillWidth: true
+                Layout.preferredHeight: progressColumn.implicitHeight + 20
+                visible: String(carouselExportSheet.progress.state || "idle") !== "idle"
+                color: theme.alpha(theme.ink850, 0.78)
+                border.width: 1
+                border.color: String(carouselExportSheet.progress.state || "") === "failed"
+                              ? theme.alpha(theme.error, 0.52)
+                              : String(carouselExportSheet.progress.state || "") === "cancelled"
+                                ? theme.alpha(theme.warning, 0.48)
+                                : theme.alpha(theme.lineSoft, 0.36)
+
+                ColumnLayout {
+                    id: progressColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 10
+                    spacing: 7
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        StatusChip {
+                            text: String(carouselExportSheet.progress.state || "idle")
+                            tone: carouselExportSheet.progress.state === "failed"
+                                  ? "error"
+                                  : carouselExportSheet.progress.state === "completed"
+                                    ? "success"
+                                    : "warning"
+                            compact: true
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: carouselDocument.exportBusy
+                                  ? "Board " + carouselExportSheet.progress.currentBoard + " · " +
+                                    carouselExportSheet.progress.completedCount + " / " +
+                                    carouselExportSheet.progress.totalCount + " complete"
+                                  : carouselExportSheet.progress.completedCount + " / " +
+                                    carouselExportSheet.progress.totalCount + " boards completed"
+                            color: theme.textMain
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+
+                    ProgressBar {
+                        Layout.fillWidth: true
+                        from: 0
+                        to: 1
+                        value: Number(carouselExportSheet.progress.fraction || 0)
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: String(carouselExportSheet.progress.failureReason || "").length > 0
+                        text: String(carouselExportSheet.progress.failureReason || "")
+                        color: carouselExportSheet.progress.state === "failed" ? theme.error : theme.warning
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 5
+
+                        Label {
+                            text: "Partial files"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                        }
+
+                        Repeater {
+                            model: carouselDocument.exportPartialCleanupPolicyOptions
+
+                            delegate: FilterChip {
+                                required property string modelData
+                                text: modelData === "remove" ? "Remove on stop" : "Keep on stop"
+                                active: carouselDocument.exportPartialCleanupPolicy === modelData
+                                enabled: !carouselDocument.exportBusy
+                                onClicked: carouselDocument.setExportPartialCleanupPolicy(modelData)
+                            }
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        ActionButton {
+                            text: "Cancel Export"
+                            compact: true
+                            visible: Boolean(carouselExportSheet.progress.canCancel)
+                            tone: "danger"
+                            onClicked: carouselDocument.cancelExport()
+                        }
+
+                        ActionButton {
+                            text: "Retry Failed"
+                            compact: true
+                            visible: Boolean(carouselExportSheet.progress.canRetry)
+                            onClicked: carouselDocument.retryFailedExport()
+                        }
+
+                        ActionButton {
+                            text: "Clean Partial"
+                            compact: true
+                            visible: Number(carouselExportSheet.progress.partialFileCount || 0) > 0 &&
+                                     !carouselDocument.exportBusy
+                            onClicked: carouselDocument.cleanupPartialExport()
+                        }
+
+                        ActionButton {
+                            text: "Reveal Output"
+                            compact: true
+                            visible: Boolean(carouselExportSheet.progress.canReveal)
+                            onClicked: carouselDocument.revealExportOutput()
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 64
+                color: theme.alpha(theme.ink850, 0.72)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.32)
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: carouselExportSheet.summary.blockingIssueCount > 0
+                              ? "Resolve blocking issues to export."
+                              : carouselDocument.exportDirectory.length === 0
+                                ? "Choose a destination to export."
+                                : "Ready to render " + carouselExportSheet.summary.boardCount + " board" +
+                                  (carouselExportSheet.summary.boardCount === 1 ? "." : "s.")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    ActionButton {
+                        text: "Cancel"
+                        compact: true
+                        onClicked: carouselExportSheet.close()
+                    }
+
+                    ActionButton {
+                        objectName: "carouselStartExportButton"
+                        text: carouselDocument.exportBusy ? "Exporting" :
+                              carouselExportSheet.progress.state === "completed" ? "Export Again" : "Start Export"
+                        tone: "primary"
+                        compact: true
+                        enabled: !carouselDocument.exportBusy &&
+                                 carouselExportSheet.summary.blockingIssueCount === 0 &&
+                                 carouselDocument.exportDirectory.length > 0
+                        disabledReason: carouselExportSheet.summary.blockingIssueCount > 0
+                                        ? "Resolve blocking preflight issues first."
+                                        : carouselDocument.exportDirectory.length === 0
+                                          ? "Choose an export destination first."
+                                          : "Export is already running."
+                        onClicked: {
+                            carouselDocument.startConfiguredExport()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselCutoutRefineDialog
+        objectName: "carouselCutoutRefineDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(440, root.width - 48)
+        height: Math.min(390, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: "Refine cutout edge"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 21
+                font.weight: Font.DemiBold
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Changes update the result and remain reversible through Undo. Use Matte or Edges in the inspector to audit the boundary."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Feather"
+                valueText: Number(value).toFixed(1) + " px"
+                from: 0
+                to: 16
+                stepSize: 0.5
+                value: Number(root.selection.cutoutFeather || 0)
+                accent: theme.accentCool400
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setSelectedMediaCutoutRefinement(
+                                nextValue,
+                                Number(root.selection.cutoutExpand || 0),
+                                Number(root.selection.cutoutEdgeContrast || 0))
+                }
+                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
+                                      0,
+                                      Number(root.selection.cutoutExpand || 0),
+                                      Number(root.selection.cutoutEdgeContrast || 0))
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Expand"
+                valueText: Number(value).toFixed(1) + " px"
+                from: -16
+                to: 16
+                stepSize: 0.5
+                value: Number(root.selection.cutoutExpand || 0)
+                accent: theme.accentWarm400
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setSelectedMediaCutoutRefinement(
+                                Number(root.selection.cutoutFeather || 0),
+                                nextValue,
+                                Number(root.selection.cutoutEdgeContrast || 0))
+                }
+                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
+                                      Number(root.selection.cutoutFeather || 0),
+                                      0,
+                                      Number(root.selection.cutoutEdgeContrast || 0))
+            }
+
+            InspectorSlider {
+                Layout.fillWidth: true
+                label: "Edge contrast"
+                valueText: Math.round(value) + "%"
+                from: -45
+                to: 100
+                stepSize: 1
+                value: Number(root.selection.cutoutEdgeContrast || 0)
+                accent: theme.success
+                onValueDragged: function(nextValue) {
+                    carouselDocument.setSelectedMediaCutoutRefinement(
+                                Number(root.selection.cutoutFeather || 0),
+                                Number(root.selection.cutoutExpand || 0),
+                                nextValue)
+                }
+                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
+                                      Number(root.selection.cutoutFeather || 0),
+                                      Number(root.selection.cutoutExpand || 0),
+                                      0)
+            }
+
+            Item { Layout.fillHeight: true }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Done"
+                    tone: "primary"
+                    compact: true
+                    onClicked: carouselCutoutRefineDialog.close()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselTemplatePackUpdateDialog
+        objectName: "carouselTemplatePackUpdateDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(660, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearTemplatePackUpdatePreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: String(carouselDocument.templatePackUpdatePreview.templateName || "Template pack")
+                      + " · v" + Number(carouselDocument.templatePackUpdatePreview.fromVersion || 0)
+                      + " → v" + Number(carouselDocument.templatePackUpdatePreview.toVersion || 0)
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 21
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "This review is non-mutating. Only unchanged v1 components are eligible; local overrides and missing components are never recreated or overwritten."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 5
+                StatusChip {
+                    text: Number(carouselDocument.templatePackUpdatePreview.updateCount || 0) + " updates"
+                    compact: true
+                }
+                StatusChip {
+                    text: Number(carouselDocument.templatePackUpdatePreview.preservedOverrideCount || 0)
+                          + " local overrides preserved"
+                    tone: Number(carouselDocument.templatePackUpdatePreview.preservedOverrideCount || 0) > 0
+                          ? "warning" : "success"
+                    compact: true
+                }
+                StatusChip {
+                    text: "Boards "
+                          + ((carouselDocument.templatePackUpdatePreview.affectedBoardNumbers || []).join(", ") || "metadata only")
+                    compact: true
+                }
+            }
+
+            Flickable {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                contentWidth: width
+                contentHeight: updateChangeColumn.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+
+                ColumnLayout {
+                    id: updateChangeColumn
+                    width: parent.width
+                    spacing: 7
+
+                    Repeater {
+                        model: carouselDocument.templatePackUpdatePreview.changes || []
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            implicitHeight: 112
+                            radius: 8
+                            color: theme.alpha(theme.ink850, 0.72)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.35)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 9
+                                spacing: 4
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.label || "Component change")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(modelData.summary || "")
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: Number(modelData.updateCount || 0) + " update · "
+                                          + Number(modelData.preservedOverrideCount || 0) + " preserved · "
+                                          + Number(modelData.missingCount || 0) + " missing — "
+                                          + String(modelData.migrationPolicy || "")
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                    elide: Text.ElideNone
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 48
+                radius: 7
+                color: theme.alpha(theme.warning, 0.10)
+                border.width: 1
+                border.color: theme.alpha(theme.warning, 0.42)
+                Label {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    text: "No automatic migration. Apply approved update creates one undo step and records the migration in this document."
+                    color: theme.textMain
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Keep current version"
+                    compact: true
+                    onClicked: carouselTemplatePackUpdateDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplyTemplatePackUpdateButton"
+                    text: "Apply approved update"
+                    tone: "primary"
+                    compact: true
+                    enabled: Boolean(carouselDocument.templatePackUpdatePreview.available)
+                    onClicked: {
+                        if (carouselDocument.applyPreviewedTemplatePackUpdate())
+                            carouselTemplatePackUpdateDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselSequenceTemplateDialog
+        objectName: "carouselSequenceTemplateDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(900, root.width - 48)
+        height: Math.min(650, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                text: String(root.sequenceTemplatePreview.name || "Sequence template")
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 22
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: String(root.sequenceTemplatePreview.purpose || "")
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
+                StatusChip {
+                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
+                          ? Number(root.sequenceTemplatePreview.itemCount || 0) + " editable layers"
+                          : Number(root.sequenceTemplatePreview.boardCount || 0) + " boards"
+                    compact: true
+                }
+                StatusChip {
+                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
+                          ? String(root.sequenceTemplatePreview.entryKind || "board")
+                          : Number(root.sequenceTemplatePreview.requiredMedia || 0) + " media slots"
+                    compact: true
+                }
+                StatusChip {
+                    text: String(root.sequenceTemplatePreview.supportedRatios || "")
+                    compact: true
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: String(root.sequenceTemplatePreview.sourceSection) !== "custom"
+                columns: root.width > 760 ? 4 : 3
+                columnSpacing: 8
+                rowSpacing: 8
+
+                Repeater {
+                    model: root.sequenceTemplatePreview.previewRoles || []
+                    delegate: Rectangle {
+                        id: fullSequenceBoardPreview
+                        required property int index
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 132
+                        Layout.maximumHeight: 205
+                        radius: 7
+                        color: index % 4 === 0 ? "#d8c8b3"
+                             : index % 4 === 1 ? "#243038"
+                             : index % 4 === 2 ? "#dce8e5" : "#eee8df"
+                        border.width: 1
+                        border.color: theme.alpha("#ffffff", 0.18)
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 5
+                            Label {
+                                text: String(fullSequenceBoardPreview.index + 1).padStart(2, "0")
+                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#b9c7ce" : "#5c554d"
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+                            Item { Layout.fillHeight: true }
+                            Label {
+                                Layout.fillWidth: true
+                                text: String(fullSequenceBoardPreview.modelData)
+                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#ffffff" : "#171717"
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 16
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideNone
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 4
+                                radius: 2
+                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#8df0b5" : "#8b6548"
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: String(root.sequenceTemplatePreview.sourceSection) === "custom"
+                radius: 8
+                color: theme.alpha(theme.ink950, 0.72)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.35)
+                clip: true
+
+                Image {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 24, 320)
+                    height: Math.min(parent.height - 24, 400)
+                    source: String(root.sequenceTemplatePreview.previewSource || "")
+                    sourceSize: Qt.size(320, 400)
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: false
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: String(root.sequenceTemplatePreview.previewSource || "").length === 0
+                    text: String(root.sequenceTemplatePreview.entryKind) === "component"
+                          ? "Reusable component" : "Saved board"
+                    color: theme.textMuted
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 18
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideNone
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
+                      ? "Applying adds this saved template to the current board. Its layers receive unique identities and remain editable; Undo removes the complete application."
+                      : "Applying replaces the current board sequence. Every generated text, shape, role, media slot, and linked spread remains editable; Undo restores the prior document."
+                color: theme.textFaint
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                elide: Text.ElideNone
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Cancel"
+                    compact: true
+                    onClicked: carouselSequenceTemplateDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplyTemplateLibraryEntryButton"
+                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
+                          ? "Add to current board" : "Apply complete sequence"
+                    tone: "primary"
+                    compact: true
+                    onClicked: {
+                        if (carouselDocument.applyTemplateLibraryEntry(
+                                    String(root.sequenceTemplatePreview.templateId || "")))
+                            carouselSequenceTemplateDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselStoryboardDialog
+        objectName: "carouselStoryboardDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(980, root.width - 48)
+        height: Math.min(760, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: "Storyboard overview"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideNone
+                }
+                StatusChip {
+                    text: carouselDocument.selectedSlideCount + " selected"
+                    compact: true
+                }
+                StatusChip {
+                    text: carouselDocument.boardSections.length + " sections"
+                    compact: true
+                }
+            }
+
+            RowLayout {
+                objectName: "carouselCreateBoardSectionControls"
+                Layout.fillWidth: true
+                spacing: 6
+
+                ToneTextField {
+                    id: storyboardSectionNameField
+                    objectName: "carouselStoryboardSectionNameField"
+                    Layout.fillWidth: true
+                    placeholderText: "Section name for selected consecutive boards"
+                    text: root.storyboardSectionName
+                    onTextEdited: root.storyboardSectionName = text
+                    onAccepted: {
+                        if (carouselDocument.createBoardSection(root.storyboardSectionName)) {
+                            root.storyboardSectionName = ""
+                            text = ""
+                        }
+                    }
+                }
+
+                ActionButton {
+                    objectName: "carouselCreateBoardSectionButton"
+                    compact: true
+                    tone: "primary"
+                    text: "Create section"
+                    enabled: carouselDocument.selectedSlideCount >= 2 &&
+                             root.storyboardSectionName.trim().length > 0
+                    disabledReason: "Select at least two consecutive boards and enter a name."
+                    onClicked: {
+                        if (carouselDocument.createBoardSection(root.storyboardSectionName)) {
+                            root.storyboardSectionName = ""
+                            storyboardSectionNameField.text = ""
+                        }
+                    }
+                }
+            }
+
+            ScrollView {
+                objectName: "carouselBoardSectionsOverview"
+                Layout.fillWidth: true
+                Layout.preferredHeight: carouselDocument.boardSections.length > 0 ? 104 : 0
+                visible: carouselDocument.boardSections.length > 0
+                clip: true
+                contentHeight: availableHeight
+
+                Row {
+                    height: parent.height
+                    spacing: 8
+
+                    Repeater {
+                        model: carouselDocument.boardSections
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: 286
+                            height: 96
+                            radius: theme.radius8
+                            color: theme.alpha(theme.ink950, 0.66)
+                            border.width: 1
+                            border.color: theme.alpha(theme.accentWarm400, 0.34)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    ToneTextField {
+                                        objectName: "carouselBoardSectionRenameField"
+                                        Layout.fillWidth: true
+                                        text: String(modelData.name || "Section")
+                                        onEditingFinished: {
+                                            if (text.trim().length > 0 && text.trim() !== String(modelData.name || ""))
+                                                carouselDocument.renameBoardSection(String(modelData.sectionId || ""), text)
+                                        }
+                                    }
+                                    StatusChip {
+                                        text: Number(modelData.span || 0) + " boards"
+                                        compact: true
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 3
+                                    ActionButton {
+                                        compact: true
+                                        text: "Select"
+                                        onClicked: carouselDocument.selectBoardSection(String(modelData.sectionId || ""))
+                                    }
+                                    ActionButton {
+                                        objectName: "carouselBoardSectionCollapseButton"
+                                        compact: true
+                                        text: Boolean(modelData.collapsed) ? "Expand" : "Collapse"
+                                        onClicked: carouselDocument.setBoardSectionCollapsed(
+                                                       String(modelData.sectionId || ""),
+                                                       !Boolean(modelData.collapsed))
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        showText: false
+                                        iconName: "chevron-left"
+                                        tooltipText: "Move complete section earlier"
+                                        enabled: Boolean(modelData.canMoveEarlier)
+                                        onClicked: carouselDocument.moveBoardSection(String(modelData.sectionId || ""), -1)
+                                    }
+                                    ActionButton {
+                                        compact: true
+                                        showText: false
+                                        iconName: "chevron-right"
+                                        tooltipText: "Move complete section later"
+                                        enabled: Boolean(modelData.canMoveLater)
+                                        onClicked: carouselDocument.moveBoardSection(String(modelData.sectionId || ""), 1)
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        objectName: "carouselBoardSectionUngroupButton"
+                                        compact: true
+                                        tone: "danger"
+                                        text: "Ungroup"
+                                        onClicked: carouselDocument.removeBoardSection(String(modelData.sectionId || ""))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: 4
+                Repeater {
+                    model: root.boardRoleButtons
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: modelData.label
+                        onClicked: carouselDocument.setSelectedSlidesRole(modelData.value)
+                    }
+                }
+            }
+
+            GridView {
+                id: carouselStoryboardGrid
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                cellWidth: 176
+                cellHeight: 224
+                clip: true
+                model: carouselDocument.storyboardEntries
+
+                delegate: Item {
+                    required property int index
+                    required property var modelData
+                    readonly property int boardIndex: Number(modelData.index || 0)
+                    width: carouselStoryboardGrid.cellWidth
+                    height: carouselStoryboardGrid.cellHeight
+
+                    CarouselBoardThumb {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 6
+                        height: 184
+                        index: parent.boardIndex
+                        modelData: parent.modelData
+                        onSelectedRequested: function(boardIndex, modifiers) {
+                            if (Boolean(parent.modelData.sectionCollapsed))
+                                carouselDocument.selectBoardSection(String(parent.modelData.sectionId || ""))
+                            else if (root.hasRangeSelectModifier(modifiers))
+                                carouselDocument.selectSlideRange(boardIndex)
+                            else if (root.hasMultiSelectModifier(modifiers))
+                                carouselDocument.toggleSlideSelection(boardIndex)
+                            else
+                                carouselDocument.selectSlide(boardIndex)
+                        }
+                        onDuplicateRequested: function(boardIndex) {
+                            if (Boolean(parent.modelData.sectionCollapsed)) {
+                                carouselDocument.selectBoardSection(String(parent.modelData.sectionId || ""))
+                                carouselDocument.duplicateSelectedSlides()
+                            } else {
+                                carouselDocument.selectSlide(boardIndex)
+                                carouselDocument.duplicateCurrentSlide()
+                            }
+                        }
+                        onReorderRequested: function(fromIndex, toIndex) {
+                            if (String(parent.modelData.sectionId || "").length > 0)
+                                carouselDocument.moveBoardSection(
+                                            String(parent.modelData.sectionId || ""),
+                                            toIndex < parent.boardIndex ? -1 : 1)
+                            else
+                                carouselDocument.moveSlide(
+                                            fromIndex,
+                                            Math.min(carouselDocument.slideCount - 1, toIndex))
+                        }
+                        onMediaDropRequested: function(boardIndex, drop) {
+                            root.applyMediaDrop(drop, boardIndex, "thumbnail", "primary", 0.5, 0.5)
+                        }
+                    }
+
+                    StatusChip {
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.leftMargin: 12
+                        anchors.topMargin: 12
+                        visible: Boolean(parent.modelData.sectionFirst)
+                        text: String(parent.modelData.sectionName || "Section")
+                        tone: "accent"
+                        compact: true
+                        z: 20
+                    }
+
+                    Rectangle {
+                        objectName: "carouselCollapsedBoardSectionSummary"
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 42
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        height: 30
+                        radius: theme.radius6
+                        visible: Boolean(parent.modelData.sectionCollapsed)
+                        color: theme.alpha(theme.ink950, 0.88)
+                        border.width: 1
+                        border.color: theme.alpha(theme.accentWarm400, 0.5)
+                        z: 20
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: Number(parent.parent.modelData.sectionSpan || 0) +
+                                  " boards collapsed · click to select section"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                        }
+
+                        TapHandler {
+                            onTapped: carouselDocument.selectBoardSection(
+                                          String(parent.parent.modelData.sectionId || ""))
+                        }
+                    }
+
+                    ActionButton {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 6
+                        compact: true
+                        text: "Open in composer"
+                        onClicked: {
+                            carouselDocument.selectSlide(parent.boardIndex)
+                            carouselStoryboardDialog.close()
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ActionButton {
+                    text: "Duplicate selected"
+                    enabled: carouselDocument.canAddSlide
+                    onClicked: carouselDocument.duplicateSelectedSlides()
+                }
+                ActionButton {
+                    text: "Delete selected"
+                    tone: "danger"
+                    enabled: carouselDocument.slideCount > carouselDocument.selectedSlideCount
+                    onClicked: carouselDocument.removeSelectedSlides()
+                }
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Return to composer"
+                    tone: "primary"
+                    onClicked: carouselStoryboardDialog.close()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselRepeatGridDialog
+        objectName: "carouselRepeatGridDialog"
+        readonly property var preview: carouselDocument.repeatGridPreview
+
+        function refreshPreview() {
+            carouselDocument.previewRepeatGrid(
+                        root.repeatGridRows, root.repeatGridColumns,
+                        root.repeatGridGapX, root.repeatGridGapY,
+                        root.repeatGridOrdering)
+        }
+
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(720, root.width - 48)
+        height: Math.min(700, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearRepeatGridPreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: "Repeat grid"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Repeat the selected layer or grouped cell as ordinary, independently editable layers."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Cancel repeat grid"
+                    onClicked: carouselRepeatGridDialog.close()
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 10
+                rowSpacing: 6
+
+                InspectorSlider {
+                    Layout.fillWidth: true
+                    label: "Rows"
+                    valueText: Math.round(value).toString()
+                    from: 1
+                    to: 10
+                    stepSize: 1
+                    value: root.repeatGridRows
+                    onValueDragged: function(nextValue) {
+                        root.repeatGridRows = Math.round(nextValue)
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+                InspectorSlider {
+                    Layout.fillWidth: true
+                    label: "Columns"
+                    valueText: Math.round(value).toString()
+                    from: 1
+                    to: 10
+                    stepSize: 1
+                    value: root.repeatGridColumns
+                    onValueDragged: function(nextValue) {
+                        root.repeatGridColumns = Math.round(nextValue)
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+                InspectorSlider {
+                    Layout.fillWidth: true
+                    label: "Gap X"
+                    valueText: Math.round(value) + " px"
+                    from: 0
+                    to: 320
+                    stepSize: 1
+                    value: root.repeatGridGapX
+                    onValueDragged: function(nextValue) {
+                        root.repeatGridGapX = nextValue
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+                InspectorSlider {
+                    Layout.fillWidth: true
+                    label: "Gap Y"
+                    valueText: Math.round(value) + " px"
+                    from: 0
+                    to: 320
+                    stepSize: 1
+                    value: root.repeatGridGapY
+                    onValueDragged: function(nextValue) {
+                        root.repeatGridGapY = nextValue
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 5
+                Label {
+                    text: "Ordering"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Across rows"
+                    active: root.repeatGridOrdering === "row-major"
+                    onClicked: {
+                        root.repeatGridOrdering = "row-major"
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Down columns"
+                    active: root.repeatGridOrdering === "column-major"
+                    onClicked: {
+                        root.repeatGridOrdering = "column-major"
+                        carouselRepeatGridDialog.refreshPreview()
+                    }
+                }
+            }
+
+            Rectangle {
+                id: repeatGridPreviewSurface
+                objectName: "carouselRepeatGridPreviewSurface"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 180
+                radius: theme.radius8
+                color: theme.mediaCanvas
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.5)
+                clip: true
+
+                Item {
+                    id: repeatGridResultBounds
+                    anchors.centerIn: parent
+                    width: {
+                        const resultWidth = Math.max(1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
+                        const resultHeight = Math.max(1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
+                        const scale = Math.min((repeatGridPreviewSurface.width - 36) / resultWidth,
+                                               (repeatGridPreviewSurface.height - 36) / resultHeight)
+                        return resultWidth * Math.max(0.01, scale)
+                    }
+                    height: {
+                        const resultWidth = Math.max(1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
+                        const resultHeight = Math.max(1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
+                        const scale = Math.min((repeatGridPreviewSurface.width - 36) / resultWidth,
+                                               (repeatGridPreviewSurface.height - 36) / resultHeight)
+                        return resultHeight * Math.max(0.01, scale)
+                    }
+
+                    Repeater {
+                        model: carouselRepeatGridDialog.preview.cells || []
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            readonly property real resultWidth: Math.max(
+                                                                    1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
+                            readonly property real resultHeight: Math.max(
+                                                                     1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
+                            x: (Number(modelData.x || 0) -
+                                Number(carouselRepeatGridDialog.preview.resultX || 0)) /
+                               resultWidth * repeatGridResultBounds.width
+                            y: (Number(modelData.y || 0) -
+                                Number(carouselRepeatGridDialog.preview.resultY || 0)) /
+                               resultHeight * repeatGridResultBounds.height
+                            width: repeatGridResultBounds.width /
+                                   Math.max(1, Number(carouselRepeatGridDialog.preview.columns || 1)) * 0.92
+                            height: repeatGridResultBounds.height /
+                                    Math.max(1, Number(carouselRepeatGridDialog.preview.rows || 1)) * 0.92
+                            radius: 4
+                            color: Boolean(modelData.sourceCell)
+                                   ? theme.alpha(theme.accentWarm400, 0.35)
+                                   : theme.alpha(theme.accentCool400, 0.24)
+                            border.width: Boolean(modelData.sourceCell) ? 2 : 1
+                            border.color: Boolean(modelData.sourceCell)
+                                          ? theme.accentWarm400 : theme.accentCool400
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: Number(modelData.cellIndex || 0) + 1
+                                color: theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: Number(carouselRepeatGridDialog.preview.cellCount || 0) + " cells · " +
+                          Number(carouselRepeatGridDialog.preview.projectedLayerCount || 0) +
+                          " editable layers · " +
+                          Math.round(Number(carouselRepeatGridDialog.preview.resultWidth || 0)) + " × " +
+                          Math.round(Number(carouselRepeatGridDialog.preview.resultHeight || 0)) + " px"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    elide: Text.ElideNone
+                }
+                StatusChip {
+                    compact: true
+                    tone: "success"
+                    text: "Detached + editable"
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselRepeatGridDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplyRepeatGridButton"
+                    Layout.fillWidth: true
+                    text: "Create repeat grid"
+                    tone: "primary"
+                    enabled: Boolean(carouselRepeatGridDialog.preview.active)
+                    onClicked: {
+                        if (carouselDocument.applyRepeatGrid())
+                            carouselRepeatGridDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselSelectionBatchDialog
+        objectName: "carouselSelectionBatchDialog"
+        readonly property var preview: carouselDocument.selectionBatchPreview
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(680, root.width - 48)
+        height: Math.min(620, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearSelectionBatchOperationPreview()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        text: String(carouselSelectionBatchDialog.preview.operationLabel || "Batch change") + " preview"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Anchor: " + String(carouselSelectionBatchDialog.preview.anchorLabel || "layer") +
+                              " · " + Number(carouselSelectionBatchDialog.preview.affectedCount || 0) +
+                              " affected" +
+                              (Number(carouselSelectionBatchDialog.preview.skippedCount || 0) > 0
+                               ? " · " + Number(carouselSelectionBatchDialog.preview.skippedCount) + " incompatible skipped"
+                               : "")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Cancel batch change"
+                    onClicked: carouselSelectionBatchDialog.close()
+                }
+            }
+
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 5
+                model: carouselSelectionBatchDialog.preview.entries || []
+
+                delegate: Rectangle {
+                    id: batchPreviewRow
+                    required property var modelData
+                    width: ListView.view.width
+                    height: batchPreviewContent.implicitHeight + 14
+                    radius: theme.radius6
+                    color: theme.alpha(theme.ink850, 0.82)
+                    border.width: 1
+                    border.color: Boolean(modelData.compatible)
+                                  ? theme.alpha(theme.lineSoft, 0.4)
+                                  : theme.alpha(theme.warning, 0.55)
+
+                    ColumnLayout {
+                        id: batchPreviewContent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 7
+                        spacing: 3
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Board " + Number(batchPreviewRow.modelData.boardNumber || 1) +
+                                      " · " + String(batchPreviewRow.modelData.displayLabel || "Layer")
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                            StatusChip {
+                                compact: true
+                                tone: Boolean(batchPreviewRow.modelData.compatible) ? "success" : "warning"
+                                text: Boolean(batchPreviewRow.modelData.compatible) ? "Will change" : "Skipped"
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Before · " + String(batchPreviewRow.modelData.before || "")
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Result · " + String(batchPreviewRow.modelData.result || "")
+                            color: Boolean(batchPreviewRow.modelData.compatible) ? theme.textMain : theme.warning
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselSelectionBatchDialog.close()
+                }
+                ActionButton {
+                    objectName: "carouselApplySelectionBatchButton"
+                    Layout.fillWidth: true
+                    text: "Apply in one step"
+                    tone: "primary"
+                    enabled: Boolean(carouselSelectionBatchDialog.preview.active) &&
+                             Number(carouselSelectionBatchDialog.preview.affectedCount || 0) > 0
+                    onClicked: {
+                        if (carouselDocument.applySelectionBatchOperation())
+                            carouselSelectionBatchDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselMediaUsageDialog
+        objectName: "carouselMediaUsageDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: root.mediaUsageReportState = carouselDocument.mediaUsageReport(
+                      carouselDocument.mediaAutofillPlan || [])
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        text: "Media usage"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Every source, crop reuse, offline dependency, and dependent board in this Carousel."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ActionButton {
+                    compact: true
+                    text: "Refresh"
+                    onClicked: root.mediaUsageReportState = carouselDocument.mediaUsageReport(
+                                   carouselDocument.mediaAutofillPlan || [])
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Close media usage"
+                    onClicked: carouselMediaUsageDialog.close()
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 5
+                columnSpacing: 5
+                rowSpacing: 5
+
+                Repeater {
+                    model: [
+                        { label: "Sources", value: Number(root.mediaUsageReportState.sourceCount || 0), tone: "neutral" },
+                        { label: "Placements", value: Number(root.mediaUsageReportState.placementCount || 0), tone: "neutral" },
+                        { label: "Duplicates", value: Number(root.mediaUsageReportState.duplicateSourceCount || 0), tone: Number(root.mediaUsageReportState.duplicateSourceCount || 0) > 0 ? "warning" : "neutral" },
+                        { label: "Offline", value: Number(root.mediaUsageReportState.offlineSourceCount || 0), tone: Number(root.mediaUsageReportState.offlineSourceCount || 0) > 0 ? "danger" : "neutral" },
+                        { label: "Unused", value: Number(root.mediaUsageReportState.unusedSelectionCount || 0), tone: Number(root.mediaUsageReportState.unusedSelectionCount || 0) > 0 ? "warning" : "neutral" }
+                    ]
+
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 48
+                        radius: theme.radius6
+                        color: theme.alpha(theme.ink850, 0.82)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.35)
+
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: 1
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: String(modelData.value)
+                                color: modelData.tone === "danger" ? theme.error
+                                      : modelData.tone === "warning" ? theme.warning
+                                      : theme.textStrong
+                                font.family: theme.fontMono
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: modelData.label
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                            }
+                        }
+                    }
+                }
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 7
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: Number(root.mediaUsageReportState.sourceCount || 0) === 0
+                        text: "No media sources are placed in this document."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+
+                    Repeater {
+                        model: root.mediaUsageReportState.entries || []
+
+                        delegate: Rectangle {
+                            id: mediaUsageCard
+                            required property var modelData
+                            Layout.fillWidth: true
+                            implicitHeight: mediaUsageCardContent.implicitHeight + 16
+                            radius: theme.radius8
+                            color: theme.alpha(theme.ink850, 0.82)
+                            border.width: 1
+                            border.color: Boolean(modelData.offline)
+                                          ? theme.alpha(theme.error, 0.75)
+                                          : theme.alpha(theme.lineSoft, 0.4)
+
+                            ColumnLayout {
+                                id: mediaUsageCardContent
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(mediaUsageCard.modelData.displayLabel || "Media")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+                                    StatusChip {
+                                        compact: true
+                                        visible: Boolean(mediaUsageCard.modelData.duplicate)
+                                        tone: "warning"
+                                        text: Number(mediaUsageCard.modelData.placementCount || 0) + " placements"
+                                    }
+                                    StatusChip {
+                                        compact: true
+                                        visible: Boolean(mediaUsageCard.modelData.hasReusedCrop)
+                                        tone: "neutral"
+                                        text: Number(mediaUsageCard.modelData.reusedCropCount || 0) + " reused crop"
+                                    }
+                                    StatusChip {
+                                        compact: true
+                                        visible: Boolean(mediaUsageCard.modelData.offline)
+                                        tone: "error"
+                                        text: "Offline"
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(mediaUsageCard.modelData.sourcePath || "")
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Boards " + String(mediaUsageCard.modelData.boardNumbersLabel || "—") +
+                                          " · " + Number(mediaUsageCard.modelData.cropVariantCount || 0) +
+                                          " crop variant" +
+                                          (Number(mediaUsageCard.modelData.cropVariantCount || 0) === 1 ? "" : "s")
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 9
+                                    elide: Text.ElideNone
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Repeater {
+                                        model: mediaUsageCard.modelData.placements || []
+
+                                        delegate: ActionButton {
+                                            required property var modelData
+                                            compact: true
+                                            text: "Board " + Number(modelData.boardNumber || 1) +
+                                                  (String(modelData.slot || "").length > 0
+                                                   ? " · " + String(modelData.slot) : " · layer")
+                                            onClicked: {
+                                                carouselDocument.focusMediaUsagePlacement(
+                                                    Number(modelData.boardIndex || 0),
+                                                    String(modelData.itemId || ""),
+                                                    String(modelData.slot || "primary"))
+                                                carouselMediaUsageDialog.close()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: Number(root.mediaUsageReportState.unusedSelectionCount || 0) > 0
+                        text: "Unused autofill selection"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+
+                    Repeater {
+                        model: root.mediaUsageReportState.unusedSelections || []
+
+                        delegate: Rectangle {
+                            id: unusedMediaCard
+                            required property var modelData
+                            Layout.fillWidth: true
+                            implicitHeight: unusedMediaRow.implicitHeight + 12
+                            radius: theme.radius6
+                            color: theme.alpha(theme.warning, 0.08)
+                            border.width: 1
+                            border.color: theme.alpha(theme.warning, 0.35)
+
+                            RowLayout {
+                                id: unusedMediaRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 6
+                                spacing: 8
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: String(unusedMediaCard.modelData.displayLabel || "Media") +
+                                          " · " + String(unusedMediaCard.modelData.reason || "Not used")
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    elide: Text.ElideNone
+                                }
+                                StatusChip {
+                                    compact: true
+                                    tone: Boolean(unusedMediaCard.modelData.offline) ? "error" : "warning"
+                                    text: Boolean(unusedMediaCard.modelData.offline) ? "Offline" : "Unused"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselVideoPreviewDialog
+        objectName: "carouselVideoPreviewDialog"
+        property url sourceUrl: ""
+        property real trimInSeconds: 0
+        property real trimOutSeconds: 0.05
+        property real posterSeconds: 0
+        property real sourceDurationSeconds: 0.05
+        property bool loopIntent: true
+        property string audioPolicy: "mute"
+        readonly property real boardAspect: {
+            const parts = String(carouselDocument.exportSummary.ratio || "4:5").split(":")
+            const widthPart = Math.max(1, Number(parts[0] || 4))
+            const heightPart = Math.max(1, Number(parts[1] || 5))
+            return widthPart / heightPart
+        }
+
+        function openForSelection() {
+            sourceUrl = String(root.selection.videoSourceUrl || "")
+            sourceDurationSeconds = Math.max(
+                        0.05, Number(root.selection.videoDurationSeconds || 0.05))
+            trimInSeconds = Math.max(
+                        0, Number(root.selection.videoTrimInSeconds || 0))
+            trimOutSeconds = Math.max(
+                        trimInSeconds + 0.05,
+                        Number(root.selection.videoTrimOutSeconds || sourceDurationSeconds))
+            posterSeconds = Math.max(
+                        trimInSeconds,
+                        Math.min(trimOutSeconds,
+                                 Number(root.selection.videoPosterSeconds || trimInSeconds)))
+            loopIntent = Boolean(root.selection.videoLoopIntent)
+            audioPolicy = String(root.selection.videoAudioPolicy || "mute")
+            open()
+        }
+
+        function seekPoster() {
+            carouselVideoPreviewPlayer.pause()
+            carouselVideoPreviewPlayer.position = Math.round(posterSeconds * 1000)
+        }
+
+        function playTrimmed() {
+            const positionSeconds = carouselVideoPreviewPlayer.position / 1000
+            if (positionSeconds < trimInSeconds || positionSeconds >= trimOutSeconds - 0.01)
+                carouselVideoPreviewPlayer.position = Math.round(trimInSeconds * 1000)
+            carouselVideoPreviewPlayer.play()
+        }
+
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(760, root.width - 48)
+        height: Math.min(720, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onOpened: Qt.callLater(seekPoster)
+        onClosed: carouselVideoPreviewPlayer.stop()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+
+                    Label {
+                        text: "Board video playback"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 20
+                        font.weight: Font.DemiBold
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Previewing " + root.formatVideoTime(
+                                  carouselVideoPreviewDialog.trimOutSeconds -
+                                  carouselVideoPreviewDialog.trimInSeconds) +
+                              " from the active board or video layer"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        elide: Text.ElideNone
+                    }
+                }
+
+                ActionButton {
+                    compact: true
+                    showText: false
+                    iconName: "close"
+                    tooltipText: "Close video preview"
+                    onClicked: carouselVideoPreviewDialog.close()
+                }
+            }
+
+            Rectangle {
+                id: carouselVideoBoardFrame
+                objectName: "carouselVideoBoardPlaybackSurface"
+                Layout.alignment: Qt.AlignHCenter
+                Layout.fillHeight: true
+                Layout.preferredWidth: Math.min(parent.width, height * carouselVideoPreviewDialog.boardAspect)
+                Layout.minimumWidth: 220
+                Layout.maximumWidth: parent.width
+                radius: theme.radius8
+                color: "#000000"
+                clip: true
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.6)
+
+                VideoOutput {
+                    id: carouselVideoPreviewOutput
+                    anchors.fill: parent
+                    fillMode: VideoOutput.PreserveAspectCrop
+                }
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: carouselVideoPreviewPlayer.mediaStatus === MediaPlayer.InvalidMedia ||
+                             carouselVideoPreviewDialog.sourceUrl.toString().length === 0
+                    text: "Video preview unavailable"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                }
+            }
+
+            MediaPlayer {
+                id: carouselVideoPreviewPlayer
+                source: carouselVideoPreviewDialog.sourceUrl
+                videoOutput: carouselVideoPreviewOutput
+                audioOutput: carouselVideoPreviewAudio
+
+                onMediaStatusChanged: {
+                    if (mediaStatus === MediaPlayer.LoadedMedia ||
+                            mediaStatus === MediaPlayer.BufferedMedia)
+                        Qt.callLater(carouselVideoPreviewDialog.seekPoster)
+                }
+                onPositionChanged: {
+                    const trimInMs = Math.round(carouselVideoPreviewDialog.trimInSeconds * 1000)
+                    const trimOutMs = Math.round(carouselVideoPreviewDialog.trimOutSeconds * 1000)
+                    if (position < trimInMs - 2) {
+                        position = trimInMs
+                    } else if (position >= trimOutMs) {
+                        if (carouselVideoPreviewDialog.loopIntent) {
+                            position = trimInMs
+                            play()
+                        } else {
+                            pause()
+                            if (Math.abs(position - trimOutMs) > 2)
+                                position = trimOutMs
+                        }
+                    }
+                }
+            }
+
+            AudioOutput {
+                id: carouselVideoPreviewAudio
+                muted: carouselVideoPreviewDialog.audioPolicy === "mute"
+                volume: 1.0
+            }
+
+            ToolValueSlider {
+                id: carouselVideoPreviewScrubber
+                objectName: "carouselVideoPreviewScrubber"
+                Layout.fillWidth: true
+                label: "Video preview position"
+                valueText: root.formatVideoTime(value / 1000)
+                tooltipText: "Scrub the trimmed video preview"
+                from: carouselVideoPreviewDialog.trimInSeconds * 1000
+                to: carouselVideoPreviewDialog.trimOutSeconds * 1000
+                value: carouselVideoPreviewPlayer.position
+                onMoved: carouselVideoPreviewPlayer.position = Math.round(value)
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.formatVideoTime(carouselVideoPreviewPlayer.position / 1000) +
+                          "  ·  " +
+                          (carouselVideoPreviewDialog.audioPolicy === "preserve" ? "Audio on" : "Muted") +
+                          "  ·  " +
+                          (carouselVideoPreviewDialog.loopIntent ? "Loops" : "Plays once")
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    elide: Text.ElideNone
+                }
+
+                ActionButton {
+                    compact: true
+                    text: "Poster frame"
+                    onClicked: carouselVideoPreviewDialog.seekPoster()
+                }
+
+                ActionButton {
+                    compact: true
+                    tone: "primary"
+                    iconName: carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState
+                              ? "pause" : "play"
+                    text: carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState
+                          ? "Pause" : "Play trim"
+                    onClicked: {
+                        if (carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState)
+                            carouselVideoPreviewPlayer.pause()
+                        else
+                            carouselVideoPreviewDialog.playTrimmed()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselMediaAutofillDialog
+        objectName: "carouselMediaAutofillDialog"
+        modal: true
+        focus: true
+        padding: 0
+        width: Math.min(680, root.width - 48)
+        height: Math.min(620, root.height - 48)
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        closePolicy: Popup.CloseOnEscape
+        onClosed: carouselDocument.clearMediaAutofillPlan()
+
+        background: Rectangle {
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.6)
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                text: "Autofill media sequence"
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 20
+                font.weight: Font.DemiBold
+                elide: Text.ElideNone
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Review the exact ordered source-to-slot mapping. Reorder or skip any source before one atomic apply."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                elide: Text.ElideNone
+            }
+
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 5
+                model: carouselDocument.mediaAutofillPlan
+
+                delegate: Rectangle {
+                    required property int index
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 46
+                    radius: theme.radius6
+                    color: theme.alpha(theme.ink850, 0.8)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.35)
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 6
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: Number(modelData.boardIndex) < 0
+                                  ? String(modelData.displayLabel || "Media") +
+                                    "  →  Unused · no open Carousel target"
+                                  : String(modelData.displayLabel || "Media") + "  →  Board " +
+                                    Number(modelData.boardNumber || 1) + " · " + String(modelData.slot || "primary")
+                            color: Boolean(modelData.skipped) ? theme.textFaint : theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            elide: Text.ElideNone
+                        }
+
+                        ActionButton {
+                            compact: true
+                            text: "Up"
+                            enabled: index > 0
+                            onClicked: carouselDocument.moveMediaAutofillEntry(index, index - 1)
+                        }
+                        ActionButton {
+                            compact: true
+                            text: "Down"
+                            enabled: index + 1 < carouselDocument.mediaAutofillPlan.length
+                            onClicked: carouselDocument.moveMediaAutofillEntry(index, index + 1)
+                        }
+                        FilterChip {
+                            text: "Skip"
+                            enabled: Number(modelData.boardIndex) >= 0
+                            active: Boolean(modelData.skipped)
+                            onClicked: carouselDocument.setMediaAutofillEntrySkipped(index, !Boolean(modelData.skipped))
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: carouselMediaAutofillDialog.close()
+                }
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Apply mapping"
+                    tone: "primary"
+                    enabled: carouselDocument.mediaAutofillPlan.length > 0
+                    onClicked: {
+                        if (carouselDocument.applyMediaAutofillPlan())
+                            carouselMediaAutofillDialog.close()
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: carouselDesignPackageImportDialog
+        objectName: "carouselDesignPackageImportDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(600, parent ? parent.width - 48 : 600)
+        height: Math.min(560, parent ? parent.height - 48 : 560)
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        padding: 0
+        background: Rectangle {
+            radius: 12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.62)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Import design package"
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 21
+                        font.weight: Font.Bold
+                        elide: Text.ElideNone
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: String(carouselDocument.designPackageImportPreview.name || "Design artifact")
+                              + " · "
+                              + String(carouselDocument.designPackageImportPreview.artifactType || "package")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
+                    }
+                }
+                StatusChip {
+                    text: Boolean(carouselDocument.designPackageImportPreview.checksumValid)
+                          ? "Checksums valid" : "Checksum failed"
+                    tone: Boolean(carouselDocument.designPackageImportPreview.checksumValid)
+                          ? "success" : "danger"
+                    compact: true
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: theme.alpha(theme.lineSoft, 0.4)
+            }
+
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 9
+                    Label {
+                        Layout.fillWidth: true
+                        Layout.margins: 18
+                        text: "Package v" + Number(carouselDocument.designPackageImportPreview.packageVersion || 0)
+                              + " · " + Number(carouselDocument.designPackageImportPreview.assetCount || 0)
+                              + " manifested assets · "
+                              + Number(carouselDocument.designPackageImportPreview.embeddedAssetCount || 0)
+                              + " embedded brand assets"
+                        color: theme.textStrong
+                        font.family: theme.fontMono
+                        font.pixelSize: 9
+                        wrapMode: Text.WordWrap
+                        elide: Text.ElideNone
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        implicitHeight: excludedMediaLabel.implicitHeight + 16
+                        radius: 8
+                        color: theme.alpha(theme.accentWarm400, 0.08)
+                        border.width: 1
+                        border.color: theme.alpha(theme.accentWarm400, 0.4)
+                        Label {
+                            id: excludedMediaLabel
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            text: Number(carouselDocument.designPackageImportPreview.excludedPrivateMediaCount || 0)
+                                  + " private project media assets were intentionally not embedded. Imported component media remains unresolved until explicitly relinked."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+                    }
+                    Rectangle {
+                        objectName: "carouselDesignPackageConflictReview"
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 18
+                        Layout.rightMargin: 18
+                        implicitHeight: conflictReviewColumn.implicitHeight + 16
+                        radius: 8
+                        color: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
+                               ? theme.alpha(theme.warning, 0.10)
+                               : theme.alpha(theme.success, 0.08)
+                        border.width: 1
+                        border.color: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
+                                      ? theme.alpha(theme.warning, 0.5)
+                                      : theme.alpha(theme.success, 0.4)
+                        ColumnLayout {
+                            id: conflictReviewColumn
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 3
+                            Label {
+                                Layout.fillWidth: true
+                                text: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
+                                      ? "Conflict review required" : "No library conflict"
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideNone
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: (Boolean(carouselDocument.designPackageImportPreview.idConflict)
+                                       ? "The artifact ID already exists. " : "")
+                                      + (Boolean(carouselDocument.designPackageImportPreview.nameConflict)
+                                         ? "The artifact name already exists. " : "")
+                                      + "Keep Both creates a new identity; Replace uses the reviewed package. Nothing changes until you choose."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WordWrap
+                                elide: Text.ElideNone
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                spacing: 7
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: {
+                        carouselDocument.clearDesignPackageImportPreview()
+                        carouselDesignPackageImportDialog.close()
+                    }
+                }
+                ActionButton {
+                    objectName: "carouselImportPackageKeepBothButton"
+                    Layout.fillWidth: true
+                    text: "Keep Both"
+                    enabled: Boolean(carouselDocument.designPackageImportPreview.canImport)
+                    onClicked: {
+                        if (carouselDocument.applyDesignPackageImport("keep-both"))
+                            carouselDesignPackageImportDialog.close()
+                    }
+                }
+                ActionButton {
+                    objectName: "carouselImportPackageReplaceButton"
+                    Layout.fillWidth: true
+                    visible: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
+                    text: "Replace"
+                    tone: "primary"
+                    enabled: Boolean(carouselDocument.designPackageImportPreview.canImport)
+                    onClicked: {
+                        if (carouselDocument.applyDesignPackageImport("replace"))
+                            carouselDesignPackageImportDialog.close()
                     }
                 }
             }

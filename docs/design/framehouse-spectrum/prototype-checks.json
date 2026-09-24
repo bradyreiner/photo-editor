@@ -1,0 +1,212 @@
+[
+  {
+    "viewport": 1600,
+    "checks": [
+      {
+        "name": "view-edit",
+        "pass": true
+      },
+      {
+        "name": "view-selection",
+        "pass": true
+      },
+      {
+        "name": "view-compare",
+        "pass": true
+      },
+      {
+        "name": "view-scopes",
+        "pass": true
+      },
+      {
+        "name": "view-library",
+        "pass": true
+      },
+      {
+        "name": "view-export",
+        "pass": true
+      },
+      {
+        "name": "view-material",
+        "pass": true
+      },
+      {
+        "name": "slider-value",
+        "pass": true
+      },
+      {
+        "name": "thumbnail-state",
+        "pass": true
+      },
+      {
+        "name": "compact-density",
+        "pass": true
+      },
+      {
+        "name": "reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "wipe-control",
+        "pass": true
+      },
+      {
+        "name": "selection-mode",
+        "pass": true
+      },
+      {
+        "name": "caustic-reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "export-preview-only",
+        "pass": true
+      },
+      {
+        "name": "no-horizontal-page-overflow",
+        "pass": true
+      }
+    ],
+    "overflow": []
+  },
+  {
+    "viewport": 1280,
+    "checks": [
+      {
+        "name": "view-edit",
+        "pass": true
+      },
+      {
+        "name": "view-selection",
+        "pass": true
+      },
+      {
+        "name": "view-compare",
+        "pass": true
+      },
+      {
+        "name": "view-scopes",
+        "pass": true
+      },
+      {
+        "name": "view-library",
+        "pass": true
+      },
+      {
+        "name": "view-export",
+        "pass": true
+      },
+      {
+        "name": "view-material",
+        "pass": true
+      },
+      {
+        "name": "slider-value",
+        "pass": true
+      },
+      {
+        "name": "thumbnail-state",
+        "pass": true
+      },
+      {
+        "name": "compact-density",
+        "pass": true
+      },
+      {
+        "name": "reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "wipe-control",
+        "pass": true
+      },
+      {
+        "name": "selection-mode",
+        "pass": true
+      },
+      {
+        "name": "caustic-reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "export-preview-only",
+        "pass": true
+      },
+      {
+        "name": "no-horizontal-page-overflow",
+        "pass": true
+      }
+    ],
+    "overflow": []
+  },
+  {
+    "viewport": 760,
+    "checks": [
+      {
+        "name": "view-edit",
+        "pass": true
+      },
+      {
+        "name": "view-selection",
+        "pass": true
+      },
+      {
+        "name": "view-compare",
+        "pass": true
+      },
+      {
+        "name": "view-scopes",
+        "pass": true
+      },
+      {
+        "name": "view-library",
+        "pass": true
+      },
+      {
+        "name": "view-export",
+        "pass": true
+      },
+      {
+        "name": "view-material",
+        "pass": true
+      },
+      {
+        "name": "slider-value",
+        "pass": true
+      },
+      {
+        "name": "thumbnail-state",
+        "pass": true
+      },
+      {
+        "name": "compact-density",
+        "pass": true
+      },
+      {
+        "name": "reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "wipe-control",
+        "pass": true
+      },
+      {
+        "name": "selection-mode",
+        "pass": true
+      },
+      {
+        "name": "caustic-reduced-motion",
+        "pass": true
+      },
+      {
+        "name": "export-preview-only",
+        "pass": true
+      },
+      {
+        "name": "no-horizontal-page-overflow",
+        "pass": true
+      }
+    ],
+    "overflow": []
+  }
+]

@@ -19,8 +19,8 @@ const auto kPreviewBackendPreferenceKey = "preview/backendPreference";
 
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 photo_editor::pipeline::metal::MetalPipelineBackend& metal_probe_backend() {
-  static photo_editor::pipeline::metal::MetalPipelineBackend backend;
-  return backend;
+  return photo_editor::pipeline::metal::
+      shared_metal_pipeline_backend();
 }
 #endif
 
@@ -81,6 +81,14 @@ bool PreviewBackendController::cudaAvailable() const { return cuda_probe_.availa
 
 bool PreviewBackendController::gpuAvailable() const { return metal_probe_.available || cuda_probe_.available; }
 
+QString PreviewBackendController::metalUnavailableReason() const {
+  return metal_probe_.available ? QString{} : metal_probe_.reason;
+}
+
+QString PreviewBackendController::cudaUnavailableReason() const {
+  return cuda_probe_.available ? QString{} : cuda_probe_.reason;
+}
+
 void PreviewBackendController::setPreferredBackend(const QString& preferred_backend) {
   const auto next = preference_from_string(preferred_backend);
   if (preferred_backend_ == next) {
@@ -136,7 +144,7 @@ void PreviewBackendController::resolveBackend() {
     } else if (!cuda_probe_.reason.isEmpty()) {
       fallback_reason_ = cuda_probe_.reason;
     } else {
-      fallback_reason_ = QStringLiteral("GPU preview is unavailable on this machine, so PhotoEditor fell back to CPU.");
+      fallback_reason_ = QStringLiteral("GPU preview is unavailable on this machine, so Looksy fell back to CPU.");
     }
   }
 }

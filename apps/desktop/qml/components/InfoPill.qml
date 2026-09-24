@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -11,19 +11,19 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: 32
-    implicitWidth: Math.max(88, textColumn.implicitWidth + 20)
+    implicitHeight: theme.iconButtonSizeCompact
+    implicitWidth: Math.max(88, textColumn.implicitWidth + theme.space20)
     radius: 0
     color: theme.alpha(theme.glassBase, 0.24)
-    border.width: 1
+    border.width: theme.hairlineWidth
     border.color: theme.alpha(theme.glassEdge, 0.14)
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 10
-        anchors.rightMargin: 10
-        anchors.topMargin: 6
-        anchors.bottomMargin: 6
+        anchors.leftMargin: theme.space10
+        anchors.rightMargin: theme.space10
+        anchors.topMargin: theme.space6
+        anchors.bottomMargin: theme.space6
 
         ColumnLayout {
             id: textColumn
@@ -33,7 +33,7 @@ Rectangle {
                 text: root.label
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 font.weight: Font.DemiBold
                 font.letterSpacing: 0
             }
@@ -42,7 +42,7 @@ Rectangle {
                 text: root.value
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 13
+                font.pixelSize: theme.typeSection
                 font.weight: Font.DemiBold
             }
         }

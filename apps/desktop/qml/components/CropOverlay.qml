@@ -22,6 +22,8 @@ Item {
     property color accentColor: "#37e6bf"
 
     signal rectEdited(real x, real y, real width, real height)
+    signal interactionStarted()
+    signal interactionFinished()
 
     visible: active && imageWidth > 1 && imageHeight > 1
     enabled: visible
@@ -392,6 +394,7 @@ Item {
         property real startMouseY: 0
         property real startNormalizedX: 0
         property real startNormalizedY: 0
+        property bool interactionActive: false
         property rect startRect: Qt.rect(0, 0, 1, 1)
     }
 
@@ -668,10 +671,14 @@ Item {
         cursorShape: cursorForMode(dragState.mode !== "" ? dragState.mode : hitMode(mouseX, mouseY))
 
         onPressed: function(mouse) {
-            if (!pointInImage(mouse.x, mouse.y))
+            if (!pointInImage(mouse.x, mouse.y)) {
+                mouse.accepted = false
                 return;
+            }
 
             dragState.mode = hitMode(mouse.x, mouse.y);
+            dragState.interactionActive = true
+            root.interactionStarted()
             dragState.startMouseX = mouse.x;
             dragState.startMouseY = mouse.y;
             dragState.startRect = normalizedRect;
@@ -691,7 +698,19 @@ Item {
             }
         }
 
-        onReleased: dragState.mode = ""
-        onCanceled: dragState.mode = ""
+        onReleased: {
+            dragState.mode = ""
+            if (dragState.interactionActive) {
+                dragState.interactionActive = false
+                root.interactionFinished()
+            }
+        }
+        onCanceled: {
+            dragState.mode = ""
+            if (dragState.interactionActive) {
+                dragState.interactionActive = false
+                root.interactionFinished()
+            }
+        }
     }
 }

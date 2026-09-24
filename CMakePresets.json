@@ -47,7 +47,17 @@
       "inherits": "base",
       "displayName": "macOS Release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "PHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT": "ON",
+        "PHOTO_EDITOR_STRICT_LCMS_VERSION": "ON",
+        "PHOTO_EDITOR_USE_PINNED_LCMS_COLOR_MANAGEMENT": "ON",
+        "PHOTO_EDITOR_REQUIRE_OCIO_ACES2": "ON",
+        "PHOTO_EDITOR_STRICT_OCIO_VERSION": "ON",
+        "PHOTO_EDITOR_REQUIRE_OPENEXR": "ON",
+        "PHOTO_EDITOR_STRICT_OPENEXR_VERSION": "ON",
+        "PHOTO_EDITOR_REQUIRE_LIBHEIF_HDR": "ON",
+        "PHOTO_EDITOR_STRICT_LIBHEIF_VERSION": "ON",
+        "PHOTO_EDITOR_REQUIRE_LIBRAW_CAMERA_LINEAR": "ON"
       },
       "condition": {
         "type": "equals",
@@ -60,7 +70,14 @@
       "inherits": "base",
       "displayName": "Windows Release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "PHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT": "ON",
+        "PHOTO_EDITOR_STRICT_LCMS_VERSION": "ON",
+        "PHOTO_EDITOR_USE_PINNED_LCMS_COLOR_MANAGEMENT": "ON",
+        "PHOTO_EDITOR_REQUIRE_OCIO_ACES2": "ON",
+        "PHOTO_EDITOR_STRICT_OCIO_VERSION": "ON",
+        "PHOTO_EDITOR_REQUIRE_LIBRAW_CAMERA_LINEAR": "ON",
+        "PHOTO_EDITOR_STRICT_LIBRAW_VERSION": "ON"
       },
       "condition": {
         "type": "equals",
@@ -74,7 +91,10 @@
       "displayName": "CI Headless",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "PHOTO_EDITOR_BUILD_DESKTOP": "OFF"
+        "PHOTO_EDITOR_BUILD_DESKTOP": "OFF",
+        "PHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT": "ON",
+        "PHOTO_EDITOR_STRICT_LCMS_VERSION": "ON",
+        "PHOTO_EDITOR_USE_PINNED_LCMS_COLOR_MANAGEMENT": "ON"
       }
     },
     {

@@ -1,10 +1,10 @@
-# Virel Studio UI/UX Redesign Plan
+# Framehouse UI/UX Redesign Plan
 
 Status: planning document only. This document does not prescribe immediate code changes and does not remove existing functionality.
 
 ## Goal
 
-Virel Studio has enough capability to feel like a serious editor, but the current UI exposes too much of that capability at the same time. The redesign should keep the full product surface while making the app feel calmer, more professional, and easier to operate for photographers and creators.
+Framehouse has enough capability to feel like a serious editor, but the current UI exposes too much of that capability at the same time. The redesign should keep the full product surface while making the app feel calmer, more professional, and easier to operate for photographers and creators.
 
 The new interface should:
 
@@ -264,7 +264,7 @@ Tertiary navigation:
 
 ### Current Functions To Preserve
 
-- Source selection: VIREL Vault, local sources, import folder, import status, drive/import source list.
+- Source selection: Framehouse Vault, local sources, import folder, import status, drive/import source list.
 - Smart collections: all images, visible, picked, rejected, rated, unrated, unmarked, online, offline.
 - Search.
 - Filters: media, project, time/import date, review, clear filters.
@@ -328,7 +328,7 @@ Selection action bar:
 
 ### Library Text Reduction
 
-- Replace "Import to VIREL Vault" with "Import" in the primary button; detail appears in tooltip or import drawer.
+- Replace "Import to Framehouse Vault" with "Import" in the primary button; detail appears in tooltip or import drawer.
 - Replace "All Images / Visible / Picked..." always-visible list with Smart Filter drawer.
 - Replace "9 results" with a small count in the filter row.
 - Show metadata labels only in inspector detail view. Use compact icon/value rows in default.
@@ -352,7 +352,7 @@ Selection action bar:
 - Detect video/photo files.
 - Show parent path.
 - Import current folder or selected files.
-- Import into catalog/VIREL Vault.
+- Import into catalog/Framehouse Vault.
 - Show import activity and failures.
 - Return to Library.
 
@@ -371,7 +371,7 @@ Import should feel like a guided intake bench:
   - Duplicate/offline warning if available.
 
 - Step 3: Destination
-  - VIREL Vault default.
+  - Framehouse Vault default.
   - Project assignment.
   - Optional rename/metadata/develop preset behind "Import Options".
 
@@ -896,7 +896,7 @@ Timeline active state:
 
 - Export presets.
 - Create/manage presets.
-- Destinations: local drive, VIREL Cloud, Dropbox, Google Drive, OneDrive.
+- Destinations: local drive, Framehouse Cloud, Dropbox, Google Drive, OneDrive.
 - Selected assets preview.
 - Add more assets.
 - Compact/pro density toggle.

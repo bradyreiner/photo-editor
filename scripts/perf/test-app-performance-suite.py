@@ -230,6 +230,30 @@ def test_threshold_evaluator_reports_failures_and_missing_metrics() -> None:
     assert_true(module.threshold_violation_count(report) == 1, "failed threshold should be counted")
 
 
+def test_skipped_suite_cannot_be_reported_as_a_release_pass() -> None:
+    module = load_module()
+    skipped = [SimpleNamespace(status="skipped")]
+    passed = [SimpleNamespace(status="passed")]
+    failed = [SimpleNamespace(status="failed")]
+    assert_true(
+        module.overall_status_for_results(skipped, "smoke", dry_run=False) == "skipped",
+        "an explained local skip must remain visible in aggregate status",
+    )
+    assert_true(
+        module.overall_status_for_results(skipped, "release-proof", dry_run=False)
+        == "incomplete",
+        "a release-proof skip must make the aggregate incomplete",
+    )
+    assert_true(
+        module.overall_status_for_results(passed, "release-proof", dry_run=False) == "passed",
+        "fully passing release proof should pass",
+    )
+    assert_true(
+        module.overall_status_for_results(failed, "smoke", dry_run=False) == "failed",
+        "a failed suite must fail every aggregate profile",
+    )
+
+
 def test_artifact_parsing_and_report_payload() -> None:
     module = load_module()
     output = "\n".join(
@@ -1384,6 +1408,7 @@ def main() -> int:
     test_goal8_suites_can_be_selected_and_dry_run()
     test_goal8_suite_command_mappings()
     test_threshold_evaluator_reports_failures_and_missing_metrics()
+    test_skipped_suite_cannot_be_reported_as_a_release_pass()
     test_artifact_parsing_and_report_payload()
     return 0
 

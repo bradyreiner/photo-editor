@@ -1,7 +1,21 @@
 (function () {
   "use strict";
 
-  const config = window.VirelDownloads || {};
+  const config = window.LooksyDownloads || {};
+  const both = config.accessMode === "paid-both";
+  const paid = both || config.accessMode === "paid-perpetual";
+  const supportedPlatforms = config.supportedPlatforms || ["mac-arm", "mac-intel", "windows"];
+  const supports = (platform) => supportedPlatforms.includes(platform);
+  const httpsUrl = (value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password;
+    } catch (_) { return false; }
+  };
+  const purchaseReady = paid && config.commercialTermsApproved === true
+    && config.priceLabel && config.licenseSummary && httpsUrl(config.purchaseUrl)
+    && httpsUrl(config.purchaseRecoveryUrl)
+    && (!both || (config.subscriptionPriceLabel && httpsUrl(config.subscriptionPurchaseUrl)));
   const state = {
     version: config.fallbackVersion || "0.1.0",
     updatedAt: config.updatedAt || "",
@@ -33,7 +47,12 @@
     macRequirement: document.getElementById("mac-requirement"),
     windowsRequirement: document.getElementById("windows-requirement"),
     supportPayment: document.getElementById("support-payment"),
-    purchase: document.getElementById("purchase-button")
+    purchase: document.getElementById("purchase-button"),
+    subscribe: document.getElementById("subscription-button"),
+    recovery: document.getElementById("purchase-recovery"),
+    commerceTitle: document.getElementById("commerce-title"),
+    commerceDescription: document.getElementById("commerce-description"),
+    commerceDetail: document.getElementById("commerce-detail")
   };
 
   function normalizePattern(pattern, fallback) {
@@ -60,7 +79,7 @@
   }
 
   function enableLink(anchor, url, label, labelElement) {
-    if (!anchor || !url) return;
+    if (!anchor || !httpsUrl(url)) return;
     anchor.href = url;
     anchor.classList.remove("disabled");
     anchor.removeAttribute("aria-disabled");
@@ -76,10 +95,7 @@
       elements.macArmButton?.classList.remove("primary");
       return;
     }
-    if (platform.includes("mac")) {
-      elements.body.classList.add("platform-mac");
-      elements.macArmButton?.classList.add("primary");
-    }
+    // The browser's Mac platform string does not identify Intel vs Apple silicon.
   }
 
   function renderStaticConfig() {
@@ -93,27 +109,64 @@
       elements.support.textContent = config.supportEmail;
     }
     enableLink(elements.supportPayment, config.supportPaymentUrl, "Support development");
-    enableLink(elements.purchase, config.purchaseUrl, "Buy a supporter license");
-    if (!config.purchaseUrl) elements.purchase.hidden = true;
+    if (paid) {
+      document.getElementById("commerce-nav").textContent = "Buy";
+      elements.commerceTitle.textContent = both ? "Choose how you create." : "Buy once. Keep creating.";
+      elements.commerceDescription.textContent = config.licenseSummary || "Purchase details will be published before sales open.";
+      elements.commerceDetail.textContent = both
+        ? "Choose a subscription or a one-time license. When editing access ends, you can still view, save, and export existing work."
+        : "Personal and client work. No subscription or periodic activation. Your receipt is your proof of purchase.";
+      elements.purchase.textContent = purchaseReady ? `Buy Looksy — ${config.priceLabel}` : "Purchases opening soon";
+      elements.supportPayment.hidden = true;
+      if (purchaseReady) enableLink(elements.purchase, config.purchaseUrl);
+      if (elements.subscribe) {
+        elements.subscribe.hidden = !both;
+        elements.subscribe.textContent = purchaseReady ? `Subscribe — ${config.subscriptionPriceLabel}` : "Subscriptions opening soon";
+        if (purchaseReady && both) enableLink(elements.subscribe, config.subscriptionPurchaseUrl);
+      }
+      if (httpsUrl(config.purchaseRecoveryUrl)) {
+        elements.recovery.hidden = false;
+        enableLink(elements.recovery, config.purchaseRecoveryUrl);
+      }
+      document.querySelectorAll(".download-title").forEach((element) => {
+        element.textContent = element.textContent.replace("Download", "Evaluate");
+      });
+    } else {
+      if (elements.subscribe) elements.subscribe.hidden = true;
+      // Support payments do not grant a commercial license.
+      elements.purchase.hidden = true;
+    }
+    document.querySelectorAll("[data-platform-card]").forEach((element) => {
+      element.hidden = !supports(element.dataset.platformCard);
+    });
+    document.getElementById("downloads").classList.toggle("single-platform", supportedPlatforms.length === 1);
+    elements.windowsRequirement.hidden = !supports("windows");
+    elements.macRequirement.hidden = !supports("mac-arm") && !supports("mac-intel");
+    if (supports("mac-arm") && !supports("mac-intel")) {
+      elements.macRequirement.textContent = "macOS 13 or newer on Apple silicon. Intel Macs are not supported by this release.";
+    }
+    if (supportedPlatforms.length === 1 && supports("mac-arm")) {
+      document.querySelector(".lede").textContent = "Looksy is a native, local-first photo editor for organizing and shaping photography on Apple silicon Macs.";
+    }
   }
 
   function render() {
     elements.version.textContent = state.version.replace(/^v/i, "");
     elements.updated.textContent = formatDate(state.updatedAt);
-    enableLink(elements.macArmButton, state.macArmUrl, state.macArmLabel, elements.macArmLabel);
-    enableLink(elements.macIntelButton, state.macIntelUrl, state.macIntelLabel, elements.macIntelLabel);
-    enableLink(elements.windowsButton, state.windowsUrl, state.windowsLabel, elements.windowsLabel);
+    if (supports("mac-arm")) enableLink(elements.macArmButton, state.macArmUrl, state.macArmLabel, elements.macArmLabel);
+    if (supports("mac-intel")) enableLink(elements.macIntelButton, state.macIntelUrl, state.macIntelLabel, elements.macIntelLabel);
+    if (supports("windows")) enableLink(elements.windowsButton, state.windowsUrl, state.windowsLabel, elements.windowsLabel);
 
-    if (state.notesUrl) {
+    if (httpsUrl(state.notesUrl)) {
       elements.notes.href = state.notesUrl;
       elements.notes.removeAttribute("aria-disabled");
       elements.notes.textContent = "Read release notes and checksums";
     }
 
     const available = [
-      state.macArmUrl ? "Apple silicon Mac" : "",
-      state.macIntelUrl ? "Intel Mac" : "",
-      state.windowsUrl ? "Windows" : ""
+      supports("mac-arm") && httpsUrl(state.macArmUrl) ? "Apple silicon Mac" : "",
+      supports("mac-intel") && httpsUrl(state.macIntelUrl) ? "Intel Mac" : "",
+      supports("windows") && httpsUrl(state.windowsUrl) ? "Windows" : ""
     ].filter(Boolean);
     if (available.length) {
       elements.status.textContent = state.errorMessage || `Signed ${state.version} builds are ready for ${available.join(", ")}.`;

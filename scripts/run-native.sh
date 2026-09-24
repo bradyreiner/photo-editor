@@ -4,10 +4,63 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONFIGURE_PRESET="dev-macos-debug"
-BUILD_PRESET="build-dev-macos-debug"
+CONFIGURE_PRESET="release-macos"
+BUILD_ENABLED=1
+BUILD_ONLY=0
+FORCE_CONFIGURE=0
+BUILD_JOBS=""
+
+usage() {
+  cat <<'HELP'
+Usage: ./scripts/run-native.sh [options] [-- app arguments...]
+
+Build only Looksy and its dependencies, prepare PostgreSQL, and launch.
+Existing builds are incremental; tests and benchmarks are built separately.
+
+  --release       Use the optimized release-macos build (default)
+  --debug         Use dev-macos-debug for debugger sessions
+  --no-build      Launch the existing app without Cargo or CMake
+  --build-only    Build the app without starting PostgreSQL or the app
+  --configure     Refresh CMake configuration before building
+  --jobs N        Limit concurrent build jobs (positive integer)
+  -h, --help      Show this help
+
+Examples:
+  ./scripts/run-native.sh
+  ./scripts/run-native.sh --no-build
+  ./scripts/run-native.sh --release --jobs 4
+HELP
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --release) CONFIGURE_PRESET="release-macos" ;;
+    --debug) CONFIGURE_PRESET="dev-macos-debug" ;;
+    --no-build) BUILD_ENABLED=0 ;;
+    --build-only) BUILD_ONLY=1 ;;
+    --configure) FORCE_CONFIGURE=1 ;;
+    --jobs)
+      shift
+      case "${1:-}" in
+        ''|*[!0-9]*|0*) printf 'Error: --jobs requires a positive integer.\n' >&2; exit 2 ;;
+      esac
+      BUILD_JOBS="$1"
+      ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ "${BUILD_ENABLED}" -eq 0 ] &&
+   { [ "${BUILD_ONLY}" -eq 1 ] || [ "${FORCE_CONFIGURE}" -eq 1 ] || [ -n "${BUILD_JOBS}" ]; }; then
+  printf 'Error: --no-build cannot be combined with build options.\n' >&2
+  exit 2
+fi
+BUILD_PRESET="build-${CONFIGURE_PRESET}"
 BUILD_DIR="${REPO_ROOT}/build/${CONFIGURE_PRESET}"
-APP_BINARY="${BUILD_DIR}/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
+APP_BINARY="${BUILD_DIR}/apps/desktop/Looksy.app/Contents/MacOS/Looksy"
+RUST_BIN_DIR="${REPO_ROOT}/rust/target/debug"
 NATIVE_LOG_STYLE="${PHOTO_EDITOR_NATIVE_LOG_STYLE:-pretty}"
 LOG_COLOR_MODE="${PHOTO_EDITOR_LOG_COLOR:-auto}"
 
@@ -128,21 +181,17 @@ warn() {
   log_line "${YELLOW}" "warn" "$*" >&2
 }
 
-if ! command -v cmake >/dev/null 2>&1; then
-  fail "cmake is required. Install it with: brew install cmake ninja rust qt"
-fi
-
-if ! command -v ninja >/dev/null 2>&1; then
-  fail "ninja is required. Install it with: brew install ninja"
-fi
-
-if ! command -v cargo >/dev/null 2>&1; then
-  fail "cargo is required. Install it with: brew install rust"
+if [ "${BUILD_ENABLED}" -eq 1 ]; then
+  for tool in cmake ninja cargo; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      fail "${tool} is required to build. Install build tools with: brew install cmake ninja rust qt"
+    fi
+  done
 fi
 
 banner
 
-if [ -z "${CMAKE_PREFIX_PATH:-}" ] && command -v brew >/dev/null 2>&1; then
+if [ "${BUILD_ENABLED}" -eq 1 ] && [ -z "${CMAKE_PREFIX_PATH:-}" ] && command -v brew >/dev/null 2>&1; then
   QT_PREFIX="$(brew --prefix qt 2>/dev/null || true)"
   if [ -n "${QT_PREFIX}" ]; then
     export CMAKE_PREFIX_PATH="${QT_PREFIX}"
@@ -153,51 +202,76 @@ fi
 
 cd "${REPO_ROOT}"
 
-if [ -z "${PHOTO_EDITOR_APP_DATA_DIR:-}" ]; then
-  PHOTO_EDITOR_APP_DATA_DIR="${HOME}/Library/Application Support/PhotoEditor"
-fi
-if [ -z "${PHOTO_EDITOR_LOG_DIR:-}" ]; then
-  PHOTO_EDITOR_LOG_DIR="${PHOTO_EDITOR_APP_DATA_DIR}/logs"
-fi
-if [ -z "${PHOTO_EDITOR_BACKUP_DIR:-}" ]; then
-  PHOTO_EDITOR_BACKUP_DIR="${PHOTO_EDITOR_APP_DATA_DIR}/backups"
+if [ "${BUILD_ENABLED}" -eq 1 ]; then
+  CARGO_ARGS=(build --manifest-path rust/Cargo.toml -p photo-catalog --bins)
+  if [ -n "${BUILD_JOBS}" ]; then
+    CARGO_ARGS+=(--jobs "${BUILD_JOBS}")
+  fi
+  run_step "Rust catalog binaries" cargo "${CARGO_ARGS[@]}"
+  if [ "${FORCE_CONFIGURE}" -eq 1 ] ||
+     [ ! -f "${BUILD_DIR}/CMakeCache.txt" ] || [ ! -f "${BUILD_DIR}/build.ninja" ] ||
+     ! grep -Fxq "PHOTO_EDITOR_RUST_BINARY_DIR:PATH=${RUST_BIN_DIR}" "${BUILD_DIR}/CMakeCache.txt"; then
+    run_step "Desktop configure" \
+      cmake --preset "${CONFIGURE_PRESET}" \
+      -DPHOTO_EDITOR_RUST_BINARY_DIR="${RUST_BIN_DIR}"
+  fi
+  BUILD_ARGS=(--build --preset "${BUILD_PRESET}" --target photo_editor_app)
+  if [ -n "${BUILD_JOBS}" ]; then
+    BUILD_ARGS+=(--parallel "${BUILD_JOBS}")
+  fi
+  run_step "Desktop build" cmake "${BUILD_ARGS[@]}"
 fi
 
-export PHOTO_EDITOR_APP_DATA_DIR
-export PHOTO_EDITOR_LOG_DIR
-export PHOTO_EDITOR_BACKUP_DIR
+[ -x "${APP_BINARY}" ] || fail "App not built: ${APP_BINARY}. Run without --no-build first."
+if [ "${BUILD_ONLY}" -eq 1 ]; then
+  note "App ready: ${APP_BINARY}"
+  exit 0
+fi
 
+PHOTO_EDITOR_APP_DATA_DIR="${PHOTO_EDITOR_APP_DATA_DIR:-${HOME}/Library/Application Support/PhotoEditor}"
+PHOTO_EDITOR_LOG_DIR="${PHOTO_EDITOR_LOG_DIR:-${PHOTO_EDITOR_APP_DATA_DIR}/logs}"
+PHOTO_EDITOR_BACKUP_DIR="${PHOTO_EDITOR_BACKUP_DIR:-${PHOTO_EDITOR_APP_DATA_DIR}/backups}"
+export PHOTO_EDITOR_APP_DATA_DIR PHOTO_EDITOR_LOG_DIR PHOTO_EDITOR_BACKUP_DIR
+
+if [ -n "${PHOTO_EDITOR_DATABASE_URL:-}" ]; then
+  CATALOG_HELPER="${RUST_BIN_DIR}/catalog_migrate"
+else
+  CATALOG_HELPER="${RUST_BIN_DIR}/catalog_local_db"
+fi
+[ -x "${CATALOG_HELPER}" ] || fail "Catalog helper not built: ${CATALOG_HELPER}. Run without --no-build first."
 mkdir -p "${PHOTO_EDITOR_APP_DATA_DIR}" "${PHOTO_EDITOR_LOG_DIR}" "${PHOTO_EDITOR_BACKUP_DIR}"
-
 note "Runtime data: ${PHOTO_EDITOR_APP_DATA_DIR}"
 note "Logs: ${PHOTO_EDITOR_LOG_DIR}"
-run_step "Rust catalog binaries" \
-  cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins
 if [ -n "${PHOTO_EDITOR_DATABASE_URL:-}" ]; then
-  run_step "Catalog migrations" \
-    "${REPO_ROOT}/rust/target/debug/catalog_migrate"
+  run_step "External PostgreSQL catalog migrations" "${CATALOG_HELPER}"
 else
-  run_step "Local catalog database" \
-    "${REPO_ROOT}/rust/target/debug/catalog_local_db" ensure-running
+  run_step "Managed local PostgreSQL catalog" "${CATALOG_HELPER}" ensure-running
 fi
-run_step "Desktop configure" \
-  cmake --preset "${CONFIGURE_PRESET}" \
-  -DPHOTO_EDITOR_RUST_BINARY_DIR="${REPO_ROOT}/rust/target/debug"
-run_step "Desktop build" \
-  cmake --build --preset "${BUILD_PRESET}"
 
-EXISTING_APP_PIDS="$(pgrep -f "${BUILD_DIR}/apps/desktop/(photo_editor_app|VirelStudio.app/Contents/MacOS/VirelStudio)" || true)"
-if [ -n "${EXISTING_APP_PIDS}" ]; then
-  warn "Stopping existing PhotoEditor instance before launch"
+# Both configurations share the same catalog/outbox. Switching to Release must
+# close this checkout's Debug instance too, before the new app acquires the lock.
+APP_PATTERN="$(printf '%s' "${REPO_ROOT}/build/" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"'(dev-macos-debug|release-macos)/apps/desktop/Looksy\.app/Contents/MacOS/Looksy'
+EXISTING_APP_PIDS=""
+if EXISTING_APP_PIDS="$(pgrep -u "$(id -u)" -f "^${APP_PATTERN}([[:space:]]|$)")"; then
+  warn "Stopping existing Looksy instance before launch"
   while IFS= read -r pid; do
-    if [ -n "${pid}" ]; then
-      kill "${pid}" 2>/dev/null || true
-    fi
+    [ -n "${pid}" ] || continue
+    kill "${pid}" 2>/dev/null || true
+    attempts=0
+    while kill -0 "${pid}" 2>/dev/null; do
+      if [ "${attempts}" -ge 100 ]; then
+        fail "Looksy (PID ${pid}) has not exited. Close it before launching again."
+      fi
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
   done <<< "${EXISTING_APP_PIDS}"
-  sleep 1
+else
+  status=$?
+  [ "${status}" -eq 1 ] || fail "Could not check whether Looksy is already running."
 fi
 
 note "App binary: ${APP_BINARY}"
-note "Build pipeline ready in $(duration_since "${started_at}")"
-log_line "${MAGENTA}" "launch" "PhotoEditor is taking over this terminal"
-exec "${APP_BINARY}"
+note "Ready in $(duration_since "${started_at}")"
+log_line "${MAGENTA}" "launch" "Looksy is taking over this terminal"
+exec "${APP_BINARY}" "$@"

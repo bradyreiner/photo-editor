@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::env;
 
 use photo_catalog::{
-    AppRuntimePaths, AssetReviewStateRecord, CatalogAssetSnapshot, CatalogService, DriveRecord,
-    PersistedProject, PostgresCatalogConfig,
+    run_catalog_helper, AppRuntimePaths, AssetReviewStateRecord, CatalogAssetSnapshot,
+    CatalogRepository, CatalogRuntime, DriveRecord, PersistedProject,
 };
 use serde::Serialize;
 
@@ -21,17 +21,18 @@ struct ReviewState {
     rating: i32,
     picked: bool,
     rejected: bool,
+    color_label: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn main() -> std::process::ExitCode {
+    run_catalog_helper(run)
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = env::args().collect();
     let limit = parse_limit(arguments.get(1).map(String::as_str));
 
-    AppRuntimePaths::from_env().ensure_directories()?;
-    let config = PostgresCatalogConfig::from_env();
-    let catalog = CatalogService::connect(&config).await?;
-    catalog.initialize_schema().await?;
+    let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     let snapshot = Snapshot {
         assets: catalog.list_asset_snapshots(limit).await?,
@@ -68,6 +69,7 @@ fn review_state_map(records: Vec<AssetReviewStateRecord>) -> BTreeMap<String, Re
                     rating: record.rating,
                     picked: record.picked,
                     rejected: record.rejected,
+                    color_label: record.color_label,
                 },
             )
         })

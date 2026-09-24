@@ -115,8 +115,37 @@ double circular_hue_distance(double left, double right) {
   return std::min(distance, 1.0 - distance);
 }
 
+double signed_opponent_hue(const ColorPixel& pixel) {
+  constexpr auto kTwoPi = 6.28318530717958647692;
+  const auto red = static_cast<double>(pixel.red);
+  const auto green = static_cast<double>(pixel.green);
+  const auto blue = static_cast<double>(pixel.blue);
+  const auto x = 2.0 * red - green - blue;
+  const auto y = std::sqrt(3.0) * (green - blue);
+  if (std::hypot(x, y) <= kEpsilon) {
+    return -1.0;
+  }
+  auto hue = std::atan2(y, x);
+  if (hue < 0.0) {
+    hue += kTwoPi;
+  }
+  return hue / kTwoPi;
+}
+
+double signed_relative_opponent_chroma(const ColorPixel& pixel) {
+  const auto red = static_cast<double>(pixel.red);
+  const auto green = static_cast<double>(pixel.green);
+  const auto blue = static_cast<double>(pixel.blue);
+  const auto x = 2.0 * red - green - blue;
+  const auto y = std::sqrt(3.0) * (green - blue);
+  return std::hypot(x, y) / std::max(1.0e-6, luminance(pixel));
+}
+
 ColorAdjustmentState base_state() {
   ColorAdjustmentState state;
+  state.color_pipeline.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::
+          LegacyOklchV1;
   state.color_pipeline.working_profile =
       photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
   state.color_pipeline.preview_output_profile =
@@ -419,6 +448,157 @@ int main() {
   }
 
   {
+    const auto shadow_cast = ColorPixel{0.012F, 0.004F, 0.010F, 1.0F};
+    auto state = base;
+    state.blacks = 93.0;
+    const auto lifted = apply_pixel(shadow_cast, state);
+    const auto source_luminance = luminance(shadow_cast);
+    const auto lifted_luminance = luminance(lifted);
+    const auto source_relative_chroma = channel_spread(shadow_cast) / source_luminance;
+    const auto lifted_relative_chroma = channel_spread(lifted) / lifted_luminance;
+    check(
+        lifted_luminance > source_luminance * 1.20 &&
+            lifted_luminance < source_luminance * 3.0,
+        "positive Blacks should lift the toe without amplifying near-black values by multiple stops",
+        &failures);
+    check(
+        lifted_relative_chroma < source_relative_chroma * 0.78,
+        "positive Blacks should suppress deep-shadow color contamination instead of revealing a cast",
+        &failures);
+    check(
+        circular_hue_distance(rgb_hue(shadow_cast), rgb_hue(lifted)) <= 0.002,
+        "deep-shadow chroma stabilization should preserve hue direction",
+        &failures);
+  }
+
+  {
+    struct NeutralLiftCase final {
+      const char* name;
+      ColorPixel input;
+      ColorAdjustmentState state;
+    };
+
+    const auto shadow_cast = ColorPixel{0.030F, 0.018F, 0.028F, 1.0F};
+    const auto upper_tone_cast = ColorPixel{0.72F, 0.62F, 0.68F, 1.0F};
+    const auto mid_shadow_cast = ColorPixel{0.13F, 0.105F, 0.120F, 1.0F};
+    std::vector<NeutralLiftCase> cases;
+    auto state = base;
+    state.contrast = -78.0;
+    cases.push_back({"negative Contrast", shadow_cast, state});
+    state = base;
+    state.highlights = 88.0;
+    cases.push_back({"Highlights", upper_tone_cast, state});
+    state = base;
+    state.shadows = 93.0;
+    cases.push_back({"Shadows", shadow_cast, state});
+    state = base;
+    state.whites = 88.0;
+    cases.push_back({"Whites", upper_tone_cast, state});
+    state = base;
+    state.brightness = 88.0;
+    cases.push_back({"Brightness", mid_shadow_cast, state});
+    state = base;
+    state.filmic_toe = 82.0;
+    cases.push_back({"Filmic toe", shadow_cast, state});
+    state = base;
+    state.levels_gamma = 72.0;
+    cases.push_back({"Levels gamma", shadow_cast, state});
+    state = base;
+    state.zone_shadows = 88.0;
+    cases.push_back({"Zone shadows", ColorPixel{0.080F, 0.060F, 0.074F, 1.0F}, state});
+    state = base;
+    state.curve_shadows = 88.0;
+    cases.push_back({"Parametric shadow curve", mid_shadow_cast, state});
+    state = base;
+    state.luma_curve_points = {
+        CurvePoint{0.0, 0.0}, CurvePoint{0.20, 0.44}, CurvePoint{1.0, 1.0}};
+    cases.push_back({"Luma point curve", mid_shadow_cast, state});
+
+    for (const auto& test_case : cases) {
+      const auto output = apply_pixel(test_case.input, test_case.state);
+      const auto source_luminance = luminance(test_case.input);
+      const auto output_luminance = luminance(output);
+      const auto source_hue = signed_opponent_hue(test_case.input);
+      const auto output_hue = signed_opponent_hue(output);
+      check(
+          std::abs(output_luminance - source_luminance) > 1.0e-4,
+          std::string(test_case.name) + " should visibly change its intended tonal range",
+          &failures);
+      check(
+          source_hue >= 0.0 && output_hue >= 0.0 &&
+              circular_hue_distance(source_hue, output_hue) <= 2.0e-5,
+          std::string(test_case.name) +
+              " should preserve signed opponent-hue direction for a color-neutral edit",
+          &failures);
+      check(
+          signed_relative_opponent_chroma(output) <=
+              signed_relative_opponent_chroma(test_case.input) + 2.0e-4,
+          std::string(test_case.name) +
+              " should not amplify low-amplitude tint relative to luminance",
+          &failures);
+    }
+
+    auto layer_state = base;
+    PhotoLayer layer;
+    layer.kind = "adjustment";
+    layer.opacity = 1.0;
+    layer.shadows = 93.0;
+    layer_state.photo_layers.push_back(layer);
+    const auto layer_output = apply_pixel(shadow_cast, layer_state);
+    check(
+        circular_hue_distance(
+            signed_opponent_hue(shadow_cast), signed_opponent_hue(layer_output)) <= 2.0e-5,
+        "adjustment-layer Shadows should preserve signed opponent-hue direction",
+        &failures);
+    check(
+        signed_relative_opponent_chroma(layer_output) <=
+            signed_relative_opponent_chroma(shadow_cast) + 2.0e-4,
+        "adjustment-layer Shadows should not amplify low-amplitude tint",
+        &failures);
+  }
+
+  {
+    auto signed_state = base;
+    signed_state.color_pipeline.working_profile =
+        photo_editor::pipeline::working_color_profile_from_name("Linear ProPhoto RGB");
+    signed_state.input_transform.raw_input_transform_enabled = false;
+    signed_state.input_transform.exposure = 1.0;
+    const auto signed_shadow = ColorPixel{-0.004F, 0.020F, 0.014F, 1.0F};
+    const auto output = apply_pixel(signed_shadow, signed_state);
+    check(
+        std::abs(output.red - signed_shadow.red * 2.0F) <= 2.0e-6F &&
+            std::abs(output.green - signed_shadow.green * 2.0F) <= 2.0e-6F &&
+            std::abs(output.blue - signed_shadow.blue * 2.0F) <= 2.0e-6F,
+        "scene-linear Exposure should preserve signed ProPhoto components exactly",
+        &failures);
+    check(
+        output.red < 0.0F &&
+            circular_hue_distance(
+                signed_opponent_hue(signed_shadow), signed_opponent_hue(output)) <= 2.0e-5,
+        "scene-linear Exposure should not clip or rotate signed shadow color",
+        &failures);
+
+    signed_state = base;
+    signed_state.color_pipeline.working_profile =
+        photo_editor::pipeline::working_color_profile_from_name("Linear ProPhoto RGB");
+    signed_state.input_transform.raw_input_transform_enabled = false;
+    signed_state.shadows = 93.0;
+    const auto shadow_output = apply_pixel(signed_shadow, signed_state);
+    check(
+        shadow_output.red < 0.0F &&
+            circular_hue_distance(
+                signed_opponent_hue(signed_shadow), signed_opponent_hue(shadow_output)) <=
+                2.0e-5,
+        "Shadows should preserve signed ProPhoto opponent direction instead of clipping it",
+        &failures);
+    check(
+        signed_relative_opponent_chroma(shadow_output) <=
+            signed_relative_opponent_chroma(signed_shadow) + 2.0e-4,
+        "Shadows should not turn signed near-black color into a stronger tint",
+        &failures);
+  }
+
+  {
     const auto expected = apply_pixels(source_corpus, static_cast<int>(source_corpus.size()), 1, base);
     std::vector<NeutralRampCase> cases;
 
@@ -426,7 +606,7 @@ int main() {
     cases.push_back(NeutralRampCase{"raw/input transform defaults", state});
 
     state = base;
-    state.exposure = 0.0;
+    state.input_transform.exposure = 0.0;
     state.contrast = 0.0;
     state.highlights = 0.0;
     state.shadows = 0.0;
@@ -454,8 +634,8 @@ int main() {
     cases.push_back(NeutralRampCase{"zone mapping defaults", state});
 
     state = base;
-    state.temperature = 0.0;
-    state.tint = 0.0;
+    state.input_transform.temperature = 0.0;
+    state.input_transform.tint = 0.0;
     state.vibrance = 0.0;
     state.saturation = 0.0;
     cases.push_back(NeutralRampCase{"white balance and color defaults", state});
@@ -551,7 +731,7 @@ int main() {
 
   {
     auto state = base;
-    state.exposure = 1.0;
+    state.input_transform.exposure = 1.0;
     state.contrast = 24.0;
     state.whites = 32.0;
     state.highlights = -18.0;
@@ -581,8 +761,8 @@ int main() {
 
   {
     auto state = base;
-    state.temperature = 42.0;
-    state.tint = -24.0;
+    state.input_transform.temperature = 42.0;
+    state.input_transform.tint = -24.0;
     const auto input = std::vector<ColorPixel>{
         gray(0.0), gray(0.006), gray(0.018), gray(0.055), gray(0.18),
         gray(0.36), gray(0.62), gray(0.86),
@@ -784,7 +964,7 @@ int main() {
     std::vector<NeutralRampCase> cases;
 
     auto state = base;
-    state.exposure = 0.55;
+    state.input_transform.exposure = 0.55;
     state.brightness = 18.0;
     cases.push_back(NeutralRampCase{"exposure and brightness", state});
 
@@ -952,6 +1132,68 @@ int main() {
 
   {
     const auto input = std::vector<ColorPixel>{
+        gray(0.045), gray(0.18), gray(0.72)};
+    auto positive = base;
+    positive.contrast = 60.0;
+    const auto positive_output =
+        apply_pixels(input, static_cast<int>(input.size()), 1, positive);
+    auto negative = base;
+    negative.contrast = -60.0;
+    const auto negative_output =
+        apply_pixels(input, static_cast<int>(input.size()), 1, negative);
+    const auto stop_distance = [](double value) {
+      return std::abs(std::log2(std::max(1.0e-8, value) / 0.18));
+    };
+    check(
+        std::abs(luminance(positive_output[1]) - 0.18) <= 2.0e-4 &&
+            std::abs(luminance(negative_output[1]) - 0.18) <= 2.0e-4,
+        "contrast should preserve the scene-referred middle-gray pivot",
+        &failures);
+    check(
+        stop_distance(luminance(positive_output[0])) >
+                stop_distance(luminance(input[0])) + 0.05 &&
+            stop_distance(luminance(positive_output[2])) >
+                stop_distance(luminance(input[2])) + 0.05,
+        "positive contrast should expand shadow and highlight distance from middle gray",
+        &failures);
+    check(
+        std::abs(
+            stop_distance(luminance(positive_output[0])) -
+            stop_distance(luminance(positive_output[2]))) <= 0.08,
+        "positive contrast should form a balanced S-curve around middle gray",
+        &failures);
+    check(
+        stop_distance(luminance(negative_output[0])) <
+                stop_distance(luminance(input[0])) - 0.05 &&
+            stop_distance(luminance(negative_output[2])) <
+                stop_distance(luminance(input[2])) - 0.05,
+        "negative contrast should compress shadow and highlight distance toward middle gray",
+        &failures);
+  }
+
+  {
+    constexpr auto kWidth = 100;
+    constexpr auto kHeight = 100;
+    std::vector<ColorPixel> clean_highlights(
+        static_cast<std::size_t>(kWidth * kHeight),
+        gray(0.45));
+    auto isolated_specular = clean_highlights;
+    isolated_specular.front() = gray(8.0);
+    auto state = base;
+    state.input_transform.exposure = 1.0;
+    const auto clean_output = apply_pixels(clean_highlights, kWidth, kHeight, state);
+    const auto specular_output = apply_pixels(isolated_specular, kWidth, kHeight, state);
+    const auto sample_index = static_cast<std::size_t>((kHeight / 2) * kWidth + (kWidth / 2));
+    check(
+        std::abs(
+            luminance(clean_output[sample_index]) -
+            luminance(specular_output[sample_index])) <= 0.005,
+        "an isolated hot pixel should not lower the exposure shoulder for every highlight",
+        &failures);
+  }
+
+  {
+    const auto input = std::vector<ColorPixel>{
         gray(0.0), gray(0.006), gray(0.018), gray(0.055), gray(0.18),
         gray(0.36), gray(0.62), gray(0.86), gray(0.98),
     };
@@ -1062,6 +1304,76 @@ int main() {
         red_before >= 0.0 && red_after >= 0.0 &&
             circular_hue_distance(red_after, 0.62) < circular_hue_distance(red_before, 0.62),
         "color replacement should move selected red hue toward target hue",
+        &failures);
+  }
+
+  {
+    const auto low_chroma = ColorPixel{0.30F, 0.24F, 0.21F, 1.0F};
+    const auto high_chroma = ColorPixel{0.52F, 0.17F, 0.045F, 1.0F};
+    auto state = base;
+    state.vibrance = 80.0;
+    const auto low_output = apply_pixel(low_chroma, state);
+    const auto high_output = apply_pixel(high_chroma, state);
+    const auto relative_chroma = [](const ColorPixel& pixel) {
+      return channel_spread(pixel) /
+             std::max(0.02, luminance(pixel));
+    };
+    const auto low_gain = relative_chroma(low_output) /
+                          std::max(1.0e-6, relative_chroma(low_chroma));
+    const auto high_gain = relative_chroma(high_output) /
+                           std::max(1.0e-6, relative_chroma(high_chroma));
+    check(
+        low_gain > high_gain + 0.03,
+        "vibrance should increase low-chroma color more than already-saturated color",
+        &failures);
+    check(
+        circular_hue_distance(rgb_hue(low_chroma), rgb_hue(low_output)) <= 0.015 &&
+            circular_hue_distance(rgb_hue(high_chroma), rgb_hue(high_output)) <= 0.015,
+        "vibrance should preserve hue while shaping perceptual chroma",
+        &failures);
+  }
+
+  {
+    const auto tones = std::vector<ColorPixel>{
+        gray(0.012), gray(0.18), gray(0.78)};
+    const auto grade_spreads = [&](ColorAdjustmentState state) {
+      const auto output =
+          apply_pixels(tones, static_cast<int>(tones.size()), 1, state);
+      return std::array<double, 3>{
+          channel_spread(output[0]),
+          channel_spread(output[1]),
+          channel_spread(output[2]),
+      };
+    };
+
+    auto shadows = base;
+    shadows.grading_shadows_hue = 220.0 / 360.0;
+    shadows.grading_shadows_saturation = 55.0;
+    const auto shadow_spread = grade_spreads(shadows);
+    check(
+        shadow_spread[0] > shadow_spread[1] + 0.01 &&
+            shadow_spread[0] > shadow_spread[2] + 0.01,
+        "shadow grading should be strongest in shadows",
+        &failures);
+
+    auto midtones = base;
+    midtones.grading_midtones_hue = 32.0 / 360.0;
+    midtones.grading_midtones_saturation = 55.0;
+    const auto midtone_spread = grade_spreads(midtones);
+    check(
+        midtone_spread[1] > midtone_spread[0] + 0.01 &&
+            midtone_spread[1] > midtone_spread[2] + 0.01,
+        "midtone grading should be strongest around middle gray",
+        &failures);
+
+    auto highlights = base;
+    highlights.grading_highlights_hue = 52.0 / 360.0;
+    highlights.grading_highlights_saturation = 55.0;
+    const auto highlight_spread = grade_spreads(highlights);
+    check(
+        highlight_spread[2] > highlight_spread[1] + 0.01 &&
+            highlight_spread[2] > highlight_spread[0] + 0.01,
+        "highlight grading should be strongest in highlights",
         &failures);
   }
 

@@ -1,4 +1,4 @@
-# Virel Studio Release Process
+# Looksy Release Process
 
 The tagged release workflow is fail closed. It tests, packages, signs, verifies,
 promotes immutable public assets, and then deploys the download site. The private
@@ -39,12 +39,13 @@ binary repository.
 
 ## Required variables
 
-- `VIREL_PUBLIC_RELEASE_REPOSITORY`
-- `VIREL_WEBSITE_URL`
-- `VIREL_SUPPORT_EMAIL`
-- `VIREL_SUPPORT_PAYMENT_URL`
-- `VIREL_PURCHASE_URL` (optional for the free alpha)
-- `VIREL_CLOUDFLARE_PAGES_PROJECT`
+- `LOOKSY_PUBLIC_RELEASE_REPOSITORY`
+- `LOOKSY_WEBSITE_URL`
+- `LOOKSY_SUPPORT_EMAIL`
+- `LOOKSY_LEGAL_PUBLISHER`
+- `LOOKSY_SUPPORT_PAYMENT_URL`
+- `LOOKSY_PURCHASE_URL` (optional for the free alpha)
+- `LOOKSY_CLOUDFLARE_PAGES_PROJECT`
 - `PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE` or `PHOTO_EDITOR_MACOS_SPARKLE_URL`
 - `PHOTO_EDITOR_MACOS_APPCAST_URL`
 - `PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY`

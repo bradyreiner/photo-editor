@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -24,9 +24,9 @@ Rectangle {
 
     Layout.fillWidth: true
     implicitHeight: presetInfoColumn.implicitHeight + theme.space16
-    radius: theme.radius12
-    color: theme.alpha(theme.ink900, 0.5)
-    border.width: theme.chromeBorderWidth
+    radius: 0
+    color: "transparent"
+    border.width: 0
     border.color: theme.alpha(theme.lineSoft, 0.5)
     clip: true
     Accessible.name: "Export preset. " +
@@ -62,7 +62,7 @@ Rectangle {
                         Layout.fillWidth: true
                         text: modelData.label
                         color: theme.textFaint
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: 9
                         fontSizeMode: Text.HorizontalFit
                         minimumPixelSize: 7
@@ -73,7 +73,7 @@ Rectangle {
                         Layout.fillWidth: true
                         text: modelData.value
                         color: theme.textMain
-                        font.family: theme.fontMono
+                        font.family: theme.fontUi
                         font.pixelSize: 11
                         font.weight: Font.Medium
                         fontSizeMode: Text.HorizontalFit

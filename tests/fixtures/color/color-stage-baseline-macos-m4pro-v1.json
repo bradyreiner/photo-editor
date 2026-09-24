@@ -1,0 +1,50 @@
+{
+  "schema": "photo-editor-color-stage-baseline:v1",
+  "captured_at": "2026-07-13",
+  "reference_machine": {
+    "model": "MacBook Pro Mac16,8",
+    "chip": "Apple M4 Pro",
+    "cpu_cores": 14,
+    "memory_gib": 48,
+    "os": "macOS 26.3.1"
+  },
+  "build": {
+    "configuration": "Debug",
+    "compiler": "AppleClang 17.0.0",
+    "metal_build_option": "measured both OFF and ON"
+  },
+  "benchmark": {
+    "driver": "color_adjustment_benchmark_driver",
+    "state": "spatial-texture-only",
+    "state_sha256": "036b90fa406f1e74664017ba3792c39d4ef42626fbefee2affda1f3f42e33294",
+    "iterations": 5,
+    "warmup_policy": "first sample retained",
+    "metrics_are_release_gates": false
+  },
+  "scenarios": [
+    {
+      "name": "tiny-grid",
+      "width": 64,
+      "height": 64,
+      "cpu": {"p50_ms": 1, "p95_ms": 3, "max_ms": 3, "gpu_command_buffers_avg": 0},
+      "metal": {"p50_ms": 1, "p95_ms": 8, "max_ms": 8, "gpu_command_buffers_avg": 3}
+    },
+    {
+      "name": "preview-960",
+      "width": 960,
+      "height": 640,
+      "cpu": {"p50_ms": 116, "p95_ms": 122, "max_ms": 122, "gpu_command_buffers_avg": 0},
+      "metal": {"p50_ms": 12, "p95_ms": 25, "max_ms": 25, "gpu_command_buffers_avg": 3},
+      "metal_p95_speedup": 4.88
+    },
+    {
+      "name": "full-1920",
+      "width": 1920,
+      "height": 1280,
+      "cpu": {"p50_ms": 448, "p95_ms": 458, "max_ms": 458, "gpu_command_buffers_avg": 0},
+      "metal": {"p50_ms": 71, "p95_ms": 84, "max_ms": 84, "gpu_command_buffers_avg": 3},
+      "metal_p95_speedup": 5.45
+    }
+  ],
+  "interpretation": "Debug baseline for regression comparison, not a release-performance claim. Metal execution was required and proved by nonzero command-buffer telemetry."
+}

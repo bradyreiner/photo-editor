@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 pragma ComponentBehavior: Bound
@@ -11,7 +11,7 @@ Item {
     property real hue: 0
     property real saturation: 0
     property real luminance: 0
-    property color accent: "#39FFAE"
+    property color accent: theme.primaryAccent
     property real wheelSize: 82
     property real maxSaturation: 100
     property bool ringMode: false

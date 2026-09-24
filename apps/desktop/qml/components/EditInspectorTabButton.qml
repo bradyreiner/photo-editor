@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 
 Item {
     id: root
@@ -33,8 +32,8 @@ Item {
         color: tabMouse.containsMouse || root.selected || root.activeFocus
                ? theme.alpha(root.accent, root.selected ? 0.07 : 0.04)
                : "transparent"
-        border.width: root.activeFocus ? 1 : 0
-        border.color: root.activeFocus ? theme.focusRing : "transparent"
+        border.width: root.activeFocus || root.selected ? 1 : 0
+        border.color: root.activeFocus || root.selected ? theme.controlEdge : "transparent"
     }
 
     Text {
@@ -58,16 +57,6 @@ Item {
         minimumPixelSize: 7
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 2
-        radius: 1
-        visible: root.selected
-        color: root.accent
-    }
-
     MouseArea {
         id: tabMouse
         anchors.fill: parent
@@ -76,8 +65,11 @@ Item {
         onClicked: root.selectedRequested(root.tabKey)
     }
 
-    ToolTip.visible: tabMouse.containsMouse && root.label.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: 2200
-    ToolTip.text: root.label
+    AppToolTip {
+        targetItem: root
+        visible: tabMouse.containsMouse && root.label.length > 0
+        delay: 350
+        timeout: 2200
+        text: root.label
+    }
 }

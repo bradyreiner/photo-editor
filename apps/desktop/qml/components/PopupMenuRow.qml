@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Button {
@@ -27,10 +27,10 @@ Button {
     readonly property string itemTooltip: !enabled && itemDisabledReason.length > 0
                                           ? itemLabel + " - " + itemDisabledReason
                                           : String(modelData.tooltip || itemLabel)
-    readonly property int rowMinimumHeight: 32
+    readonly property int rowMinimumHeight: theme.scaled(32)
     readonly property int rowPreferredHeight: theme.menuItemHeight
-    readonly property int menuIconColumnWidth: 16
-    readonly property int menuShortcutColumnWidth: 72
+    readonly property int menuIconColumnWidth: theme.scaled(16)
+    readonly property int menuShortcutColumnWidth: theme.scaled(72)
     readonly property string popupMenuRowContract: "popup-menu-row:v3|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|label-wrap:true|description-wrap:true|disabled-wrap:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true|full-label-available:true"
     readonly property string menuGeometryContract: "popup-menu-row-geometry:v1|min-height:32|preferred-height:34|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:" +
@@ -59,7 +59,11 @@ Button {
     onClicked: activated(itemKey)
 
     Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Down) {
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            event.accepted = true
+            if (root.enabled && !event.isAutoRepeat)
+                root.activated(root.itemKey)
+        } else if (event.key === Qt.Key_Down) {
             navigateRequested(1)
             event.accepted = true
         } else if (event.key === Qt.Key_Up) {
@@ -117,12 +121,12 @@ Button {
                     Layout.fillWidth: true
                     text: root.itemLabel
                     color: !root.enabled
-                           ? theme.alpha(theme.textMuted, 0.56)
+                           ? theme.alpha(theme.textMuted, 0.84)
                            : root.itemDanger
                              ? theme.error
                              : theme.textMain
                     font.family: theme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: theme.typeControl
                     font.weight: root.itemChecked ? Font.DemiBold : Font.Medium
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: root.labelMaxLines
@@ -135,9 +139,9 @@ Button {
                     Layout.fillWidth: true
                     visible: root.enabled && root.itemDescription.length > 0
                     text: root.itemDescription
-                    color: theme.alpha(theme.textMuted, 0.70)
+                    color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeLabel
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone
@@ -148,9 +152,9 @@ Button {
                     Layout.fillWidth: true
                     visible: !root.enabled && root.itemDisabledReason.length > 0
                     text: root.itemDisabledReason
-                    color: theme.alpha(theme.textMuted, 0.64)
+                    color: theme.alpha(theme.textMuted, 0.88)
                     font.family: theme.fontUi
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeLabel
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone
@@ -163,13 +167,13 @@ Button {
                 text: root.itemShortcut
                 color: theme.alpha(theme.textMuted, 0.72)
                 font.family: theme.fontMono
-                font.pixelSize: 10
+                font.pixelSize: theme.typeLabel
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
                 maximumLineCount: 1
                 elide: Text.ElideNone
                 fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 8
+                minimumPixelSize: 10
                 Layout.preferredWidth: root.itemShortcut.length > 0 ? root.menuShortcutColumnWidth : 0
                 Layout.minimumWidth: root.itemShortcut.length > 0 ? root.menuShortcutColumnWidth : 0
                 Layout.maximumWidth: root.menuShortcutColumnWidth

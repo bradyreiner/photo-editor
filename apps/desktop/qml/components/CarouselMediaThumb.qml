@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 Rectangle {
     id: root
@@ -10,7 +10,7 @@ Rectangle {
     property string tooltipText: String(asset.cameraLabel || asset.assetId || "Library asset")
     property bool online: Boolean(asset.online)
     readonly property string mediaLabel: mediaType === "video" ? "Video" : "Photo"
-    readonly property string carouselMediaThumbContract: "carousel-media-thumb:v1|preview:true|online-state:true|click-double-click:true|readable-text:true|no-elide:true"
+    readonly property string carouselMediaThumbContract: "carousel-media-thumb:v2|preview:true|online-state:true|click-double-click:true|drag-payload:true|copy-action:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|media-label-wrap:true|tooltip-full:true|accessibility-full:true"
     readonly property string mediaSurfaceContract: "media-surface:v1|quick-library-thumbnail:stable|preview-dominant:true|label-zone:bottom|badge-corner:reserved|chrome:quiet"
 
@@ -77,11 +77,29 @@ Rectangle {
         id: thumbHover
         anchors.fill: parent
         hoverEnabled: true
+        drag.target: dragProxy
+        drag.axis: Drag.XAndYAxis
+        drag.threshold: 6
         cursorShape: root.online ? Qt.PointingHandCursor : Qt.ForbiddenCursor
         onClicked: function(mouse) {
             root.activated(root.asset, mouse.modifiers)
         }
         onDoubleClicked: root.doubleActivated(root.asset)
+    }
+
+    Item {
+        id: dragProxy
+        width: 1
+        height: 1
+        Drag.active: thumbHover.drag.active && root.online
+        Drag.dragType: Drag.Automatic
+        Drag.supportedActions: Qt.CopyAction
+        Drag.proposedAction: Qt.CopyAction
+        Drag.mimeData: ({
+            "application/x-carousel-media": JSON.stringify(root.asset)
+        })
+        Drag.hotSpot.x: 0
+        Drag.hotSpot.y: 0
     }
 
     ToolTip.visible: thumbHover.containsMouse

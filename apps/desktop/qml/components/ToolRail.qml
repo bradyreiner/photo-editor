@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -14,6 +15,8 @@ Item {
     property int menuItemMaxLines: 2
     property bool showLabels: false
     property bool compact: true
+    property bool menusEnabled: true
+    property int toolIconSize: 0
     property int switchSerial: 0
     readonly property int menuMinimumWidth: theme.menuMinWidth
     readonly property int menuMaximumWidth: theme.menuMaxWidth
@@ -21,6 +24,7 @@ Item {
 
     signal toolTriggered(var tool)
     signal menuItemTriggered(var tool, string key)
+    signal closeMenusRequested()
 
     Theme { id: theme }
 
@@ -53,7 +57,14 @@ Item {
                                                         railGroupOrder().join(">") +
                                                         "|button-size:" +
                                                         String(root.buttonSize) +
-                                                        "|stable-size:true|hover-layout-shift:false|tooltips:explicit|variants:menus|one-expansion:true"
+                                                        "|stable-size:true|hover-layout-shift:false|tooltips:explicit|variants:" +
+                                                        (root.menusEnabled ? "menus" : "page-controls") +
+                                                        "|one-expansion:" + String(root.menusEnabled)
+    readonly property string directNavigationContract: "tool-rail-direct-navigation:v1|enabled:" +
+                                                       String(!root.menusEnabled) +
+                                                       "|click:page|menus:" + String(root.menusEnabled) +
+                                                       "|hover-overlays:" + String(root.menusEnabled) +
+                                                       "|variants:" + (root.menusEnabled ? "rail" : "page")
     readonly property string activationCoverageContract: "tool-rail-activation:v1|primary-tools:" +
                                                          primaryToolIds().join(",") +
                                                          "|source:rail-model|buttons:present|trigger-by-id:true"
@@ -62,13 +73,7 @@ Item {
     onSwitchSerialChanged: closeOpenMenus()
 
     function closeOpenMenus() {
-        if (!toolRepeater)
-            return
-        for (let index = 0; index < toolRepeater.count; ++index) {
-            const item = toolRepeater.itemAt(index)
-            if (item && item.closeToolMenu)
-                item.closeToolMenu()
-        }
+        root.closeMenusRequested()
     }
 
     function toolId(tool) {
@@ -100,6 +105,8 @@ Item {
     }
 
     function menuActions(tool) {
+        if (!root.menusEnabled)
+            return []
         if (!toolEnabled(tool)) {
             const reason = toolDisabledReason(tool)
             return reason.length > 0 ? [{
@@ -200,6 +207,8 @@ Item {
     }
 
     function currentActiveVariantLabel() {
+        if (!root.menusEnabled)
+            return ""
         const list = root.tools || []
         for (let index = 0; index < list.length; ++index) {
             const tool = list[index]
@@ -229,6 +238,8 @@ Item {
                 readonly property bool menuAvailable: toolMenuItems.length > 0
                 readonly property string activeFamilyLabel: tool.active === true ? root.toolLabel(tool) : ""
                 readonly property string activeVariantLabel: tool.active === true ? root.toolVariant(tool) : ""
+                property real menuPointerX: root.buttonSize / 2
+                property real menuPointerY: root.buttonSize / 2
 
                 Layout.preferredWidth: root.showLabels ? Math.max(root.buttonSize, toolButton.implicitWidth) : root.buttonSize
                 Layout.preferredHeight: root.buttonSize
@@ -242,6 +253,33 @@ Item {
                     railMenuPopup.open()
                 }
 
+                function menuPopupX() {
+                    const overlay = railMenuPopup.parent
+                    if (!overlay)
+                        return toolDelegate.x + toolDelegate.width + theme.space6
+                    const point = toolDelegate.mapToItem(overlay, menuPointerX, menuPointerY)
+                    return Math.max(theme.space8,
+                                    Math.min(overlay.width - railMenuPopup.width - theme.space8,
+                                             point.x + theme.space12))
+                }
+
+                function menuPopupY() {
+                    const overlay = railMenuPopup.parent
+                    if (!overlay)
+                        return toolDelegate.y
+                    const point = toolDelegate.mapToItem(overlay, menuPointerX, menuPointerY)
+                    return Math.max(theme.space8,
+                                    Math.min(overlay.height - railMenuPopup.height - theme.space8,
+                                             point.y - railMenuPopup.height / 2))
+                }
+
+                Connections {
+                    target: root
+                    function onCloseMenusRequested() {
+                        toolDelegate.closeToolMenu()
+                    }
+                }
+
                 Components.ToolButton {
                     id: toolButton
                     objectName: String(toolDelegate.tool.railObjectName || toolDelegate.tool.objectName || "")
@@ -249,7 +287,7 @@ Item {
                     label: root.toolLabel(toolDelegate.tool)
                     iconName: String(toolDelegate.tool.icon || "")
                     shortcut: root.toolShortcut(toolDelegate.tool)
-                    variantLabel: root.toolVariant(toolDelegate.tool)
+                    variantLabel: root.menusEnabled ? root.toolVariant(toolDelegate.tool) : ""
                     statusText: String(toolDelegate.tool.statusText || "")
                     disabledReason: root.toolDisabledReason(toolDelegate.tool)
                     accent: root.accent
@@ -259,6 +297,9 @@ Item {
                     warning: String(toolDelegate.tool.pendingState || "") === "failed"
                     commandEnabled: root.toolEnabled(toolDelegate.tool)
                     compact: root.compact
+                    toolIconSize: root.toolIconSize > 0
+                                  ? root.toolIconSize
+                                  : (root.compact ? 14 : 16)
                     showLabel: root.showLabels
                     showMenuIndicator: toolDelegate.menuAvailable
                     onClicked: {
@@ -277,6 +318,14 @@ Item {
                             toolDelegate.openToolMenu()
                             event.accepted = true
                         }
+                    }
+                }
+
+                HoverHandler {
+                    enabled: toolDelegate.menuAvailable
+                    onPointChanged: {
+                        toolDelegate.menuPointerX = point.position.x
+                        toolDelegate.menuPointerY = point.position.y
                     }
                 }
 
@@ -303,6 +352,7 @@ Item {
                 Popup {
                     id: railMenuPopup
                     property int currentFocusIndex: -1
+                    parent: Overlay.overlay
 
                     function itemEnabledAt(index) {
                         if (index < 0 || index >= toolDelegate.toolMenuItems.length)
@@ -348,8 +398,8 @@ Item {
                         }
                     }
 
-                    x: toolDelegate.width + theme.space6
-                    y: 0
+                    x: toolDelegate.menuPopupX()
+                    y: toolDelegate.menuPopupY()
                     width: Math.min(root.menuMaximumWidth,
                                     Math.max(root.menuMinimumWidth,
                                              root.menuWidthForTool(toolDelegate.tool),

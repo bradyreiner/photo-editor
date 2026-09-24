@@ -8,8 +8,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
-#include <QProcessEnvironment>
 #include <QSaveFile>
 #include <QStandardPaths>
 
@@ -116,51 +114,16 @@ QJsonObject legacy_document_backup_object(
   return object;
 }
 
-QString helper_program() {
-  return AppBootstrap::helperProgram(QStringLiteral("catalog_timeline_documents"));
-}
-
-QStringList helper_arguments(const QStringList& command_arguments) {
-  return AppBootstrap::helperArguments(QStringLiteral("catalog_timeline_documents"), command_arguments);
-}
-
 bool run_helper_command(
     const QStringList& command_arguments,
     QString* output = nullptr,
     QString* error_message = nullptr) {
-  QProcess process;
-  process.setWorkingDirectory(QDir::currentPath());
-  QProcessEnvironment environment;
-  QString environment_error;
-  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
-    if (error_message != nullptr) {
-      *error_message = environment_error;
-    }
-    return false;
-  }
-
-  process.setProcessEnvironment(environment);
-  process.setProcessChannelMode(QProcess::MergedChannels);
-  process.start(helper_program(), helper_arguments(command_arguments));
-  if (!process.waitForStarted(5000)) {
-    if (error_message != nullptr) {
-      *error_message = QStringLiteral("Unable to start timeline catalog helper.");
-    }
-    return false;
-  }
-
-  if (!process.waitForFinished(15000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-    if (error_message != nullptr) {
-      const auto helper_output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-      *error_message = helper_output.isEmpty() ? QStringLiteral("Timeline catalog helper failed.") : helper_output;
-    }
-    return false;
-  }
-
-  if (output != nullptr) {
-    *output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-  }
-  return true;
+  return AppBootstrap::runCatalogHelper(
+      QStringLiteral("catalog_timeline_documents"),
+      command_arguments,
+      output,
+      error_message,
+      15000);
 }
 
 QVector<TimelineAssetRecord> load_legacy_timeline_asset_records() {

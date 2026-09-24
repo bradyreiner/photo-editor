@@ -32,6 +32,13 @@ using MaskAlphaSpatialWeightEvaluator =
 QString shared_mask_alpha_provider_contract();
 
 QString mask_alpha_source_revision_hash(const QString& source_revision);
+QVariantMap byte_payload_fingerprint(
+    const QVariantMap& source,
+    const QString& data_key,
+    const QString& width_key,
+    const QString& height_key);
+[[nodiscard]] qsizetype mask_alpha_cache_bytes();
+[[nodiscard]] qsizetype mask_alpha_cache_ceiling_bytes();
 
 MaskAlphaEvaluationResult evaluate_mask_alpha(
     const QImage& source_image,
@@ -65,6 +72,25 @@ QVariantMap shared_mask_alpha_provider_fields(
     const QSize& target_size,
     const QString& aggregate_label = {},
     int aggregate_count = 0);
+
+QVariantMap mask_alpha_trace_fields(
+    const QVariantMap& mask,
+    const QString& source_revision,
+    const QSize& raster_size = {});
+
+void insert_mask_alpha_trace_fields(
+    QVariantMap* target,
+    const QVariantMap& mask,
+    const QString& source_revision,
+    const QSize& raster_size = {});
+
+QVariantMap composite_mask_alpha_trace_fields(
+    const QString& trace_context,
+    const QVariantList& traced_masks,
+    const QString& mask_set_id,
+    const QString& source_revision,
+    const QSize& raster_size,
+    int mask_work_state_revision);
 
 QVariantMap compose_composite_mask_alpha_trace_fields(
     const QString& trace_context,

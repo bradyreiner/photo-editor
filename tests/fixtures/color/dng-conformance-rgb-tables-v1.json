@@ -1,0 +1,31 @@
+{
+  "authority": "Digital Negative (DNG) Specification 1.7.1.0",
+  "case_count": 50,
+  "comparison_tolerance": {
+    "rgb_absolute": 2e-07
+  },
+  "composite_methods": [
+    "weighted sum",
+    "sequential"
+  ],
+  "fixture_csv": "dng-conformance-rgb-tables-v1.csv",
+  "fixture_csv_sha256": "7380eb1109a0b508f076323775f482db7a2c61296bbbe5880862302ce7db0c74",
+  "gamma_encodings": [
+    "linear",
+    "sRGB",
+    "gamma 1.8",
+    "gamma 2.2",
+    "Rec. 2020"
+  ],
+  "generator": "tests/generate_dng_conformance_reference.py",
+  "generator_sha256": "77fe5307ede811bf4d05c3af8ac286db6a482725837e3753ab22152cb111cf9b",
+  "license": "Project-authored test vectors generated from public DNG and color-science formulas",
+  "method": "Independent RGBTables trilinear interpolation, gamma, HDR, gamut-extension, semantic-mask, background, weighted-sum, and sequential composition",
+  "primaries": "linear ProPhoto RGB profile and table space",
+  "schema": "dng-conformance-rgb-tables:v1",
+  "table_dimensions": [
+    2,
+    2,
+    2
+  ]
+}

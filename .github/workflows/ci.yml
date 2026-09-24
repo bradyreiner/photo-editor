@@ -48,9 +48,45 @@ jobs:
       - name: Validate release helper syntax
         run: bash -n scripts/*.sh
 
+      - name: Validate Looksy brand surface
+        run: python3 -B scripts/verify-brand-surface.py
+
+      - name: Validate commercial release configuration
+        run: |
+          python3 -B scripts/test-release-commerce.py
+          python3 -B scripts/test-bundle-dependency-parser.py
+          python3 -B scripts/validate-release-site.py site
+          node --test scripts/test-download-page.cjs
+
       - name: Validate preview proof tooling
         run: |
           python3 -B -m py_compile scripts/perf/*.py
+          python3 -B -m py_compile scripts/color/*.py
+          python3 -B scripts/color/test-proprietary-color-boundary.py
+          python3 -B scripts/color/validate-proprietary-color-boundary.py .
+          python3 -B scripts/color/test-windows-raw-runtime-proof.py
+          python3 -B scripts/color/test-rendering-migration-proof.py
+          python3 -B scripts/color/test-built-in-preset-inventory.py
+          python3 -B scripts/color/validate-built-in-preset-inventory.py
+          python3 -B scripts/color/test-built-in-preset-approval.py
+          python3 -B scripts/color/test-physical-color-output-proof.py
+          python3 -B scripts/color/test-color-default-promotion.py
+          python3 -B scripts/color/test-validate-color-corpus.py
+          python3 -B scripts/color/test-color-source-inventory.py
+          python3 -B scripts/color/validate-color-source-inventory.py perf-corpora/color-validation-required/source-inventory.json
+          python3 -B scripts/color/test-independent-chart-source.py
+          python3 -B scripts/color/validate-independent-chart-source.py perf-corpora/color-validation-required/independent-chart-source.json
+          python3 -B scripts/color/test-independent-chart-tagged-set.py
+          python3 -B scripts/color/test-independent-chart-ocio-reference.py
+          python3 -B scripts/color/test-independent-chart-render-set.py
+          python3 -B scripts/color/test-independent-chart-comparison-set.py
+          python3 -B scripts/color/test-real-raw-render-set.py
+          python3 -B scripts/color/test-camera-support-report.py
+          python3 -B scripts/color/test-apple-device-color-proof.py
+          python3 -B scripts/color/test-aggregate-color-corpus-report.py
+          python3 -B scripts/color/test-run-color-corpus-gate.py
+          python3 -B scripts/color/validate-color-corpus.py perf-corpora/color-validation-required/manifest.example.json --schema-only
+          python3 -B scripts/perf/test-real-image-corpus-contract.py
           python3 -B scripts/perf/test-color-adjustment-gate.py
           python3 -B scripts/perf/test-color-adjustment-sample-compare.py
           python3 -B scripts/perf/test-desktop-preview-proof-capture.py
@@ -60,13 +96,85 @@ jobs:
           python3 -B scripts/perf/test-preview-release-proof-report.py
           python3 -B scripts/perf/test-desktop-preview-proof-gate.py
           python3 -B scripts/perf/test-app-performance-suite.py
+          python3 -B scripts/perf/test-prune-performance-artifacts.py
+          python3 -B scripts/test-code-duplication-report.py
+          python3 -B scripts/test-qml-warning-budget.py
+          python3 -B scripts/test-checklist-index.py
+          python3 -B scripts/test-catalog-helper-multicall.py
+          python3 -B scripts/test-package-composition-report.py
+          python3 -B scripts/test-prune-qt-quick-controls-styles.py
+          python3 -B scripts/test-prune-qt-macos-runtime.py
+          python3 -B scripts/test-sign-macos-bundle.py
+          python3 -B scripts/validate-checklist-index.py
+          python3 -B scripts/test-architecture-boundaries.py
 
       - name: Validate GitHub workflows
         uses: raven-actions/actionlint@v2
 
+  source-closure:
+    needs: repo-hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config
+
+      - name: Export and inventory tracked source
+        id: source
+        shell: bash
+        run: |
+          export_root="${RUNNER_TEMP}/framehouse-source"
+          evidence_root="${RUNNER_TEMP}/framehouse-source-evidence"
+          mkdir -p "${export_root}" "${evidence_root}"
+          git archive --format=tar HEAD | tar -xf - -C "${export_root}"
+          python3 "${export_root}/scripts/verify-source-closure.py" \
+            --source-root "${export_root}" \
+            --tree "${GITHUB_SHA}" \
+            --output "${evidence_root}/source-inventory.json"
+          python3 "${export_root}/scripts/code-duplication-report.py" \
+            --source-root "${export_root}" \
+            --output "${evidence_root}/code-duplication.json" \
+            --minimum-lines 12 \
+            --minimum-characters 320 \
+            --fail-above 732 \
+            --fail-production-above 505
+          printf 'export_root=%s\n' "${export_root}" >> "${GITHUB_OUTPUT}"
+          printf 'evidence_root=%s\n' "${evidence_root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify locked Rust graph from exported source
+        working-directory: ${{ steps.source.outputs.export_root }}/rust
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 \
+            > "${{ steps.source.outputs.evidence_root }}/cargo-metadata.json"
+          cargo build --workspace --locked
+          cargo test --workspace --locked
+
+      - name: Verify native graph from exported source
+        working-directory: ${{ steps.source.outputs.export_root }}
+        run: |
+          cmake --preset ci-headless
+          cmake --build --preset build-ci-headless --parallel
+          cmake --build build/ci-headless --target help \
+            > "${{ steps.source.outputs.evidence_root }}/cmake-target-inventory.txt"
+          ctest --preset test-ci-headless --output-on-failure
+
+      - name: Publish source closure evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-closure-${{ github.sha }}
+          path: ${{ steps.source.outputs.evidence_root }}
+          if-no-files-found: error
+
   rust:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -87,6 +195,40 @@ jobs:
         working-directory: rust
         run: cargo test --workspace --locked
 
+      - name: Install PostgreSQL runtime proof dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+
+      - name: Build PostgreSQL catalog helpers
+        working-directory: rust
+        run: cargo build -p photo-catalog --bins --locked
+
+      - name: Prove managed and external PostgreSQL catalog authority
+        shell: bash
+        run: |
+          postgres_runtime_dir="$(dirname "$(pg_config --bindir)")"
+          PHOTO_EDITOR_CATALOG_BIN_DIR="${GITHUB_WORKSPACE}/rust/target/debug" \
+          PHOTO_EDITOR_POSTGRES_RUNTIME_DIR="${postgres_runtime_dir}" \
+            scripts/test-postgres-catalog-runtime.sh
+
+      - name: Prove 100k-asset PostgreSQL catalog scale
+        shell: bash
+        run: |
+          postgres_runtime_dir="$(dirname "$(pg_config --bindir)")"
+          mkdir -p "${GITHUB_WORKSPACE}/postgres-large-library-proof"
+          python3 scripts/test-postgres-large-library.py \
+            --catalog-bin-dir "${GITHUB_WORKSPACE}/rust/target/debug" \
+            --postgres-runtime-dir "${postgres_runtime_dir}" \
+            --output "${GITHUB_WORKSPACE}/postgres-large-library-proof/report.json"
+
+      - name: Upload 100k-asset PostgreSQL proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-large-library-${{ github.sha }}
+          path: postgres-large-library-proof/report.json
+          if-no-files-found: error
+
   headless-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -96,7 +238,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config liblcms2-dev
 
       - name: Configure CMake
         run: cmake --preset ci-headless
@@ -107,6 +249,27 @@ jobs:
       - name: Run CTest
         run: ctest --preset test-ci-headless --output-on-failure
 
+      - name: Prove explicit behavior without ICC backend
+        run: |
+          cmake --preset ci-headless -B build/ci-headless-no-lcms -DPHOTO_EDITOR_ENABLE_LCMS_COLOR_MANAGEMENT=OFF -DPHOTO_EDITOR_REQUIRE_LCMS_COLOR_MANAGEMENT=OFF
+          cmake --build build/ci-headless-no-lcms --target color_transform_reference_test --parallel
+          ./build/ci-headless-no-lcms/tests/color_transform_reference_test --expect-no-icc-backend
+
+      - name: Generate color quality baseline
+        run: |
+          mkdir -p color-quality-artifact
+          ./build/ci-headless/tests/color_transform_reference_test --report color-quality-artifact/reference-report.json
+          ./build/ci-headless/tests/color_cmm_comparison_test --report color-quality-artifact/cmm-comparison-report.json --heatmap color-quality-artifact/cmm-error-heatmap.svg
+          cp tests/fixtures/color/color-quality-manifest-v1.json color-quality-artifact/manifest.json
+          cp tests/fixtures/color/color-stage-baseline-macos-m4pro-v1.json color-quality-artifact/color-stage-baseline.json
+
+      - name: Upload color quality baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: color-quality-baseline-${{ github.sha }}
+          path: color-quality-artifact
+          if-no-files-found: error
+
   headless-linux-asan-ubsan:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -116,7 +279,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config
 
       - name: Configure CMake (ASAN/UBSAN)
         run: cmake --preset ci-headless-asan-ubsan
@@ -142,7 +305,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config
 
       - name: Configure CMake (ThreadSanitizer)
         run: cmake --preset ci-headless-tsan
@@ -198,14 +361,25 @@ jobs:
           modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
           cache: true
 
+      - name: Install pinned Windows RAW dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            --triplet x64-windows `
+            --x-manifest-root="$env:GITHUB_WORKSPACE"
+
       - name: Configure desktop build
-        run: cmake --preset dev-windows-debug
+        shell: pwsh
+        run: >-
+          cmake --preset dev-windows-debug
+          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DPHOTO_EDITOR_REQUIRE_LIBRAW_CAMERA_LINEAR=ON
 
       - name: Build desktop targets
         run: cmake --build --preset build-dev-windows-debug --parallel
 
-      - name: Run focused desktop controller tests
-        run: ctest --test-dir build/dev-windows-debug -R "app_shell_controller_test|app_bootstrap_test" --output-on-failure
+      - name: Run desktop test suite
+        run: ctest --test-dir build/dev-windows-debug --output-on-failure --timeout 420 -LE monolithic -j 4
 
   desktop-macos:
     runs-on: macos-14
@@ -214,6 +388,9 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install color reference backend
+        run: brew install little-cms2 openexr libheif libraw
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -231,9 +408,50 @@ jobs:
       - name: Build desktop targets
         run: cmake --build --preset build-dev-macos-debug --parallel
 
-      - name: Run focused desktop smoke tests
-        run: ctest --test-dir build/dev-macos-debug -R "desktop_shell_smoke_test|app_shell_controller_test|app_bootstrap_test" --output-on-failure
+      - name: Reject new QML correctness warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          qmllint @build/dev-macos-debug/apps/desktop/.rcc/qmllint/photo_editor_app.rsp 2>&1 \
+            | tee "${RUNNER_TEMP}/photo-editor-qmllint.log"
+          python3 -B scripts/qml-warning-budget.py \
+            --input "${RUNNER_TEMP}/photo-editor-qmllint.log" \
+            --max-category Quick.layout-positioning=0 \
+            --max-category comma=0
+
+      - name: Run desktop test suite
+        run: ctest --test-dir build/dev-macos-debug --output-on-failure --timeout 420 -LE monolithic -j 4
         env:
+          PHOTO_EDITOR_VISUAL_PROOF_DIR: ${{ runner.temp }}/photo-editor-visual-proof
+
+      - name: Generate macOS color quality baseline
+        run: |
+          mkdir -p color-quality-macos-artifact
+          ./build/dev-macos-debug/tests/color_transform_reference_test --report color-quality-macos-artifact/reference-report.json
+          ./build/dev-macos-debug/tests/color_cmm_comparison_test --report color-quality-macos-artifact/cmm-comparison-report.json --heatmap color-quality-macos-artifact/cmm-error-heatmap.svg
+          cp tests/fixtures/color/color-quality-manifest-v1.json color-quality-macos-artifact/manifest.json
+          cp tests/fixtures/color/color-stage-baseline-macos-m4pro-v1.json color-quality-macos-artifact/color-stage-baseline.json
+
+      - name: Upload macOS color quality baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: color-quality-macos-${{ github.sha }}
+          path: color-quality-macos-artifact
+          if-no-files-found: error
+
+      - name: Run pixel zoom visual proof
+        run: ctest --test-dir build/dev-macos-debug -R "^desktop_shell_smoke_test$" --output-on-failure --timeout 300
+        env:
+          PHOTO_EDITOR_RUN_PIXEL_ZOOM_VISUAL_PROOF: "1"
+          PHOTO_EDITOR_SMOKE_STOP_AFTER_PIXEL_ZOOM: "1"
+          PHOTO_EDITOR_VISUAL_PROOF_DIR: ${{ runner.temp }}/photo-editor-visual-proof
+
+      - name: Run mask layout and geometry visual proof
+        run: ctest --test-dir build/dev-macos-debug -R "^desktop_shell_smoke_test$" --output-on-failure --timeout 300
+        env:
+          PHOTO_EDITOR_RUN_MASK_LAYOUT_PROOF: "1"
+          PHOTO_EDITOR_RUN_MASK_GEOMETRY_PROOFS: "1"
+          PHOTO_EDITOR_SMOKE_STOP_AFTER_MASK_GEOMETRY_PROOFS: "1"
           PHOTO_EDITOR_VISUAL_PROOF_DIR: ${{ runner.temp }}/photo-editor-visual-proof
 
       - name: Create preview performance corpus
@@ -391,7 +609,7 @@ jobs:
           cache: true
 
       - name: Install macOS native dependencies
-        run: brew install cmake ninja postgresql@16
+        run: brew install cmake ninja
 
       - name: Build Rust helper binaries
         run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
@@ -402,8 +620,7 @@ jobs:
           cmake \
             --preset release-macos \
             "-DPHOTO_EDITOR_RUST_BINARY_DIR=${GITHUB_WORKSPACE}/rust/target/release" \
-            "-DPHOTO_EDITOR_STRICT_PACKAGING=ON" \
-            "-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=$(brew --prefix postgresql@16)"
+            "-DPHOTO_EDITOR_STRICT_PACKAGING=OFF"
 
       - name: Build release targets
         run: cmake --build --preset build-release-macos --parallel

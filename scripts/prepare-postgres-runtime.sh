@@ -74,8 +74,19 @@ esac
 find_runtime_root() {
   local candidate
   while IFS= read -r candidate; do
-    if [ -f "${candidate}/bin/pg_ctl" ] || [ -f "${candidate}/bin/pg_ctl.exe" ]; then
-      if [ -f "${candidate}/bin/initdb" ] || [ -f "${candidate}/bin/initdb.exe" ]; then
+    if { [ -x "${candidate}/bin/initdb" ] &&
+         [ -x "${candidate}/bin/pg_ctl" ] &&
+         [ -x "${candidate}/bin/pg_dump" ] &&
+         [ -x "${candidate}/bin/pg_restore" ] &&
+         [ -x "${candidate}/bin/postgres" ] &&
+         [ -x "${candidate}/bin/psql" ]; } ||
+       { [ -f "${candidate}/bin/initdb.exe" ] &&
+         [ -f "${candidate}/bin/pg_ctl.exe" ] &&
+         [ -f "${candidate}/bin/pg_dump.exe" ] &&
+         [ -f "${candidate}/bin/pg_restore.exe" ] &&
+         [ -f "${candidate}/bin/postgres.exe" ] &&
+         [ -f "${candidate}/bin/psql.exe" ]; }; then
+      if find "${candidate}/share" -type f -name postgres.bki -print -quit 2>/dev/null | grep -q .; then
         printf '%s\n' "${candidate}"
         return 0
       fi
@@ -86,7 +97,7 @@ find_runtime_root() {
 
 runtime_dir="$(find_runtime_root || true)"
 if [ -z "${runtime_dir}" ]; then
-  echo "Unable to locate a PostgreSQL runtime root containing bin/pg_ctl and bin/initdb under ${destination_root}." >&2
+  echo "Unable to locate a PostgreSQL runtime root containing initdb, pg_ctl, pg_dump, pg_restore, postgres, psql, and share/**/postgres.bki under ${destination_root}." >&2
   exit 1
 fi
 

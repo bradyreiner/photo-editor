@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 Item {
     id: root
@@ -7,7 +7,7 @@ Item {
     property string label: ""
     property string shortLabel: ""
     property string iconName: ""
-    property color checkedColor: theme.accentWarm500
+    property color checkedColor: theme.primaryAccent
     property bool checked: false
 
     signal toggled()
@@ -17,8 +17,8 @@ Item {
     readonly property string timelineTrackToggleButtonContract: "timeline-track-toggle-button:v1|checked-state:true|disabled-state:true|hover:true|keyboard:true|tooltip-full:true|accessibility-full:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|compact-glyph:true|tooltip-full:true|accessibility-full:true"
 
-    implicitWidth: 20
-    implicitHeight: 18
+    implicitWidth: theme.iconButtonSizeCompact
+    implicitHeight: theme.iconButtonSizeCompact
     activeFocusOnTab: enabled
     Accessible.role: Accessible.Button
     Accessible.name: root.label
@@ -30,15 +30,15 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius6
+        radius: theme.radius4
         color: !root.enabled
                ? theme.alpha(theme.ink700, 0.42)
                : root.checked
-                 ? theme.alpha(root.checkedColor, 0.24)
+                 ? theme.alpha(root.checkedColor, 0.11)
                  : (toggleMouse.containsMouse || root.activeFocus
-                    ? theme.alpha(theme.glassLift, 0.32)
-                    : theme.alpha(theme.ink700, 0.84))
-        border.width: root.activeFocus ? 2 : 0
+                    ? theme.alpha(theme.editorControlHover, 0.68)
+                    : "transparent")
+        border.width: root.activeFocus ? theme.focusBorderWidth : 0
         border.color: root.activeFocus
                       ? theme.focusRing
                       : "transparent"
@@ -49,10 +49,10 @@ Item {
         visible: root.iconName.length > 0
         name: root.iconName
         color: !root.enabled
-               ? theme.alpha(theme.textMuted, 0.52)
-               : (root.checked ? theme.textStrong : theme.textMain)
-        implicitWidth: 11
-        implicitHeight: 11
+               ? theme.alpha(theme.textMuted, 0.82)
+               : (root.checked ? root.checkedColor : theme.textMain)
+        implicitWidth: theme.scaled(14)
+        implicitHeight: theme.scaled(14)
     }
 
     Text {
@@ -64,17 +64,17 @@ Item {
         visible: root.iconName.length === 0
         text: root.shortLabel
         color: !root.enabled
-               ? theme.alpha(theme.textMuted, 0.52)
-               : (root.checked ? theme.textStrong : theme.textMain)
+               ? theme.alpha(theme.textMuted, 0.82)
+               : (root.checked ? root.checkedColor : theme.textMain)
         font.family: theme.fontMono
-        font.pixelSize: 9
+        font.pixelSize: theme.typeCaption
         font.weight: Font.DemiBold
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         maximumLineCount: 1
         elide: Text.ElideNone
         fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: 7
+        minimumPixelSize: 10
     }
 
     MouseArea {

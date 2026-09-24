@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -32,6 +34,61 @@ QImage neutral_gradient_image() {
   return image;
 }
 
+QImage varied_scene_image() {
+  QImage image(48, 32, QImage::Format_ARGB32);
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const auto hue = (x * 7 + y * 3) % 360;
+      const auto saturation = 70 + ((x + y) % 5) * 24;
+      const auto value = 65 + ((x * 4 + y * 5) % 145);
+      image.setPixelColor(x, y, QColor::fromHsv(hue, saturation, value));
+    }
+  }
+  return image;
+}
+
+QImage adjusted_image(
+    const QImage& source,
+    double contrast_scale,
+    int brightness_delta,
+    int red_delta,
+    int blue_delta,
+    double saturation_scale) {
+  auto adjusted = source;
+  for (int y = 0; y < adjusted.height(); ++y) {
+    for (int x = 0; x < adjusted.width(); ++x) {
+      auto color = source.pixelColor(x, y);
+      const auto adjust_channel = [contrast_scale, brightness_delta](int value) {
+        return std::clamp(
+            static_cast<int>(std::round(
+                128.0 + (static_cast<double>(value) - 128.0) * contrast_scale)) +
+                brightness_delta,
+            0,
+            255);
+      };
+      color.setRed(std::clamp(adjust_channel(color.red()) + red_delta, 0, 255));
+      color.setGreen(adjust_channel(color.green()));
+      color.setBlue(std::clamp(adjust_channel(color.blue()) + blue_delta, 0, 255));
+      color.setHsv(
+          color.hsvHue(),
+          std::clamp(
+              static_cast<int>(std::round(
+                  static_cast<double>(color.hsvSaturation()) * saturation_scale)),
+              0,
+              255),
+          color.value());
+      adjusted.setPixelColor(x, y, color);
+    }
+  }
+  return adjusted;
+}
+
+QVariantMap image_stats(const QImage& image) {
+  return photo_editor::desktop::validate_agent_edit_image(image)
+      .value(QStringLiteral("imageStats"))
+      .toMap();
+}
+
 QVariantMap strict_style() {
   return QVariantMap{
       {QStringLiteral("validation"),
@@ -57,9 +114,117 @@ QVariantMap point(double x, double y) {
   };
 }
 
+QImage retouch_quality_baseline_image() {
+  QImage image(200, 100, QImage::Format_ARGB32);
+  for (auto y = 0; y < image.height(); ++y) {
+    for (auto x = 0; x < image.width(); ++x) {
+      image.setPixelColor(
+          x,
+          y,
+          QColor(40 + x, 80 + y, 120 + x / 4));
+    }
+  }
+  return image;
+}
+
+QVariantMap materialized_retouch_quality_patch() {
+  return QVariantMap{
+      {QStringLiteral("retouch"),
+       QVariantMap{
+           {QStringLiteral("appendRetouchStack"),
+            QVariantList{
+                QVariantMap{
+                    {QStringLiteral("id"), QStringLiteral("quality-proof-retouch")},
+                    {QStringLiteral("agentRegion"),
+                     QVariantMap{
+                         {QStringLiteral("centerX"), 0.5},
+                         {QStringLiteral("centerY"), 0.5},
+                         {QStringLiteral("radiusX"), 0.1},
+                         {QStringLiteral("radiusY"), 0.1},
+                     }},
+                    {QStringLiteral("segmentationWidth"), 200},
+                    {QStringLiteral("segmentationHeight"), 100},
+                    {QStringLiteral("inpaintSourceBoundsX"), 70},
+                    {QStringLiteral("inpaintSourceBoundsY"), 35},
+                    {QStringLiteral("inpaintSourceBoundsWidth"), 60},
+                    {QStringLiteral("inpaintSourceBoundsHeight"), 30},
+                },
+            }},
+       }},
+  };
+}
+
 }  // namespace
 
 int main() {
+  const auto retouch_baseline = retouch_quality_baseline_image();
+  auto clean_retouch = retouch_baseline;
+  for (auto y = 40; y < 60; ++y) {
+    for (auto x = 80; x < 120; ++x) {
+      const auto normalized_x =
+          (static_cast<double>(x) + 0.5 - 100.0) / 20.0;
+      const auto normalized_y =
+          (static_cast<double>(y) + 0.5 - 50.0) / 10.0;
+      if (normalized_x * normalized_x + normalized_y * normalized_y > 1.0) {
+        continue;
+      }
+      const auto before = retouch_baseline.pixelColor(x, y);
+      clean_retouch.setPixelColor(
+          x,
+          y,
+          QColor(before.red() + 4, before.green() + 4, before.blue() + 4));
+    }
+  }
+  const auto clean_retouch_quality =
+      photo_editor::desktop::evaluate_agent_retouch_proof_quality(
+          retouch_baseline,
+          clean_retouch,
+          materialized_retouch_quality_patch());
+  if (!clean_retouch_quality.value(QStringLiteral("required")).toBool() ||
+      !clean_retouch_quality.value(QStringLiteral("available")).toBool() ||
+      !clean_retouch_quality.value(QStringLiteral("ok")).toBool() ||
+      !clean_retouch_quality.value(QStringLiteral("backgroundContinuity"))
+           .toBool()) {
+    return fail("retouch quality proof should accept a bounded, texture-preserving reconstruction");
+  }
+
+  auto haloed_retouch = clean_retouch;
+  for (auto y = 35; y < 65; ++y) {
+    for (auto x = 70; x < 130; ++x) {
+      const auto normalized_x =
+          (static_cast<double>(x) + 0.5 - 100.0) / 20.0;
+      const auto normalized_y =
+          (static_cast<double>(y) + 0.5 - 50.0) / 10.0;
+      const auto distance_squared =
+          normalized_x * normalized_x + normalized_y * normalized_y;
+      if (distance_squared <= 1.0 || distance_squared > 2.25) {
+        continue;
+      }
+      const auto before = retouch_baseline.pixelColor(x, y);
+      const auto offset = (x + y) % 2 == 0 ? 10 : -10;
+      haloed_retouch.setPixelColor(
+          x,
+          y,
+          QColor(before.red() + offset,
+                 before.green() + offset,
+                 before.blue() + offset));
+    }
+  }
+  const auto haloed_retouch_quality =
+      photo_editor::desktop::evaluate_agent_retouch_proof_quality(
+          retouch_baseline,
+          haloed_retouch,
+          materialized_retouch_quality_patch());
+  if (!haloed_retouch_quality.value(QStringLiteral("available")).toBool() ||
+      haloed_retouch_quality.value(QStringLiteral("ok")).toBool() ||
+      haloed_retouch_quality.value(QStringLiteral("backgroundContinuity"))
+          .toBool() ||
+      !haloed_retouch_quality.value(QStringLiteral("failureReason"))
+           .toString()
+           .contains(QStringLiteral("surrounding color or texture"))) {
+    return fail("retouch quality proof should reject a visible halo around the target");
+  }
+
   const auto clean = photo_editor::desktop::validate_agent_edit_image(
       neutral_gradient_image(),
       strict_style());
@@ -237,6 +402,130 @@ int main() {
           clean.value(QStringLiteral("qualityScore")).toDouble() ||
       !retouch_risk.value(QStringLiteral("qualityScoreReport")).toMap().value(QStringLiteral("needsUserReview")).toBool()) {
     return fail("retouch provenance risk should reduce the quality score and require review");
+  }
+
+  const auto intent_source = varied_scene_image();
+  const auto source_stats = image_stats(intent_source);
+  const auto brighter_stats = image_stats(adjusted_image(intent_source, 1.0, 20, 0, 0, 1.0));
+  const auto darker_stats = image_stats(adjusted_image(intent_source, 1.0, -20, 0, 0, 1.0));
+  const auto stronger_stats = image_stats(adjusted_image(intent_source, 1.35, 0, 0, 0, 1.0));
+  const auto softer_stats = image_stats(adjusted_image(intent_source, 0.68, 0, 0, 0, 1.0));
+  const auto warmer_stats = image_stats(adjusted_image(intent_source, 1.0, 0, 18, -18, 1.0));
+  const auto cooler_stats = image_stats(adjusted_image(intent_source, 1.0, 0, -18, 18, 1.0));
+  const auto muted_stats = image_stats(adjusted_image(intent_source, 1.0, 0, 0, 0, 0.45));
+  const auto monochrome_stats = image_stats(adjusted_image(intent_source, 1.0, 0, 0, 0, 0.0));
+
+  const auto brighter_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      brighter_stats,
+      QStringLiteral("Make it brighter."),
+      {{QStringLiteral("brightness"), QStringLiteral("brighter")}});
+  if (!brighter_alignment.value(QStringLiteral("available")).toBool() ||
+      !brighter_alignment.value(QStringLiteral("ok")).toBool() ||
+      brighter_alignment.value(QStringLiteral("version")).toString() !=
+          QStringLiteral("agent-pixel-intent-alignment-v1") ||
+      brighter_alignment.value(QStringLiteral("checks")).toList().size() != 1 ||
+      brighter_alignment.value(QStringLiteral("deltas")).toMap()
+              .value(QStringLiteral("averageLuma")).toDouble() <= 1.5) {
+    return fail("pixel intent alignment should prove a requested brightness increase");
+  }
+
+  const auto opposite_brightness = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      darker_stats,
+      QStringLiteral("Make it brighter."));
+  if (opposite_brightness.value(QStringLiteral("ok")).toBool() ||
+      !opposite_brightness.value(QStringLiteral("issues")).toStringList().join(QStringLiteral("; "))
+           .contains(QStringLiteral("requested a brighter image"))) {
+    return fail("pixel intent alignment should reject an edit that moves opposite brightness intent");
+  }
+
+  const auto darker_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      darker_stats,
+      QStringLiteral("Darken the image."));
+  const auto stronger_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      stronger_stats,
+      QStringLiteral("Use stronger contrast."));
+  const auto softer_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      softer_stats,
+      QStringLiteral("Use softer contrast."));
+  if (!darker_alignment.value(QStringLiteral("ok")).toBool() ||
+      !stronger_alignment.value(QStringLiteral("ok")).toBool() ||
+      !softer_alignment.value(QStringLiteral("ok")).toBool()) {
+    return fail("pixel intent alignment should cover darker and both contrast directions");
+  }
+
+  const auto warmer_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      warmer_stats,
+      QString(),
+      {{QStringLiteral("palette"), QStringLiteral("warm")}});
+  const auto cooler_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      cooler_stats,
+      QStringLiteral("Make this cooler."));
+  const auto opposite_warmth = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      cooler_stats,
+      QStringLiteral("Make this warmer."));
+  if (!warmer_alignment.value(QStringLiteral("ok")).toBool() ||
+      !cooler_alignment.value(QStringLiteral("ok")).toBool() ||
+      opposite_warmth.value(QStringLiteral("ok")).toBool()) {
+    return fail("pixel intent alignment should prove both warmth directions and reject the opposite result");
+  }
+
+  const auto muted_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      muted_stats,
+      QStringLiteral("Make the color more muted."));
+  const auto monochrome_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      monochrome_stats,
+      QStringLiteral("Black and white."),
+      {{QStringLiteral("colorMode"), QStringLiteral("monochrome")}});
+  const auto quieter_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      softer_stats,
+      QStringLiteral("Make it quieter."));
+  if (!muted_alignment.value(QStringLiteral("ok")).toBool() ||
+      !monochrome_alignment.value(QStringLiteral("ok")).toBool() ||
+      !quieter_alignment.value(QStringLiteral("ok")).toBool()) {
+    return fail("pixel intent alignment should cover muted, monochrome, and quieter directions");
+  }
+
+  const auto preserve_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      source_stats,
+      QStringLiteral("Keeping the tone unchanged, preserve the color."));
+  const auto broken_preservation = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      warmer_stats,
+      QStringLiteral("Preserve the color."));
+  if (!preserve_alignment.value(QStringLiteral("ok")).toBool() ||
+      broken_preservation.value(QStringLiteral("ok")).toBool()) {
+    return fail("pixel intent alignment should enforce explicit preservation constraints");
+  }
+
+  const auto vague_alignment = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      brighter_stats,
+      QStringLiteral("Make it cinematic."));
+  const auto localized_warmth = photo_editor::desktop::evaluate_agent_edit_intent_alignment(
+      source_stats,
+      warmer_stats,
+      QStringLiteral("Warm the skin, but leave everything else alone."),
+      {
+          {QStringLiteral("palette"), QStringLiteral("warm")},
+          {QStringLiteral("globalChangePolicy"), QStringLiteral("preserve")},
+          {QStringLiteral("localizedActions"),
+           QVariantList{QVariantMap{{QStringLiteral("target"), QStringLiteral("skin")}}}},
+      });
+  if (vague_alignment.value(QStringLiteral("available")).toBool() ||
+      localized_warmth.value(QStringLiteral("available")).toBool()) {
+    return fail("pixel intent alignment should not invent global requirements for vague or localized requests");
   }
 
   return EXIT_SUCCESS;

@@ -1,6 +1,10 @@
 # Color Tools Remediation Checklist
 
-This checklist tracks the work needed to make Virel Studio's adjustment tools reliable, understandable, and defensible. Each item includes the current problem, the target behavior, and the implementation path.
+> Supporting remediation record. Completed checks here are component evidence, not overall product
+> completion. The current execution and release authority is
+> `docs/color-engine-and-app-foundations-completion-strategy.md`.
+
+This checklist tracks the work needed to make Framehouse's adjustment tools reliable, understandable, and defensible. Each item includes the current problem, the target behavior, and the implementation path.
 
 ## Tone And Levels
 
@@ -13,7 +17,7 @@ This checklist tracks the work needed to make Virel Studio's adjustment tools re
   - Problem: Strong recovery can look crunchy or synthetic, especially on RAW-like dark ranges and clipped highlights.
   - Goal: Shadows reveal detail without gray mush; highlights recover with smooth rolloff and preserved color.
   - Approach: Replace broad tone-anchor pushes with luminance-masked recovery, protect midtone contrast, add clipped-highlight and dark-ramp visual tests.
-  - Status: Core tone math has been retuned to use identity-preserving seven-point tone anchors, protected highlight chroma, and exact per-pixel preview/export rendering for high-risk tone recipes. `render_golden_test` includes deterministic night-recovery and clipped-highlight rollback fixtures with locked render hashes plus luminance-region behavior checks. `raw_corpus_test` covers representative camera/profile RAW transform behavior without requiring external image files. No licensed real RAW/night/high-contrast fixture corpus is currently tracked in the repo; real-image approval is an external QA pass until that corpus exists.
+  - Status: Core tone math has been retuned to use identity-preserving seven-point tone anchors, protected highlight chroma, and exact per-pixel preview/export rendering for high-risk tone recipes. `render_golden_test` includes deterministic night-recovery and clipped-highlight rollback fixtures with locked render hashes plus luminance-region behavior checks. `synthetic_raw_pipeline_invariant_test` covers constructed camera/profile RAW transform behavior without external image files; it is explicitly not real-corpus evidence. No licensed real RAW/night/high-contrast fixture corpus is currently tracked in the repo; real-image approval is an external QA pass until that corpus exists.
 
 - [x] **Contrast quality**
   - Problem: Global contrast changes too much of the curve and can crush blacks or make highlights brittle.
@@ -80,21 +84,21 @@ This checklist tracks the work needed to make Virel Studio's adjustment tools re
 ## Presets
 
 - [x] **Basic Studio preset browser**
-  - Problem: Studio exposed a hardcoded save action but no way to browse and apply the built-in Virel presets.
+  - Problem: Studio exposed a hardcoded save action but no way to browse and apply the built-in Framehouse presets.
   - Goal: Built-in and user presets are reachable from the Adjust inspector.
   - Approach: Add a compact preset selector, pack/category metadata, intensity control, changed-control chips, Apply, and Save controls backed by the existing preset API.
 
 - [x] **Preset library**
   - Problem: Built-in presets exist in controller code, but Studio still needs full management and preview workflows.
-  - Goal: Virel built-in presets and user presets are browseable, previewable, adjustable, and manageable.
+  - Goal: Framehouse built-in presets and user presets are browseable, previewable, adjustable, and manageable.
   - Approach: Build a preset browser backed by existing built-ins, add categories, thumbnails, intensity, save/delete/import/export, and recipe diff preview.
-  - Status: Studio now exposes a searchable preset library with generated thumbnails, Virel/custom labels, adjustment-group chips, favorite/apply card actions, intensity, changed-control chips, save, rename, move-pack, delete for user presets, and import/export sync-bundle controls. Backend controller tests cover save/rename/delete/export/import/favorites/preview recipe behavior, and shell tests cover the Studio management affordances.
+  - Status: Studio now exposes a searchable preset library with generated thumbnails, Framehouse/custom labels, adjustment-group chips, favorite/apply card actions, intensity, changed-control chips, save, rename, move-pack, delete for user presets, and import/export sync-bundle controls. Backend controller tests cover save/rename/delete/export/import/favorites/preview recipe behavior, and shell tests cover the Studio management affordances.
 
 - [x] **Preset quality**
   - Problem: Presets cannot be trusted until the underlying tools and preview path are stable.
   - Goal: Presets should produce polished starting points for RAW, portrait, landscape, monochrome, and night images.
   - Approach: Retune built-ins after tone/color fixes, add golden renders, and support custom preset storage.
-  - Status: Tone/color stability is better, Studio now has a full preset library, and `render_golden_test` locks representative Clean Portrait and Landscape Pop preset-style renders with behavior checks for skin hue stability and sky protection. `editor_preview_controller_test` renders the actual built-in `Clean Portrait`, `Landscape Pop`, and `Clean Black and White` registry presets through the output pipeline and locks deterministic image hashes. `raw_corpus_test` covers representative RAW profile behavior. A real-image approval corpus can still improve editorial tuning, but the enforceable in-repo preset contracts now cover RAW-style transforms, portrait, landscape, monochrome, and night workflows.
+  - Status: Tone/color stability is better, Studio now has a full preset library, and `render_golden_test` locks representative Clean Portrait and Landscape Pop preset-style renders with behavior checks for skin hue stability and sky protection. `editor_preview_controller_test` renders the actual built-in `Clean Portrait`, `Landscape Pop`, and `Clean Black and White` registry presets through the output pipeline and locks deterministic image hashes. `synthetic_raw_pipeline_invariant_test` covers constructed RAW profile behavior but is not real-corpus proof. A real-image approval corpus can still improve editorial tuning, but the enforceable in-repo preset contracts now cover RAW-style transforms, portrait, landscape, monochrome, and night workflows.
 
 ## Validation Standard
 

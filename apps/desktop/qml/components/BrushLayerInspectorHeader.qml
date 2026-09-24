@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -27,7 +27,7 @@ Rectangle {
 
     implicitHeight: brushLayerHeaderContent.implicitHeight + 14
     radius: 4
-    color: theme.alpha(theme.panelLift, 0.66)
+    color: theme.alpha(theme.surfaceTop, 0.66)
     border.width: theme.chromeBorderWidth
     border.color: theme.alpha(root.accent, 0.34)
     clip: true

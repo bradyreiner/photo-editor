@@ -1294,3 +1294,9 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+/* Native hidden semantics must win over component display rules. */
+[hidden] { display: none !important; }
+
+.download-grid.three-up.single-platform { grid-template-columns: minmax(0, 1fr); }
+.download-grid.three-up.single-platform .download-card { min-height: 118px; }
+#purchase-button.disabled, #subscription-button.disabled { display: inline-flex; opacity: 0.6; pointer-events: none; }

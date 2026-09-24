@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 TextField {
     id: root
@@ -14,23 +14,17 @@ TextField {
     selectedTextColor: theme.ink950
     selectionColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.85)
     font.family: theme.fontUi
-    font.pixelSize: 12
+    font.pixelSize: theme.typeControl
     leftPadding: theme.space12
     rightPadding: theme.space12
     activeFocusOnTab: true
+    hoverEnabled: true
 
     background: Rectangle {
         radius: theme.radiusControl
-        color: root.enabled ? theme.alpha(theme.glassBase, 0.38) : theme.alpha(theme.glassBase, 0.26)
-        border.width: root.activeFocus ? 2 : 1
-        border.color: root.activeFocus ? theme.alpha(theme.focusRing, 0.9) : theme.alpha(theme.glassEdge, 0.2)
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 1
-            radius: Math.max(1, parent.radius - 1)
-            visible: root.activeFocus
-            color: theme.alpha(theme.focusFill, 0.2)
-        }
+        color: !root.enabled ? theme.alpha(theme.fieldFill, 0.45)
+               : root.hovered ? theme.fieldHoverFill : theme.fieldFill
+        border.width: root.activeFocus ? theme.focusBorderWidth : 0
+        border.color: theme.focusRing
     }
 }

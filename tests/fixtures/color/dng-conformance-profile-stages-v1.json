@@ -1,0 +1,53 @@
+{
+  "authority": "Digital Negative (DNG) Specification 1.7.1.0",
+  "case_count": 72,
+  "comparison_tolerance": {
+    "rgb_absolute": 2e-06
+  },
+  "domain": "standard RGB [0, 1]",
+  "fixture_csv": "dng-conformance-profile-stages-v1.csv",
+  "fixture_csv_sha256": "8cb4b08e55408b0a4f094c571e7e96c8a32e688df34ca978a5ef39dfa7c48dcf",
+  "generator": "tests/generate_dng_conformance_reference.py",
+  "generator_sha256": "77fe5307ede811bf4d05c3af8ac286db6a482725837e3753ab22152cb111cf9b",
+  "license": "Project-authored test vectors generated from public DNG and color-science formulas",
+  "method": "Independent HSV trilinear interpolation, sRGB value encoding, natural cubic spline tone curve, and triple-illuminant weighting",
+  "schema": "dng-conformance-profile-stages:v1",
+  "stage_case_count": 9,
+  "stages": [
+    "hue-sat-linear",
+    "hue-sat-srgb",
+    "look-linear",
+    "look-srgb",
+    "tone",
+    "hue-sat-triple-0",
+    "hue-sat-triple-1",
+    "hue-sat-triple-2"
+  ],
+  "table_dimensions": [
+    6,
+    3,
+    2
+  ],
+  "tone_curve": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.2,
+      0.1
+    ],
+    [
+      0.5,
+      0.65
+    ],
+    [
+      0.8,
+      0.9
+    ],
+    [
+      1.0,
+      1.0
+    ]
+  ]
+}

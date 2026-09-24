@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -8,9 +8,9 @@ Item {
     required property string title
     property string subtitle: ""
     property color accent: theme.accentWarm400
-    property bool showAccentMarker: true
+    property bool showAccentMarker: false
     property string titleFontFamily: theme.fontDisplay
-    property int titlePixelSize: 15
+    property int titlePixelSize: theme.typeDialogTitle
     property int titleWeight: Font.DemiBold
 
     implicitHeight: columnLayout.implicitHeight
@@ -51,7 +51,7 @@ Item {
             text: root.subtitle
             color: theme.textMuted
             font.family: theme.fontUi
-            font.pixelSize: 11
+            font.pixelSize: theme.typeBody
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }

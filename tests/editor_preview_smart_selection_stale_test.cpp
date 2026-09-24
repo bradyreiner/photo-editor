@@ -15,19 +15,19 @@ namespace photo_editor::desktop {
 
 struct EditorPreviewControllerTestAccess {
   static int smart_select_preview_generation(const EditorPreviewController& controller) {
-    return controller.smart_select_preview_generation_;
+    return controller.mask_session_.smartPreviewGeneration();
   }
 
   static int smart_selection_job_generation(const EditorPreviewController& controller) {
-    return controller.smart_selection_job_generation_;
+    return controller.mask_session_.smartSelectionGeneration();
   }
 
   static int smart_selection_cancelled_count(const EditorPreviewController& controller) {
-    return controller.smart_selection_cancelled_count_;
+    return controller.mask_session_.smartSelectionCancelledCount();
   }
 
   static int mask_work_state_revision(const EditorPreviewController& controller) {
-    return controller.mask_work_state_revision_;
+    return controller.mask_session_.workRevision();
   }
 
   static QVariantMap last_mask_work_telemetry(const EditorPreviewController& controller) {
@@ -45,7 +45,7 @@ struct EditorPreviewControllerTestAccess {
 
   static bool smart_select_preview_request_pending(
       const EditorPreviewController& controller) {
-    return controller.smart_select_preview_request_pending_;
+    return controller.mask_worker_coordinator_.smartSelectPreviewPending();
   }
 
   static bool smart_select_preview_timer_active(
@@ -55,7 +55,7 @@ struct EditorPreviewControllerTestAccess {
 
   static bool smart_select_commit_request_pending(
       const EditorPreviewController& controller) {
-    return controller.smart_select_commit_request_pending_;
+    return controller.mask_worker_coordinator_.smartSelectCommitPending();
   }
 
   static bool smart_select_commit_pending(
@@ -76,7 +76,7 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static int render_generation(const EditorPreviewController& controller) {
-    return controller.render_generation_;
+    return controller.preview_session_.generation();
   }
 
   static EditIntent last_edit_intent(const EditorPreviewController& controller) {
@@ -90,10 +90,8 @@ struct EditorPreviewControllerTestAccess {
     controller.pending_interactive_request_ = controller.currentRenderRequest(false);
     controller.pending_full_request_ = controller.currentRenderRequest(true);
     controller.pending_overlay_request_ = controller.currentRenderRequest(false);
-    controller.smart_select_preview_request_pending_ = true;
-    controller.pending_smart_select_preview_request_ = {};
-    controller.smart_select_commit_request_pending_ = true;
-    controller.pending_smart_select_commit_request_ = {};
+    controller.mask_worker_coordinator_.setPendingSmartSelectPreview({});
+    controller.mask_worker_coordinator_.setPendingSmartSelectCommit({});
     controller.smart_select_commit_pending_ = true;
     controller.smart_select_commit_intent_ = QStringLiteral("selection");
     controller.smart_select_commit_create_new_ = true;

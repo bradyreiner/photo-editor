@@ -1,0 +1,70 @@
+{
+  "authority": "Digital Negative (DNG) Specification 1.7.1.0",
+  "case_count": 6,
+  "comparison_tolerance": {
+    "rgb_absolute": 2e-07
+  },
+  "fixture_csv": "dng-conformance-profile-gain-table-map-v1.csv",
+  "fixture_csv_sha256": "66cc4cb30b135781e8995e3a12abe0da385aea2cc00d3cae5c9339138c3940f8",
+  "gain_values": [
+    [
+      [
+        0.8,
+        1.0,
+        1.2,
+        1.4
+      ],
+      [
+        1.1,
+        1.3,
+        1.5,
+        1.7
+      ]
+    ],
+    [
+      [
+        0.9,
+        1.15,
+        1.35,
+        1.6
+      ],
+      [
+        1.2,
+        1.4,
+        1.8,
+        2.0
+      ]
+    ]
+  ],
+  "gamma": 0.8,
+  "generator": "tests/generate_dng_conformance_reference.py",
+  "generator_sha256": "77fe5307ede811bf4d05c3af8ac286db6a482725837e3753ab22152cb111cf9b",
+  "image_dimensions": [
+    100,
+    80
+  ],
+  "license": "Project-authored test vectors generated from public DNG and color-science formulas",
+  "map_input_weights": [
+    0.25,
+    0.5,
+    0.1,
+    0.05,
+    0.1
+  ],
+  "map_origin_vh": [
+    0.1,
+    0.05
+  ],
+  "map_points": [
+    2,
+    2,
+    4
+  ],
+  "map_spacing_vh": [
+    0.75,
+    0.75
+  ],
+  "method": "Independent float32 spatial and weight-axis interpolation following ProfileGainTableMap2",
+  "schema": "dng-conformance-profile-gain-table-map:v1",
+  "support_overrange": true
+}

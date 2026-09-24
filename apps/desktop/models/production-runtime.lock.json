@@ -1,0 +1,53 @@
+{
+  "schema": "framehouse-ai-runtime-lock-v1",
+  "version": 1,
+  "supportedHost": {
+    "system": "Darwin",
+    "machine": "arm64"
+  },
+  "modelBundle": {
+    "schema": "framehouse-ai-model-bundle-v1",
+    "version": 1,
+    "artifacts": [
+      {
+        "id": "opencv-inpainting-lama-2025jan",
+        "role": "inpaint",
+        "contract": "opencv-lama-image-mask-nchw-float32-512-v1",
+        "path": "inpaint/lama.onnx",
+        "bytes": 92591623,
+        "sha256": "7df918ac3921d3daf0aae1d219776cf0dc4e4935f035af81841b40adcf74fdf2",
+        "downloadUrl": "https://huggingface.co/opencv/inpainting_lama/resolve/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/inpainting_lama_2025jan.onnx",
+        "sourceUrl": "https://huggingface.co/opencv/inpainting_lama/blob/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/inpainting_lama_2025jan.onnx",
+        "upstreamArchitectureUrl": "https://github.com/advimman/lama",
+        "license": {
+          "name": "Apache-2.0",
+          "url": "https://huggingface.co/opencv/inpainting_lama/blob/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/LICENSE"
+        }
+      }
+    ]
+  },
+  "onnxRuntime": {
+    "version": "1.29.0",
+    "platform": "osx-arm64",
+    "archive": {
+      "fileName": "onnxruntime-osx-arm64-1.29.0.tgz",
+      "bytes": 41578864,
+      "sha256": "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92",
+      "downloadUrl": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
+      "sourceUrl": "https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0"
+    },
+    "archiveRoot": "onnxruntime-osx-arm64-1.29.0",
+    "license": {
+      "name": "MIT",
+      "url": "https://github.com/microsoft/onnxruntime/blob/v1.29.0/LICENSE"
+    },
+    "requiredFiles": [
+      "VERSION_NUMBER",
+      "LICENSE",
+      "ThirdPartyNotices.txt",
+      "include/onnxruntime_cxx_api.h",
+      "include/coreml_provider_factory.h",
+      "lib/libonnxruntime.1.29.0.dylib"
+    ]
+  }
+}

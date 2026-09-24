@@ -104,7 +104,7 @@ This checklist defines the requirements and goals for an in-app, locally run edi
   - [x] Export after review.
   - [x] Add an Agent panel run-mode selector for analyze, draft, batch validation, and export preflight.
 - [x] Let users choose tool permissions:
-  - [x] Normal users choose Conservative, Balanced, Full edit, or Full edit + retouch instead of starting from raw tool toggles.
+  - [x] Normal users choose Protect, Balanced, or Transform instead of starting from raw tool toggles; retouch and destructive actions remain approval-gated in every mode.
   - [x] Advanced users can still expand Details and edit exact tool permissions.
   - [x] Global tone/color.
   - [x] Curves/levels.
@@ -193,7 +193,11 @@ batch_behavior:
 
 - [x] Support at least one local model backend for the first implementation.
 - [x] Keep the model runner outside the UI thread.
-  - [x] Draft planning dispatches local model planning through a worker runner and records runner metadata in reports/manifests.
+  - [x] Primary draft planning copies a value-only request into a `QFutureWatcher` continuation, rejects stale request IDs/fingerprints, and records the continuation in reports/manifests.
+  - [x] A delayed local-model controller test proves a 20 ms event-loop heartbeat fires during inference, cancellation completes exactly once, and neither controller nor catalog access occurs on the worker.
+  - [x] Convert the optional model tool-call follow-up, per-cluster batch planning, and validation-repair model rounds from explicit worker waits to the same request-owned continuation pattern.
+    - [x] `agent-request-owned-planning-continuation-v2` runs primary planning, the bounded MCP follow-up, each lighting-cluster plan, and each validation-repair turn as logical request stages. It caches every completed stage and proof critique per request, prevents tool-call replay, emits one final completion, and uses no nested planning event-pump loop.
+    - [x] Freeze the originating project, look, model, scope, and exact target-photo membership. A delayed-model regression changes selection during inference and proves the request safe-stops exactly once with `stale_request_context` instead of applying stale work.
 - [x] Let the app discover configured local models.
   - [x] Built-in deterministic local model registry.
   - [x] Discover local model metadata from an app-data manifest.
@@ -249,7 +253,8 @@ Suggested MCP tools:
 - [x] `photo_list_models`
 - [x] `photo_selected_assets`
 - [x] `photo_read_asset`
-- [x] `photo_read_recipe`
+- [x] `photo_read_adjustments`
+- [~] `photo_read_recipe` (compatibility-only; remove after the migration release)
 - [x] `photo_validate_recipe_patch`
 - [x] `photo_apply_recipe_patch_draft`
 - [x] `photo_render_proof`
@@ -490,6 +495,7 @@ Suggested MCP tools:
 - [x] Add confirmation requirements for bulk commit, export, retouch, and deletion-like actions.
   - [x] Add explicit confirmation requirement for automation export queueing.
   - [x] Add explicit confirmation requirement for automation draft commits.
+  - [x] Add a confirmed automation/MCP review-resolution action so a blocked draft can actually `fix`, `accept_anyway`, or `rollback_photo` before commit.
   - [x] Add explicit confirmation requirement for automation retouch patch drafts.
   - [x] Keep deletion-like actions out of the photo automation bridge until a confirmed, reversible workflow exists.
 - [x] Redact sensitive paths in shareable reports where possible.
@@ -498,7 +504,10 @@ Suggested MCP tools:
 ## Performance Requirements
 
 - [x] Keep model inference off the UI thread.
-  - [x] Draft planning uses the worker model runner and pumps UI events while awaiting the local plan.
+  - [x] Primary local-model planning returns control to the workspace and resumes through a request-owned `QFutureWatcher` without nested UI event pumping.
+  - [x] Preserve end-to-end request timing, live `plan-worker` events, duplicate-start rejection, and cancellation evidence across the continuation boundary.
+  - [x] Move model follow-up, batch-cluster planning, and validation repair to request-owned continuations; focused controller and bridge tests prove logical-stage-once replay policy, exact tool/critique reuse, stale-context rejection, zero planning event-pump iterations, and one completion signal.
+  - [x] Replace proof-render and retouch-materialization waits in the accepted resident draft path with `agent-request-owned-worker-continuation-v1`. Each logical asset/iteration stage runs once through `QFutureWatcher<QVariantMap>`, keeps renderer priority and cancellation active across the yield, rejects stale project/look/model/scope/photo membership, and resumes without a nested event-pump loop. Focused controller proof covers live progressive preview, exact cancel restoration, one completion signal, and multi-photo stage replay.
 - [x] Keep render proof jobs cancellable.
   - [x] Route draft proof rendering through controller cancellation and timeout checks before decode, before each render, before saving, and before validation.
   - [x] Persist proof render cancellation policy and checkpoint metadata in validation reports so manifests show that proof jobs remain cancellable.

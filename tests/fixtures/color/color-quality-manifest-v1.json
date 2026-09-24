@@ -1,0 +1,143 @@
+{
+  "schema": "photo-editor-color-quality-manifest:v1",
+  "rendering_model_version": "color-pipeline-v1-baseline",
+  "reference_backends": {
+    "little_cms": {
+      "required_for_ci_oracle": true,
+      "runtime_version_recorded_in_report": true,
+      "production_version_policy": "minimum 2.14; validated 2.18; exact 2.18 in strict builds"
+    },
+    "open_color_io": {
+      "required_for_release_aces2": true,
+      "validated_version": "2.5.1",
+      "production_version_policy": "minimum 2.5; exact 2.5.1 in strict release builds",
+      "built_in_config": "cg-config-v4.0.0_aces-v2.0_ocio-v2.5"
+    },
+    "qt_qcolorspace": {
+      "status": "active-desktop-oracle"
+    },
+    "macos_colorsync": {
+      "status": "active-macos-oracle"
+    },
+    "dng_conformance_oracle": {
+      "implementation": "project-authored plain Python",
+      "authority": "Digital Negative (DNG) Specification 1.7.1.0 and published CIE color science",
+      "sdk_dependency": false
+    }
+  },
+  "fixtures": [
+    {
+      "path": "tests/fixtures/color/transform-reference-v1.csv",
+      "sha256": "73cb2f7c7b39eb7d2fefc6d05020ab21369ed2d6e909011a81d2369bb51a6991",
+      "license": "project-authored-under-repository-license",
+      "provenance": "CIE standard white points and published reference values named per row"
+    },
+    {
+      "path": "tests/fixtures/color/cmm-comparison-patches-v1.csv",
+      "sha256": "76694b7c4ee6a125d57caad24f5fd745d402f202c329a6a6162b7b4d01bcd61b",
+      "license": "project-authored-under-repository-license",
+      "provenance": "synthetic linear Display P3 stress corpus"
+    },
+    {
+      "path": "tests/fixtures/color/color-stage-baseline-macos-m4pro-v1.json",
+      "sha256": "28c958500483ca37129deb5e6293ae4047490ce6c338bbd7548c6a0bce80cb8b",
+      "license": "project-authored-under-repository-license",
+      "provenance": "CPU and Metal benchmark captured on the named release-reference-class Mac"
+    },
+    {
+      "path": "tests/fixtures/color/icc/manifest-v1.json",
+      "sha256": "389ec7dccea7745c5e16dd65614c2d467968b99c2226b12cb79864182f713765",
+      "license": "per-profile licensing and provenance recorded in the nested manifest",
+      "provenance": "hash-verified ICC v2, v4, matrix/TRC, parametric TRC, A2B/B2A LUT, and DeviceLink payload corpus"
+    },
+    {
+      "path": "tests/fixtures/color/aces2-ocio-reference-v1.csv",
+      "sha256": "d0305b67a3b1dbb5db5d4f23f61190fc738da6eeee68cb7c3ce49ceead4968de",
+      "license": "project-authored inputs and OpenColorIO BSD-3-Clause generated reference values",
+      "provenance": "600 deterministic ACES2065-1 patches rendered by the pinned OpenColorIO ACES 2 SDR Rec.709 display view"
+    },
+    {
+      "path": "tests/fixtures/color/aces2-ocio-reference-v1.json",
+      "sha256": "d4f413b624fc4344c71490ed5e03e86d05830b639a5bb83eb08ca70058f64301",
+      "license": "project-authored-under-repository-license",
+      "provenance": "OpenColorIO version, built-in config, config and processor cache identities, view identity, and corpus hash"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-camera-transform-v1.csv",
+      "sha256": "c3b8b0fe0288e6ee812ce0b0ff8f5df348153423942f60a38775c506c4312e39",
+      "license": "project-authored-under-repository-license",
+      "provenance": "eleven deterministic standard, custom-xy, spectrum-form, and DNG 1.6 triple-illuminant camera-to-PCS transforms generated from public DNG and CIE formulas"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-camera-transform-v1.json",
+      "sha256": "3f6662a4edc14c3dcde355e662077dfb8ace6ba214ccb96b4a717ad544c657d3",
+      "license": "project-authored-under-repository-license",
+      "provenance": "DNG specification authority, project generator identity, profile definition, fixture hash, and comparison tolerances"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-profile-stages-v1.csv",
+      "sha256": "8cb4b08e55408b0a4f094c571e7e96c8a32e688df34ca978a5ef39dfa7c48dcf",
+      "license": "project-authored-under-repository-license",
+      "provenance": "72 deterministic single/triple HueSatMap, LookTable, sRGB-encoded table, and ProfileToneCurve values generated from public DNG and color-science formulas"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-profile-stages-v1.json",
+      "sha256": "a3b5653e303fa23d3ec791d45fb1fbf3a7ccd35e902bce67a87ba712795b7c7e",
+      "license": "project-authored-under-repository-license",
+      "provenance": "DNG specification authority, project generator identity, stage corpus definition, fixture hash, and comparison tolerance"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-profile-gain-table-map-v1.csv",
+      "sha256": "66cc4cb30b135781e8995e3a12abe0da385aea2cc00d3cae5c9339138c3940f8",
+      "license": "project-authored-under-repository-license",
+      "provenance": "six deterministic spatial, exposure-weighted, signed, over-range, and neutral ProfileGainTableMap2 values generated from public DNG formulas"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-profile-gain-table-map-v1.json",
+      "sha256": "1a77e1f02cfbd63f1ff148acf6c3d4f1d9962c601b700707a30cca72826d9065",
+      "license": "project-authored-under-repository-license",
+      "provenance": "DNG specification authority, project generator identity, gain-map geometry and weights, fixture hash, and comparison tolerance"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-rgb-tables-v1.csv",
+      "sha256": "7380eb1109a0b508f076323775f482db7a2c61296bbbe5880862302ce7db0c74",
+      "license": "project-authored-under-repository-license",
+      "provenance": "50 deterministic RGBTables gamma, HDR, gamut-extension, semantic-mask, background, weighted-sum, and sequential composition values generated from public DNG formulas"
+    },
+    {
+      "path": "tests/fixtures/color/dng-conformance-rgb-tables-v1.json",
+      "sha256": "95bb6854cceea98c44a14084a7a81790a293e034b398dd368aaccc860ae36f47",
+      "license": "project-authored-under-repository-license",
+      "provenance": "DNG specification authority, project generator identity, RGBTables corpus definition, fixture hash, and comparison tolerance"
+    }
+  ],
+  "profile_definitions": [
+    {
+      "name": "Linear Display P3",
+      "sha256": "9b22f08a9c239664e096a95707374d627ca59b17e974f407aed6ef8282618f0e",
+      "definition": "D65:0.3127,0.3290; R:0.6800,0.3200; G:0.2650,0.6900; B:0.1500,0.0600; gamma:1.0"
+    },
+    {
+      "name": "Little CMS generated sRGB",
+      "sha256": "121e3fd8da277781c5daab4508a5646014396b9b2ff45bd3c44e99fa54de7759",
+      "definition": "cmsCreate_sRGBProfile using IEC 61966-2-1 primaries and transfer curve"
+    }
+  ],
+  "release_thresholds": {
+    "icc_oracle_delta_e_00": {
+      "p95_max": 0.25,
+      "absolute_max": 0.75
+    },
+    "aces2_ocio_sdr_delta_e_00": {
+      "p99_max": 0.5,
+      "absolute_max": 2.0
+    },
+    "neutral_channel_drift_max": 0.000001,
+    "alpha_absolute_error_max": 0.0000001,
+    "hdr_oracle_delta_e_itp": {
+      "p95_max": 1.0,
+      "absolute_max": 3.0,
+      "enforcement": "pending-hdr-reference-transform"
+    }
+  }
+}

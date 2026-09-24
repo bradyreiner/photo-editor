@@ -1,0 +1,84 @@
+{
+  "schema": "photo-editor-icc-corpus:v1",
+  "encoding": "base64 of the unmodified profile payload",
+  "profiles": [
+    {
+      "id": "icc-srgb-v2-2014",
+      "file": "srgb-v2-2014.icc.base64",
+      "profileVersion": "2.0",
+      "profileClass": "display",
+      "colorSpace": "RGB",
+      "pcs": "XYZ",
+      "transformKind": "matrix-trc",
+      "payloadBytes": 3024,
+      "payloadSha256": "384b832de3412066743b52a75ee906b6fb9fb8d9e09e936fc2c43223815c6e0a",
+      "source": "https://registry.color.org/rgb-registry/profiles/sRGB2014.icc",
+      "license": "ICC general profile license; unmodified redistribution permitted"
+    },
+    {
+      "id": "icc-display-p3-v4",
+      "file": "display-p3-v4.icc.base64",
+      "profileVersion": "4.0",
+      "profileClass": "display",
+      "colorSpace": "RGB",
+      "pcs": "XYZ",
+      "transformKind": "matrix-trc-parametric",
+      "payloadBytes": 536,
+      "payloadSha256": "20789fdbea9835251a4f0796c8bf45cbd964896044886540da21ffc7457af0ab",
+      "source": "https://registry.color.org/rgb-registry/profiles/DisplayP3.zip",
+      "license": "Copyright Apple Inc. 2022; distributed unmodified by the ICC registry"
+    },
+    {
+      "id": "icc-cvd-lut-deutan-v4",
+      "file": "cvd-lut-deutan-v4.icc.base64",
+      "profileVersion": "4.0",
+      "profileClass": "input",
+      "colorSpace": "RGB",
+      "pcs": "Lab",
+      "transformKind": "A2B0-and-A2B1-LUT",
+      "payloadBytes": 6568,
+      "payloadSha256": "47225761e99dff203636117ed647511a7cfb3a28288d7c27ba25e0480544e34d",
+      "source": "https://registry.color.org/profile-library/profiles/CVDlut-deutan.icc",
+      "license": "ICC general profile license; unmodified redistribution permitted"
+    },
+    {
+      "id": "icc-srgb-v4-preference",
+      "file": "srgb-v4-preference.icc.base64",
+      "profileVersion": "4.2",
+      "profileClass": "color-space",
+      "colorSpace": "RGB",
+      "pcs": "Lab",
+      "transformKind": "A2B-and-B2A-LUT",
+      "payloadBytes": 60960,
+      "payloadSha256": "83174717332326ddc198d9df188a4daec27b8979ba152cebbfc470c793d0bb11",
+      "source": "https://registry.color.org/rgb-registry/profiles/sRGB_v4_ICC_preference.icc",
+      "license": "ICC sRGB v4 profile terms; unmodified redistribution permitted"
+    },
+    {
+      "id": "icc-srgb-v2-to-display-p3-v4-device-link",
+      "file": "srgb-v2-to-display-p3-v4-device-link.icc.base64",
+      "profileVersion": "4.3",
+      "profileClass": "device-link",
+      "colorSpace": "RGB",
+      "pcs": "RGB",
+      "transformKind": "baked-relative-colorimetric-device-link",
+      "payloadBytes": 31608,
+      "payloadSha256": "d523312c11bfbb1d40e61a4eb51c15e6fecc78dbfe4bf65b2f33ecace31bd856",
+      "source": "generated from the immutable sRGB v2 2014 and Display P3 v4 corpus payloads",
+      "generator": "Little CMS 2.18 linkicc -b -t 1",
+      "license": "Little CMS generated profile copyright tag states no copyright, use freely"
+    }
+  ],
+  "generatedCases": [
+    {
+      "id": "malformed-zero-payload",
+      "reason": "Deterministic malformed profile fixture",
+      "payloadBytes": 16
+    },
+    {
+      "id": "oversized-payload",
+      "reason": "Deterministic allocation-boundary fixture",
+      "payloadBytes": 16777217
+    }
+  ]
+}

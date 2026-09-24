@@ -1,6 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Dialog {
@@ -36,7 +36,7 @@ Dialog {
     readonly property int editableShortcutCount: editableShortcuts.length
     readonly property string dialogVisibilityContract: "dialog-visibility:v1|keyboard-shortcuts|always:title-search-editable-presets-shortcut-sections-close|contextual:status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality"
     readonly property string dialogSurfaceContract: "dialog-surface:v1|keyboard-shortcuts|search:header|editable:top|sections:scrollable|keys:fixed-readable|descriptions:wrap|presets:readable-buttons|no-elide:true|no-overlap:true"
-    readonly property string functionPreservationMap: "function-preservation:v1|search-shortcuts:header-field|edit-sequence:inline-field|reset-sequence:inline-reset|apply-presets:preset-buttons|conflict-detection:set-and-preset|platform-modifiers:mac-or-control|shortcut-help:section-cards"
+    readonly property string functionPreservationMap: "function-preservation:v2|search-shortcuts:header-field|edit-sequence:inline-field-persisted|reset-sequence:inline-reset|apply-presets:preset-buttons-persisted|conflict-detection:dialog-and-controller|runtime-actions:live-bindings|platform-modifiers:mac-or-control|shortcut-help:section-cards"
     readonly property var shortcutPresetMappings: [
         {
             "id": "app-native",
@@ -113,6 +113,10 @@ Dialog {
             title: "Global",
             accent: theme.accentCool400,
             items: [
+                { "keys": "Shift+click", "description": "Select a range of Library photos from the last clicked photo." },
+                { "keys": primary("click"), "description": "Add or remove individual Library photos from the selection." },
+                { "keys": primary("C"), "description": "In Library or Edit, choose edit groups to copy from the active photo. Ctrl+C also works on Mac." },
+                { "keys": primary("V"), "description": "Paste copied edit groups onto selected photos. Ctrl+V also works on Mac." },
                 { "keys": primary("O"), "description": "Import a folder into the library." },
                 { "keys": primary("N"), "description": "Create a new timeline." },
                 { "keys": primary("1-5"), "description": "Switch directly between Library, Edit, Carousel, Timeline, and Export." },
@@ -175,14 +179,25 @@ Dialog {
             items: [
                 { "keys": primary("S"), "description": "Save the current timeline." },
                 { "keys": "Space", "description": "Play or pause sequence playback." },
+                { "keys": "J / K / L", "description": "Shuttle reverse, stop, or forward; repeat J or L for 2x, 4x, and 8x." },
                 { "keys": "Left / Right", "description": "Step back / forward one frame." },
                 { "keys": "Home / End", "description": "Jump to start / end of timeline." },
+                { "keys": "Alt+Left / Alt+Right", "description": "Jump to the previous / next edit point." },
+                { "keys": "Alt+Up / Alt+Down", "description": "Jump to the previous / next sequence marker." },
+                { "keys": "Shift+I / Shift+O", "description": "Go to the Source In / Out point." },
+                { "keys": "F", "description": "Match the Program frame into the Source monitor." },
                 { "keys": "V", "description": "Select tool." },
-                { "keys": "B", "description": "Razor tool." },
+                { "keys": "C", "description": "Razor tool." },
+                { "keys": "B", "description": "Split the selected clip at the playhead." },
                 { "keys": "Y", "description": "Slip tool." },
                 { "keys": "N", "description": "Roll tool." },
+                { "keys": "U", "description": "Slide tool." },
                 { "keys": "S", "description": "Toggle snapping." },
                 { "keys": "M", "description": "Drop a sequence marker at the playhead." },
+                { "keys": primary("C / X / V"), "description": "Copy, cut, or paste selected timeline clips." },
+                { "keys": primary("Shift+V"), "description": "Insert-paste clips and ripple every track plus markers." },
+                { "keys": primary("D"), "description": "Duplicate selected clips with track spacing and linked audio." },
+                { "keys": primaryAlt("R"), "description": "Replace selected clip media from Source without changing sequence timing." },
                 { "keys": primary("= / -"), "description": "Zoom in / out." },
                 { "keys": primary("0"), "description": "Zoom to fit all clips." },
                 { "keys": primary("\\"), "description": "Split the selected clip at the playhead." },
@@ -195,6 +210,12 @@ Dialog {
             title: "Carousel",
             accent: theme.success,
             items: [
+                { "keys": primary("Z"), "description": "Undo the last carousel edit." },
+                { "keys": primary("Shift+Z"), "description": "Redo the last undone edit." },
+                { "keys": primary("C / X / V"), "description": "Copy, cut, or paste selected layers." },
+                { "keys": primary("D"), "description": "Duplicate selected layers." },
+                { "keys": primary("G / Shift+G"), "description": "Group or ungroup selected layers." },
+                { "keys": "V / H / T / M / U / B / E", "description": "Select, pan, text, media, shape, brush, or eraser tool." },
                 { "keys": primary("Shift+A"), "description": "Add a new slide." },
                 { "keys": primary("["), "description": "Move the current slide earlier." },
                 { "keys": primary("]"), "description": "Move the current slide later." },
@@ -389,6 +410,13 @@ Dialog {
                 "defaultSequence": shortcut.defaultSequence
             }
         }
+        let overrides = {}
+        for (let index = 0; index < shortcuts.length; ++index)
+            overrides[shortcuts[index].id] = shortcuts[index].sequence
+        if (!appShell.setShortcutOverrides(overrides)) {
+            shortcutEditorStatus = "Shortcut preset could not be saved because it conflicts with another shortcut."
+            return false
+        }
         editableShortcuts = shortcuts
         activeShortcutPreset = cleanPresetId
         shortcutEditorStatus = "Applied " + preset.label + " shortcuts."
@@ -405,6 +433,11 @@ Dialog {
         const conflicts = shortcutConflictIds(cleanSequence, cleanId)
         if (conflicts.length > 0) {
             shortcutEditorStatus = "Shortcut conflicts with " + conflicts.join(", ") + "."
+            return false
+        }
+
+        if (!appShell.setShortcutOverride(cleanId, cleanSequence)) {
+            shortcutEditorStatus = "Shortcut could not be saved because it conflicts with another shortcut."
             return false
         }
 
@@ -428,12 +461,38 @@ Dialog {
 
     function resetShortcutSequence(shortcutId) {
         for (let i = 0; i < editableShortcuts.length; ++i) {
-            if (editableShortcuts[i].id === shortcutId)
-                return setShortcutSequence(shortcutId, editableShortcuts[i].defaultSequence)
+            if (editableShortcuts[i].id === shortcutId) {
+                appShell.resetShortcutOverride(shortcutId)
+                const shortcuts = editableShortcuts.slice(0)
+                shortcuts[i] = {
+                    "id": shortcuts[i].id,
+                    "label": shortcuts[i].label,
+                    "sequence": shortcuts[i].defaultSequence,
+                    "defaultSequence": shortcuts[i].defaultSequence
+                }
+                editableShortcuts = shortcuts
+                shortcutEditorStatus = "Shortcut reset."
+                return true
+            }
         }
         shortcutEditorStatus = "Shortcut was not found."
         return false
     }
+
+    function loadPersistedShortcuts() {
+        const shortcuts = editableShortcuts.slice(0)
+        for (let index = 0; index < shortcuts.length; ++index) {
+            shortcuts[index] = {
+                "id": shortcuts[index].id,
+                "label": shortcuts[index].label,
+                "sequence": appShell.shortcutSequence(shortcuts[index].id, shortcuts[index].defaultSequence),
+                "defaultSequence": shortcuts[index].defaultSequence
+            }
+        }
+        editableShortcuts = shortcuts
+    }
+
+    Component.onCompleted: loadPersistedShortcuts()
 
     parent: Overlay.overlay
     x: parent ? Math.round((parent.width - width) / 2) : 0

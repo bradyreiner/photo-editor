@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "looksy-customers-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "d1_databases": [{ "binding": "DB", "database_name": "looksy-customers-staging", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "vars": {
+    "ISSUER": "https://accounts.example.invalid",
+    "SIGNING_KEY_ID": "looksy-1",
+    "LEMON_STORE_ID": "",
+    "PRODUCT_POLICY": "{}",
+    "ALLOW_TEST_PURCHASES": "true",
+    "TRIAL_DAYS": "14",
+    "LEASE_DAYS": "7",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUDIENCE": ""
+  },
+  "triggers": { "crons": ["17 * * * *"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true }
+}

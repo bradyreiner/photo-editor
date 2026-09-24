@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList id="photo-editor-ctf-offset-v1" name="Photo Editor CTF Offset" version="2.1">
+  <Description>Deterministic RGB offset used by the OCIO file-transform contract.</Description>
+  <InputDescriptor>Linear RGB</InputDescriptor>
+  <OutputDescriptor>Offset Linear RGB</OutputDescriptor>
+  <Matrix inBitDepth="32f" outBitDepth="32f">
+    <Array dim="3 4">
+      1 0 0 0.10
+      0 1 0 0.20
+      0 0 1 0.30
+    </Array>
+  </Matrix>
+</ProcessList>

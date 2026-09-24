@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "virel-studio-native-dependencies",
+  "version-string": "0.1",
+  "builtin-baseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+  "dependencies": [
+    "openssl",
+    {
+      "name": "libraw",
+      "default-features": false,
+      "features": [
+        "dng-lossy"
+      ],
+      "version>=": "0.21.5"
+    }
+  ],
+  "overrides": [
+    {
+      "name": "libraw",
+      "version": "0.21.5"
+    }
+  ]
+}

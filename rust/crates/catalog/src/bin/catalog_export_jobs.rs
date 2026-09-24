@@ -1,18 +1,22 @@
-use std::env;
+use photo_catalog::{
+    run_catalog_helper, AppRuntimePaths, CatalogRepository, CatalogRuntime, PersistedExportJob,
+};
 
-use photo_catalog::{AppRuntimePaths, CatalogService, PersistedExportJob, PostgresCatalogConfig};
+pub(crate) fn main() -> std::process::ExitCode {
+    run_catalog_helper(run)
+}
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments: Vec<String> = env::args().collect();
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let arguments = photo_catalog::helper_arguments::read_helper_arguments()?;
     let command = arguments.get(1).map(String::as_str).unwrap_or("list");
 
-    AppRuntimePaths::from_env().ensure_directories()?;
-    let config = PostgresCatalogConfig::from_env();
-    let catalog = CatalogService::connect(&config).await?;
-    catalog.initialize_schema().await?;
+    let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     match command {
+        "health" => {
+            catalog.healthcheck().await?;
+            println!("{{\"ready\":true}}");
+        }
         "list" => {
             let jobs = catalog.list_export_jobs().await?;
             println!("{}", serde_json::to_string_pretty(&jobs)?);
@@ -22,13 +26,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let job: PersistedExportJob = serde_json::from_str(payload)?;
             catalog.upsert_export_job(&job).await?;
         }
+        "import-legacy" => {
+            let payload = arguments.get(2).ok_or("missing legacy job payload")?;
+            let job: PersistedExportJob = serde_json::from_str(payload)?;
+            let accepted = catalog.import_legacy_export_job(&job).await?;
+            println!(
+                "{}",
+                serde_json::json!({"accepted": accepted, "job_id": job.job_id})
+            );
+        }
         "delete" => {
             let job_id = arguments.get(2).ok_or("missing job_id argument")?;
             catalog.delete_export_job(job_id).await?;
         }
         _ => {
             eprintln!(
-                "Usage: {} <list|upsert|delete> ...",
+                "Usage: {} <health|list|upsert|import-legacy|delete> ...",
                 arguments
                     .first()
                     .map(String::as_str)

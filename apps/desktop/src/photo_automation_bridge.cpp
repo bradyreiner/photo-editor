@@ -1,4 +1,5 @@
 #include "photo_automation_bridge.h"
+#include "search_edit_workflow.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -12,9 +13,10 @@
 #include <QLocalSocket>
 #include <QHostAddress>
 #include <QSaveFile>
+#include <QRandomGenerator>
 #include <QTcpServer>
 #include <QTcpSocket>
-#include <QUuid>
+#include <QUrl>
 #include <QVariantMap>
 #include <QVector>
 
@@ -23,13 +25,20 @@
 #include "agent_edit_controller.h"
 #include "agent_edit_recipe_patch.h"
 #include "app_bootstrap.h"
+#include "automation_capability_policy.h"
 #include "catalog_asset_model.h"
+#include "edit_adjustment_patch.h"
 #include "photo_mcp_server.h"
 
 namespace photo_editor::desktop {
 namespace {
 
 constexpr auto kProtocol = "photo-editor-automation-jsonl-v1";
+constexpr auto kMaximumAutomationBytes = 1024 * 1024;
+constexpr auto kMaximumMcpHeaderBytes = 32 * 1024;
+constexpr auto kMaximumMcpConnections = 16;
+constexpr auto kMaximumMcpRequestsPerMinute = 120;
+constexpr auto kMaximumJsonDepth = 32;
 
 QJsonObject ok_response(const QJsonObject& result = {}) {
   return QJsonObject{
@@ -45,6 +54,14 @@ QJsonObject error_response(const QString& message) {
   };
 }
 
+QJsonObject capability_error_response(const QString& required_capability) {
+  auto response = error_response(
+      QStringLiteral("Automation capability '%1' is required.").arg(required_capability));
+  response.insert(QStringLiteral("errorCode"), QStringLiteral("insufficient_capability"));
+  response.insert(QStringLiteral("requiredCapability"), required_capability);
+  return response;
+}
+
 bool has_only_keys(const QJsonObject& object, const QStringList& keys) {
   for (auto iterator = object.constBegin(); iterator != object.constEnd(); ++iterator) {
     if (!keys.contains(iterator.key())) {
@@ -55,10 +72,60 @@ bool has_only_keys(const QJsonObject& object, const QStringList& keys) {
 }
 
 bool is_local_http_origin(const QString& value) {
-  return value == QStringLiteral("http://127.0.0.1") ||
-         value == QStringLiteral("http://localhost") ||
-         value.startsWith(QStringLiteral("http://127.0.0.1:")) ||
-         value.startsWith(QStringLiteral("http://localhost:"));
+  const QUrl origin(value);
+  return origin.isValid() &&
+         origin.scheme() == QStringLiteral("http") &&
+         (origin.host() == QStringLiteral("127.0.0.1") ||
+          origin.host() == QStringLiteral("localhost")) &&
+         origin.userInfo().isEmpty() && origin.path().isEmpty() &&
+         origin.query().isEmpty() && origin.fragment().isEmpty();
+}
+
+bool is_local_http_host(const QString& value, quint16 server_port) {
+  const QUrl host_url(QStringLiteral("http://") + value);
+  return host_url.isValid() && host_url.userInfo().isEmpty() &&
+         (host_url.host() == QStringLiteral("127.0.0.1") ||
+          host_url.host() == QStringLiteral("localhost")) &&
+         host_url.port() == static_cast<int>(server_port) &&
+         (host_url.path().isEmpty() || host_url.path() == QStringLiteral("/"));
+}
+
+int json_depth(const QJsonValue& value, int current_depth = 1) {
+  auto maximum_depth = current_depth;
+  if (value.isObject()) {
+    const auto object = value.toObject();
+    for (auto iterator = object.constBegin(); iterator != object.constEnd(); ++iterator) {
+      maximum_depth = std::max(maximum_depth, json_depth(iterator.value(), current_depth + 1));
+    }
+  } else if (value.isArray()) {
+    for (const auto& item : value.toArray()) {
+      maximum_depth = std::max(maximum_depth, json_depth(item, current_depth + 1));
+    }
+  }
+  return maximum_depth;
+}
+
+bool constant_time_equal(const QByteArray& supplied, const QByteArray& expected) {
+  const auto maximum_size = std::max(supplied.size(), expected.size());
+  auto difference = static_cast<unsigned int>(supplied.size() ^ expected.size());
+  for (qsizetype index = 0; index < maximum_size; ++index) {
+    const auto supplied_byte =
+        index < supplied.size() ? static_cast<unsigned char>(supplied.at(index)) : 0U;
+    const auto expected_byte =
+        index < expected.size() ? static_cast<unsigned char>(expected.at(index)) : 0U;
+    difference |= supplied_byte ^ expected_byte;
+  }
+  return difference == 0U;
+}
+
+QString high_entropy_token() {
+  QString token;
+  token.reserve(64);
+  auto* random = QRandomGenerator::system();
+  for (auto index = 0; index < 4; ++index) {
+    token.append(QStringLiteral("%1").arg(random->generate64(), 16, 16, QLatin1Char('0')));
+  }
+  return token;
 }
 
 bool retouch_key_requires_confirmation(const QString& key) {
@@ -349,6 +416,10 @@ QString PhotoAutomationBridge::mcpEndpointKind() const {
   return mcp_endpoint_kind_;
 }
 
+QStringList PhotoAutomationBridge::mcpCapabilities() const {
+  return mcp_capabilities_;
+}
+
 int PhotoAutomationBridge::mcpConnectedClientCount() const {
   return mcp_connected_client_count_;
 }
@@ -381,7 +452,9 @@ QString PhotoAutomationBridge::errorMessage() const {
   return error_message_;
 }
 
-bool PhotoAutomationBridge::start() {
+bool PhotoAutomationBridge::start(
+    bool enable_mcp_http,
+    const QStringList& mcp_capabilities) {
   stop();
   error_message_.clear();
   if (agent_edit_ == nullptr || catalog_model_ == nullptr) {
@@ -389,17 +462,39 @@ bool PhotoAutomationBridge::start() {
     return false;
   }
 
+  const auto allowed_capabilities = automation_capability_names();
+  for (const auto& capability : mcp_capabilities) {
+    const auto normalized = capability.trimmed().toLower();
+    if (!allowed_capabilities.contains(normalized)) {
+      error_message_ = QStringLiteral("Unknown MCP capability: %1").arg(capability);
+      return false;
+    }
+    if (!mcp_capabilities_.contains(normalized)) {
+      mcp_capabilities_.append(normalized);
+    }
+  }
+  if (mcp_capabilities_.isEmpty()) {
+    mcp_capabilities_.append(QStringLiteral("read"));
+  }
+
   const auto session_dir = QDir(AppBootstrap::appDataLocation()).filePath(QStringLiteral("automation"));
   if (!QDir().mkpath(session_dir)) {
     error_message_ = QStringLiteral("Unable to create automation runtime directory.");
     return false;
   }
+  if (!QFile::setPermissions(
+          session_dir,
+          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) {
+    error_message_ = QStringLiteral("Unable to restrict automation runtime directory permissions.");
+    return false;
+  }
   endpoint_name_ = QStringLiteral("photo-editor-agent-%1").arg(QCoreApplication::applicationPid());
   session_file_path_ = QDir(session_dir).filePath(QStringLiteral("session.json"));
-  token_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  token_ = high_entropy_token();
 
   QLocalServer::removeServer(endpoint_name_);
   server_ = new QLocalServer(this);
+  server_->setSocketOptions(QLocalServer::UserAccessOption);
   connect(server_, &QLocalServer::newConnection, this, &PhotoAutomationBridge::acceptPendingConnections);
   if (!server_->listen(endpoint_name_)) {
     const auto local_error = server_->errorString();
@@ -421,20 +516,22 @@ bool PhotoAutomationBridge::start() {
     endpoint_kind_ = QStringLiteral("qlocalserver");
   }
 
-  mcp_server_ = new PhotoMcpServer(this, this);
-  mcp_http_server_ = new QTcpServer(this);
-  connect(
-      mcp_http_server_,
-      &QTcpServer::newConnection,
-      this,
-      &PhotoAutomationBridge::acceptPendingMcpHttpConnections);
-  if (!mcp_http_server_->listen(QHostAddress::LocalHost, 0)) {
-    error_message_ = QStringLiteral("MCP localhost HTTP server failed: %1").arg(mcp_http_server_->errorString());
-    stop();
-    return false;
+  if (enable_mcp_http) {
+    mcp_server_ = new PhotoMcpServer(this, this);
+    mcp_http_server_ = new QTcpServer(this);
+    connect(
+        mcp_http_server_,
+        &QTcpServer::newConnection,
+        this,
+        &PhotoAutomationBridge::acceptPendingMcpHttpConnections);
+    if (!mcp_http_server_->listen(QHostAddress::LocalHost, 0)) {
+      error_message_ = QStringLiteral("MCP localhost HTTP server failed: %1").arg(mcp_http_server_->errorString());
+      stop();
+      return false;
+    }
+    mcp_endpoint_kind_ = QStringLiteral("streamable-http-localhost-authenticated");
+    mcp_endpoint_ = QStringLiteral("http://127.0.0.1:%1/mcp").arg(mcp_http_server_->serverPort());
   }
-  mcp_endpoint_kind_ = QStringLiteral("streamable-http-localhost");
-  mcp_endpoint_ = QStringLiteral("http://127.0.0.1:%1/mcp").arg(mcp_http_server_->serverPort());
 
   if (!writeSessionFile()) {
     stop();
@@ -476,11 +573,14 @@ void PhotoAutomationBridge::stop() {
   endpoint_kind_.clear();
   mcp_endpoint_.clear();
   mcp_endpoint_kind_.clear();
+  mcp_capabilities_.clear();
   mcp_connected_client_count_ = 0;
   mcp_total_client_count_ = 0;
   mcp_last_tool_call_name_.clear();
   mcp_last_tool_call_status_.clear();
   mcp_last_tool_call_at_.clear();
+  mcp_request_times_ms_.clear();
+  mcp_active_tool_calls_ = 0;
   token_.clear();
 }
 
@@ -517,6 +617,16 @@ void PhotoAutomationBridge::acceptPendingMcpHttpConnections() {
   while (mcp_http_server_->hasPendingConnections()) {
     auto* socket = mcp_http_server_->nextPendingConnection();
     socket->setParent(this);
+    if (!socket->peerAddress().isLoopback() ||
+        mcp_connected_client_count_ >= kMaximumMcpConnections) {
+      connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
+      replyMcpHttp(
+          socket,
+          503,
+          QByteArrayLiteral("Service Unavailable"),
+          QJsonObject{{QStringLiteral("error"), QStringLiteral("MCP connection limit reached.")}});
+      continue;
+    }
     socket->setProperty("buffer", QByteArray{});
     ++mcp_connected_client_count_;
     ++mcp_total_client_count_;
@@ -534,7 +644,7 @@ void PhotoAutomationBridge::readSocketRequest(QIODevice* socket) {
   auto buffer = socket->property("buffer").toByteArray();
   buffer.append(socket->readAll());
   auto newline = buffer.indexOf('\n');
-  if (newline < 0 && buffer.size() < 1024 * 1024) {
+  if (newline < 0 && buffer.size() < kMaximumAutomationBytes) {
     socket->setProperty("buffer", buffer);
     return;
   }
@@ -555,7 +665,7 @@ void PhotoAutomationBridge::readMcpHttpRequest(QTcpSocket* socket) {
   auto buffer = socket->property("buffer").toByteArray();
   buffer.append(socket->readAll());
   const auto header_end = buffer.indexOf("\r\n\r\n");
-  if (header_end < 0 && buffer.size() < 1024 * 1024) {
+  if (header_end < 0 && buffer.size() < kMaximumMcpHeaderBytes) {
     socket->setProperty("buffer", buffer);
     return;
   }
@@ -592,18 +702,21 @@ void PhotoAutomationBridge::readMcpHttpRequest(QTcpSocket* socket) {
 
   const auto method = request_parts.at(0);
   auto content_length = -1;
+  QByteArray authorization;
+  QString host;
   for (int index = 1; index < header_lines.size(); ++index) {
-    const auto line = QString::fromLatin1(header_lines.at(index)).trimmed();
-    const auto colon = line.indexOf(QLatin1Char(':'));
+    const auto line_bytes = header_lines.at(index).trimmed();
+    const auto colon = line_bytes.indexOf(':');
     if (colon <= 0) {
       continue;
     }
-    const auto key = line.left(colon).trimmed().toLower();
-    const auto value = line.mid(colon + 1).trimmed();
+    const auto key = QString::fromLatin1(line_bytes.left(colon)).trimmed().toLower();
+    const auto value_bytes = line_bytes.mid(colon + 1).trimmed();
+    const auto value = QString::fromLatin1(value_bytes);
     if (key == QStringLiteral("content-length")) {
       auto ok = false;
       content_length = value.toInt(&ok);
-      if (!ok || content_length < 0 || content_length > 1024 * 1024) {
+      if (!ok || content_length < 0 || content_length > kMaximumAutomationBytes) {
         replyMcpHttp(
             socket,
             400,
@@ -620,7 +733,38 @@ void PhotoAutomationBridge::readMcpHttpRequest(QTcpSocket* socket) {
             QJsonObject{{QStringLiteral("error"), QStringLiteral("MCP localhost endpoint rejects non-local Origin headers.")}});
         return;
       }
+    } else if (key == QStringLiteral("authorization")) {
+      authorization = value_bytes;
+    } else if (key == QStringLiteral("host")) {
+      host = value;
     }
+  }
+
+  if (mcp_http_server_ == nullptr ||
+      !is_local_http_host(host, mcp_http_server_->serverPort())) {
+    replyMcpHttp(
+        socket,
+        400,
+        QByteArrayLiteral("Bad Request"),
+        QJsonObject{{QStringLiteral("error"), QStringLiteral("Valid localhost Host header is required.")}});
+    return;
+  }
+
+  if (!validMcpAuthorization(authorization)) {
+    replyMcpHttp(
+        socket,
+        401,
+        QByteArrayLiteral("Unauthorized"),
+        QJsonObject{{QStringLiteral("error"), QStringLiteral("Valid MCP authorization is required.")}});
+    return;
+  }
+  if (!admitMcpRequest()) {
+    replyMcpHttp(
+        socket,
+        429,
+        QByteArrayLiteral("Too Many Requests"),
+        QJsonObject{{QStringLiteral("error"), QStringLiteral("MCP request rate limit reached.")}});
+    return;
   }
 
   if (method == QStringLiteral("GET")) {
@@ -669,6 +813,14 @@ void PhotoAutomationBridge::readMcpHttpRequest(QTcpSocket* socket) {
         QJsonObject{{QStringLiteral("error"), QStringLiteral("MCP request body must be a JSON-RPC object.")}});
     return;
   }
+  if (json_depth(document.object()) > kMaximumJsonDepth) {
+    replyMcpHttp(
+        socket,
+        400,
+        QByteArrayLiteral("Bad Request"),
+        QJsonObject{{QStringLiteral("error"), QStringLiteral("MCP request JSON nesting is too deep.")}});
+    return;
+  }
   if (mcp_server_ == nullptr) {
     replyMcpHttp(
         socket,
@@ -678,8 +830,22 @@ void PhotoAutomationBridge::readMcpHttpRequest(QTcpSocket* socket) {
     return;
   }
   const auto request_object = document.object();
-  const auto response = mcp_server_->handleJsonRpc(request_object);
-  if (request_object.value(QStringLiteral("method")).toString() == QStringLiteral("tools/call")) {
+  const auto is_tool_call =
+      request_object.value(QStringLiteral("method")).toString() == QStringLiteral("tools/call");
+  if (is_tool_call && mcp_active_tool_calls_ >= 1) {
+    replyMcpHttp(
+        socket,
+        429,
+        QByteArrayLiteral("Too Many Requests"),
+        QJsonObject{{QStringLiteral("error"), QStringLiteral("Another MCP tool call is active.")}});
+    return;
+  }
+  if (is_tool_call) {
+    ++mcp_active_tool_calls_;
+  }
+  const auto response = mcp_server_->handleJsonRpc(request_object, mcp_capabilities_);
+  if (is_tool_call) {
+    --mcp_active_tool_calls_;
     const auto params = request_object.value(QStringLiteral("params")).toObject();
     const auto tool_name = params.value(QStringLiteral("name")).toString();
     const auto status = response.contains(QStringLiteral("error")) ||
@@ -724,8 +890,9 @@ void PhotoAutomationBridge::replyMcpHttp(
 }
 
 void PhotoAutomationBridge::replyMcpHttpSse(QTcpSocket* socket) const {
-  const auto tools_result =
-      mcp_server_ != nullptr ? mcp_server_->toolsListResult() : QJsonObject{};
+  const auto tools_result = mcp_server_ != nullptr
+                                ? mcp_server_->toolsListResult(mcp_capabilities_)
+                                : QJsonObject{};
   const auto tools = tools_result.value(QStringLiteral("tools")).toArray();
   QJsonArray tool_names;
   for (const auto& tool_value : tools) {
@@ -776,12 +943,26 @@ QJsonObject PhotoAutomationBridge::handleJsonRequest(const QJsonObject& request)
           {QStringLiteral("id"), QStringLiteral("token"), QStringLiteral("command"), QStringLiteral("args")})) {
     return error_response(QStringLiteral("Request contains unknown fields."));
   }
-  if (request.value(QStringLiteral("token")).toString() != token_) {
+  if (!constant_time_equal(
+          request.value(QStringLiteral("token")).toString().toUtf8(),
+          token_.toUtf8())) {
     return error_response(QStringLiteral("Invalid automation token."));
   }
   const auto command = request.value(QStringLiteral("command")).toString().trimmed();
   if (command.isEmpty()) {
     return error_response(QStringLiteral("Command is required."));
+  }
+  const auto required_capability = automation_capability_for_command(command);
+  if (required_capability != QStringLiteral("read") && required_capability != QStringLiteral("export") &&
+      command != QStringLiteral("photo_commit_agent_draft") &&
+      command != QStringLiteral("photo_cancel_agent_run") &&
+      command != QStringLiteral("photo_rollback_agent_draft") &&
+      command != QStringLiteral("photo_search_edit_cancel") &&
+      edit_access_policy_ && !edit_access_policy_()) {
+    return error_response(QStringLiteral("Editing requires an active trial or purchase."));
+  }
+  if (!mcp_capabilities_.contains(required_capability)) {
+    return capability_error_response(required_capability);
   }
   const auto args_value = request.value(QStringLiteral("args"));
   if (!args_value.isUndefined() && !args_value.isObject()) {
@@ -795,7 +976,47 @@ QJsonObject PhotoAutomationBridge::handleJsonRequest(const QJsonObject& request)
   return response;
 }
 
+bool PhotoAutomationBridge::validMcpAuthorization(const QByteArray& authorization) const {
+  if (token_.isEmpty()) {
+    return false;
+  }
+  return constant_time_equal(
+      authorization,
+      QByteArrayLiteral("Bearer ") + token_.toUtf8());
+}
+
+bool PhotoAutomationBridge::admitMcpRequest() {
+  const auto now_ms = QDateTime::currentMSecsSinceEpoch();
+  constexpr auto window_ms = 60 * 1000;
+  while (!mcp_request_times_ms_.isEmpty() &&
+         now_ms - mcp_request_times_ms_.head() >= window_ms) {
+    mcp_request_times_ms_.dequeue();
+  }
+  if (mcp_request_times_ms_.size() >= kMaximumMcpRequestsPerMinute) {
+    return false;
+  }
+  mcp_request_times_ms_.enqueue(now_ms);
+  return true;
+}
+
 QJsonObject PhotoAutomationBridge::handleCommand(const QString& command, const QJsonObject& args) const {
+  if (command == QStringLiteral("photo_search_edit_start")) {
+    if (!has_only_keys(args, {QStringLiteral("instruction")}) || !args.value("instruction").isString())
+      return error_response(QStringLiteral("Search requires only an instruction string."));
+    if (search_edit_ == nullptr) return error_response(QStringLiteral("Search-and-edit is unavailable."));
+    QVariantMap model;
+    for (const auto& value : agent_edit_->availableModels()) {
+      const auto candidate = value.toMap();
+      if (candidate.value("id").toString() == agent_edit_->selectedModelId()) model = candidate;
+    }
+    return ok_response(QJsonObject::fromVariantMap(search_edit_->start(args.value("instruction").toString(), model)));
+  }
+  if (command == QStringLiteral("photo_search_edit_status") || command == QStringLiteral("photo_search_edit_cancel")) {
+    if (!args.isEmpty()) return error_response(QStringLiteral("This search command accepts no arguments."));
+    if (search_edit_ == nullptr) return error_response(QStringLiteral("Search-and-edit is unavailable."));
+    if (command == QStringLiteral("photo_search_edit_cancel")) search_edit_->cancel();
+    return ok_response(QJsonObject::fromVariantMap(search_edit_->snapshot()));
+  }
   if (command == QStringLiteral("photo_live_status")) {
     if (!args.isEmpty()) {
       return error_response(QStringLiteral("photo_live_status does not accept args."));
@@ -854,13 +1075,32 @@ QJsonObject PhotoAutomationBridge::handleCommand(const QString& command, const Q
     });
   }
 
+  if (command == QStringLiteral("photo_read_adjustments")) {
+    if (!args.isEmpty()) {
+      return error_response(QStringLiteral("photo_read_adjustments does not accept args."));
+    }
+    return ok_response(QJsonObject{
+        {QStringLiteral("assetId"), catalog_model_->selectedAssetId()},
+        {QStringLiteral("adjustmentPatchJson"),
+         catalog_model_->selectedAdjustmentPatchJson()},
+    });
+  }
+
   if (command == QStringLiteral("photo_read_recipe")) {
     if (!args.isEmpty()) {
       return error_response(QStringLiteral("photo_read_recipe does not accept args."));
     }
+    const auto adjustments =
+        parse_adjustment_patch_json(
+            catalog_model_
+                ->selectedAdjustmentPatchJson());
     return ok_response(QJsonObject{
         {QStringLiteral("assetId"), catalog_model_->selectedAssetId()},
-        {QStringLiteral("recipeJson"), catalog_model_->selectedRecipeJson()},
+        {QStringLiteral("recipeJson"),
+         adjustments.ok()
+             ? serialize_edit_recipe_json(
+                   *adjustments.state)
+             : QString{}},
     });
   }
 
@@ -1057,6 +1297,45 @@ QJsonObject PhotoAutomationBridge::handleCommand(const QString& command, const Q
     return ok_response(variant_map_to_json_object(agent_edit_->commitDraft(true)));
   }
 
+  if (command == QStringLiteral("photo_resolve_agent_review_issue")) {
+    if (!has_only_keys(
+            args,
+            {QStringLiteral("assetId"), QStringLiteral("action"),
+             QStringLiteral("confirmed")}) ||
+        !args.value(QStringLiteral("assetId")).isString() ||
+        !args.value(QStringLiteral("action")).isString() ||
+        !args.value(QStringLiteral("confirmed")).isBool()) {
+      return error_response(QStringLiteral(
+          "photo_resolve_agent_review_issue requires assetId, action, and confirmed."));
+    }
+    if (!args.value(QStringLiteral("confirmed")).toBool()) {
+      return error_response(QStringLiteral(
+          "photo_resolve_agent_review_issue requires confirmed: true."));
+    }
+    const auto asset_id =
+        args.value(QStringLiteral("assetId")).toString().trimmed();
+    const auto action =
+        args.value(QStringLiteral("action")).toString().trimmed().toLower();
+    if (asset_id.isEmpty()) {
+      return error_response(QStringLiteral(
+          "photo_resolve_agent_review_issue requires a non-empty assetId."));
+    }
+    if (action == QStringLiteral("fix")) {
+      return ok_response(
+          variant_map_to_json_object(agent_edit_->fixReviewIssue(asset_id)));
+    }
+    if (action == QStringLiteral("accept_anyway")) {
+      return ok_response(
+          variant_map_to_json_object(agent_edit_->acceptReviewIssue(asset_id)));
+    }
+    if (action == QStringLiteral("rollback_photo")) {
+      return ok_response(
+          variant_map_to_json_object(agent_edit_->rollbackReviewIssue(asset_id)));
+    }
+    return error_response(QStringLiteral(
+        "photo_resolve_agent_review_issue action must be fix, accept_anyway, or rollback_photo."));
+  }
+
   if (command == QStringLiteral("photo_cancel_agent_run")) {
     if (!has_only_keys(args, {QStringLiteral("reason")}) ||
         (!args.value(QStringLiteral("reason")).isUndefined() &&
@@ -1091,7 +1370,9 @@ bool PhotoAutomationBridge::writeSessionFile() {
       {QStringLiteral("mcpProtocol"), QStringLiteral("model-context-protocol-jsonrpc-2025-06-18")},
       {QStringLiteral("mcpEndpointKind"), mcp_endpoint_kind_},
       {QStringLiteral("mcpEndpoint"), mcp_endpoint_},
-      {QStringLiteral("mcpTransport"), QStringLiteral("streamable-http")},
+      {QStringLiteral("mcpTransport"),
+       mcp_http_server_ != nullptr ? QStringLiteral("streamable-http") : QStringLiteral("disabled")},
+      {QStringLiteral("mcpCapabilities"), QJsonArray::fromStringList(mcp_capabilities_)},
       {QStringLiteral("mcpConnectedClientCount"), mcp_connected_client_count_},
       {QStringLiteral("mcpTotalClientCount"), mcp_total_client_count_},
       {QStringLiteral("mcpLastToolCallName"), mcp_last_tool_call_name_},
@@ -1102,9 +1383,18 @@ bool PhotoAutomationBridge::writeSessionFile() {
       {QStringLiteral("pid"), QCoreApplication::applicationPid()},
       {QStringLiteral("startedAtUtc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
   };
+  if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+    error_message_ = QStringLiteral("Unable to restrict automation session file permissions.");
+    return false;
+  }
   file.write(QJsonDocument(payload).toJson(QJsonDocument::Indented));
   if (!file.commit()) {
     error_message_ = QStringLiteral("Unable to commit automation session file.");
+    return false;
+  }
+  if (!QFile::setPermissions(
+          session_file_path_, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+    error_message_ = QStringLiteral("Unable to restrict committed automation session file permissions.");
     return false;
   }
   return true;

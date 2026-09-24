@@ -9,6 +9,8 @@
 
 #include "agent_edit_recipe_patch.h"
 #include "agent_edit_style.h"
+#include "photo_layer_effect_codec.h"
+#include "photo_text_style.h"
 
 namespace {
 
@@ -371,6 +373,7 @@ int main() {
   auto layers_style = style;
   auto layers_tools = layers_style.value(QStringLiteral("allowedTools")).toMap();
   layers_tools.insert(QStringLiteral("layers_luts"), true);
+  layers_tools.insert(QStringLiteral("graphics"), false);
   layers_style.insert(QStringLiteral("allowedTools"), layers_tools);
   const QVariantList valid_lut_stack{
       QVariantMap{
@@ -450,6 +453,153 @@ int main() {
           .toMap()
           .isEmpty()) {
     return fail("recipe patch diff should include layer stack changes");
+  }
+
+  auto graphics_style = layers_style;
+  auto graphics_allowed_tools = graphics_style.value(QStringLiteral("allowedTools")).toMap();
+  graphics_allowed_tools.insert(QStringLiteral("graphics"), true);
+  graphics_style.insert(QStringLiteral("allowedTools"), graphics_allowed_tools);
+  const QVariantMap graphic_text_layer{
+      {QStringLiteral("id"), QStringLiteral("agent-graphic-headline")},
+      {QStringLiteral("kind"), QStringLiteral("text")},
+      {QStringLiteral("name"), QStringLiteral("Poster headline")},
+      {QStringLiteral("text"), QStringLiteral("NORTH BY NATURE")},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("opacity"), 1.0},
+      {QStringLiteral("blendMode"), QStringLiteral("normal")},
+      {QStringLiteral("x"), 96},
+      {QStringLiteral("y"), 88},
+      {QStringLiteral("pixelWidth"), 900},
+      {QStringLiteral("pixelHeight"), 180},
+      {QStringLiteral("canvasWidth"), 1200},
+      {QStringLiteral("canvasHeight"), 1200},
+      {QStringLiteral("textTypography"),
+       photo_editor::desktop::encode_photo_text_style(
+           photo_editor::desktop::PhotoTextStyle{}).toVariantMap()},
+  };
+  const QVariantMap graphic_patch{
+      {QStringLiteral("graphics"),
+       QVariantMap{{QStringLiteral("textLayers"), QVariantList{graphic_text_layer}}}},
+  };
+  const auto graphic_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(graphic_patch, graphics_style);
+  if (!graphic_validation.valid ||
+      !graphic_validation.warnings.join(QStringLiteral("; ")).contains(QStringLiteral("legibility"))) {
+    std::cerr << graphic_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("agent graphic text layers should validate with layout review guidance");
+  }
+  const auto graphic_permission_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(graphic_patch, layers_style);
+  if (graphic_permission_validation.valid ||
+      !graphic_permission_validation.errors.join(QStringLiteral("; ")).contains(QStringLiteral("does not allow"))) {
+    return fail("agent graphics should respect the explicit style tool permission");
+  }
+  const auto graphic_schema = photo_editor::desktop::agent_recipe_patch_tool_schema()
+                                  .value(QStringLiteral("groups")).toMap()
+                                  .value(QStringLiteral("graphics")).toMap()
+                                  .value(QStringLiteral("fields")).toMap()
+                                  .value(QStringLiteral("textLayers")).toMap();
+  if (graphic_schema.value(QStringLiteral("type")).toString() != QStringLiteral("graphicTextStack") ||
+      !graphic_schema.value(QStringLiteral("appendOnly")).toBool()) {
+    return fail("agent graphics schema should advertise append-only editable text layers");
+  }
+  const auto effect_change_schema = photo_editor::desktop::agent_recipe_patch_tool_schema()
+                                       .value(QStringLiteral("groups")).toMap()
+                                       .value(QStringLiteral("layers")).toMap()
+                                       .value(QStringLiteral("fields")).toMap()
+                                       .value(QStringLiteral("effectChanges")).toMap();
+  if (effect_change_schema.value(QStringLiteral("type")).toString() !=
+          QStringLiteral("layerEffectChanges") ||
+      effect_change_schema.value(QStringLiteral("allowedTypes")).toStringList().size() != 6) {
+    return fail("agent layer-effect schema should expose every currently supported non-destructive effect");
+  }
+  photo_editor::desktop::EditRecipeState graphic_state;
+  graphic_state.layers = QVariantList{QVariantMap{
+      {QStringLiteral("id"), QStringLiteral("user-existing-text")},
+      {QStringLiteral("kind"), QStringLiteral("text")},
+      {QStringLiteral("name"), QStringLiteral("User caption")},
+      {QStringLiteral("text"), QStringLiteral("Keep me")},
+  }};
+  const auto graphic_before = graphic_state;
+  photo_editor::desktop::apply_agent_recipe_patch(&graphic_state, graphic_patch);
+  if (graphic_state.layers.size() != 2 ||
+      graphic_state.layers.at(0).toMap().value(QStringLiteral("agentGraphic")).toBool() != true ||
+      graphic_state.layers.at(1).toMap().value(QStringLiteral("id")).toString() !=
+          QStringLiteral("user-existing-text")) {
+    return fail("agent graphic text should be editable and preserve existing user layers");
+  }
+  const auto graphic_diff = photo_editor::desktop::agent_recipe_patch_diff(
+      graphic_before, graphic_state, graphic_patch);
+  if (graphic_diff.value(QStringLiteral("graphics")).toMap()
+          .value(QStringLiteral("textLayers")).toMap()
+          .value(QStringLiteral("after")).toList().size() != 1) {
+    return fail("agent graphic diff should expose the generated editable text layer");
+  }
+  auto revised_graphic_text_layer = graphic_text_layer;
+  revised_graphic_text_layer.insert(QStringLiteral("text"), QStringLiteral("WILD LIGHT"));
+  photo_editor::desktop::apply_agent_recipe_patch(
+      &graphic_state,
+      QVariantMap{{QStringLiteral("graphics"), QVariantMap{{QStringLiteral("textLayers"),
+                                                            QVariantList{revised_graphic_text_layer}}}}});
+  if (graphic_state.layers.size() != 2 ||
+      graphic_state.layers.at(0).toMap().value(QStringLiteral("text")).toString() !=
+          QStringLiteral("WILD LIGHT") ||
+      graphic_state.layers.at(1).toMap().value(QStringLiteral("id")).toString() !=
+          QStringLiteral("user-existing-text")) {
+    return fail("graphic revisions should replace only prior agent-owned layers");
+  }
+  auto malformed_graphic_layer = graphic_text_layer;
+  malformed_graphic_layer.insert(QStringLiteral("id"), QStringLiteral("user-text"));
+  const QVariantMap malformed_graphic_patch{
+      {QStringLiteral("graphics"), QVariantMap{{QStringLiteral("textLayers"),
+                                                QVariantList{malformed_graphic_layer}}}},
+  };
+  if (photo_editor::desktop::validate_agent_recipe_patch(malformed_graphic_patch, graphics_style).valid) {
+    return fail("agent graphics should reject layer ids outside the agent-owned namespace");
+  }
+  const QVariantMap effect_change{
+      {QStringLiteral("layerId"), QStringLiteral("user-existing-text")},
+      {QStringLiteral("effectId"), QStringLiteral("agent-effect-soft-focus")},
+      {QStringLiteral("type"), QStringLiteral("gaussian_blur")},
+      {QStringLiteral("enabled"), true},
+      {QStringLiteral("amount"), 0.35},
+      {QStringLiteral("sigma"), 6.0},
+      {QStringLiteral("edgeMode"), QStringLiteral("reflect")},
+  };
+  const QVariantMap effect_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{effect_change}}}},
+  };
+  const auto effect_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(effect_patch, layers_style);
+  if (!effect_validation.valid) {
+    std::cerr << effect_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("bounded agent layer effects should validate under layer permissions");
+  }
+  photo_editor::desktop::apply_agent_recipe_patch(&graphic_state, effect_patch);
+  const auto graphic_effect_layer = graphic_state.layers.at(1).toMap();
+  const auto generated_effects = photo_editor::desktop::decode_photo_layer_effects(graphic_effect_layer);
+  if (!generated_effects || generated_effects->size() != 1 ||
+      generated_effects->front().id != "agent-effect-soft-focus" ||
+      generated_effects->front().type_id != "gaussian_blur" ||
+      !almost_equal(generated_effects->front().amount, 0.35) ||
+      !almost_equal(generated_effects->front().gaussian.sigma, 6.0) ||
+      graphic_effect_layer.value(QStringLiteral("text")).toString() != QStringLiteral("Keep me")) {
+    return fail("agent layer effects should update only the target layer while retaining its editable text");
+  }
+  const auto effect_diff = photo_editor::desktop::agent_recipe_patch_diff(
+      graphic_before, graphic_state, effect_patch);
+  if (effect_diff.value(QStringLiteral("layers")).toMap()
+          .value(QStringLiteral("effectChanges")).toList().first().toMap()
+          .value(QStringLiteral("after")).toMap().isEmpty()) {
+    return fail("agent layer-effect diff should show the applied effect");
+  }
+  auto invalid_effect = effect_change;
+  invalid_effect.insert(QStringLiteral("sigma"), 5000.0);
+  const QVariantMap invalid_effect_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{invalid_effect}}}},
+  };
+  if (photo_editor::desktop::validate_agent_recipe_patch(invalid_effect_patch, layers_style).valid) {
+    return fail("agent layer effects should reject values outside renderer limits");
   }
 
   const auto layer_stack_disallowed =
@@ -662,6 +812,273 @@ int main() {
           .toMap()
           .isEmpty()) {
     return fail("recipe patch diff should include mask stack changes");
+  }
+  const auto existing_first_mask_id =
+      mask_state.mask_stack.first().toMap().value(QStringLiteral("id")).toString();
+  const QVariantMap append_mask_stack_patch{
+      {QStringLiteral("masks"),
+       QVariantMap{
+           {QStringLiteral("appendMaskStack"),
+            QVariantList{
+                QVariantMap{
+                    {QStringLiteral("id"), QStringLiteral("agent-localized-face")},
+                    {QStringLiteral("kind"), QStringLiteral("radial")},
+                    {QStringLiteral("name"), QStringLiteral("Agent Face Lift")},
+                    {QStringLiteral("centerX"), 0.52},
+                    {QStringLiteral("centerY"), 0.38},
+                    {QStringLiteral("radiusX"), 0.16},
+                    {QStringLiteral("radiusY"), 0.22},
+                    {QStringLiteral("feather"), 0.68},
+                    {QStringLiteral("exposure"), 0.22},
+                },
+            }},
+       }},
+  };
+  const auto append_mask_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          append_mask_stack_patch, style);
+  photo_editor::desktop::apply_agent_recipe_patch(
+      &mask_state, append_mask_stack_patch);
+  if (!append_mask_validation.valid || mask_state.mask_stack.size() != 4 ||
+      mask_state.mask_stack.first()
+              .toMap()
+              .value(QStringLiteral("id"))
+              .toString() != existing_first_mask_id ||
+      mask_state.mask_stack.last()
+              .toMap()
+              .value(QStringLiteral("id"))
+              .toString() != QStringLiteral("agent-localized-face")) {
+    return fail("append-mask recipe patches should preserve existing user masks and add the bounded local adjustment");
+  }
+  auto semantic_request_patch = append_mask_stack_patch;
+  auto semantic_request_group =
+      semantic_request_patch.value(QStringLiteral("masks")).toMap();
+  auto semantic_request_masks =
+      semantic_request_group.value(QStringLiteral("appendMaskStack")).toList();
+  auto semantic_request_mask = semantic_request_masks.first().toMap();
+  semantic_request_mask.insert(
+      QStringLiteral("agentSelectionMode"), QStringLiteral("semantic"));
+  semantic_request_mask.insert(
+      QStringLiteral("agentSemanticTarget"), QStringLiteral("subject"));
+  semantic_request_masks[0] = semantic_request_mask;
+  semantic_request_group.insert(
+      QStringLiteral("appendMaskStack"), semantic_request_masks);
+  semantic_request_patch.insert(
+      QStringLiteral("masks"), semantic_request_group);
+  const auto semantic_request_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          semantic_request_patch, style);
+  if (!semantic_request_validation.valid) {
+    return fail("agent masks should accept a bounded semantic request with a radial fail-closed fallback");
+  }
+  semantic_request_mask.insert(
+      QStringLiteral("agentSemanticTarget"), QStringLiteral("face"));
+  semantic_request_masks[0] = semantic_request_mask;
+  semantic_request_group.insert(
+      QStringLiteral("appendMaskStack"), semantic_request_masks);
+  semantic_request_patch.insert(
+      QStringLiteral("masks"), semantic_request_group);
+  const auto unsupported_semantic_request =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          semantic_request_patch, style);
+  if (unsupported_semantic_request.valid ||
+      !unsupported_semantic_request.errors.join(QStringLiteral("; "))
+           .contains(QStringLiteral("subject, background, or sky"))) {
+    return fail("agent semantic requests should fail closed for unsupported semantic targets");
+  }
+  auto guided_request_patch = append_mask_stack_patch;
+  auto guided_request_group =
+      guided_request_patch.value(QStringLiteral("masks")).toMap();
+  auto guided_request_masks =
+      guided_request_group.value(QStringLiteral("appendMaskStack")).toList();
+  auto guided_request_mask = guided_request_masks.first().toMap();
+  guided_request_mask.insert(
+      QStringLiteral("agentSelectionMode"), QStringLiteral("guided"));
+  guided_request_mask.insert(
+      QStringLiteral("agentSelectionLabel"), QStringLiteral("red jacket"));
+  guided_request_masks[0] = guided_request_mask;
+  guided_request_group.insert(
+      QStringLiteral("appendMaskStack"), guided_request_masks);
+  guided_request_patch.insert(
+      QStringLiteral("masks"), guided_request_group);
+  const auto guided_request_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          guided_request_patch, style);
+  if (!guided_request_validation.valid) {
+    return fail("agent masks should accept a labeled evidence-guided object request with a radial fail-closed fallback");
+  }
+  guided_request_mask.insert(
+      QStringLiteral("agentSelectionCandidates"),
+      QVariantList{
+          QVariantMap{
+              {QStringLiteral("id"), QStringLiteral("candidate-left-window")},
+              {QStringLiteral("label"), QStringLiteral("Left window")},
+              {QStringLiteral("confidence"), 0.78},
+              {QStringLiteral("region"),
+               QVariantMap{
+                   {QStringLiteral("centerX"), 0.28},
+                   {QStringLiteral("centerY"), 0.34},
+                   {QStringLiteral("radiusX"), 0.12},
+                   {QStringLiteral("radiusY"), 0.18},
+                   {QStringLiteral("feather"), 0.68},
+               }},
+          },
+          QVariantMap{
+              {QStringLiteral("id"), QStringLiteral("candidate-right-window")},
+              {QStringLiteral("label"), QStringLiteral("Right window")},
+              {QStringLiteral("confidence"), 0.74},
+              {QStringLiteral("region"),
+               QVariantMap{
+                   {QStringLiteral("centerX"), 0.76},
+                   {QStringLiteral("centerY"), 0.32},
+                   {QStringLiteral("radiusX"), 0.13},
+                   {QStringLiteral("radiusY"), 0.19},
+                   {QStringLiteral("feather"), 0.68},
+               }},
+          },
+      });
+  guided_request_masks[0] = guided_request_mask;
+  guided_request_group.insert(
+      QStringLiteral("appendMaskStack"), guided_request_masks);
+  guided_request_patch.insert(
+      QStringLiteral("masks"), guided_request_group);
+  const auto candidate_guided_request =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          guided_request_patch, style);
+  if (!candidate_guided_request.valid) {
+    return fail("ambiguous guided requests should accept two bounded, stable object candidates");
+  }
+  auto visual_referent_mask = guided_request_mask;
+  visual_referent_mask.remove(QStringLiteral("agentSelectionCandidates"));
+  visual_referent_mask.insert(
+      QStringLiteral("agentVisualReferentId"),
+      QStringLiteral("referent-right-window"));
+  visual_referent_mask.insert(
+      QStringLiteral("agentSelectionSource"),
+      QStringLiteral("confirmed-visual-referent"));
+  auto visual_referent_group = guided_request_group;
+  visual_referent_group.insert(
+      QStringLiteral("appendMaskStack"),
+      QVariantList{visual_referent_mask});
+  auto visual_referent_patch = guided_request_patch;
+  visual_referent_patch.insert(
+      QStringLiteral("masks"), visual_referent_group);
+  const auto visual_referent_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          visual_referent_patch, style);
+  if (!visual_referent_validation.valid) {
+    return fail("confirmed visual referents should validate only as resolved guided selections");
+  }
+  visual_referent_mask.insert(
+      QStringLiteral("agentSelectionCandidates"),
+      guided_request_mask.value(QStringLiteral("agentSelectionCandidates")));
+  visual_referent_group.insert(
+      QStringLiteral("appendMaskStack"),
+      QVariantList{visual_referent_mask});
+  visual_referent_patch.insert(
+      QStringLiteral("masks"), visual_referent_group);
+  const auto ambiguous_visual_referent =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          visual_referent_patch, style);
+  if (ambiguous_visual_referent.valid ||
+      !ambiguous_visual_referent.errors.join(QStringLiteral("; "))
+           .contains(QStringLiteral("cannot retain ambiguous candidates"))) {
+    return fail("a remembered object must not retain fresh ambiguous candidates");
+  }
+  auto invalid_candidates =
+      guided_request_mask.value(QStringLiteral("agentSelectionCandidates")).toList();
+  invalid_candidates.removeLast();
+  guided_request_mask.insert(
+      QStringLiteral("agentSelectionCandidates"), invalid_candidates);
+  guided_request_masks[0] = guided_request_mask;
+  guided_request_group.insert(
+      QStringLiteral("appendMaskStack"), guided_request_masks);
+  guided_request_patch.insert(
+      QStringLiteral("masks"), guided_request_group);
+  const auto underspecified_candidate_request =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          guided_request_patch, style);
+  if (underspecified_candidate_request.valid ||
+      !underspecified_candidate_request.errors.join(QStringLiteral("; "))
+           .contains(QStringLiteral("two or three"))) {
+    return fail("ambiguous guided requests should fail closed unless at least two candidates are explicit");
+  }
+  guided_request_mask.remove(QStringLiteral("agentSelectionCandidates"));
+  guided_request_mask.remove(QStringLiteral("agentSelectionLabel"));
+  guided_request_masks[0] = guided_request_mask;
+  guided_request_group.insert(
+      QStringLiteral("appendMaskStack"), guided_request_masks);
+  guided_request_patch.insert(
+      QStringLiteral("masks"), guided_request_group);
+  const auto unlabeled_guided_request =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          guided_request_patch, style);
+  if (unlabeled_guided_request.valid ||
+      !unlabeled_guided_request.errors.join(QStringLiteral("; "))
+           .contains(QStringLiteral("target label"))) {
+    return fail("evidence-guided object requests should fail closed without a specific target label");
+  }
+  guided_request_mask.insert(
+      QStringLiteral("agentSelectionLabel"), QStringLiteral("red jacket"));
+  guided_request_mask.insert(
+      QStringLiteral("agentSemanticTarget"), QStringLiteral("subject"));
+  guided_request_masks[0] = guided_request_mask;
+  guided_request_group.insert(
+      QStringLiteral("appendMaskStack"), guided_request_masks);
+  guided_request_patch.insert(
+      QStringLiteral("masks"), guided_request_group);
+  const auto mixed_guided_request =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          guided_request_patch, style);
+  if (mixed_guided_request.valid) {
+    return fail("evidence-guided object requests should not silently mix semantic target contracts");
+  }
+  auto generated_agent_mask = mask_state.mask_stack.last().toMap();
+  const QByteArray generated_alpha(16, static_cast<char>(0x7f));
+  generated_agent_mask.insert(QStringLiteral("segmentationData"), generated_alpha);
+  generated_agent_mask.insert(QStringLiteral("segmentationWidth"), 4);
+  generated_agent_mask.insert(QStringLiteral("segmentationHeight"), 4);
+  generated_agent_mask.insert(
+      QStringLiteral("agentSemanticTarget"), QStringLiteral("subject"));
+  mask_state.mask_stack[mask_state.mask_stack.size() - 1] = generated_agent_mask;
+  auto updated_append_mask_stack_patch = append_mask_stack_patch;
+  auto updated_append_group =
+      updated_append_mask_stack_patch.value(QStringLiteral("masks")).toMap();
+  auto updated_append_masks =
+      updated_append_group.value(QStringLiteral("appendMaskStack")).toList();
+  auto updated_appended_mask = updated_append_masks.first().toMap();
+  updated_appended_mask.insert(QStringLiteral("kind"), QStringLiteral("subject"));
+  updated_appended_mask.insert(QStringLiteral("exposure"), 0.31);
+  updated_append_masks[0] = updated_appended_mask;
+  updated_append_group.insert(
+      QStringLiteral("appendMaskStack"), updated_append_masks);
+  updated_append_mask_stack_patch.insert(
+      QStringLiteral("masks"), updated_append_group);
+  photo_editor::desktop::apply_agent_recipe_patch(
+      &mask_state, updated_append_mask_stack_patch);
+  if (mask_state.mask_stack.size() != 4 ||
+      !almost_equal(
+          mask_state.mask_stack.last()
+              .toMap()
+              .value(QStringLiteral("exposure"))
+              .toDouble(),
+          0.31) ||
+      mask_state.mask_stack.last()
+              .toMap()
+              .value(QStringLiteral("segmentationData"))
+              .toByteArray() != generated_alpha) {
+    std::cerr << "updated stable mask="
+              << QJsonDocument::fromVariant(mask_state.mask_stack.last())
+                     .toJson(QJsonDocument::Compact)
+                     .toStdString()
+              << " alphaBytes="
+              << mask_state.mask_stack.last()
+                     .toMap()
+                     .value(QStringLiteral("segmentationData"))
+                     .toByteArray()
+                     .size()
+              << '\n';
+    return fail("append-mask recipe patches should update a stable agent mask without duplicating it or discarding its generated matte");
   }
 
   const QVariantMap malformed_mask_payload_patch{
@@ -876,6 +1293,71 @@ int main() {
     return fail("recipe patch diff should include retouch stack changes");
   }
 
+  auto appended_retouch = valid_retouch_stack.first().toMap();
+  appended_retouch.insert(
+      QStringLiteral("id"), QStringLiteral("agent-heal-appended"));
+  appended_retouch.insert(
+      QStringLiteral("name"), QStringLiteral("Agent Heal Appended"));
+  const QVariantMap append_retouch_patch{
+      {QStringLiteral("retouch"),
+       QVariantMap{
+           {QStringLiteral("appendRetouchStack"),
+            QVariantList{appended_retouch}},
+       }},
+  };
+  const auto append_retouch_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          append_retouch_patch, style);
+  if (!append_retouch_validation.valid) {
+    return fail("recipe patch validation should accept append-only retouch edits");
+  }
+  photo_editor::desktop::apply_agent_recipe_patch(
+      &retouch_state, append_retouch_patch);
+  const auto appended_retouch_stack = retouch_state.mask_stack;
+  auto existing_retouch_count = 0;
+  auto appended_retouch_count = 0;
+  for (const auto& value : appended_retouch_stack) {
+    const auto mask = value.toMap();
+    if (mask.value(QStringLiteral("id")).toString() ==
+        QStringLiteral("agent-heal-retouch")) {
+      ++existing_retouch_count;
+    }
+    if (mask.value(QStringLiteral("id")).toString() ==
+        QStringLiteral("agent-heal-appended")) {
+      ++appended_retouch_count;
+    }
+  }
+  if (existing_retouch_count != 1 || appended_retouch_count != 1 ||
+      appended_retouch_stack.size() != 6) {
+    return fail("append-only retouch edits should preserve existing selection and retouch entries");
+  }
+  appended_retouch.insert(QStringLiteral("removeStrength"), 54.0);
+  photo_editor::desktop::apply_agent_recipe_patch(
+      &retouch_state,
+      QVariantMap{
+          {QStringLiteral("retouch"),
+           QVariantMap{
+               {QStringLiteral("appendRetouchStack"),
+                QVariantList{appended_retouch}},
+           }},
+      });
+  auto updated_appended_count = 0;
+  auto updated_appended_strength = 0.0;
+  for (const auto& value : retouch_state.mask_stack) {
+    const auto mask = value.toMap();
+    if (mask.value(QStringLiteral("id")).toString() ==
+        QStringLiteral("agent-heal-appended")) {
+      ++updated_appended_count;
+      updated_appended_strength =
+          mask.value(QStringLiteral("removeStrength")).toDouble();
+    }
+  }
+  if (updated_appended_count != 1 ||
+      !almost_equal(updated_appended_strength, 54.0) ||
+      retouch_state.mask_stack.size() != 6) {
+    return fail("append-only retouch retries should update their own stable id without duplicating edits");
+  }
+
   const QVariantMap malformed_retouch_payload_patch{
       {QStringLiteral("retouch"),
        QVariantMap{
@@ -921,21 +1403,32 @@ int main() {
     return fail("recipe patch validation should enforce retouch modes");
   }
 
+  const QVariantMap retired_noop_raw_patch{
+      {QStringLiteral("raw"),
+       QVariantMap{
+           {QStringLiteral("rawBoost"), 1.2},
+           {QStringLiteral("rawGamutMapping"), false},
+       }},
+  };
+  const auto retired_noop_raw_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(
+          retired_noop_raw_patch, style);
+  if (retired_noop_raw_validation.valid ||
+      !retired_noop_raw_validation.errors.join(QStringLiteral("; "))
+           .contains(QStringLiteral("rawBoost"))) {
+    return fail(
+        "agent recipe patches must reject retired RAW controls that never altered pixels");
+  }
+
   auto coverage_style = layers_style;
   const QVariantMap coverage_patch{
       {QStringLiteral("raw"),
        QVariantMap{
            {QStringLiteral("rawExposure"), 0.4},
-           {QStringLiteral("rawBoost"), 1.2},
-           {QStringLiteral("rawShadowBoost"), 1.4},
-           {QStringLiteral("rawDetail"), 35.0},
-           {QStringLiteral("rawChromaNoiseReduction"), 18.0},
-           {QStringLiteral("rawMoireReduction"), 8.0},
            {QStringLiteral("rawHotDeadPixelCleanup"), 0.41},
            {QStringLiteral("rawFalseColorSuppression"), 0.29},
            {QStringLiteral("rawHighlightRecovery"), false},
            {QStringLiteral("rawDemosaicQuality"), QStringLiteral("Full")},
-           {QStringLiteral("rawGamutMapping"), false},
            {QStringLiteral("rawLensCorrection"), false},
            {QStringLiteral("rawWhiteBalanceOverride"), true},
            {QStringLiteral("rawCameraMatchingLook"), QStringLiteral("Portrait")},
@@ -1210,6 +1703,28 @@ int main() {
                                      .toMap()
                                      .value(QStringLiteral("maskStack"))
                                      .toMap();
+  const auto append_mask_stack_schema =
+      schema_groups.value(QStringLiteral("masks"))
+          .toMap()
+          .value(QStringLiteral("fields"))
+          .toMap()
+          .value(QStringLiteral("appendMaskStack"))
+          .toMap();
+  if (append_mask_stack_schema.value(QStringLiteral("type")).toString() !=
+      QStringLiteral("maskStack")) {
+    return fail("agent recipe patch schema should expose non-destructive append-mask edits");
+  }
+  const auto append_retouch_stack_schema =
+      schema_groups.value(QStringLiteral("retouch"))
+          .toMap()
+          .value(QStringLiteral("fields"))
+          .toMap()
+          .value(QStringLiteral("appendRetouchStack"))
+          .toMap();
+  if (append_retouch_stack_schema.value(QStringLiteral("type")).toString() !=
+      QStringLiteral("retouchStack")) {
+    return fail("agent recipe patch schema should expose non-destructive append-retouch edits");
+  }
   const auto mask_creation_kinds =
       mask_stack_schema.value(QStringLiteral("maskCreationKinds")).toStringList();
   const auto local_adjustment_fields =

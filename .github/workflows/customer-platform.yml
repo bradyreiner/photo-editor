@@ -1,0 +1,29 @@
+name: Customer platform
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/customer-platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: services/customer-platform/package-lock.json
+      - run: npm ci --legacy-peer-deps
+      - run: npm run check
+      - run: npx wrangler deploy --dry-run --outdir /tmp/looksy-worker
+      - name: Check desktop admission and release policy
+        working-directory: .
+        run: |
+          python3 -B scripts/check-customer-edit-admission.py
+          python3 -B scripts/test-appcast-rollout.py

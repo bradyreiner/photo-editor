@@ -1,18 +1,45 @@
-Virel Studio Evaluation License
+Looksy Software License
 
-Copyright (c) 2026 Virel. All rights reserved.
+Copyright (c) 2026 the copyright holders. All rights reserved.
 
-The Virel Studio application, source code, artwork, and accompanying materials
-are proprietary. Permission is granted to install and use an officially
-distributed alpha or beta build for personal evaluation, testing, and feedback.
+Looksy and its accompanying materials are proprietary. The Publisher is the
+legal person or entity identified in the official distribution and, for a paid
+license, on your order. Your photographs and work remain yours.
+
+Evaluation
+
+Without a purchased license, you may install official evaluation builds for
+personal evaluation, testing, and feedback. Evaluation access does not grant a
+license for paid client work or other production business use.
+
+Purchased license
+
+A completed, non-refunded purchase grants the named purchaser a non-exclusive
+license to use the purchased major version for personal and commercial work,
+including client deliverables, on computers that purchaser owns or controls.
+Each additional user needs a separate license. Keep your receipt as proof of
+purchase. A support payment alone does not purchase this license.
+
+The purchased major version may continue to be used without a subscription or
+periodic online activation. Maintenance updates released for that major version
+are included. Future major versions are separate purchases unless your order
+expressly includes them. This does not promise future features, a particular
+update schedule, or indefinite support for operating systems or hardware.
+
+Restrictions and third parties
 
 You may not redistribute, sell, sublicense, reverse engineer except where such
 restriction is prohibited by applicable law, or use the software to provide a
-hosted service without written permission from Virel.
+hosted service without written permission from the Publisher. These restrictions
+do not limit rights granted by applicable third-party licenses, including rights
+to replace or debug modifications to LGPL-covered components where applicable.
 
-Evaluation builds may be incomplete and may change or expire. Back up important
+Pre-release builds may be incomplete and may change. Back up important
 catalogs and original media. The software is provided "as is", without warranty
-of any kind, to the maximum extent permitted by law.
+of any kind, to the maximum extent permitted by law. Mandatory consumer rights
+and remedies are unaffected. Refunds are governed by the policy supplied at
+purchase and applicable law. A fully refunded purchase ends the associated
+paid license; it does not affect ownership of your photographs or exports.
 
 Third-party components remain governed by their respective licenses and are
 identified in THIRD_PARTY_NOTICES.md.

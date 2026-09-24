@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -10,6 +10,7 @@ Rectangle {
     property string subtitle: ""
     property string detail: ""
     property string metadata: ""
+    property string accessibleDescription: ""
     property string iconName: "media"
     property string thumbnailSource: ""
     property bool thumbnailAvailable: thumbnailSource.length > 0
@@ -74,9 +75,9 @@ Rectangle {
                                        : changed ? accent
                                        : theme.textMuted
     readonly property color rowFill: !enabled ? theme.alpha(theme.glassBase, 0.26)
-                                 : selected ? theme.alpha(rowAccent, 0.11)
+                                 : selected ? theme.alpha(theme.glassLift, 0.52)
                                  : hovered ? theme.alpha(theme.glassLift, 0.30)
-                                 : theme.alpha(theme.panelColor, 0.48)
+                                 : theme.alpha(theme.surfaceBottom, 0.48)
     readonly property string stateSummary: {
         let parts = []
         if (locked)
@@ -113,14 +114,15 @@ Rectangle {
     Layout.preferredHeight: rowHeight
     radius: theme.radius8
     color: rowFill
-    border.width: activeFocus ? 2 : (selected || activeMask || hovered ? theme.chromeBorderWidth : 0)
-    border.color: activeFocus ? theme.focusRing
-                              : selected || activeMask ? theme.alpha(rowAccent, 0.64)
+    border.width: activeFocus || selected || activeMask || hovered ? 1 : 0
+    border.color: activeFocus || selected ? theme.controlEdge
+                              : activeMask ? theme.alpha(rowAccent, 0.64)
                                                        : theme.alpha(theme.textMuted, 0.26)
     clip: true
     activeFocusOnTab: true
     Accessible.name: root.title
-    Accessible.description: root.subtitle.length > 0 ? root.subtitle : root.stateSummary
+    Accessible.description: root.accessibleDescription.length > 0 ? root.accessibleDescription
+                               : root.subtitle.length > 0 ? root.subtitle : root.stateSummary
     Accessible.role: Accessible.ListItem
     Accessible.selected: root.selected || root.activeMask
     Keys.onReturnPressed: root.clicked()
@@ -140,6 +142,7 @@ Rectangle {
             return true
         }
 
+        onPressed: root.forceActiveFocus()
         onClicked: root.clicked()
     }
 
@@ -148,8 +151,8 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 3
-        visible: root.selected || root.activeMask || root.solo || root.changed
-        color: root.rowAccent
+        visible: root.activeMask || root.solo || (root.changed && !root.selected)
+        color: root.activeMask ? root.activeMaskAccent : (root.solo ? theme.warning : root.rowAccent)
     }
 
     Rectangle {
@@ -209,7 +212,7 @@ Rectangle {
             radius: 4
             color: theme.alpha(root.thumbnailAccent, 0.12)
             border.width: theme.chromeBorderWidth
-            border.color: root.selected ? theme.alpha(root.thumbnailAccent, 0.52)
+            border.color: root.selected ? theme.controlEdge
                                         : theme.alpha(theme.textMain, 0.20)
             clip: true
 
@@ -234,7 +237,7 @@ Rectangle {
                 name: root.iconName
                 width: root.compact ? 13 : 15
                 height: width
-                color: root.selected ? root.thumbnailAccent : theme.textMain
+                color: theme.textMain
             }
 
             Rectangle {
@@ -270,7 +273,7 @@ Rectangle {
                     objectName: root.titleObjectName
                     Layout.fillWidth: true
                     text: root.title
-                    color: root.selected ? root.accent : theme.textMain
+                    color: theme.textMain
                     font.family: theme.fontUi
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
@@ -294,7 +297,7 @@ Rectangle {
                         Layout.preferredHeight: 18
                         radius: 3
                         color: badgeActive ? theme.alpha(badgeAccent, 0.16)
-                                           : theme.alpha(theme.panelLift, 0.40)
+                                           : theme.alpha(theme.surfaceTop, 0.40)
                         border.width: theme.chromeBorderWidth
                         border.color: badgeActive ? theme.alpha(badgeAccent, 0.48)
                                                   : theme.alpha(theme.textMuted, 0.22)
@@ -385,7 +388,7 @@ Rectangle {
                        ? theme.alpha(root.activeMaskAccent, 0.16)
                        : root.maskLabel !== "No Mask"
                        ? theme.alpha(root.accent, 0.13)
-                       : theme.alpha(theme.panelLift, 0.34)
+                       : theme.alpha(theme.surfaceTop, 0.34)
                 border.width: theme.chromeBorderWidth
                 border.color: root.activeMask
                               ? theme.alpha(root.activeMaskAccent, 0.58)
@@ -448,8 +451,6 @@ Rectangle {
                 text: "More"
                 iconName: "menu"
                 compact: true
-                width: implicitWidth
-                height: implicitHeight
                 enabled: root.menuItems.length > 0
                 tooltipText: root.menuTooltip
                 menuItems: root.menuItems

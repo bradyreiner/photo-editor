@@ -29,7 +29,7 @@ DEFAULT_BUDGETS = (
     StageBudget("brush_page_to_controls_ready", 150.0, 250.0),
     StageBudget("brush_pointer_down_to_live_feedback", 33.0, 50.0),
     StageBudget("brush_release_to_committed_mask", 500.0, 800.0),
-    StageBudget("tool_adjust_to_draft_scheduled", 75.0, 125.0),
+    StageBudget("global_exposure_to_draft_scheduled", 75.0, 125.0),
 )
 
 

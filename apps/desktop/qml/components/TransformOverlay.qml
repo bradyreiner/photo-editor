@@ -13,6 +13,8 @@ Item {
 
     signal scaleEdited(real scale)
     signal rotationEdited(real rotation)
+    signal interactionStarted()
+    signal interactionFinished()
 
     visible: active && imageWidth > 1 && imageHeight > 1
     enabled: visible
@@ -90,6 +92,7 @@ Item {
                 anchors.margins: -8
                 cursorShape: Qt.CrossCursor
                 onPressed: function(mouse) {
+                    root.interactionStarted();
                     const point = rotationHandle.mapToItem(root, mouse.x, mouse.y);
                     dragState.startRotation = root.transformRotation;
                     dragState.startAngle = root.angleForPoint(point);
@@ -101,6 +104,8 @@ Item {
                     const delta = root.angleForPoint(point) - dragState.startAngle;
                     root.rotationEdited(root.clamp(dragState.startRotation + delta, -45, 45));
                 }
+                onReleased: root.interactionFinished()
+                onCanceled: root.interactionFinished()
             }
         }
 
@@ -120,6 +125,7 @@ Item {
                 anchors.margins: -8
                 cursorShape: Qt.SizeFDiagCursor
                 onPressed: function(mouse) {
+                    root.interactionStarted();
                     const point = scaleHandle.mapToItem(root, mouse.x, mouse.y);
                     dragState.startScale = root.boundedScale;
                     dragState.startDistance = Math.max(1, root.distanceForPoint(point));
@@ -131,6 +137,8 @@ Item {
                     const nextScale = dragState.startScale * root.distanceForPoint(point) / dragState.startDistance;
                     root.scaleEdited(root.clamp(nextScale, 0.25, 4));
                 }
+                onReleased: root.interactionFinished()
+                onCanceled: root.interactionFinished()
             }
         }
 

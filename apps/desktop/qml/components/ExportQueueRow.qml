@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -66,6 +66,33 @@ Rectangle {
 
     Theme { id: theme }
 
+    property bool completionObserverReady: false
+    property string observedStatus: ""
+    Component.onCompleted: {
+        observedStatus = statusText
+        completionObserverReady = true
+    }
+    onStatusTextChanged: {
+        const wasPending = observedStatus === "Queued" || observedStatus === "Running" ||
+                           observedStatus === "Saving" || observedStatus === "Paused" ||
+                           observedStatus === "Canceling"
+        if (completionObserverReady && wasPending && statusText === "Completed")
+            deliveryCaustic.complete()
+        observedStatus = statusText
+    }
+    CompletionCaustic {
+        id: deliveryCaustic
+        objectName: "exportRowCompletionCaustic"
+        anchors.right: parent.right
+        anchors.rightMargin: 16
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 3
+        width: 104
+        height: 10
+        duration: 620
+        intensity: 0.82
+    }
+
     function toneAccent(tone) {
         if (tone === "error")
             return theme.error
@@ -81,15 +108,11 @@ Rectangle {
     }
 
     Layout.fillWidth: true
-    implicitHeight: Math.max(64, rowContent.implicitHeight + theme.space16)
-    radius: theme.radius8
+    implicitHeight: Math.max(64, rowContent.implicitHeight + theme.space24)
+    radius: theme.radiusPanel
     color: alternate ? theme.alpha(theme.ink850, 0.62) : theme.alpha(theme.ink900, 0.72)
-    border.width: 1
-    border.color: statusTone === "error"
-                  ? theme.alpha(theme.error, 0.42)
-                  : statusTone === "success"
-                    ? theme.alpha(theme.accentCool500, 0.34)
-                    : theme.alpha(theme.glassEdge, 0.22)
+    border.width: activeFocus ? theme.focusBorderWidth : 0
+    border.color: theme.focusRing
     clip: true
     activeFocusOnTab: true
     Accessible.name: root.title + ", " + root.statusText
@@ -103,7 +126,7 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 2
-        visible: statusTone !== "neutral"
+        visible: statusTone === "error"
         color: root.accent
         opacity: 0.88
     }
@@ -112,6 +135,7 @@ Rectangle {
         id: rowContent
         anchors.fill: parent
         anchors.margins: theme.space8
+        anchors.bottomMargin: theme.space16
         spacing: theme.space6
 
         RowLayout {
@@ -123,7 +147,7 @@ Rectangle {
                 Layout.preferredWidth: 18
                 text: String(root.rowIndex + 1)
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: 10
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -184,7 +208,7 @@ Rectangle {
                     visible: root.subtitle.length > 0
                     text: root.subtitle
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontUi
                     font.pixelSize: 10
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
@@ -202,7 +226,7 @@ Rectangle {
                     visible: root.preset.length > 0
                     text: root.preset
                     color: theme.textMain
-                    font.family: theme.fontMono
+                    font.family: theme.fontUi
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignRight
                     fontSizeMode: Text.HorizontalFit
@@ -215,7 +239,7 @@ Rectangle {
                     visible: root.format.length > 0 || root.sizeLabel.length > 0
                     text: [root.format, root.sizeLabel].filter(function(part) { return part.length > 0 }).join("  ")
                     color: theme.textMuted
-                    font.family: theme.fontMono
+                    font.family: theme.fontUi
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignRight
                     fontSizeMode: Text.HorizontalFit

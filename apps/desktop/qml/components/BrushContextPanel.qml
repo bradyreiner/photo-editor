@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -90,7 +90,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 38
             radius: 3
-            color: theme.alpha(theme.panelLift, 0.88)
+            color: theme.alpha(theme.surfaceTop, 0.88)
             border.width: theme.chromeBorderWidth
             border.color: theme.alpha(theme.glassEdge, 0.42)
 
@@ -254,7 +254,7 @@ Rectangle {
                 iconName: "brush-subtract"
                 role: "segmented"
                 active: root.operation === "subtract"
-                accent: "#d98962"
+                accent: theme.error
                 onClicked: root.eraseRequested()
             }
 
@@ -407,8 +407,9 @@ Rectangle {
             visible: false
             controlHeight: 34
             label: root.exposureLabel
-            from: -2
-            to: 2
+            from: -5
+            to: 5
+            precisionResponse: true
             stepSize: 0.01
             defaultValue: 0
             value: root.exposureValue

@@ -1,0 +1,2 @@
+ALTER TABLE asset_review_states
+ADD COLUMN IF NOT EXISTS color_label TEXT NOT NULL DEFAULT '';

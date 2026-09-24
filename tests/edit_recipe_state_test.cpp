@@ -1,13 +1,21 @@
 #include <cmath>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <vector>
+#include "photo_layer_effect_codec.h"
 
+#include <QByteArray>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
+#include <QSaveFile>
 #include <QTemporaryDir>
 
+#include "edit_adjustment_patch.h"
+#include "edit_history_snapshot_store.h"
 #include "edit_recipe_state.h"
 
 namespace {
@@ -17,6 +25,11 @@ using photo_editor::desktop::EditRecipeValidationResult;
 
 int fail(const char* message) {
   std::cerr << message << '\n';
+  return EXIT_FAILURE;
+}
+
+int fail(const QString& message) {
+  std::cerr << message.toStdString() << '\n';
   return EXIT_FAILURE;
 }
 
@@ -103,6 +116,56 @@ int main() {
   }
   if (parsed_legacy.hsl_channel != QStringLiteral("Blues")) {
     return fail("legacy recipe should still parse color mixer channel");
+  }
+  if (parsed_legacy.camera_profile_rendering_model != QStringLiteral("matrix-only-v1")) {
+    return fail("legacy recipes should retain the matrix-only camera profile rendering model");
+  }
+  if (parsed_legacy.highlight_reconstruction_model !=
+      QStringLiteral("legacy-working-rgb-v1")) {
+    return fail("legacy recipes should retain their working-RGB highlight reconstruction model");
+  }
+  if (parsed_legacy.preview_output_mode !=
+      QStringLiteral("Monitor")) {
+    return fail(
+        "legacy recipes should migrate to the explicit Monitor preview mode");
+  }
+
+  {
+    auto preview_mode_state = EditRecipeState{};
+    preview_mode_state.preview_output_mode =
+        QStringLiteral("Reference Display Target");
+    preview_mode_state.preview_color_space =
+        QStringLiteral("Display P3");
+    const auto serialized =
+        photo_editor::desktop::
+            serialize_edit_recipe_json(
+                preview_mode_state);
+    const auto document =
+        QJsonDocument::fromJson(
+            serialized.toUtf8())
+            .object();
+    if (document
+            .value(QStringLiteral("outputTransform"))
+            .toObject()
+            .value(QStringLiteral("previewMode"))
+            .toString() !=
+            QStringLiteral(
+                "Reference Display Target")) {
+      return fail(
+          "structured recipes should serialize the explicit preview mode");
+    }
+    const auto reparsed =
+        photo_editor::desktop::
+            parse_edit_recipe_json(
+                serialized);
+    if (reparsed.preview_output_mode !=
+            QStringLiteral(
+                "Reference Display Target") ||
+        reparsed.preview_color_space !=
+            QStringLiteral("Display P3")) {
+      return fail(
+          "explicit preview mode and reference target should round-trip");
+    }
   }
 
   struct MatteCleanupDefaultCase final {
@@ -351,9 +414,98 @@ int main() {
   const auto default_output_transform = default_document.value(QStringLiteral("outputTransform")).toObject();
   const auto default_export_transform = default_document.value(QStringLiteral("exportTransform")).toObject();
   const auto default_optics = default_document.value(QStringLiteral("optics")).toObject();
-  if (default_raw_adjustments.size() != 30 || default_global_adjustments.size() != 32 ||
-      default_color_pipeline.size() != 11 || default_optics.size() != 3) {
-    return fail("default recipe should expose the complete raw/global/pipeline/optics adjustment groups");
+  if (default_raw_adjustments.size() != 31 || default_global_adjustments.size() != 32 ||
+      default_color_pipeline.size() != 17 || default_optics.size() != 3) {
+    return fail(QStringLiteral(
+                    "default recipe should expose the complete raw/global/pipeline/optics adjustment groups "
+                    "(actual %1/%2/%3/%4, expected 31/32/17/3)")
+                    .arg(default_raw_adjustments.size())
+                    .arg(default_global_adjustments.size())
+                    .arg(default_color_pipeline.size())
+                    .arg(default_optics.size()));
+  }
+  if (default_color_pipeline.value(QStringLiteral("rendererTransitionLook")).toString() !=
+      QStringLiteral("none")) {
+    return fail("default recipes should serialize an explicit neutral renderer transition look");
+  }
+  if (default_color_pipeline.value(QStringLiteral("cameraProfileRenderingModel")).toString() !=
+      QStringLiteral("dng-profile-v2")) {
+    return fail("new recipes should opt into the complete DNG camera profile rendering model");
+  }
+  auto legacy_named_dng_document = default_document;
+  auto legacy_named_dng_pipeline = default_color_pipeline;
+  legacy_named_dng_pipeline.insert(
+      QStringLiteral("cameraProfileRenderingModel"),
+      QStringLiteral("adobe-dng-profile-v2"));
+  legacy_named_dng_document.insert(
+      QStringLiteral("colorPipeline"),
+      legacy_named_dng_pipeline);
+  const auto legacy_named_dng_json = compact_json(legacy_named_dng_document);
+  const auto legacy_named_dng_validation =
+      photo_editor::desktop::validate_edit_recipe_json(legacy_named_dng_json);
+  const auto legacy_named_dng_state =
+      photo_editor::desktop::parse_edit_recipe_json(legacy_named_dng_json);
+  const auto canonical_dng_document = QJsonDocument::fromJson(
+      photo_editor::desktop::serialize_edit_recipe_json(legacy_named_dng_state)
+          .toUtf8())
+                                          .object();
+  if (!legacy_named_dng_validation.valid ||
+      legacy_named_dng_state.camera_profile_rendering_model !=
+          QStringLiteral("dng-profile-v2") ||
+      canonical_dng_document.value(QStringLiteral("colorPipeline"))
+              .toObject()
+              .value(QStringLiteral("cameraProfileRenderingModel"))
+              .toString() != QStringLiteral("dng-profile-v2")) {
+    return fail("legacy Adobe-branded DNG recipe identifiers should load and serialize canonically");
+  }
+  if (default_color_pipeline.value(QStringLiteral("photographicRenderingModel")).toString() !=
+      QStringLiteral("aces2-ocio-v1")) {
+    return fail("new recipes should use the official ACES 2 output renderer");
+  }
+  auto aces_recipe_state = default_state;
+  aces_recipe_state.photographic_rendering_model = QStringLiteral("ACES 2");
+  const auto aces_recipe_json =
+      photo_editor::desktop::serialize_edit_recipe_json(aces_recipe_state);
+  const auto reparsed_aces_recipe =
+      photo_editor::desktop::parse_edit_recipe_json(aces_recipe_json);
+  if (reparsed_aces_recipe.photographic_rendering_model !=
+          QStringLiteral("aces2-ocio-v1") ||
+      !photo_editor::desktop::validate_edit_recipe_json(aces_recipe_json).valid) {
+    return fail("recipe v12 should normalize, persist, and validate the official ACES 2 renderer");
+  }
+  auto unknown_renderer_state = default_state;
+  unknown_renderer_state.photographic_rendering_model =
+      QStringLiteral("unknown-renderer");
+  const auto reparsed_unknown_renderer =
+      photo_editor::desktop::parse_edit_recipe_json(
+          photo_editor::desktop::serialize_edit_recipe_json(
+              unknown_renderer_state));
+  if (reparsed_unknown_renderer.photographic_rendering_model !=
+      QStringLiteral("aces2-ocio-v1")) {
+    return fail(
+        "unknown renderer names must not opt new recipe writes into the legacy renderer");
+  }
+  if (default_raw_adjustments.value(QStringLiteral("highlightReconstructionModel")).toString() !=
+      QStringLiteral("camera-linear-opposed-v2")) {
+    return fail("new recipes should reconstruct highlights in camera-linear signal space");
+  }
+  const auto default_profile_assets =
+      default_color_pipeline.value(QStringLiteral("profileAssets")).toObject();
+  if (default_profile_assets.size() != 4 ||
+      !default_profile_assets.value(QStringLiteral("input")).toObject().isEmpty() ||
+      !default_profile_assets.value(QStringLiteral("preview")).toObject().isEmpty() ||
+      !default_profile_assets.value(QStringLiteral("proof")).toObject().isEmpty() ||
+      !default_profile_assets.value(QStringLiteral("export")).toObject().isEmpty()) {
+    return fail("default recipe should declare four empty ICC profile asset slots");
+  }
+  const auto default_proofing =
+      default_color_pipeline.value(QStringLiteral("proofing")).toObject();
+  if (default_proofing.size() != 3 ||
+      default_proofing.value(QStringLiteral("renderIntent")).toString() !=
+          QStringLiteral("Relative Colorimetric") ||
+      default_proofing.value(QStringLiteral("simulatePaperWhite")).toBool() ||
+      default_proofing.value(QStringLiteral("simulateInkBlack")).toBool()) {
+    return fail("recipe v12 should persist explicit proof intent and paper/ink simulation policy");
   }
   if (default_curves.value(QStringLiteral("parametric")).toObject().size() != 4 ||
       !default_curves.value(QStringLiteral("channels")).toArray().isEmpty()) {
@@ -374,7 +526,14 @@ int main() {
       !almost_equal(default_crop_transform.value(QStringLiteral("scale")).toDouble(), 1.0)) {
     return fail("default recipe should expose identity crop and transform state");
   }
-  if (default_output_transform.size() != 3 || default_export_transform.size() != 1 ||
+  if (default_output_transform.size() != 4 ||
+      default_output_transform
+              .value(
+                  QStringLiteral(
+                      "previewMode"))
+              .toString() !=
+          QStringLiteral("Monitor") ||
+      default_export_transform.size() != 1 ||
       !almost_equal(default_color_pipeline.value(QStringLiteral("headroom")).toDouble(), 1.0) ||
       !default_color_pipeline.value(QStringLiteral("gamutMappingEnabled")).toBool() ||
       !default_color_pipeline.value(QStringLiteral("blackPointCompensationEnabled")).toBool()) {
@@ -384,7 +543,7 @@ int main() {
       default_output_transform.contains(QStringLiteral("workingColorSpace")) ||
       default_output_transform.contains(QStringLiteral("renderIntent")) ||
       default_output_transform.contains(QStringLiteral("headroom"))) {
-    return fail("default v5 outputTransform should not duplicate export or color pipeline state");
+    return fail("default v6 outputTransform should not duplicate export or color pipeline state");
   }
   if (default_document.value(QStringLiteral("exportTransform"))
           .toObject()
@@ -438,6 +597,144 @@ int main() {
   const auto valid_default_recipe = photo_editor::desktop::validate_edit_recipe_json(default_recipe);
   if (!valid_default_recipe.valid || !valid_default_recipe.errors.isEmpty()) {
     return fail("validator should accept the serialized default structured recipe");
+  }
+  auto invalid_highlight_model_document = default_document;
+  auto invalid_highlight_model_raw =
+      invalid_highlight_model_document.value(QStringLiteral("rawAdjustments")).toObject();
+  invalid_highlight_model_raw.insert(
+      QStringLiteral("highlightReconstructionModel"),
+      QStringLiteral("unversioned-magic"));
+  invalid_highlight_model_document.insert(
+      QStringLiteral("rawAdjustments"),
+      invalid_highlight_model_raw);
+  const auto invalid_highlight_model_validation =
+      photo_editor::desktop::validate_edit_recipe_json(
+          compact_json(invalid_highlight_model_document));
+  if (invalid_highlight_model_validation.valid ||
+      !errors_contain(
+          invalid_highlight_model_validation,
+          QStringLiteral("highlightReconstructionModel"))) {
+    return fail("validator should reject unknown highlight reconstruction models");
+  }
+
+  EditRecipeState profile_asset_state = default_state;
+  profile_asset_state.preview_icc_profile_asset = photo_editor::desktop::IccProfileAssetState{
+      .asset_id = QStringLiteral("icc:display-p3-reference"),
+      .payload_sha256 = QString(64, QLatin1Char('a')),
+      .display_name = QStringLiteral("Display P3 Reference"),
+      .source_uri = QStringLiteral("/profiles/display-p3.icc"),
+      .source_kind = QStringLiteral("user-file"),
+      .byte_size = 4321,
+  };
+  profile_asset_state.export_icc_profile_asset = photo_editor::desktop::IccProfileAssetState{
+      .asset_id = QStringLiteral("icc:print-output-reference"),
+      .payload_sha256 = QString(64, QLatin1Char('b')),
+      .display_name = QStringLiteral("Print Output Reference"),
+      .source_uri = QStringLiteral("/profiles/print-output.icc"),
+      .source_kind = QStringLiteral("managed-project-asset"),
+      .byte_size = 8192,
+  };
+  const auto profile_asset_recipe =
+      photo_editor::desktop::serialize_edit_recipe_json(profile_asset_state);
+  const auto profile_asset_validation =
+      photo_editor::desktop::validate_edit_recipe_json(profile_asset_recipe);
+  const auto reparsed_profile_assets =
+      photo_editor::desktop::parse_edit_recipe_json(profile_asset_recipe);
+  if (!profile_asset_validation.valid || !profile_asset_validation.errors.isEmpty() ||
+      reparsed_profile_assets.preview_icc_profile_asset !=
+          profile_asset_state.preview_icc_profile_asset ||
+      reparsed_profile_assets.export_icc_profile_asset !=
+          profile_asset_state.export_icc_profile_asset ||
+      profile_asset_recipe.contains(QStringLiteral("base64"), Qt::CaseInsensitive)) {
+    return fail("ICC profile asset identity should round-trip without embedding profile bytes");
+  }
+
+  EditRecipeState dcp_asset_state = default_state;
+  dcp_asset_state.input_color_profile = QStringLiteral("Camera DCP: Fixture Camera");
+  dcp_asset_state.camera_dcp_profile_asset = photo_editor::desktop::DcpProfileAssetState{
+      .schema_version = 1,
+      .asset_id = QStringLiteral("dcp:fixture-camera-reference"),
+      .payload_sha256 = QString(64, QLatin1Char('c')),
+      .display_name = QStringLiteral("Fixture Camera Reference"),
+      .source_uri = QStringLiteral("/profiles/fixture-camera.dcp"),
+      .source_kind = QStringLiteral("user-file"),
+      .byte_size = 16384,
+  };
+  const auto dcp_asset_recipe =
+      photo_editor::desktop::serialize_edit_recipe_json(dcp_asset_state);
+  const auto dcp_asset_document = QJsonDocument::fromJson(dcp_asset_recipe.toUtf8()).object();
+  const auto dcp_asset_object = dcp_asset_document.value(QStringLiteral("colorPipeline"))
+                                    .toObject()
+                                    .value(QStringLiteral("cameraProfileAsset"))
+                                    .toObject();
+  const auto dcp_asset_validation =
+      photo_editor::desktop::validate_edit_recipe_json(dcp_asset_recipe);
+  const auto reparsed_dcp_asset =
+      photo_editor::desktop::parse_edit_recipe_json(dcp_asset_recipe);
+  if (!dcp_asset_validation.valid || !dcp_asset_validation.errors.isEmpty() ||
+      dcp_asset_object.value(QStringLiteral("schemaVersion")).toInt() != 1 ||
+      dcp_asset_object.value(QStringLiteral("assetId")).toString() !=
+          dcp_asset_state.camera_dcp_profile_asset.asset_id ||
+      dcp_asset_object.value(QStringLiteral("payloadSha256")).toString() !=
+          dcp_asset_state.camera_dcp_profile_asset.payload_sha256 ||
+      dcp_asset_object.value(QStringLiteral("byteSize")).toVariant().toLongLong() !=
+          dcp_asset_state.camera_dcp_profile_asset.byte_size ||
+      reparsed_dcp_asset.camera_dcp_profile_asset !=
+          dcp_asset_state.camera_dcp_profile_asset ||
+      dcp_asset_recipe.contains(QStringLiteral("base64"), Qt::CaseInsensitive)) {
+    return fail("DCP asset identity should round-trip in the versioned recipe without profile bytes");
+  }
+
+  auto invalid_dcp_document = dcp_asset_document;
+  auto invalid_dcp_pipeline =
+      invalid_dcp_document.value(QStringLiteral("colorPipeline")).toObject();
+  auto invalid_dcp_asset =
+      invalid_dcp_pipeline.value(QStringLiteral("cameraProfileAsset")).toObject();
+  invalid_dcp_asset.insert(QStringLiteral("payload"), QStringLiteral("forbidden"));
+  invalid_dcp_pipeline.insert(QStringLiteral("cameraProfileAsset"), invalid_dcp_asset);
+  invalid_dcp_document.insert(QStringLiteral("colorPipeline"), invalid_dcp_pipeline);
+  const auto embedded_dcp_validation =
+      photo_editor::desktop::validate_edit_recipe_json(compact_json(invalid_dcp_document));
+  if (embedded_dcp_validation.valid ||
+      !errors_contain(embedded_dcp_validation, QStringLiteral("identity, not DCP bytes"))) {
+    return fail("recipe validation should reject embedded DCP profile payloads");
+  }
+
+  invalid_dcp_asset = dcp_asset_object;
+  invalid_dcp_asset.insert(QStringLiteral("schemaVersion"), 2);
+  invalid_dcp_asset.insert(QStringLiteral("payloadSha256"), QStringLiteral("not-a-hash"));
+  invalid_dcp_asset.insert(QStringLiteral("byteSize"), 0);
+  invalid_dcp_pipeline =
+      dcp_asset_document.value(QStringLiteral("colorPipeline")).toObject();
+  invalid_dcp_pipeline.insert(QStringLiteral("cameraProfileAsset"), invalid_dcp_asset);
+  invalid_dcp_document = dcp_asset_document;
+  invalid_dcp_document.insert(QStringLiteral("colorPipeline"), invalid_dcp_pipeline);
+  const auto invalid_dcp_identity_validation =
+      photo_editor::desktop::validate_edit_recipe_json(compact_json(invalid_dcp_document));
+  if (invalid_dcp_identity_validation.valid ||
+      !errors_contain(invalid_dcp_identity_validation, QStringLiteral("schemaVersion must be 1")) ||
+      !errors_contain(invalid_dcp_identity_validation, QStringLiteral("64 hexadecimal characters")) ||
+      !errors_contain(invalid_dcp_identity_validation, QStringLiteral("byteSize must be between"))) {
+    return fail("recipe validation should reject unknown or malformed DCP asset identities");
+  }
+
+  auto embedded_payload_document = QJsonDocument::fromJson(profile_asset_recipe.toUtf8());
+  auto embedded_payload_root = embedded_payload_document.object();
+  auto embedded_payload_pipeline =
+      embedded_payload_root.value(QStringLiteral("colorPipeline")).toObject();
+  auto embedded_payload_assets =
+      embedded_payload_pipeline.value(QStringLiteral("profileAssets")).toObject();
+  auto embedded_preview_profile =
+      embedded_payload_assets.value(QStringLiteral("preview")).toObject();
+  embedded_preview_profile.insert(QStringLiteral("base64"), QStringLiteral("forbidden"));
+  embedded_payload_assets.insert(QStringLiteral("preview"), embedded_preview_profile);
+  embedded_payload_pipeline.insert(QStringLiteral("profileAssets"), embedded_payload_assets);
+  embedded_payload_root.insert(QStringLiteral("colorPipeline"), embedded_payload_pipeline);
+  const auto embedded_payload_validation = photo_editor::desktop::validate_edit_recipe_json(
+      compact_json(embedded_payload_root));
+  if (embedded_payload_validation.valid ||
+      !errors_contain(embedded_payload_validation, QStringLiteral("identity, not ICC bytes"))) {
+    return fail("recipe validation should reject embedded ICC profile payloads");
   }
   if (photo_editor::desktop::normalized_mask_operation(QStringLiteral("exclude")) != QStringLiteral("exclude") ||
       photo_editor::desktop::normalized_mask_operation(QStringLiteral("replace")) != QStringLiteral("replace") ||
@@ -588,8 +885,73 @@ int main() {
       photo_editor::desktop::parse_edit_recipe_json(migrated_legacy_recipe.recipe_json);
   if (!almost_equal(reparsed_migrated_legacy.exposure, parsed_legacy.exposure) ||
       !almost_equal(reparsed_migrated_legacy.linear_mask_position, parsed_legacy.linear_mask_position) ||
-      reparsed_migrated_legacy.crop_preset != parsed_legacy.crop_preset) {
+      reparsed_migrated_legacy.crop_preset != parsed_legacy.crop_preset ||
+      reparsed_migrated_legacy.camera_profile_rendering_model != QStringLiteral("matrix-only-v1") ||
+      reparsed_migrated_legacy.highlight_reconstruction_model !=
+          QStringLiteral("legacy-working-rgb-v1")) {
     return fail("migration should preserve legacy recipe values");
+  }
+  if (migrated_legacy_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("cameraProfileRenderingModel"))
+          .toString() != QStringLiteral("matrix-only-v1")) {
+    return fail("migration should explicitly pin legacy camera profile rendering semantics");
+  }
+
+  auto version_eight_document = default_document;
+  version_eight_document.insert(QStringLiteral("recipeVersion"), 8);
+  auto version_eight_raw =
+      version_eight_document.value(QStringLiteral("rawAdjustments")).toObject();
+  version_eight_raw.remove(QStringLiteral("highlightReconstructionModel"));
+  version_eight_document.insert(QStringLiteral("rawAdjustments"), version_eight_raw);
+  const auto migrated_version_eight = photo_editor::desktop::migrate_edit_recipe_json(
+      compact_json(version_eight_document));
+  const auto reparsed_version_eight = photo_editor::desktop::parse_edit_recipe_json(
+      migrated_version_eight.recipe_json);
+  if (!migrated_version_eight.migrated || migrated_version_eight.source_version != 8 ||
+      !migrated_version_eight.errors.isEmpty() ||
+      reparsed_version_eight.highlight_reconstruction_model !=
+          QStringLiteral("legacy-working-rgb-v1")) {
+    return fail("v8 recipes should migrate with their prior highlight reconstruction pixels pinned");
+  }
+
+  auto version_nine_document = default_document;
+  version_nine_document.insert(QStringLiteral("recipeVersion"), 9);
+  auto version_nine_pipeline =
+      version_nine_document.value(QStringLiteral("colorPipeline")).toObject();
+  version_nine_pipeline.remove(QStringLiteral("photographicRenderingModel"));
+  version_nine_document.insert(QStringLiteral("colorPipeline"), version_nine_pipeline);
+  const auto migrated_version_nine = photo_editor::desktop::migrate_edit_recipe_json(
+      compact_json(version_nine_document));
+  const auto reparsed_version_nine = photo_editor::desktop::parse_edit_recipe_json(
+      migrated_version_nine.recipe_json);
+  if (!migrated_version_nine.migrated || migrated_version_nine.source_version != 9 ||
+      !migrated_version_nine.errors.isEmpty() ||
+      reparsed_version_nine.photographic_rendering_model !=
+          QStringLiteral("legacy-oklch-v1")) {
+    return fail("v9 recipes should migrate with their prior photographic output pixels pinned");
+  }
+
+  auto version_ten_document = default_document;
+  version_ten_document.insert(QStringLiteral("recipeVersion"), 10);
+  auto version_ten_pipeline =
+      version_ten_document.value(QStringLiteral("colorPipeline")).toObject();
+  version_ten_pipeline.insert(
+      QStringLiteral("photographicRenderingModel"),
+      QStringLiteral("aces2-hellwig-jmh-v1"));
+  version_ten_document.insert(
+      QStringLiteral("colorPipeline"),
+      version_ten_pipeline);
+  const auto migrated_version_ten = photo_editor::desktop::migrate_edit_recipe_json(
+      compact_json(version_ten_document));
+  const auto reparsed_version_ten = photo_editor::desktop::parse_edit_recipe_json(
+      migrated_version_ten.recipe_json);
+  if (!migrated_version_ten.migrated ||
+      migrated_version_ten.source_version != 10 ||
+      !migrated_version_ten.errors.isEmpty() ||
+      reparsed_version_ten.photographic_rendering_model !=
+          QStringLiteral("aces2-hellwig-jmh-v1")) {
+    return fail("v10 ACES recipes should retain the native renderer identity and pixels");
   }
 
   const auto migrated_unversioned_recipe = photo_editor::desktop::migrate_edit_recipe_json(
@@ -655,15 +1017,25 @@ int main() {
       expected_sidecar_path) {
     return fail("sidecar path should sit next to the source asset");
   }
-  const auto exported_sidecar =
-      photo_editor::desktop::export_edit_recipe_sidecar(sidecar_asset_path, legacy_recipe);
-  if (!exported_sidecar.ok || exported_sidecar.sidecar_path != expected_sidecar_path ||
-      exported_sidecar.recipe_json.isEmpty()) {
-    return fail("sidecar export should atomically write a migrated recipe");
+  const auto legacy_sidecar_migration =
+      photo_editor::desktop::migrate_edit_recipe_json(
+          legacy_recipe);
+  QSaveFile legacy_sidecar_fixture(
+      expected_sidecar_path);
+  if (!legacy_sidecar_migration.errors.isEmpty() ||
+      !legacy_sidecar_fixture.open(
+          QIODevice::WriteOnly |
+          QIODevice::Text) ||
+      legacy_sidecar_fixture.write(
+          legacy_sidecar_migration.recipe_json.toUtf8()) < 0 ||
+      !legacy_sidecar_fixture.commit()) {
+    return fail("legacy sidecar fixture should be written for compatibility-read proof");
   }
   const auto imported_sidecar =
       photo_editor::desktop::import_edit_recipe_sidecar(sidecar_asset_path);
-  if (!imported_sidecar.ok || imported_sidecar.recipe_json != exported_sidecar.recipe_json) {
+  if (!imported_sidecar.ok ||
+      imported_sidecar.recipe_json !=
+          legacy_sidecar_migration.recipe_json) {
     return fail("sidecar import should read and migrate the stored recipe");
   }
   const auto imported_sidecar_recipe =
@@ -672,10 +1044,23 @@ int main() {
       imported_sidecar_recipe.crop_preset != parsed_legacy.crop_preset) {
     return fail("sidecar import should preserve migrated recipe values");
   }
+  QSaveFile invalid_sidecar_fixture(
+      expected_sidecar_path);
+  if (!invalid_sidecar_fixture.open(
+          QIODevice::WriteOnly |
+          QIODevice::Text) ||
+      invalid_sidecar_fixture.write("{ bad") < 0 ||
+      !invalid_sidecar_fixture.commit()) {
+    return fail("invalid legacy sidecar fixture should be written");
+  }
   const auto invalid_sidecar =
-      photo_editor::desktop::export_edit_recipe_sidecar(sidecar_asset_path, QStringLiteral("{ bad"));
-  if (invalid_sidecar.ok || !errors_contain(invalid_sidecar.errors, QStringLiteral("parse error"))) {
-    return fail("sidecar export should reject invalid recipe JSON");
+      photo_editor::desktop::import_edit_recipe_sidecar(
+          sidecar_asset_path);
+  if (invalid_sidecar.ok ||
+      !errors_contain(
+          invalid_sidecar.errors,
+          QStringLiteral("parse error"))) {
+    return fail("legacy sidecar reader should reject invalid recipe JSON");
   }
 
   const auto invalid_json = photo_editor::desktop::validate_edit_recipe_json(QStringLiteral("{ bad"));
@@ -860,6 +1245,9 @@ int main() {
   color_pipeline_state.monitor_color_profile = QStringLiteral("sRGB");
   color_pipeline_state.soft_proof_enabled = true;
   color_pipeline_state.soft_proof_profile = QStringLiteral("Adobe RGB");
+  color_pipeline_state.proof_render_intent = QStringLiteral("Perceptual");
+  color_pipeline_state.proof_simulate_paper_white = true;
+  color_pipeline_state.proof_simulate_ink_black = true;
   color_pipeline_state.output_color_space = QStringLiteral("Rec.2020");
   color_pipeline_state.output_headroom = 2.0;
   color_pipeline_state.render_intent = QStringLiteral("Relative Colorimetric");
@@ -913,6 +1301,17 @@ int main() {
               .value(QStringLiteral("softProofProfile"))
               .toString() != QStringLiteral("Adobe RGB")) {
     return fail("structured recipe should serialize soft proof output profiles");
+  }
+  const auto serialized_proofing =
+      color_pipeline_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("proofing"))
+          .toObject();
+  if (serialized_proofing.value(QStringLiteral("renderIntent")).toString() !=
+          QStringLiteral("Perceptual") ||
+      !serialized_proofing.value(QStringLiteral("simulatePaperWhite")).toBool() ||
+      !serialized_proofing.value(QStringLiteral("simulateInkBlack")).toBool()) {
+    return fail("structured recipe should serialize explicit proof rendering policy");
   }
   const auto color_pipeline_output_transform =
       color_pipeline_document.value(QStringLiteral("outputTransform")).toObject();
@@ -974,6 +1373,9 @@ int main() {
       reparsed_color_pipeline.monitor_color_profile != QStringLiteral("sRGB") ||
       !reparsed_color_pipeline.soft_proof_enabled ||
       reparsed_color_pipeline.soft_proof_profile != QStringLiteral("Adobe RGB") ||
+      reparsed_color_pipeline.proof_render_intent != QStringLiteral("Perceptual") ||
+      !reparsed_color_pipeline.proof_simulate_paper_white ||
+      !reparsed_color_pipeline.proof_simulate_ink_black ||
       reparsed_color_pipeline.working_color_profile != QStringLiteral("Linear Rec.2020") ||
       reparsed_color_pipeline.output_color_space != QStringLiteral("Rec.2020") ||
       std::abs(reparsed_color_pipeline.output_headroom - 2.0) > 1.0e-9 ||
@@ -1064,7 +1466,8 @@ int main() {
       snapshots.at(0).toObject().value(QStringLiteral("name")).toString() != QStringLiteral("Base tone") ||
       snapshots.at(1).toObject().value(QStringLiteral("branchId")).toString() != QStringLiteral("matte") ||
       snapshots.at(1).toObject().value(QStringLiteral("parentSnapshotId")).toString().isEmpty() ||
-      snapshots.at(1).toObject().value(QStringLiteral("recipeJson")).toString().isEmpty()) {
+      !snapshots.at(1).toObject().value(QStringLiteral("adjustmentPatch")).isObject() ||
+      snapshots.at(1).toObject().contains(QStringLiteral("recipeJson"))) {
     return fail("structured recipe should serialize named snapshots and branch lineage");
   }
   const auto reparsed_snapshots =
@@ -1467,6 +1870,12 @@ int main() {
   base_linear_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("subject-set"));
   base_linear_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Subject"));
   base_linear_mask.insert(QStringLiteral("kind"), QStringLiteral("linear"));
+  base_linear_mask.insert(
+      QStringLiteral("agentVisualReferentId"),
+      QStringLiteral("referent-subject-alpha"));
+  base_linear_mask.insert(
+      QStringLiteral("agentSelectionSource"),
+      QStringLiteral("confirmed-visual-referent"));
   base_linear_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
   base_linear_mask.insert(QStringLiteral("enabled"), true);
   base_linear_mask.insert(QStringLiteral("opacity"), 0.72);
@@ -1504,6 +1913,16 @@ int main() {
   if (stacked_mask_array.size() != 2) {
     return fail("structured recipe should serialize the full ordered mask stack");
   }
+  if (stacked_mask_array.at(0)
+              .toObject()
+              .value(QStringLiteral("agentVisualReferentId"))
+              .toString() != QStringLiteral("referent-subject-alpha") ||
+      stacked_mask_array.at(0)
+              .toObject()
+              .value(QStringLiteral("agentSelectionSource"))
+              .toString() != QStringLiteral("confirmed-visual-referent")) {
+    return fail("structured recipe output should preserve confirmed visual-referent provenance");
+  }
   if (stacked_mask_array.at(1).toObject().value(QStringLiteral("operation")).toString() !=
       QStringLiteral("subtract")) {
     return fail("structured recipe should preserve mask combine operations");
@@ -1531,6 +1950,16 @@ int main() {
     return fail("structured recipe should write explicit typed mask-set schema fields");
   }
   const auto stacked_sources = stacked_mask_sets.at(0).toObject().value(QStringLiteral("sources")).toArray();
+  if (stacked_sources.at(0)
+              .toObject()
+              .value(QStringLiteral("agentVisualReferentId"))
+              .toString() != QStringLiteral("referent-subject-alpha") ||
+      stacked_sources.at(0)
+              .toObject()
+              .value(QStringLiteral("agentSelectionSource"))
+              .toString() != QStringLiteral("confirmed-visual-referent")) {
+    return fail("typed mask sources should preserve confirmed visual-referent provenance");
+  }
   if (stacked_sources.at(0).toObject().value(QStringLiteral("componentSchemaVersion")).toInt() != 1 ||
       stacked_sources.at(1).toObject().value(QStringLiteral("componentSchemaVersion")).toInt() != 1) {
     return fail("structured recipe should write explicit typed mask component schema fields");
@@ -1550,6 +1979,22 @@ int main() {
       !stacked_sources.at(0).toObject().value(QStringLiteral("reusableOutput")).toBool() ||
       stacked_sources.at(0).toObject().value(QStringLiteral("blendMode")).toString() != QStringLiteral("screen")) {
     return fail("grouped mask sources should preserve per-mask opacity, density, invert, reusable output, and blend mode");
+  }
+  const auto reparsed_stacked_masks =
+      photo_editor::desktop::parse_edit_recipe_json(
+          QString::fromUtf8(
+              QJsonDocument(stacked_document).toJson(QJsonDocument::Compact)))
+          .mask_stack;
+  if (reparsed_stacked_masks.isEmpty() ||
+      reparsed_stacked_masks.first()
+              .toMap()
+              .value(QStringLiteral("agentVisualReferentId"))
+              .toString() != QStringLiteral("referent-subject-alpha") ||
+      reparsed_stacked_masks.first()
+              .toMap()
+              .value(QStringLiteral("agentSelectionSource"))
+              .toString() != QStringLiteral("confirmed-visual-referent")) {
+    return fail("structured recipe parsing should round-trip confirmed visual-referent provenance");
   }
   const auto typed_stacked_sets =
       photo_editor::desktop::typed_mask_set_models_from_stack(stacked_mask_state.mask_stack);
@@ -3225,5 +3670,483 @@ int main() {
     return fail("empty group selection should merge the full edit recipe");
   }
 
+  EditRecipeState layer_runtime_state;
+  QVariantMap nested_layer;
+  nested_layer.insert(
+      QStringLiteral("id"),
+      QStringLiteral("nested"));
+  nested_layer.insert(
+      QStringLiteral("kind"),
+      QStringLiteral("adjustment"));
+  nested_layer.insert(
+      QStringLiteral("thumbnailSource"),
+      QStringLiteral(
+          "data:image/png;base64,nested-runtime"));
+  QVariantMap layer_with_runtime;
+  layer_with_runtime.insert(
+      QStringLiteral("id"),
+      QStringLiteral("layer-runtime"));
+  layer_with_runtime.insert(
+      QStringLiteral("kind"),
+      QStringLiteral("content"));
+  layer_with_runtime.insert(
+      QStringLiteral("pixelData"),
+      QByteArrayLiteral(
+          "authoritative-pixels"));
+  layer_with_runtime.insert(
+      QStringLiteral("maskData"),
+      QByteArrayLiteral(
+          "authoritative-mask"));
+  layer_with_runtime.insert(
+      QStringLiteral("thumbnailSource"),
+      QStringLiteral(
+          "data:image/png;base64,top-runtime"));
+  layer_with_runtime.insert(
+      QStringLiteral(
+          "thumbnailQueueStateSignature"),
+      QStringLiteral("transient-queue-state"));
+  layer_with_runtime.insert(
+      QStringLiteral("children"),
+      QVariantList{nested_layer});
+  layer_runtime_state.layers = {
+      layer_with_runtime};
+  const auto layer_runtime_recipe =
+      photo_editor::desktop::
+          serialize_edit_recipe_json(
+              layer_runtime_state);
+  if (layer_runtime_recipe.contains(
+          QStringLiteral(
+              "top-runtime")) ||
+      layer_runtime_recipe.contains(
+          QStringLiteral(
+              "nested-runtime")) ||
+      layer_runtime_recipe.contains(
+          QStringLiteral(
+              "transient-queue-state"))) {
+    return fail(
+        "recipe serialization must recursively exclude thumbnail runtime state");
+  }
+  const auto reparsed_layer_runtime =
+      photo_editor::desktop::
+          parse_edit_recipe_json(
+              layer_runtime_recipe);
+  const auto reparsed_layer =
+      reparsed_layer_runtime.layers
+          .value(0)
+          .toMap();
+  if (reparsed_layer
+              .value(
+                  QStringLiteral(
+                      "pixelData"))
+              .toByteArray() !=
+          QByteArrayLiteral(
+              "authoritative-pixels") ||
+      reparsed_layer
+              .value(
+                  QStringLiteral(
+                      "maskData"))
+              .toByteArray() !=
+          QByteArrayLiteral(
+              "authoritative-mask") ||
+      reparsed_layer
+              .value(
+                  QStringLiteral(
+                      "children"))
+              .toList()
+              .value(0)
+              .toMap()
+              .contains(
+                  QStringLiteral(
+                      "thumbnailSource"))) {
+    return fail(
+        "thumbnail stripping must preserve authoritative recursive layer payloads");
+  }
+
+  EditRecipeState reusable_adjustments;
+  reusable_adjustments.exposure = 0.85;
+  reusable_adjustments.temperature = 14.0;
+  reusable_adjustments.raw_exposure = 0.4;
+  reusable_adjustments.input_color_profile =
+      QStringLiteral("Camera Native");
+  reusable_adjustments.monitor_color_profile =
+      QStringLiteral("/source/display.icc");
+  reusable_adjustments.camera_dcp_profile_asset.asset_id =
+      QStringLiteral("sha256:camera-profile");
+  reusable_adjustments.input_icc_profile_asset.asset_id =
+      QStringLiteral("sha256:input-profile");
+  const auto reusable_patch =
+      photo_editor::desktop::serialize_adjustment_patch(
+          reusable_adjustments,
+          {
+              QStringLiteral("raw"),
+              QStringLiteral("tone"),
+              QStringLiteral("color"),
+          },
+          photo_editor::desktop::
+              AdjustmentPatchScope::SourceAgnostic);
+  if (reusable_patch.contains(
+          QStringLiteral("recipeVersion")) ||
+      reusable_patch.value(
+          QStringLiteral("adjustmentState"))
+          .toObject()
+          .contains(QStringLiteral("recipeVersion")) ||
+      reusable_patch.value(QStringLiteral("format"))
+              .toString() !=
+          QStringLiteral(
+              "photo-editor-adjustment-patch")) {
+    return fail(
+        "reusable settings must use the adjustment patch contract, not an embedded legacy recipe");
+  }
+  const auto decoded_reusable =
+      photo_editor::desktop::parse_adjustment_patch(
+          reusable_patch);
+  if (!decoded_reusable.ok() ||
+      !almost_equal(
+          decoded_reusable.state->exposure, 0.85) ||
+      !almost_equal(
+          decoded_reusable.state->temperature, 14.0) ||
+      !almost_equal(
+          decoded_reusable.state->raw_exposure, 0.4) ||
+      decoded_reusable.state->input_color_profile !=
+          QStringLiteral("Embedded") ||
+      !decoded_reusable.state
+           ->monitor_color_profile.isEmpty() ||
+      decoded_reusable.state
+          ->camera_dcp_profile_asset.configured() ||
+      decoded_reusable.state
+          ->input_icc_profile_asset.configured()) {
+    return fail(
+        "source-agnostic adjustment patches must preserve edits and remove source/profile identities");
+  }
+
+  const auto camera_patch =
+      photo_editor::desktop::serialize_adjustment_patch(
+          reusable_adjustments,
+          {QStringLiteral("raw")},
+          photo_editor::desktop::
+              AdjustmentPatchScope::CameraBound);
+  const auto decoded_camera =
+      photo_editor::desktop::parse_adjustment_patch(
+          camera_patch);
+  if (!decoded_camera.ok() ||
+      decoded_camera.scope !=
+          photo_editor::desktop::
+              AdjustmentPatchScope::CameraBound ||
+      decoded_camera.state
+              ->camera_dcp_profile_asset.asset_id !=
+          QStringLiteral("sha256:camera-profile") ||
+      decoded_camera.state->input_color_profile !=
+          QStringLiteral("Camera Native")) {
+    return fail(
+        "camera-bound defaults must retain their explicit camera profile identity");
+  }
+
+  auto embedded_legacy_patch = reusable_patch;
+  auto embedded_state =
+      embedded_legacy_patch
+          .value(QStringLiteral("adjustmentState"))
+          .toObject();
+  embedded_state.insert(
+      QStringLiteral("recipeVersion"), 12);
+  embedded_legacy_patch.insert(
+      QStringLiteral("adjustmentState"),
+      embedded_state);
+  if (photo_editor::desktop::parse_adjustment_patch(
+          embedded_legacy_patch)
+          .ok()) {
+    return fail(
+        "adjustment patch decoder must reject embedded legacy recipe authority");
+  }
+  const auto canonical_asset_patch =
+      photo_editor::desktop::
+          canonical_asset_bound_adjustment_patch_json(
+              photo_editor::desktop::
+                  serialize_edit_recipe_json(
+                      EditRecipeState{
+                          .exposure = 0.5}));
+  const auto decoded_asset_patch =
+      photo_editor::desktop::
+          parse_adjustment_patch_json(
+              canonical_asset_patch);
+  const auto decoded_empty_payload =
+      photo_editor::desktop::
+          parse_adjustment_payload_or_legacy_recipe(
+              QString{});
+  if (!decoded_asset_patch.ok() ||
+      decoded_asset_patch.scope !=
+          photo_editor::desktop::
+              AdjustmentPatchScope::AssetBound) {
+    return fail(
+        "legacy recipes must normalize to an asset-bound adjustment patch");
+  }
+  if (!decoded_empty_payload.ok() ||
+      decoded_empty_payload.scope !=
+          photo_editor::desktop::
+              AdjustmentPatchScope::AssetBound) {
+    return fail(
+        "an empty adjustment payload must decode as default asset-bound state");
+  }
+  if (!photo_editor::desktop::
+           canonical_asset_bound_adjustment_patch_json(
+               QStringLiteral(
+                   "{\"format\":\"invalid\",\"adjustmentState\":{}}"))
+           .isEmpty()) {
+    return fail(
+        "asset-bound adjustment normalization must reject malformed patch envelopes");
+  }
+
+  EditRecipeState identity_state;
+  identity_state.layers = QVariantList{
+      QVariantMap{
+          {QStringLiteral("id"),
+           QStringLiteral("identity-layer")},
+          {QStringLiteral("pixelData"),
+           QByteArray(16 * 1024, 'a')},
+      },
+  };
+  QVariantList identity_brush_points;
+  identity_brush_points.reserve(10'000);
+  for (int index = 0; index < 10'000; ++index) {
+    identity_brush_points.append(
+        brush_point(
+            static_cast<double>(index) / 10'000.0,
+            0.5,
+            0.1,
+            1.0));
+  }
+  identity_state.mask_stack = QVariantList{
+      QVariantMap{
+          {QStringLiteral("id"),
+           QStringLiteral("identity-mask")},
+          {QStringLiteral("kind"),
+           QStringLiteral("brush")},
+          {QStringLiteral("enabled"), true},
+          {QStringLiteral("brushPoints"),
+           identity_brush_points},
+      },
+  };
+  const auto identity =
+      photo_editor::desktop::
+          adjustment_patch_identity_json(
+              identity_state);
+  if (identity !=
+      photo_editor::desktop::
+          adjustment_patch_identity_json(
+              identity_state)) {
+    return fail(
+        "adjustment patch identity must be deterministic");
+  }
+  if (identity.size() >= 100'000) {
+    return fail(
+        "adjustment patch identity must remain bounded for large masks and binary layers");
+  }
+
+  auto changed_binary_state = identity_state;
+  auto changed_layer =
+      changed_binary_state.layers.first().toMap();
+  auto changed_pixels =
+      changed_layer
+          .value(QStringLiteral("pixelData"))
+          .toByteArray();
+  changed_pixels[changed_pixels.size() - 1] = 'b';
+  changed_layer.insert(
+      QStringLiteral("pixelData"), changed_pixels);
+  changed_binary_state.layers[0] = changed_layer;
+  if (photo_editor::desktop::
+          adjustment_patch_identity_json(
+              changed_binary_state) == identity) {
+    return fail(
+        "adjustment patch identity must detect binary payload changes");
+  }
+
+  auto changed_brush_state = identity_state;
+  auto changed_mask =
+      changed_brush_state.mask_stack.first().toMap();
+  auto changed_points =
+      changed_mask
+          .value(QStringLiteral("brushPoints"))
+          .toList();
+  auto changed_point = changed_points.last().toMap();
+  changed_point.insert(QStringLiteral("x"), 0.25);
+  changed_points[changed_points.size() - 1] =
+      changed_point;
+  changed_mask.insert(
+      QStringLiteral("brushPoints"), changed_points);
+  changed_brush_state.mask_stack[0] = changed_mask;
+  if (photo_editor::desktop::
+          adjustment_patch_identity_json(
+              changed_brush_state) == identity) {
+    return fail(
+        "adjustment patch identity must detect large brush history changes");
+  }
+
+  EditRecipeState multi_mask_identity;
+  std::vector<QString> expected_mask_digests;
+  for (int index = 0; index < 10; ++index) {
+    const QVariantMap mask{{"id", QStringLiteral("identity-multi-%1").arg(index)},
+        {"kind", "brush"}, {"enabled", true}, {"segmentationWidth", 256},
+        {"segmentationHeight", 256}, {"segmentationData", QByteArray(256 * 256, char('a' + index))}};
+    multi_mask_identity.mask_stack.append(mask);
+    expected_mask_digests.push_back(QString::fromLatin1(QCryptographicHash::hash(
+        QJsonDocument::fromVariant(mask).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()));
+  }
+  std::vector<std::future<QString>> identities;
+  for (int worker = 0; worker < 4; ++worker)
+    identities.push_back(std::async(std::launch::async, [multi_mask_identity]() {
+      return photo_editor::desktop::adjustment_patch_identity_json(multi_mask_identity);
+    }));
+  const auto multi_identity = identities.front().get();
+  for (std::size_t worker = 1; worker < identities.size(); ++worker)
+    if (identities[worker].get() != multi_identity) return fail("Concurrent identity cache misses changed the digest");
+  for (const auto& digest : expected_mask_digests)
+    if (!multi_identity.contains(digest)) return fail("Cached mask digest differs from its portable SHA256 oracle");
+  auto changed_multi = multi_mask_identity;
+  auto edited_mask = changed_multi.mask_stack.last().toMap();
+  edited_mask.insert("opacity", 0.4);
+  changed_multi.mask_stack.last() = edited_mask;
+  if (photo_editor::desktop::adjustment_patch_identity_json(changed_multi) == multi_identity ||
+      photo_editor::desktop::adjustment_patch_identity_json(multi_mask_identity) != multi_identity)
+    return fail("Multi-mask identity caching must retain changes and original revisions independently");
+
+  EditRecipeState legacy_adjustments;
+  legacy_adjustments.exposure = 0.5;
+  const auto legacy_stored =
+      photo_editor::desktop::
+          parse_stored_adjustment_state(
+              QJsonObject{
+                  {QStringLiteral("recipeJson"),
+                   photo_editor::desktop::
+                       serialize_edit_recipe_json(
+                           legacy_adjustments)},
+                  {QStringLiteral("adjustmentGroups"),
+                   QJsonArray{
+                       QStringLiteral("tone"),
+                       QStringLiteral("color"),
+                   }},
+              },
+              photo_editor::desktop::
+                  AdjustmentPatchScope::
+                      SourceAgnostic);
+  if (!legacy_stored.state.has_value() ||
+      !legacy_stored.legacy_compatibility_read ||
+      legacy_stored.groups !=
+          QStringList{
+              QStringLiteral("tone"),
+              QStringLiteral("color"),
+          }) {
+    return fail(
+        "legacy preset recipes must remain a clearly marked compatibility read");
+  }
+
+  QTemporaryDir history_store_root;
+  if (!history_store_root.isValid()) {
+    return fail(
+        "history snapshot store test needs a temporary root");
+  }
+  const auto history_store_path =
+      history_store_root.filePath(
+          QStringLiteral("history.json"));
+  photo_editor::desktop::StoredEditHistorySnapshots
+      history_snapshots;
+  history_snapshots.insert(
+      QStringLiteral("asset-history"),
+      {photo_editor::desktop::
+           StoredEditHistorySnapshot{
+               .id = QStringLiteral("snapshot-1"),
+               .name = QStringLiteral("Approved"),
+               .created_at =
+                   QStringLiteral(
+                       "2026-07-30T12:00:00.000Z"),
+               .state = legacy_adjustments,
+           }});
+  if (!photo_editor::desktop::
+          save_edit_history_snapshots(
+              history_store_path,
+              history_snapshots)) {
+    return fail(
+        "history snapshot patch store should save atomically");
+  }
+  QFile history_store_file(history_store_path);
+  if (!history_store_file.open(QIODevice::ReadOnly)) {
+    return fail(
+        "history snapshot patch store should be readable");
+  }
+  const auto history_store_bytes =
+      history_store_file.readAll();
+  if (history_store_bytes.contains("recipeJson") ||
+      !history_store_bytes.contains(
+          "photo-editor-edit-history-snapshots") ||
+      !history_store_bytes.contains(
+          "\"asset-bound\"")) {
+    return fail(
+        "history snapshot store must write asset-bound patches without legacy recipes");
+  }
+  const auto reloaded_history =
+      photo_editor::desktop::
+          load_edit_history_snapshots(
+              history_store_path);
+  if (reloaded_history
+              .value(
+                  QStringLiteral("asset-history"))
+              .size() != 1 ||
+      !almost_equal(
+          reloaded_history
+              .value(
+                  QStringLiteral("asset-history"))
+              .at(0)
+              .state.exposure,
+          0.5)) {
+    return fail(
+        "history snapshot patch store must restore saved state");
+  }
+
+  {
+    using namespace photo_editor::desktop;
+    EditRecipeState effect_state;
+    photo_editor::pipeline::PhotoEffectInstance blur;
+    blur.id = "blur-json";
+    const auto effects = encode_photo_layer_effects(std::vector{blur});
+    effect_state.layers = {QVariantMap{{"id", "layer-json"}, {"kind", "adjustment"},
+        {"enabled", true}, {"effectStack", *effects}}};
+    const auto json = serialize_edit_recipe_json(effect_state);
+    if (QJsonDocument::fromJson(json.toUtf8()).object().value("recipeVersion").toInt() != kPhotoEffectsEditRecipeVersion ||
+        !validate_edit_recipe_json(json).valid || parse_edit_recipe_json(json).layers != effect_state.layers)
+      return fail("photo effects must use version 14 desktop JSON and retain exact layer payloads");
+    const auto migration = migrate_edit_recipe_json(json);
+    if (!migration.errors.empty() || migration.target_version != kPhotoEffectsEditRecipeVersion ||
+        parse_edit_recipe_json(migration.recipe_json).layers != effect_state.layers)
+      return fail("automatic migration must preserve effect-capable schema and payloads");
+    if (migrate_edit_recipe_json(json, 12).errors.empty())
+      return fail("explicit downgrade must not silently drop effect support");
+    auto bad = QJsonDocument::fromJson(json.toUtf8()).object();
+    bad.insert("recipeVersion", 12);
+    if (validate_edit_recipe_json(QString::fromUtf8(QJsonDocument(bad).toJson())).valid)
+      return fail("old desktop envelope must not claim support for effects");
+    bad.insert("recipeVersion", 14);
+    auto rows = bad.value("layers").toArray();
+    auto row = rows[0].toObject();
+    row.insert("effectStack", "malformed");
+    rows[0] = row;
+    bad.insert("layers", rows);
+    if (validate_edit_recipe_json(QString::fromUtf8(QJsonDocument(bad).toJson())).valid)
+      return fail("malformed effect envelope must fail desktop validation");
+    effect_state.layers.clear();
+    if (QJsonDocument::fromJson(serialize_edit_recipe_json(effect_state).toUtf8()).object().value("recipeVersion").toInt() != 12)
+      return fail("effect-free documents must retain version 12 compatibility");
+  }
+  {
+    using namespace photo_editor::desktop;
+    EditRecipeState state;
+    state.layers = {QVariantMap{{"id", "styled-text"}, {"kind", "text"},
+        {"textTypography", QVariantMap{{"version", 1}, {"size", 27.375}}}}};
+    const auto json = serialize_edit_recipe_json(state);
+    if (QJsonDocument::fromJson(json.toUtf8()).object().value("recipeVersion").toInt() != 15 ||
+        !validate_edit_recipe_json(json).valid || parse_edit_recipe_json(json).layers != state.layers)
+      return fail("Typography must retain its opt-in payload in desktop version 15");
+    const auto migration = migrate_edit_recipe_json(json);
+    if (!migration.errors.empty() || migration.target_version != 15 ||
+        !migrate_edit_recipe_json(json, 14).errors.size())
+      return fail("Typography migration must preserve version 15 and reject downgrade");
+  }
   return EXIT_SUCCESS;
 }

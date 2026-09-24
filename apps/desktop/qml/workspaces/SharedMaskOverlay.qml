@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import PhotoEditor
 import "../components"
@@ -28,13 +29,22 @@ Item {
     property real genericTintOpacity: 0.18
     property bool outlineActivationDeferred: false
     property bool selectionFillVisible: false
+    property int externalFocusSerial: 0
+    property var externalFocusRegion: ({})
+    property var externalCandidateRegions: []
+    property bool agentPointTargetingEnabled: false
+    property var agentPointTargetRegion: ({})
+    readonly property bool hasExternalFocusRegion: Number.isFinite(Number(externalFocusRegion.centerX)) &&
+                                                   Number.isFinite(Number(externalFocusRegion.centerY)) &&
+                                                   Number(externalFocusRegion.radiusX || 0) > 0 &&
+                                                   Number(externalFocusRegion.radiusY || 0) > 0
     readonly property int sharedOverlayVersion: 1
     readonly property string overlayGeometryContract: "image-rect-clipped|crop-rotation-aware:v1"
     readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
     readonly property string outlineScaleBucketContract: "outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale"
     readonly property string outlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
     readonly property string handleReadabilityContract: "dual-contrast-halo|large-hit-target|color-independent:v1"
-    readonly property string maskOverlayColorContract: "single-solid-default|custom-color-override|retouch-exception:v1"
+    readonly property string maskOverlayColorContract: "color-safe-overlay:v2|palette:standard-protanopia-deuteranopia-tritanopia-grayscale|operations:add-subtract-intersect|dual-contrast-halo:true|custom-color-override|retouch-exception"
     readonly property string maskRasterPreviewPolicy: "editor-canvas-vector-mask-preview|final-alpha-contour-fill-and-outline:v3"
     readonly property string liveOverlayPerformanceContract: "live-brush-overlay|ui-frame-budget:16ms|point-budget:512|no-preview-render-block:v1"
     readonly property string deepZoomCanvasPerformanceContract: "deep-zoom-canvas:v2|item:viewport-bounded|coordinates:window-translated|hidden:skip-paint"
@@ -54,7 +64,7 @@ Item {
     readonly property string activeOutlineTraceProvider: String(activeOutlineTrace.mask_alpha_provider || "")
     readonly property string activeOutlineTraceProviderSignature: String(activeOutlineTrace.mask_alpha_provider_signature || "")
     readonly property string activeOutlineTraceMaskAlphaSignature: String(activeOutlineTrace.mask_alpha_trace_signature || "")
-    readonly property color defaultMaskOverlayColor: "#24dcc2"
+    readonly property color defaultMaskOverlayColor: theme.selectionPalette("add")
     readonly property color activeOperationColor: resolvedOverlayColor(
                                                       defaultMaskOverlayColor)
     readonly property bool deepZoomCanvasMode: Number(outlineVisualScale || 1.0) > 16.0
@@ -78,6 +88,15 @@ Item {
     }
 
     signal activeOutlineClicked(real normalizedX, real normalizedY)
+    signal agentPointTargeted(real normalizedX, real normalizedY)
+
+    onExternalFocusSerialChanged: {
+        if (externalFocusSerial <= 0 || (!hasExternalFocusRegion && !hasActiveMask))
+            return
+        agentFindingFocusPulse.opacity = 0.94
+        agentFindingFocusPulse.scale = 0.72
+        agentFindingFocusAnimation.restart()
+    }
 
     Timer {
         id: sharedCanvasPaintTimer
@@ -173,12 +192,7 @@ Item {
     }
 
     function selectionOperationOverlayColor(operationName) {
-        const operation = String(operationName || "add").trim().toLowerCase()
-        if (operation === "subtract")
-            return "#ff8a4c"
-        if (operation === "intersect")
-            return "#8fa8ff"
-        return "#24dcc2"
+        return theme.selectionPalette(operationName)
     }
 
     function resolvedOverlayColor(fallbackColor) {
@@ -765,10 +779,14 @@ Item {
                     const cy = root.height * editorPreview.activeMaskCenterY - y
                     const rx = Math.max(12, root.width * editorPreview.activeMaskRadiusX)
                     const ry = Math.max(12, root.height * editorPreview.activeMaskRadiusY)
+                    ctx.save()
+                    ctx.translate(cx, cy)
+                    ctx.rotate(editorPreview.activeMaskRotation * Math.PI / 180.0)
                     ctx.beginPath()
-                    ctx.ellipse(cx, cy, rx, ry, editorPreview.activeMaskRotation * Math.PI / 180.0, 0, Math.PI * 2)
+                    ctx.ellipse(-rx, -ry, rx * 2, ry * 2)
                     ctx.fill()
                     ctx.stroke()
+                    ctx.restore()
                 } else if (editorPreview.activeMaskKind === "linear") {
                     const position = root.height * editorPreview.activeMaskPosition - y
                     const feather = Math.max(18, root.height * editorPreview.activeMaskFeather)
@@ -802,7 +820,7 @@ Item {
 
                 objectName: "polygonEdgeInsertHandle" + edgeIndex
                 readonly property string handleReadabilityContract: root.handleReadabilityContract
-                visible: !parent.activeBrushPainting
+                visible: !maskCanvasOverlay.activeBrushPainting
                 x: viewPoint.x - width / 2
                 y: viewPoint.y - height / 2
                 width: 14
@@ -872,7 +890,7 @@ Item {
 
                 objectName: "polygonVertexHandle" + pointIndex
                 readonly property string handleReadabilityContract: root.handleReadabilityContract
-                visible: !parent.activeBrushPainting
+                visible: !maskCanvasOverlay.activeBrushPainting
                 x: viewPoint.x - width / 2
                 y: viewPoint.y - height / 2
                 width: pointIndex === 0 && editorPreview.activeMaskPolygonPointCount >= 3 ? 18 : 14
@@ -1062,11 +1080,158 @@ Item {
         }
     }
 
+    Repeater {
+        id: agentGroundingCandidateRepeater
+        model: root.externalCandidateRegions || []
+
+        delegate: Item {
+            id: groundingCandidate
+            required property var modelData
+            required property int index
+            readonly property var region: modelData.region || ({})
+            readonly property var leftPoint: root.viewPointForImage(
+                                                      Number(region.centerX || 0.5) - Number(region.radiusX || 0.1),
+                                                      Number(region.centerY || 0.5))
+            readonly property var rightPoint: root.viewPointForImage(
+                                                       Number(region.centerX || 0.5) + Number(region.radiusX || 0.1),
+                                                       Number(region.centerY || 0.5))
+            readonly property var topPoint: root.viewPointForImage(
+                                                     Number(region.centerX || 0.5),
+                                                     Number(region.centerY || 0.5) - Number(region.radiusY || 0.1))
+            readonly property var bottomPoint: root.viewPointForImage(
+                                                        Number(region.centerX || 0.5),
+                                                        Number(region.centerY || 0.5) + Number(region.radiusY || 0.1))
+            objectName: root.overlayObjectName(
+                            "AgentGroundingCandidate" + String(index + 1),
+                            "agentGroundingCandidate" + String(index + 1))
+            x: Math.min(leftPoint.x, rightPoint.x)
+            y: Math.min(topPoint.y, bottomPoint.y)
+            width: Math.max(30, Math.abs(rightPoint.x - leftPoint.x))
+            height: Math.max(30, Math.abs(bottomPoint.y - topPoint.y))
+            visible: root.externalCandidateRegions.length > 1
+            z: 7
+
+            Rectangle {
+                anchors.fill: parent
+                radius: Math.min(width, height) / 2
+                color: theme.alpha(root.accentColor, 0.08)
+                border.width: root.stableOutlineWidth(6)
+                border.color: theme.alpha(theme.ink950, 0.84)
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: root.stableOutlineWidth(4)
+                radius: Math.min(width, height) / 2
+                color: "transparent"
+                border.width: root.stableOutlineWidth(2.5)
+                border.color: root.accentColor
+            }
+
+            Rectangle {
+                objectName: root.overlayObjectName(
+                                "AgentGroundingCandidateBadge" + String(groundingCandidate.index + 1),
+                                "agentGroundingCandidateBadge" + String(groundingCandidate.index + 1))
+                width: 25
+                height: 25
+                radius: 13
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.leftMargin: -6
+                anchors.topMargin: -6
+                color: root.accentColor
+                border.width: 2
+                border.color: theme.ink950
+
+                Text {
+                    anchors.centerIn: parent
+                    text: String(groundingCandidate.index + 1)
+                    color: theme.ink950
+                    font.family: theme.fontMono
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+            }
+        }
+    }
+
+    Item {
+        id: agentFindingFocusPulse
+        objectName: root.overlayObjectName("AgentFindingFocusPulse", "agentFindingFocusPulse")
+        readonly property var focusCenter: root.viewPointForImage(
+                                                    root.hasExternalFocusRegion
+                                                    ? Number(root.externalFocusRegion.centerX)
+                                                    : Number(editorPreview.activeMaskCenterX || 0.5),
+                                                    root.hasExternalFocusRegion
+                                                    ? Number(root.externalFocusRegion.centerY)
+                                                    : Number(editorPreview.activeMaskCenterY || 0.5))
+        width: Math.max(28, root.width *
+                        (root.hasExternalFocusRegion
+                         ? Number(root.externalFocusRegion.radiusX)
+                         : Number(editorPreview.activeMaskRadiusX || 0.1)) * 2)
+        height: Math.max(28, root.height *
+                         (root.hasExternalFocusRegion
+                          ? Number(root.externalFocusRegion.radiusY)
+                          : Number(editorPreview.activeMaskRadiusY || 0.1)) * 2)
+        x: focusCenter.x - width / 2
+        y: focusCenter.y - height / 2
+        opacity: 0
+        scale: 0.72
+        visible: opacity > 0.01 && (root.hasExternalFocusRegion ||
+                 (root.hasActiveMask &&
+                  (editorPreview.activeMaskKind === "radial" ||
+                  editorPreview.activeMaskKind === "ellipse" ||
+                  editorPreview.activeMaskKind === "rectangle")))
+        z: 8
+
+        Canvas {
+            anchors.fill: parent
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onPaint: {
+                const ctx = getContext("2d")
+                ctx.reset()
+                ctx.clearRect(0, 0, width, height)
+                ctx.beginPath()
+                ctx.ellipse(4, 4, Math.max(1, width - 8), Math.max(1, height - 8))
+                ctx.lineWidth = root.stableOutlineWidth(6)
+                ctx.strokeStyle = theme.alpha(theme.ink950, 0.86)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.ellipse(4, 4, Math.max(1, width - 8), Math.max(1, height - 8))
+                ctx.lineWidth = root.stableOutlineWidth(2.5)
+                ctx.strokeStyle = theme.alpha(root.accentColor, 0.98)
+                ctx.stroke()
+            }
+        }
+
+        ParallelAnimation {
+            id: agentFindingFocusAnimation
+            NumberAnimation {
+                target: agentFindingFocusPulse
+                property: "scale"
+                from: 0.72
+                to: 1.18
+                duration: 720
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                target: agentFindingFocusPulse
+                property: "opacity"
+                from: 0.94
+                to: 0
+                duration: 720
+                easing.type: Easing.OutCubic
+            }
+        }
+    }
+
     MouseArea {
         objectName: root.overlayObjectName("SharedActiveOutlineHitTarget", "sharedActiveOutlineHitTarget")
         readonly property string selectionSyncContract: "canvas-outline-hit-test|activeOutlineClicked|selectMaskSetAndLayer:v1"
         anchors.fill: parent
-        enabled: activeSelectionOutline.visible && !root.activeBrushPainting
+        enabled: activeSelectionOutline.visible && !root.activeBrushPainting &&
+                 !root.agentPointTargetingEnabled
         acceptedButtons: Qt.LeftButton
         hoverEnabled: false
         preventStealing: false
@@ -1076,6 +1241,74 @@ Item {
         onClicked: function(mouse) {
             if (!root.selectActiveOutlineFromCanvas(mouse.x, mouse.y))
                 mouse.accepted = false
+        }
+    }
+
+    Rectangle {
+        objectName: root.overlayObjectName("AgentPointTargetMarker",
+                                          "agentPointTargetMarker")
+        readonly property var region: root.agentPointTargetRegion || ({})
+        readonly property real centerX: Number(root.agentPointTargetRegion.centerX || 0.5)
+        readonly property real centerY: Number(root.agentPointTargetRegion.centerY || 0.5)
+        readonly property real radiusX: Math.max(0.02, Number(region.radiusX || 0.12))
+        readonly property real radiusY: Math.max(0.02, Number(region.radiusY || 0.12))
+        readonly property var leftPoint: root.viewPointForImage(centerX - radiusX, centerY)
+        readonly property var rightPoint: root.viewPointForImage(centerX + radiusX, centerY)
+        readonly property var topPoint: root.viewPointForImage(centerX, centerY - radiusY)
+        readonly property var bottomPoint: root.viewPointForImage(centerX, centerY + radiusY)
+        visible: !root.agentPointTargetingEnabled &&
+                 Number.isFinite(Number(root.agentPointTargetRegion.centerX)) &&
+                 Number.isFinite(Number(root.agentPointTargetRegion.centerY))
+        x: Math.min(leftPoint.x, rightPoint.x)
+        y: Math.min(topPoint.y, bottomPoint.y)
+        width: Math.max(42, Math.abs(rightPoint.x - leftPoint.x))
+        height: Math.max(42, Math.abs(bottomPoint.y - topPoint.y))
+        radius: Math.min(width, height) / 2
+        color: theme.alpha(theme.selectionAccent, 0.10)
+        border.width: 2
+        border.color: theme.selectionAccent
+        z: 11
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 6
+            height: 6
+            radius: 3
+            color: theme.selectionAccent
+        }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.bottom
+            anchors.topMargin: 6
+            text: "TARGET SEED"
+            color: theme.selectionAccent
+            font.family: theme.fontMono
+            font.pixelSize: 9
+            font.weight: Font.Bold
+        }
+    }
+
+    MouseArea {
+        objectName: root.overlayObjectName("AgentPointTargetInput",
+                                          "agentPointTargetInput")
+        readonly property string spatialConversationContract:
+            "agent-point-grounded-correction-v2|coordinates:image-normalized|content-snap:confidence-gated|fallback:visible-radial|outside:fail-closed"
+        anchors.fill: parent
+        enabled: root.agentPointTargetingEnabled && !root.activeBrushPainting
+        acceptedButtons: Qt.LeftButton
+        preventStealing: true
+        cursorShape: Qt.CrossCursor
+        z: 12
+
+        onClicked: function(mouse) {
+            const point = root.imagePointFromLocal(mouse.x, mouse.y)
+            if (!point.valid) {
+                mouse.accepted = false
+                return
+            }
+            root.agentPointTargeted(root.clamp(point.x, 0, 1),
+                                    root.clamp(point.y, 0, 1))
         }
     }
 }

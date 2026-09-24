@@ -9,10 +9,11 @@ version="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION")"
 package_dir="${REPO_ROOT}/build/release-macos/package"
 dmg_path=""
 require_signature=0
+allow_no_sparkle=0
 
 usage() {
   cat <<'EOF'
-Verify a packaged macOS Virel Studio DMG.
+Verify a packaged macOS Looksy DMG.
 
 Usage:
   scripts/verify-macos-release.sh [options]
@@ -22,6 +23,7 @@ Options:
   --package-dir PATH    Directory containing the packaged DMG.
   --dmg PATH            DMG path to verify.
   --require-signature   Require Developer ID signature assessment to pass.
+  --allow-no-sparkle    Allow a local package built without the Sparkle updater.
   --help                Show this help text.
 EOF
 }
@@ -56,6 +58,10 @@ while [ "$#" -gt 0 ]; do
       require_signature=1
       shift
       ;;
+    --allow-no-sparkle)
+      allow_no_sparkle=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -67,7 +73,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${dmg_path}" ]; then
-  dmg_path="$(find "${package_dir}" -maxdepth 2 -type f -name "VirelStudio-${version}-Darwin-*.dmg" | head -n 1)"
+  dmg_path="$(find "${package_dir}" -maxdepth 2 -type f -name "Looksy-${version}-Darwin-*.dmg" | head -n 1)"
 fi
 
 [ -f "${dmg_path}" ] || fail "DMG not found: ${dmg_path}"
@@ -91,54 +97,43 @@ trap detach EXIT
 log "Mounting DMG read-only"
 hdiutil attach -readonly -nobrowse -mountpoint "${mount_point}" "${dmg_path}" >/dev/null
 
-app_path="${mount_point}/VirelStudio.app"
-[ -d "${app_path}" ] || fail "VirelStudio.app not found inside DMG"
+app_path="${mount_point}/Looksy.app"
+[ -d "${app_path}" ] || fail "Looksy.app not found inside DMG"
 
-for helper in \
-  VirelStudio \
-  catalog_carousel_documents \
-  catalog_export_jobs \
-  catalog_local_db \
-  catalog_migrate \
-  catalog_snapshot \
-  catalog_state \
-  catalog_timeline_documents \
-  import_catalog \
-  save_edit_recipe; do
+[ -x "${app_path}/Contents/MacOS/Looksy" ] || fail "missing app executable: Looksy"
+while IFS= read -r helper; do
+  [ -n "${helper}" ] || continue
   [ -x "${app_path}/Contents/MacOS/${helper}" ] || fail "missing executable helper: ${helper}"
-done
+done <"${REPO_ROOT}/cmake/CatalogHelpers.txt"
 
-for postgres_tool in initdb pg_ctl pg_dump pg_restore; do
-  [ -x "${app_path}/Contents/Resources/postgres/bin/${postgres_tool}" ] || fail "missing bundled PostgreSQL tool: ${postgres_tool}"
+postgres_root="${app_path}/Contents/Resources/postgres"
+[ -d "${postgres_root}/bin" ] || fail "bundled PostgreSQL runtime is missing"
+for postgres_tool in initdb pg_ctl pg_dump pg_restore postgres psql; do
+  [ -x "${postgres_root}/bin/${postgres_tool}" ] ||
+    fail "bundled PostgreSQL tool is missing: ${postgres_tool}"
 done
+log "Managed PostgreSQL runtime is present"
+
+log "Running isolated managed/external PostgreSQL catalog lifecycle"
+PHOTO_EDITOR_CATALOG_BIN_DIR="${app_path}/Contents/MacOS" \
+PHOTO_EDITOR_POSTGRES_RUNTIME_DIR="${postgres_root}" \
+  "${REPO_ROOT}/scripts/test-postgres-catalog-runtime.sh"
 
 [ -d "${app_path}/Contents/Frameworks" ] || fail "Qt frameworks were not bundled under Contents/Frameworks"
+if [ "${allow_no_sparkle}" -eq 0 ]; then
+  [ -d "${app_path}/Contents/Frameworks/Sparkle.framework" ] || fail "Sparkle.framework was not bundled"
+  feed_url="$(plutil -extract SUFeedURL raw "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
+  public_key="$(plutil -extract SUPublicEDKey raw "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
+  [ -n "${feed_url}" ] || fail "Sparkle feed URL is missing from Info.plist"
+  [ -n "${public_key}" ] || fail "Sparkle public EdDSA key is missing from Info.plist"
+else
+  log "Skipping Sparkle checks for an explicitly allowed local package"
+fi
 [ -f "${app_path}/Contents/Resources/licenses/LICENSE" ] || fail "application license is missing"
 [ -f "${app_path}/Contents/Resources/licenses/THIRD_PARTY_NOTICES.md" ] || fail "third-party notices are missing"
 
-log "Checking Mach-O dynamic library paths"
-while IFS= read -r -d '' candidate; do
-  if file -b "${candidate}" | grep -q 'Mach-O'; then
-    install_id="$(otool -D "${candidate}" 2>/dev/null | sed -n '2p' || true)"
-    bad_paths="$(
-      otool -L "${candidate}" | sed '1d' | awk '{print $1}' |
-        while IFS= read -r dependency; do
-          if [ "${dependency}" = "${install_id}" ]; then
-            continue
-          fi
-          case "${dependency}" in
-            /opt/homebrew/*|/usr/local/opt/*)
-              printf '%s\n' "${dependency}"
-              ;;
-          esac
-        done
-    )"
-    if [ -n "${bad_paths}" ]; then
-      printf '%s\n' "${bad_paths}" >&2
-      fail "${candidate#${app_path}/} still links to local package-manager paths"
-    fi
-  fi
-done < <(find "${app_path}" -type f -print0)
+log "Checking the complete Mach-O dependency closure"
+"${REPO_ROOT}/scripts/verify-macos-bundle-dependencies.sh" "${app_path}"
 
 if [ "${require_signature}" -eq 1 ]; then
   log "Verifying Developer ID signature"

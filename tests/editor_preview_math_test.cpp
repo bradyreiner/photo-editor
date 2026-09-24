@@ -93,7 +93,7 @@ void prepare_extended_headroom(ColorAdjustmentState& state) {
 }
 
 void prepare_filmic_shoulder(ColorAdjustmentState& state) {
-  state.exposure = 0.75;
+  state.input_transform.exposure = 0.75;
 }
 
 using StateSetter = void (*)(ColorAdjustmentState&, double);
@@ -134,7 +134,7 @@ std::vector<ColorPixel> apply_local_adjusted_pixels(
     int height,
     const ColorAdjustmentState& state,
     bool* ok) {
-  *ok = photo_editor::pipeline::apply_local_adjustments_to_adjusted_pixels(
+  *ok = photo_editor::pipeline::apply_local_adjustments_to_look_pixels(
       &pixels,
       width,
       height,
@@ -149,7 +149,7 @@ std::vector<ColorPixel> apply_local_adjusted_pixels(
     const ColorAdjustmentState& state,
     const LocalAdjustmentCoordinateMapping& mapping,
     bool* ok) {
-  *ok = photo_editor::pipeline::apply_local_adjustments_to_adjusted_pixels(
+  *ok = photo_editor::pipeline::apply_local_adjustments_to_look_pixels(
       &pixels,
       width,
       height,
@@ -384,6 +384,14 @@ int main() {
       ColorPixel{.red = 0.95F, .green = 0.95F, .blue = 0.95F, .alpha = 1.0F},
       positive_contrast_state);
   if (!(stop_delta(0.35, positive_mid) > stop_delta(0.95, positive_high) + 0.08)) {
+    std::cerr << "positive contrast response: mid="
+              << luminance(positive_mid)
+              << " mid_stop_delta="
+              << stop_delta(0.35, positive_mid)
+              << " high=" << luminance(positive_high)
+              << " high_stop_delta="
+              << stop_delta(0.95, positive_high)
+              << '\n';
     return fail("positive contrast should focus more on midtones than highlight extremes");
   }
 
@@ -396,6 +404,12 @@ int main() {
       ColorPixel{.red = 0.95F, .green = 0.95F, .blue = 0.95F, .alpha = 1.0F},
       negative_contrast_state);
   if (!(stop_delta(0.35, negative_mid) > stop_delta(0.95, negative_high) + 0.08)) {
+    std::cerr << "negative contrast response: mid="
+              << luminance(negative_mid)
+              << " mid_stop_delta=" << stop_delta(0.35, negative_mid)
+              << " high=" << luminance(negative_high)
+              << " high_stop_delta=" << stop_delta(0.95, negative_high)
+              << '\n';
     return fail("negative contrast should flatten midtones more than bright highlights");
   }
 
@@ -512,20 +526,36 @@ int main() {
   hdr_headroom_state.color_pipeline.output_headroom = 4.0;
   const auto hdr_headroom_mapped = apply_pixels(hdr_scene, 5, 1, hdr_headroom_state);
   const auto hdr_locally_mapped = apply_pixels(hdr_scene, 5, 1, hdr_local_tone_state);
-  if (!(luminance(hdr_global_mapped[2]) <= 1.0 &&
+  if (!(luminance(hdr_global_mapped[2]) > 3.0 &&
         luminance(hdr_locally_mapped[2]) + 0.01 < luminance(hdr_headroom_mapped[2]) &&
         luminance(hdr_locally_mapped[2]) > luminance(hdr_locally_mapped[1]))) {
+    std::cerr
+        << "HDR local tone response: global_peak="
+        << luminance(hdr_global_mapped[2])
+        << " headroom_peak="
+        << luminance(hdr_headroom_mapped[2])
+        << " local_peak="
+        << luminance(hdr_locally_mapped[2])
+        << " local_neighbor="
+        << luminance(hdr_locally_mapped[1])
+        << '\n';
     return fail("HDR local tone mapping should locally compress bright regions while preserving highlight detail order");
   }
 
   ColorAdjustmentState strong_shoulder_state;
-  strong_shoulder_state.exposure = 0.75;
+  strong_shoulder_state.input_transform.exposure = 0.75;
   strong_shoulder_state.filmic_shoulder = 80.0;
   const auto strong_shoulder_adjusted = apply_single_pixel(bright_input, strong_shoulder_state);
   ColorAdjustmentState soft_shoulder_state = strong_shoulder_state;
   soft_shoulder_state.filmic_shoulder = -80.0;
   const auto soft_shoulder_adjusted = apply_single_pixel(bright_input, soft_shoulder_state);
   if (!(luminance(strong_shoulder_adjusted) + 0.02 < luminance(soft_shoulder_adjusted))) {
+    std::cerr
+        << "filmic shoulder response: strong="
+        << luminance(strong_shoulder_adjusted)
+        << " soft="
+        << luminance(soft_shoulder_adjusted)
+        << '\n';
     return fail("filmic shoulder should control highlight rolloff strength");
   }
 
@@ -616,21 +646,21 @@ int main() {
 
   const auto neutral_gray_input = linear_pixel_from_srgb(QColor::fromRgbF(0.5F, 0.5F, 0.5F, 1.0F));
   ColorAdjustmentState warm_wb_state;
-  warm_wb_state.temperature = 100.0;
+  warm_wb_state.input_transform.temperature = 100.0;
   const auto warm_balanced = apply_single_pixel(neutral_gray_input, warm_wb_state);
   if (!(warm_balanced.red > warm_balanced.green && warm_balanced.green > warm_balanced.blue)) {
     return fail("positive temperature should warm neutrals without introducing a purple cast");
   }
 
   ColorAdjustmentState cool_wb_state;
-  cool_wb_state.temperature = -100.0;
+  cool_wb_state.input_transform.temperature = -100.0;
   const auto cool_balanced = apply_single_pixel(neutral_gray_input, cool_wb_state);
   if (!(cool_balanced.blue > cool_balanced.green && cool_balanced.green > cool_balanced.red)) {
     return fail("negative temperature should cool neutrals without introducing a green cast");
   }
 
   ColorAdjustmentState magenta_tint_state;
-  magenta_tint_state.tint = 100.0;
+  magenta_tint_state.input_transform.tint = 100.0;
   const auto magenta_tinted = apply_single_pixel(neutral_gray_input, magenta_tint_state);
   if (!(magenta_tinted.red > magenta_tinted.green &&
         magenta_tinted.blue > magenta_tinted.green)) {
@@ -638,7 +668,7 @@ int main() {
   }
 
   ColorAdjustmentState green_tint_state;
-  green_tint_state.tint = -100.0;
+  green_tint_state.input_transform.tint = -100.0;
   const auto green_tinted = apply_single_pixel(neutral_gray_input, green_tint_state);
   if (!(green_tinted.green > green_tinted.red &&
         green_tinted.green > green_tinted.blue)) {
@@ -660,13 +690,19 @@ int main() {
 
   const std::vector<SignedPixelSliderCase> signed_global_slider_cases = {
       {"temperature", signed_mid_input,
-       [](ColorAdjustmentState& state, double value) { state.temperature = value; },
+       [](ColorAdjustmentState& state, double value) {
+         state.input_transform.temperature = value;
+       },
        red_blue_bias_metric},
       {"tint", signed_mid_input,
-       [](ColorAdjustmentState& state, double value) { state.tint = value; },
+       [](ColorAdjustmentState& state, double value) {
+         state.input_transform.tint = value;
+       },
        magenta_green_bias_metric},
       {"exposure", signed_mid_input,
-       [](ColorAdjustmentState& state, double value) { state.exposure = value / 100.0; }},
+       [](ColorAdjustmentState& state, double value) {
+         state.input_transform.exposure = value / 100.0;
+       }},
       {"brightness", signed_mid_input,
        [](ColorAdjustmentState& state, double value) { state.brightness = value; }},
       {"contrast", signed_light_input,
@@ -783,10 +819,31 @@ int main() {
   gamut_state.saturation = 100.0;
   gamut_state.color_mixer_channels[0].saturation = 100.0;  // Reds channel
   const auto gamut_adjusted = apply_single_pixel(vivid_red_input, gamut_state);
-  if (gamut_adjusted.red < -1e-6 || gamut_adjusted.red > 1.0 + 1e-6 ||
-      gamut_adjusted.green < -1e-6 || gamut_adjusted.green > 1.0 + 1e-6 ||
-      gamut_adjusted.blue < -1e-6 || gamut_adjusted.blue > 1.0 + 1e-6) {
-    return fail("perceptual gamut fitting should keep output RGB in range");
+  if (!std::isfinite(gamut_adjusted.red) ||
+      !std::isfinite(gamut_adjusted.green) ||
+      !std::isfinite(gamut_adjusted.blue) ||
+      !(gamut_adjusted.red > 1.0F ||
+        gamut_adjusted.green < 0.0F ||
+        gamut_adjusted.blue < 0.0F)) {
+    return fail(
+        "scene color edits should preserve finite over-range chroma until photographic output");
+  }
+  std::vector<ColorPixel> gamut_published = {gamut_adjusted};
+  if (!photo_editor::pipeline::apply_color_photographic_output_stage(
+          &gamut_published,
+          1,
+          1,
+          gamut_state.color_pipeline,
+          photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+          photo_editor::pipeline::Aces2OutputLutQuality::Final) ||
+      gamut_published[0].red < -1e-6 ||
+      gamut_published[0].red > 1.0 + 1e-6 ||
+      gamut_published[0].green < -1e-6 ||
+      gamut_published[0].green > 1.0 + 1e-6 ||
+      gamut_published[0].blue < -1e-6 ||
+      gamut_published[0].blue > 1.0 + 1e-6) {
+    return fail(
+        "photographic output should perceptually fit over-range scene chroma to the target");
   }
 
   const auto bright_yellow_input = linear_pixel_from_srgb(QColor::fromRgbF(1.0F, 0.96F, 0.42F, 1.0F));
@@ -801,7 +858,7 @@ int main() {
 
   const auto shoulder_input = linear_pixel_from_srgb(QColor::fromRgbF(0.95F, 0.95F, 0.95F, 1.0F));
   ColorAdjustmentState fast_shoulder_state;
-  fast_shoulder_state.exposure = 1.5;
+  fast_shoulder_state.input_transform.exposure = 1.5;
   const auto fast_shoulder_adjusted = apply_single_pixel(shoulder_input, fast_shoulder_state);
   ColorAdjustmentState slow_shoulder_state = fast_shoulder_state;
   slow_shoulder_state.linear_mask_enabled = true;  // Forces the slow path with a no-op local adjustment.
@@ -811,13 +868,31 @@ int main() {
   }
 
   ColorAdjustmentState exposure_state;
-  exposure_state.exposure = 1.0;
+  exposure_state.input_transform.exposure = 1.0;
   const auto shoulder_adjusted = apply_single_pixel(shoulder_input, exposure_state);
   if (!(luminance(shoulder_adjusted) > luminance(shoulder_input))) {
     return fail("positive exposure should still brighten highlights");
   }
-  if (!(luminance(shoulder_adjusted) < 0.999999)) {
-    return fail("highlight shoulder should keep strong exposure edits below hard clipping");
+  if (!(luminance(shoulder_adjusted) > 1.0)) {
+    return fail(
+        "scene exposure should preserve highlight values above diffuse white");
+  }
+  std::vector<ColorPixel> shoulder_published = {
+      shoulder_input,
+      shoulder_adjusted,
+  };
+  if (!photo_editor::pipeline::apply_color_photographic_output_stage(
+          &shoulder_published,
+          2,
+          1,
+          exposure_state.color_pipeline,
+          photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+          photo_editor::pipeline::Aces2OutputLutQuality::Final) ||
+      !(luminance(shoulder_published[1]) >
+        luminance(shoulder_published[0])) ||
+      !(luminance(shoulder_published[1]) < 0.999999)) {
+    return fail(
+        "photographic output should roll exposed highlights below hard clipping while retaining order");
   }
 
   auto local_stage_state = synthetic_mask_set_state(
@@ -938,7 +1013,7 @@ int main() {
 
   const auto warm_highlight_input = linear_pixel_from_srgb(QColor::fromRgbF(0.95F, 0.88F, 0.76F, 1.0F));
   ColorAdjustmentState warm_highlight_state;
-  warm_highlight_state.exposure = 1.25;
+  warm_highlight_state.input_transform.exposure = 1.25;
   warm_highlight_state.whites = 70.0;
   const auto warm_highlight_adjusted = apply_single_pixel(warm_highlight_input, warm_highlight_state);
   if (!(warm_highlight_adjusted.red > warm_highlight_adjusted.green &&
@@ -1661,6 +1736,45 @@ int main() {
   }
 
   const auto synthetic_mask_pixel = linear_pixel_from_srgb(QColor::fromRgbF(0.34F, 0.34F, 0.34F, 1.0F));
+  // With one analytic source, moving scalar refinement from that source to
+  // its containing set must preserve the exact result. Analytic masks avoid
+  // raster morphology, which intentionally has different spatial semantics.
+  for (const auto invert : {false, true}) {
+    for (const auto expand : {-35.0, 0.0, 40.0}) {
+      for (const auto smooth : {0.0, 65.0}) {
+        for (const auto fine_edge : {0.0, 55.0}) {
+          for (const auto edge_contrast : {0.0, 70.0}) {
+            LocalMask source;
+            source.kind = "linear";
+            source.feather = 0.8;
+            auto refined_set_state = synthetic_mask_set_state({source});
+            auto& set = refined_set_state.local_mask_sets.front();
+            set.selection_invert = invert;
+            set.selection_expand = expand;
+            set.selection_smooth = smooth;
+            set.selection_fine_edge = fine_edge;
+            set.selection_edge_contrast = edge_contrast;
+            set.opacity = 0.7;
+            set.density = 0.6;
+            source.selection_invert = invert;
+            source.selection_expand = expand;
+            source.selection_smooth = smooth;
+            source.selection_fine_edge = fine_edge;
+            source.selection_edge_contrast = edge_contrast;
+            source.opacity = 0.7;
+            source.density = 0.6;
+            const std::vector<ColorPixel> input(9, synthetic_mask_pixel);
+            const auto set_pixels = apply_pixels(input, 9, 1, refined_set_state);
+            const auto source_pixels = apply_pixels(input, 9, 1, synthetic_mask_set_state({source}));
+            for (std::size_t i = 0; i < set_pixels.size(); ++i) {
+              if (!pixel_close(set_pixels[i], source_pixels[i], 1e-7))
+                return fail("scalar mask-set refinement must preserve source refinement arithmetic and order");
+            }
+          }
+        }
+      }
+    }
+  }
   const std::vector<ColorPixel> synthetic_mask_input(4, synthetic_mask_pixel);
   const auto synthetic_neutral_pixels =
       apply_pixels(synthetic_mask_input, 4, 1, ColorAdjustmentState{});
@@ -1689,8 +1803,11 @@ int main() {
         synthetic_mask_pixel,
         synthetic_mask_set_state({source}));
     const auto measured_weight = stop_delta(luminance(synthetic_mask_pixel), output_pixel);
-    if (!almost_equal(measured_weight, test_case.expected_weight, 1e-4)) {
-      return fail("mask opacity and density should resolve to min(base, density) multiplied by opacity");
+    const auto expected_composited_stop =
+        std::log2(1.0 + test_case.expected_weight);
+    if (!almost_equal(measured_weight, expected_composited_stop, 1e-4)) {
+      return fail(
+          "mask density and opacity should composite the full operator result by the resolved alpha");
     }
   }
 
@@ -1702,7 +1819,8 @@ int main() {
       synthetic_mask_pixel,
       synthetic_mask_set_state({inverted_empty_source}));
   const auto source_invert_order_weight = stop_delta(luminance(synthetic_mask_pixel), source_invert_order_pixel);
-  if (!almost_equal(source_invert_order_weight, 0.20, 1e-4)) {
+  if (!almost_equal(
+          source_invert_order_weight, std::log2(1.20), 1e-4)) {
     return fail("source invert should run after matte refinement but before density and opacity");
   }
 
@@ -1762,7 +1880,7 @@ int main() {
   const auto half_subtract_weight = stop_delta(
       luminance(synthetic_mask_pixel),
       source_refined_before_composition_pixels.front());
-  if (!(half_subtract_weight > 0.45 && half_subtract_weight < 0.55) ||
+  if (!almost_equal(half_subtract_weight, std::log2(1.5), 1e-4) ||
       !pixel_close(source_refined_before_composition_pixels.at(1), synthetic_selected_pixels.front()) ||
       !pixel_close(source_refined_before_composition_pixels.at(2), synthetic_neutral_pixels.front())) {
     return fail("source refinement should resolve before add/subtract set composition");
@@ -1800,7 +1918,8 @@ int main() {
   const auto set_invert_unselected_weight = stop_delta(
       luminance(synthetic_mask_pixel),
       set_invert_density_order_pixels.at(1));
-  if (!almost_equal(set_invert_selected_weight, 0.20, 1e-4) ||
+  if (!almost_equal(
+          set_invert_selected_weight, std::log2(1.20), 1e-4) ||
       !almost_equal(set_invert_unselected_weight, 0.0, 1e-4)) {
     return fail("mask-set invert should run after composition but before set density and opacity");
   }
@@ -3566,10 +3685,17 @@ int main() {
       2,
       1,
       masked_lut_layer_state);
+  auto full_lut_layer_state = masked_lut_layer_state;
+  full_lut_layer_state.photo_layers[0].mask_data = {255, 255};
+  std::vector<ColorPixel> full_lut_layer_pixels = {lut_source, lut_source};
+  photo_editor::pipeline::apply_color_adjustments(
+      &full_lut_layer_pixels,
+      2,
+      1,
+      full_lut_layer_state);
   if (!pixel_close(masked_lut_layer_pixels[0], lut_source, 1e-5) ||
-      !(masked_lut_layer_pixels[1].red > 0.95F &&
-        masked_lut_layer_pixels[1].green < 0.05F &&
-        masked_lut_layer_pixels[1].blue < 0.05F)) {
+      !pixel_close(masked_lut_layer_pixels[1], full_lut_layer_pixels[1], 1e-5) ||
+      pixel_close(full_lut_layer_pixels[1], lut_source, 1e-3)) {
     return fail("layer-local LUT stacks should be gated by the layer mask alpha");
   }
   std::vector<ColorPixel> clipped_layer_pixels(
@@ -3707,6 +3833,7 @@ int main() {
   };
   photo_editor::pipeline::apply_color_adjustments(&screen_blend_pixels, 1, 1, screen_blend_state);
   if (!almost_equal(screen_blend_pixels[0].red, 0.75, 1e-5)) {
+    std::cerr << "screen blend response: " << screen_blend_pixels[0].red << '\n';
     return fail("screen blend mode should lighten by inverting multiplied inverse channels");
   }
   std::vector<ColorPixel> normal_adjustment_blend_pixels = {
@@ -3805,6 +3932,11 @@ int main() {
     if (!(blend_pixels[0].red >= 0.0F && blend_pixels[0].red <= 1.0F &&
           blend_pixels[0].green >= 0.0F && blend_pixels[0].green <= 1.0F &&
           blend_pixels[0].blue >= 0.0F && blend_pixels[0].blue <= 1.0F)) {
+      std::cerr
+          << "advanced blend response " << mode << ": "
+          << blend_pixels[0].red << ", "
+          << blend_pixels[0].green << ", "
+          << blend_pixels[0].blue << '\n';
       return fail("advanced blend modes should produce bounded color channels");
     }
   }

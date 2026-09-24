@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -7,10 +7,17 @@ Item {
     id: root
 
     property string label: ""
+    // A symmetric quadratic track gives exposure more room around zero while
+    // keeping the value, keyboard increment and saved recipe in actual EV.
+    property bool precisionResponse: false
+    readonly property real displayedPosition: precisionResponse
+                                              ? (control.mirrored ? 1 - positionForValue(control.value) : positionForValue(control.value))
+                                              : control.visualPosition
     property string valueText: ""
     property color accent: theme.accentWarm400
     property var trackColors: []
     property bool valueInputEnabled: true
+    property bool valueInputDirty: false
     property string valueInputMode: "raw"
     property string disabledReason: ""
     property bool showFullLabelTooltip: true
@@ -24,32 +31,32 @@ Item {
     property bool hasPendingDraggedValue: false
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
     property real modifiedEpsilon: stepSize > 0 ? Math.max(stepSize / 2, 0.0001) : 0.0001
-    property int controlHeight: 44
-    readonly property real sliderScale: Math.max(1.0, controlHeight / 34)
+    property int controlHeight: theme.scaled(38)
+    readonly property real sliderScale: theme.interfaceScale
     readonly property int trackHeight: 3
     readonly property int thumbRestSize: 12
     readonly property int thumbPressedSize: 16
     readonly property int thumbReservedSize: Math.max(thumbRestSize, thumbPressedSize)
     readonly property real thumbVisualScale: thumbReservedSize > 0
-                                       ? (control.pressed ? 1.0 : thumbRestSize / thumbReservedSize)
+                                       ? (root.pressed ? 1.0 : thumbRestSize / thumbReservedSize)
                                        : 1.0
     property alias from: control.from
     property alias to: control.to
     property alias stepSize: control.stepSize
     property alias value: control.value
-    readonly property alias pressed: control.pressed
+    readonly property bool pressed: control.pressed || precisionPointer.gestureActive
     readonly property real normalizedValue: (control.to - control.from) !== 0 ? (control.value - control.from) / (control.to - control.from) : 0
     readonly property real defaultPosition: (control.to - control.from) !== 0 ? clamp((defaultValue - control.from) / (control.to - control.from), 0, 1) : 0
     readonly property bool hasCenterMarker: control.from < 0 && control.to > 0
     readonly property real centerMarkerPosition: hasCenterMarker ? (0 - control.from) / (control.to - control.from) : 0
-    readonly property real fillStartPosition: Math.min(defaultPosition, control.visualPosition)
-    readonly property real fillEndPosition: Math.max(defaultPosition, control.visualPosition)
+    readonly property real fillStartPosition: Math.min(defaultPosition, root.displayedPosition)
+    readonly property real fillEndPosition: Math.max(defaultPosition, root.displayedPosition)
     readonly property bool modified: Math.abs(control.value - defaultValue) > modifiedEpsilon
     readonly property int trackColorCount: Array.isArray(trackColors) ? trackColors.length : 0
     readonly property bool hasTrackGradient: trackColorCount > 1
     readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0
                                                  ? root.label + " - " + root.disabledReason
-                                                 : root.label
+                                                 : root.label + (root.precisionResponse ? " · Shift: fine adjustment · Esc: cancel" : "")
     readonly property string sliderContract: "inspector-slider:v2|label-column:" +
                                              String(labelColumnWidth) +
                                              "|value-column:" +
@@ -75,7 +82,7 @@ Item {
                                              "|drag-commit-interval-ms:" +
                                              String(dragCommitIntervalMs)
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|value-fit:true|tooltip-full:true|accessibility-full:true"
-    readonly property string valueGeometryContract: "slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:44|track-height:3|thumb:12-16|reserved-thumb:16|handle-layout-shift:false"
+    readonly property string valueGeometryContract: "slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:38|track-height:3|thumb:12-16|reserved-thumb:16|handle-layout-shift:false"
     readonly property string resetActionContract: "slider-reset-action:v1|icon-only:true|tooltip-full:true|accessible-label:true|disabled-reason:true|active-when-modified:true|fixed-column:" +
                                                   String(root.resetColumnWidth)
     signal interactionStarted()
@@ -91,6 +98,23 @@ Item {
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    function positionForValue(value) {
+        if (precisionResponse && control.from < 0 && control.to > 0) {
+            const normalized = value < 0 ? value / -control.from : value / control.to
+            return 0.5 + Math.sign(normalized) * Math.sqrt(Math.abs(normalized)) * 0.5
+        }
+        return control.to !== control.from ? (value - control.from) / (control.to - control.from) : 0
+    }
+
+    function valueForPosition(position) {
+        const bounded = clamp(position, 0, 1)
+        if (precisionResponse && control.from < 0 && control.to > 0) {
+            const signed = bounded * 2 - 1
+            return signed * Math.abs(signed) * (signed < 0 ? -control.from : control.to)
+        }
+        return control.from + bounded * (control.to - control.from)
     }
 
     function kelvinToControlValue(kelvin) {
@@ -114,11 +138,14 @@ Item {
     }
 
     function commitValueText() {
-        if (!root.valueInputEnabled)
+        if (!root.valueInputEnabled || !root.valueInputDirty)
             return
         const nextValue = clamp(parsedInputValue(valueField.text), control.from, control.to)
-        valueField.text = root.valueText
+        root.valueInputDirty = false
         root.valueDragged(nextValue)
+        // Typing replaces the text binding. Restore it after committing so a
+        // later focus change cannot submit the previous displayed value.
+        valueField.text = Qt.binding(function() { return root.valueText })
     }
 
     function queueDraggedValue(value) {
@@ -148,6 +175,7 @@ Item {
 
     function testCommitInputText(text) {
         valueField.text = String(text)
+        root.valueInputDirty = true
         commitValueText()
         return control.value
     }
@@ -181,19 +209,19 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             text: root.label
             color: root.enabled
-                   ? (root.modified ? root.accent : (control.pressed ? theme.textStrong : theme.textMain))
+                   ? (root.pressed ? theme.textStrong : theme.textMain)
                    : theme.textFaint
             elide: Text.ElideNone
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8
             maximumLineCount: 1
             font.family: theme.fontUi
-            font.pixelSize: 11
-            font.weight: root.modified || control.pressed ? Font.DemiBold : Font.Bold
+            font.pixelSize: theme.typeLabel
+            font.weight: root.pressed ? Font.DemiBold : Font.Normal
             font.capitalization: Font.MixedCase
             font.letterSpacing: 0
             ToolTip.visible: root.showFullLabelTooltip &&
-                             (labelText.contentWidth > labelText.width + 1 ||
+                             (root.precisionResponse || labelText.contentWidth > labelText.width + 1 ||
                               (!root.enabled && root.disabledReason.length > 0)) &&
                              labelHover.hovered
             ToolTip.text: root.resolvedTooltipText
@@ -229,6 +257,9 @@ Item {
                 rightPadding: 0
                 topPadding: 0
                 bottomPadding: 0
+                Accessible.name: root.label
+                Accessible.description: root.valueText
+                Accessible.role: Accessible.Slider
 
                 background: Item {
                     x: control.leftPadding
@@ -273,6 +304,18 @@ Item {
                                : theme.alpha(theme.ink950, 0.24)
                     }
 
+                    Repeater {
+                        model: root.hasTrackGradient ? 0 : 11
+                        Rectangle {
+                            required property int index
+                            x: parent ? index * (parent.width - 1) / 10 : 0
+                            y: -5
+                            width: 1
+                            height: index % 5 === 0 ? 4 : 2
+                            color: theme.alpha(theme.textMuted, index % 5 === 0 ? 0.42 : 0.22)
+                        }
+                    }
+
                     Rectangle {
                         visible: root.hasCenterMarker
                         x: Math.max(0, Math.min(parent.width - width, root.centerMarkerPosition * parent.width - width / 2))
@@ -296,22 +339,24 @@ Item {
                 }
 
                 handle: Rectangle {
-                    x: control.leftPadding + control.visualPosition * (control.availableWidth - width)
+                    x: control.leftPadding + root.displayedPosition * (control.availableWidth - width)
                     y: control.topPadding + control.availableHeight / 2 - height / 2
                     width: Math.round(root.thumbReservedSize * root.sliderScale)
                     height: width
-                    radius: 4
-                    rotation: 45
+                    radius: width / 2
+                    rotation: 0
                     color: "transparent"
 
                     Rectangle {
                         anchors.centerIn: parent
                         width: parent.width * root.thumbVisualScale
                         height: width
-                        radius: 4
-                        color: control.pressed ? theme.polar : (root.modified ? root.accent : theme.alpha(theme.polar, 0.90))
-                        border.width: 2
-                        border.color: control.pressed ? theme.alpha(root.accent, 0.95) : theme.alpha(theme.ink950, 0.76)
+                        radius: width / 2
+                        color: root.pressed ? theme.polar : "#D1D8E2"
+                        border.width: control.visualFocus ? theme.focusBorderWidth : 2
+                        border.color: control.visualFocus
+                                      ? theme.focusRing
+                                      : (root.pressed ? theme.alpha(root.accent, 0.95) : theme.alpha(theme.ink950, 0.76))
 
                         Behavior on width {
                             NumberAnimation { duration: theme.durationFast }
@@ -320,10 +365,83 @@ Item {
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: control.pressed ? 4 : 3
+                        width: root.pressed ? 4 : 3
                         height: width
                         radius: width / 2
-                        color: control.pressed ? root.accent : theme.alpha(theme.ink950, 0.86)
+                        color: "transparent"
+                    }
+                }
+
+                MouseArea {
+                    id: precisionPointer
+                    objectName: root.objectName.length > 0 ? root.objectName + "PrecisionPointer" : ""
+                    anchors.fill: parent
+                    enabled: root.precisionResponse
+                    preventStealing: true
+                    property bool gestureActive: false
+                    property real startValue: 0
+                    property real pointerPosition: 0
+                    property real lastX: 0
+                    property bool fineMode: false
+                    readonly property real travel: Math.max(1, width - control.handle.width)
+
+                    function finish(cancel) {
+                        if (!gestureActive)
+                            return
+                        gestureActive = false
+                        if (cancel) {
+                            dragCommitTimer.stop()
+                            root.hasPendingDraggedValue = false
+                            root.valueDragged(startValue)
+                        } else {
+                            root.flushQueuedDraggedValue()
+                            dragCommitTimer.stop()
+                        }
+                        root.interactionFinished()
+                    }
+
+                    function publishPosition() {
+                        const value = root.valueForPosition(pointerPosition)
+                        const snapped = root.stepSize > 0 ? Math.round(value / root.stepSize) * root.stepSize : value
+                        root.queueDraggedValue(root.clamp(snapped, root.from, root.to))
+                    }
+
+                    onPressed: function(mouse) {
+                        control.forceActiveFocus()
+                        startValue = control.value
+                        pointerPosition = root.positionForValue(startValue)
+                        lastX = mouse.x
+                        fineMode = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                        gestureActive = true
+                        root.interactionStarted()
+                        const handleCenter = control.handle.width / 2 + root.displayedPosition * travel
+                        if (Math.abs(mouse.x - handleCenter) > control.handle.width && !fineMode) {
+                            pointerPosition = root.clamp((mouse.x - control.handle.width / 2) / travel, 0, 1)
+                            if (control.mirrored)
+                                pointerPosition = 1 - pointerPosition
+                            publishPosition()
+                        }
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!gestureActive)
+                            return
+                        const dx = mouse.x - lastX
+                        lastX = mouse.x
+                        const fine = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                        if (fine !== fineMode) {
+                            fineMode = fine
+                            return
+                        }
+                        pointerPosition = root.clamp(pointerPosition + dx / travel * (control.mirrored ? -1 : 1) * (fine ? 0.1 : 1), 0, 1)
+                        publishPosition()
+                    }
+                    onReleased: finish(false)
+                    onCanceled: finish(true)
+                }
+                Keys.onEscapePressed: function(event) {
+                    if (precisionPointer.gestureActive) {
+                        precisionPointer.finish(true)
+                        event.accepted = true
                     }
                 }
 
@@ -348,20 +466,24 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             horizontalAlignment: Text.AlignRight
             enabled: root.enabled && root.valueInputEnabled
+            Accessible.name: root.label + " value"
+            Accessible.description: "Type a value for " + root.label
             text: root.valueText
-            color: root.enabled ? (root.modified ? root.accent : (root.pressed ? theme.textStrong : "#C8D2DC")) : theme.textFaint
-            font.family: theme.fontMono
-            font.pixelSize: 11
-            font.weight: Font.Bold
+            color: root.enabled ? theme.textStrong : theme.textFaint
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeLabel
+            font.weight: Font.Medium
             font.letterSpacing: 0
+            hoverEnabled: true
             selectByMouse: true
             inputMethodHints: Qt.ImhFormattedNumbersOnly
             background: Rectangle {
-                color: valueField.activeFocus ? theme.alpha(root.accent, 0.08) : "transparent"
-                border.width: valueField.activeFocus || root.modified ? 1 : 0
-                border.color: theme.alpha(root.accent, valueField.activeFocus ? 0.65 : 0.32)
+                color: valueField.activeFocus || valueField.hovered ? theme.ink800 : "transparent"
+                border.width: valueField.activeFocus ? theme.focusBorderWidth : 0
+                border.color: theme.focusRing
                 radius: 2
             }
+            onTextEdited: root.valueInputDirty = true
             onAccepted: root.commitValueText()
             onActiveFocusChanged: {
                 if (!activeFocus)
@@ -377,11 +499,12 @@ Item {
             Layout.preferredHeight: Math.min(root.controlHeight - 8, 30)
             Layout.alignment: Qt.AlignVCenter
             visible: root.showResetButton
+            opacity: root.modified ? 1 : 0
             iconName: "reset"
             compact: true
             showLabel: false
             label: root.label.length > 0 ? "Reset " + root.label : "Reset value"
-            active: root.modified
+            active: false
             enabled: root.enabled && root.modified
             commandEnabled: root.enabled && root.modified
             disabledReason: root.modified ? "" : "Value is already at its default."

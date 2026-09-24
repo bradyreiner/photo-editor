@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -44,10 +44,10 @@ Rectangle {
 
     implicitWidth: brushToolControls.implicitWidth + 18
     implicitHeight: 44
-    radius: 3
-    color: theme.alpha(theme.ink950, 0.84)
-    border.width: theme.chromeBorderWidth
-    border.color: root.accent
+    radius: theme.radiusPanel
+    color: theme.surfaceTop
+    border.width: theme.hairlineWidth
+    border.color: theme.controlEdge
     clip: true
 
     ColumnLayout {
@@ -105,7 +105,7 @@ Rectangle {
                 iconName: "brush-subtract"
                 role: "segmented"
                 active: root.operation === "subtract"
-                accent: "#d98962"
+                accent: theme.error
                 tooltip: "Erase from the active selection."
                 onClicked: root.eraseRequested()
             }

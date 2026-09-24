@@ -4,18 +4,25 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLockFile>
 #include <QMetaObject>
-#include <QProcess>
-#include <QProcessEnvironment>
 #include <QSaveFile>
+#include <QSet>
+#include <QThread>
+
+#include <algorithm>
 
 namespace photo_editor::desktop {
 
 namespace {
+
+constexpr int kJobStoreHelperFinishTimeoutMs = 5000;
 
 JobStoreNotifier* notifier_instance() {
   static auto* notifier = new JobStoreNotifier();
@@ -34,51 +41,16 @@ QString jobs_index_path() {
   return QDir(jobs_root_path()).filePath(QStringLiteral("index.json"));
 }
 
-QString helper_program() {
-  return AppBootstrap::helperProgram(QStringLiteral("catalog_export_jobs"));
-}
-
-QStringList helper_arguments(const QStringList& command_arguments) {
-  return AppBootstrap::helperArguments(QStringLiteral("catalog_export_jobs"), command_arguments);
-}
-
 bool run_helper_command(
     const QStringList& command_arguments,
     QString* output = nullptr,
     QString* error_message = nullptr) {
-  QProcess process;
-  process.setWorkingDirectory(QDir::currentPath());
-  QProcessEnvironment environment;
-  QString environment_error;
-  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
-    if (error_message != nullptr) {
-      *error_message = environment_error;
-    }
-    return false;
-  }
-
-  process.setProcessEnvironment(environment);
-  process.setProcessChannelMode(QProcess::MergedChannels);
-  process.start(helper_program(), helper_arguments(command_arguments));
-  if (!process.waitForStarted(5000)) {
-    if (error_message != nullptr) {
-      *error_message = QStringLiteral("Unable to start job store helper.");
-    }
-    return false;
-  }
-
-  if (!process.waitForFinished(15000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-    if (error_message != nullptr) {
-      const auto helper_output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-      *error_message = helper_output.isEmpty() ? QStringLiteral("Job store helper failed.") : helper_output;
-    }
-    return false;
-  }
-
-  if (output != nullptr) {
-    *output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-  }
-  return true;
+  return AppBootstrap::runCatalogHelper(
+      QStringLiteral("catalog_export_jobs"),
+      command_arguments,
+      output,
+      error_message,
+      kJobStoreHelperFinishTimeoutMs);
 }
 
 QJsonObject object_from_record(const PersistentJobRecord& record) {
@@ -93,7 +65,9 @@ QJsonObject object_from_record(const PersistentJobRecord& record) {
   if (!record.recipe_json.trimmed().isEmpty()) {
     const auto document = QJsonDocument::fromJson(record.recipe_json.toUtf8());
     if (document.isObject()) {
-      object.insert(QStringLiteral("recipe_json"), document.object());
+      object.insert(
+          QStringLiteral("adjustment_payload"),
+          document.object());
     }
   }
   if (!record.metadata_json.isEmpty()) {
@@ -122,7 +96,11 @@ PersistentJobRecord record_from_object(const QJsonObject& object) {
   record.display_label = object.value(QStringLiteral("display_label")).toString().trimmed();
   record.source_path = object.value(QStringLiteral("source_path")).toString().trimmed();
   record.edited_preview_source = object.value(QStringLiteral("edited_preview_source")).toString().trimmed();
-  const auto recipe_value = object.value(QStringLiteral("recipe_json"));
+  const auto recipe_value =
+      object.contains(QStringLiteral("adjustment_payload"))
+          ? object.value(
+                QStringLiteral("adjustment_payload"))
+          : object.value(QStringLiteral("recipe_json"));
   if (recipe_value.isObject()) {
     record.recipe_json = QString::fromUtf8(
         QJsonDocument(recipe_value.toObject()).toJson(QJsonDocument::Compact));
@@ -146,29 +124,53 @@ PersistentJobRecord record_from_object(const QJsonObject& object) {
   return record;
 }
 
-QVector<PersistentJobRecord> load_legacy_records() {
+QVector<PersistentJobRecord> load_legacy_records(QString* error_message = nullptr) {
+  if (error_message != nullptr) error_message->clear();
   QVector<PersistentJobRecord> records;
   QFile file(jobs_index_path());
-  if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
-    return records;
+  if (!file.exists()) return records;
+  if (!file.open(QIODevice::ReadOnly)) {
+    if (error_message != nullptr) *error_message = QStringLiteral("Unable to read legacy job history; existing data was preserved.");
+    return {};
   }
 
   const auto parsed = QJsonDocument::fromJson(file.readAll());
-  if (!parsed.isObject()) {
-    return records;
+  if (file.error() != QFile::NoError || !parsed.isObject() ||
+      !parsed.object().value(QStringLiteral("jobs")).isArray()) {
+    if (error_message != nullptr) *error_message = QStringLiteral("Invalid legacy job history; existing data was preserved.");
+    return {};
   }
 
   const auto items = parsed.object().value(QStringLiteral("jobs")).toArray();
   records.reserve(items.size());
+  QSet<QString> ids;
   for (const auto& value : items) {
-    if (value.isObject()) {
-      const auto record = record_from_object(value.toObject());
-      if (!record.job_id.isEmpty()) {
-        records.push_back(record);
-      }
+    const auto record = record_from_object(value.toObject());
+    if (!value.isObject() || record.job_id.isEmpty() || ids.contains(record.job_id)) {
+      if (error_message != nullptr) *error_message = QStringLiteral("Invalid or duplicate legacy job record; existing data was preserved.");
+      return {};
     }
+    ids.insert(record.job_id);
+    records.push_back(record);
   }
   return records;
+}
+
+bool lock_legacy_file(QLockFile& lock, QString* error_message) {
+  if (QDir().mkpath(jobs_root_path())) {
+    // Keep the existing one-second bound, but retry short file transactions
+    // frequently. A coarse blocking retry can miss most available lock windows
+    // in a burst of independent desktop/helper processes.
+    QElapsedTimer deadline;
+    deadline.start();
+    do {
+      if (lock.tryLock(0)) return true;
+      if (lock.error() != QLockFile::LockFailedError || deadline.elapsed() >= 1000) break;
+      QThread::msleep(5);
+    } while (deadline.elapsed() < 1000);
+  }
+  if (error_message != nullptr) *error_message = QStringLiteral("Legacy job history is busy or unavailable. Try again; existing data was preserved.");
+  return false;
 }
 
 bool save_legacy_records(
@@ -189,13 +191,30 @@ bool save_legacy_records(
     }
     return false;
   }
-  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-  return file.commit();
+  const auto bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+  if (file.write(bytes) != bytes.size() || !file.commit()) {
+    if (error_message != nullptr) *error_message = QStringLiteral("Unable to commit job history; existing data was preserved.");
+    return false;
+  }
+  return true;
 }
 
 bool migrate_legacy_records_to_helper(
-    const QVector<PersistentJobRecord>& legacy_records,
     QString* error_message = nullptr) {
+  // Serialize upload passes across processes without holding the mutation
+  // lock during helper I/O. A contending observer retries rather than uploading
+  // an older snapshot after another pass has already published a newer one.
+  QLockFile migration_lock(QDir(jobs_root_path()).filePath(QStringLiteral("migration.lock")));
+  if (!QDir().mkpath(jobs_root_path()) || !migration_lock.tryLock(0)) {
+    if (error_message != nullptr) *error_message = QStringLiteral("Job history migration is already running or unavailable. Retry recovery.");
+    return false;
+  }
+  QString snapshot_error;
+  const auto legacy_records = load_legacy_records(&snapshot_error);
+  if (!snapshot_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = snapshot_error;
+    return false;
+  }
   if (legacy_records.isEmpty()) {
     return true;
   }
@@ -203,12 +222,44 @@ bool migrate_legacy_records_to_helper(
   for (const auto& record : legacy_records) {
     const auto payload = QString::fromUtf8(
         QJsonDocument(object_from_record(record)).toJson(QJsonDocument::Compact));
-    if (!run_helper_command({QStringLiteral("upsert"), payload}, nullptr, error_message)) {
+    QString output;
+    if (!run_helper_command({QStringLiteral("import-legacy"), payload}, &output, error_message)) {
+      return false;
+    }
+    const auto receipt = QJsonDocument::fromJson(output.toUtf8());
+    const auto accepted = receipt.object().value(QStringLiteral("accepted"));
+    if (!receipt.isObject() || !accepted.isBool() || !accepted.toBool()) {
+      if (error_message != nullptr) {
+        *error_message = accepted.isBool()
+            ? QStringLiteral("Legacy job %1 conflicts with existing catalog history. Both versions were preserved; review the conflict before retrying recovery.").arg(record.job_id)
+            : QStringLiteral("Catalog did not confirm legacy job migration. Local history was preserved.");
+      }
       return false;
     }
   }
 
-  return save_legacy_records({}, error_message);
+  // Helpers run without a local-file lock. At publication, remove only the
+  // exact uploaded versions; concurrent appends and same-ID changes survive.
+  // The short read/modify/write lock is shared with fallback writers/deleters
+  // and works across desktop processes, not just threads in this instance.
+  QHash<QString, QJsonObject> uploaded_versions;
+  uploaded_versions.reserve(legacy_records.size());
+  for (const auto& record : legacy_records)
+    uploaded_versions.insert(record.job_id, object_from_record(record));
+  QLockFile lock(QDir(jobs_root_path()).filePath(QStringLiteral("index.lock")));
+  if (!lock_legacy_file(lock, error_message)) return false;
+  QString read_error;
+  auto remaining = load_legacy_records(&read_error);
+  if (!read_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = read_error;
+    return false;
+  }
+  const auto original_size = remaining.size();
+  remaining.erase(std::remove_if(remaining.begin(), remaining.end(), [&](const auto& current) {
+    const auto uploaded = uploaded_versions.constFind(current.job_id);
+    return uploaded != uploaded_versions.cend() && object_from_record(current) == uploaded.value();
+  }), remaining.end());
+  return remaining.size() == original_size || save_legacy_records(remaining, error_message);
 }
 
 }  // namespace
@@ -223,16 +274,25 @@ JobStoreNotifier* jobStoreNotifier() {
   return notifier_instance();
 }
 
-QVector<PersistentJobRecord> loadPersistedJobRecords() {
-  const auto legacy_records = load_legacy_records();
-  auto migrated_legacy_records = false;
+QVector<PersistentJobRecord> loadPersistedJobRecords(QString* error_message, bool migrate_legacy) {
+  if (error_message != nullptr) error_message->clear();
+  QString legacy_error;
+  auto legacy_records = load_legacy_records(&legacy_error);
+  if (migrate_legacy && !legacy_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = legacy_error;
+    return {};
+  }
   QString migration_error;
-  if (!legacy_records.isEmpty()) {
-    migrated_legacy_records = migrate_legacy_records_to_helper(legacy_records, &migration_error);
+  if (migrate_legacy && !legacy_records.isEmpty()) {
+    (void)migrate_legacy_records_to_helper(&migration_error);
+    legacy_records = load_legacy_records(&legacy_error);
+    if (migration_error.isEmpty()) migration_error = legacy_error;
+    if (migration_error.isEmpty() && !legacy_records.isEmpty())
+      migration_error = QStringLiteral("Job history changed during migration. Retry recovery before starting queued work.");
   }
 
   QString output;
-  if (run_helper_command({QStringLiteral("list")}, &output, nullptr)) {
+  if (run_helper_command({QStringLiteral("list")}, &output, error_message)) {
     const auto parsed = QJsonDocument::fromJson(output.toUtf8());
     if (parsed.isArray()) {
       QVector<PersistentJobRecord> records;
@@ -240,25 +300,53 @@ QVector<PersistentJobRecord> loadPersistedJobRecords() {
       records.reserve(items.size());
       for (const auto& value : items) {
         if (!value.isObject()) {
-          continue;
+          if (error_message != nullptr) {
+            *error_message = QStringLiteral("Catalog returned invalid job history records.");
+          }
+          return legacy_records;
         }
         const auto record = record_from_object(value.toObject());
-        if (!record.job_id.isEmpty()) {
-          records.push_back(record);
+        if (record.job_id.isEmpty()) {
+          if (error_message != nullptr) {
+            *error_message = QStringLiteral("Catalog returned a job history record without an ID.");
+          }
+          return legacy_records;
         }
+        records.push_back(record);
       }
-      if (!records.isEmpty() || legacy_records.isEmpty() || migrated_legacy_records) {
+      if (error_message != nullptr && !migration_error.isEmpty()) *error_message = migration_error;
+      if (!records.isEmpty() || legacy_records.isEmpty()) {
         return records;
       }
+    } else if (error_message != nullptr) {
+      *error_message = QStringLiteral("Catalog returned invalid job history.");
     }
   }
 
   return legacy_records;
 }
 
+qint64 persistentRenderQueueOrderForNewJob(const QString& job_id) {
+  const auto normalized_id = job_id.trimmed();
+  auto maximum_order = 0LL;
+  for (const auto& record : loadPersistedJobRecords()) {
+    if (record.job_kind != QStringLiteral("asset_export") &&
+        record.job_kind != QStringLiteral("timeline_render")) {
+      continue;
+    }
+    const auto order = record.metadata_json.value(QStringLiteral("queueOrder"))
+                           .toVariant().toLongLong();
+    if (!normalized_id.isEmpty() && record.job_id == normalized_id && order > 0) {
+      return order;
+    }
+    maximum_order = qMax(maximum_order, order);
+  }
+  return maximum_order + 1;
+}
+
 bool upsertPersistedJobRecord(
     const PersistentJobRecord& record,
-    QString* error_message) {
+    QString* error_message, bool require_catalog) {
   const auto payload = QString::fromUtf8(
       QJsonDocument(object_from_record(record)).toJson(QJsonDocument::Compact));
   if (run_helper_command({QStringLiteral("upsert"), payload}, nullptr, error_message)) {
@@ -269,7 +357,17 @@ bool upsertPersistedJobRecord(
     return true;
   }
 
-  auto records = load_legacy_records();
+  // Startup recovery must be durable in the selected catalog before dispatch
+  // is enabled. A legacy fallback write is not confirmation of that commit.
+  if (require_catalog) return false;
+  QLockFile lock(QDir(jobs_root_path()).filePath(QStringLiteral("index.lock")));
+  if (!lock_legacy_file(lock, error_message)) return false;
+  QString read_error;
+  auto records = load_legacy_records(&read_error);
+  if (!read_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = read_error;
+    return false;
+  }
   bool updated_existing = false;
   for (auto& existing : records) {
     if (existing.job_id == record.job_id) {
@@ -307,7 +405,14 @@ bool removePersistedJobRecord(
     return true;
   }
 
-  auto records = load_legacy_records();
+  QLockFile lock(QDir(jobs_root_path()).filePath(QStringLiteral("index.lock")));
+  if (!lock_legacy_file(lock, error_message)) return false;
+  QString read_error;
+  auto records = load_legacy_records(&read_error);
+  if (!read_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = read_error;
+    return false;
+  }
   QVector<PersistentJobRecord> next_records;
   next_records.reserve(records.size());
   for (const auto& record : records) {
@@ -325,19 +430,39 @@ bool removePersistedJobRecord(
   return saved;
 }
 
-int recoverInterruptedJobRecords(QString* error_message) {
-  const auto records = loadPersistedJobRecords();
+int recoverInterruptedJobRecords(QString* error_message, bool require_catalog) {
+  if (error_message != nullptr) error_message->clear();
+  QString read_error;
+  const auto records = loadPersistedJobRecords(&read_error);
+  if (require_catalog && !read_error.isEmpty()) {
+    if (error_message != nullptr) *error_message = read_error;
+    return 0;
+  }
   auto recovered = 0;
 
   for (auto record : records) {
-    if (record.status != QStringLiteral("Running")) {
+    const auto interrupted_status = record.status;
+    if (interrupted_status != QStringLiteral("Running") &&
+        interrupted_status != QStringLiteral("Pausing") &&
+        interrupted_status != QStringLiteral("Canceling")) {
       continue;
     }
 
-    if (record.job_kind == QStringLiteral("asset_export") ||
+    if (record.job_kind == QStringLiteral("catalog_import") &&
+        interrupted_status == QStringLiteral("Pausing")) {
+      record.status = QStringLiteral("Paused");
+      record.error_message = QStringLiteral("Paused after the previous app session ended.");
+    } else if (interrupted_status == QStringLiteral("Canceling")) {
+      record.status = QStringLiteral("Canceled");
+      record.error_message = QStringLiteral("Canceled when the previous app session ended.");
+    } else if (record.job_kind == QStringLiteral("asset_export") ||
         record.job_kind == QStringLiteral("timeline_render")) {
-      record.status = QStringLiteral("Queued");
-      record.error_message = QStringLiteral("Recovered after the previous app session ended.");
+      // Export and render jobs write files outside the catalog. Never replay one
+      // merely because the previous process disappeared: the user must confirm
+      // the persisted delivery plan before another externally visible write.
+      record.status = QStringLiteral("Paused");
+      record.error_message = QStringLiteral(
+          "Interrupted before completion. Review the destination, then resume when ready.");
     } else {
       record.status = QStringLiteral("Failed");
       if (record.error_message.trimmed().isEmpty()) {
@@ -348,10 +473,17 @@ int recoverInterruptedJobRecords(QString* error_message) {
     record.progress = 0;
     record.updated_at = iso_now();
     record.metadata_json.insert(QStringLiteral("recoveredAfterRestart"), true);
+    record.metadata_json.insert(QStringLiteral("recoveryAcknowledged"), false);
+    record.metadata_json.insert(QStringLiteral("potentiallyIncomplete"), true);
+    record.metadata_json.insert(
+        QStringLiteral("requiresRecoveryConfirmation"),
+        record.status == QStringLiteral("Paused"));
     record.metadata_json.insert(
         QStringLiteral("recoveryAction"),
-        record.status == QStringLiteral("Queued") ? QStringLiteral("requeued") : QStringLiteral("failed"));
-    if (!upsertPersistedJobRecord(record, error_message)) {
+        record.status == QStringLiteral("Paused")
+            ? QStringLiteral("awaiting-confirmation")
+            : record.status.toLower());
+    if (!upsertPersistedJobRecord(record, error_message, require_catalog)) {
       return recovered;
     }
     ++recovered;
@@ -378,16 +510,22 @@ bool retryPersistedJobRecord(
     }
 
     if (record.job_kind != QStringLiteral("asset_export") &&
+        record.job_kind != QStringLiteral("catalog_import") &&
         record.job_kind != QStringLiteral("timeline_render")) {
       if (error_message != nullptr) {
-        *error_message = QStringLiteral("Only export and timeline render jobs can be retried right now.");
+        *error_message = QStringLiteral("This job type cannot be retried.");
       }
       return false;
     }
 
-    if (record.status != QStringLiteral("Failed")) {
+    const auto canceled_retryable_job =
+        record.status == QStringLiteral("Canceled") &&
+        (record.job_kind == QStringLiteral("catalog_import") ||
+         record.job_kind == QStringLiteral("asset_export") ||
+         record.job_kind == QStringLiteral("timeline_render"));
+    if (record.status != QStringLiteral("Failed") && !canceled_retryable_job) {
       if (error_message != nullptr) {
-        *error_message = QStringLiteral("Only failed jobs can be retried.");
+        *error_message = QStringLiteral("Only failed or canceled imports and renders can be retried.");
       }
       return false;
     }
@@ -447,15 +585,18 @@ bool cancelPersistedJobRecord(
 
     if (record.status == QStringLiteral("Running")) {
       if (record.job_kind != QStringLiteral("asset_export") &&
+          record.job_kind != QStringLiteral("catalog_import") &&
           record.job_kind != QStringLiteral("timeline_render")) {
         if (error_message != nullptr) {
-          *error_message = QStringLiteral("Only queued imports can be canceled right now.");
+          *error_message = QStringLiteral("This running job cannot be canceled safely.");
         }
         return false;
       }
 
       record.status = QStringLiteral("Canceling");
-      record.error_message = QStringLiteral("Cancel requested. Finishing the current render step.");
+      record.error_message = record.job_kind == QStringLiteral("catalog_import")
+                                 ? QStringLiteral("Cancel requested. Stopping at a safe file boundary.")
+                                 : QStringLiteral("Cancel requested. Finishing the current render step.");
       record.updated_at = iso_now();
       record.metadata_json.insert(QStringLiteral("cancellationRequested"), true);
       record.metadata_json.insert(QStringLiteral("cancellationRequestedAt"), record.updated_at);
@@ -475,6 +616,87 @@ bool cancelPersistedJobRecord(
     *error_message = QStringLiteral("The selected job could not be found.");
   }
   return false;
+}
+
+bool pausePersistedJobRecord(const QString& job_id, QString* error_message) {
+  const auto trimmed_id = job_id.trimmed();
+  const auto records = loadPersistedJobRecords();
+  for (auto record : records) {
+    if (record.job_id != trimmed_id) {
+      continue;
+    }
+    if ((record.job_kind != QStringLiteral("catalog_import") &&
+         record.job_kind != QStringLiteral("asset_export") &&
+         record.job_kind != QStringLiteral("timeline_render")) ||
+        (record.status != QStringLiteral("Queued") && record.status != QStringLiteral("Running"))) {
+      if (error_message != nullptr) {
+        *error_message = QStringLiteral("Only queued or running imports and renders can be paused.");
+      }
+      return false;
+    }
+
+    const auto was_running = record.status == QStringLiteral("Running");
+    record.status = was_running ? QStringLiteral("Pausing") : QStringLiteral("Paused");
+    record.error_message = was_running
+                               ? (record.job_kind == QStringLiteral("catalog_import")
+                                      ? QStringLiteral("Pause requested. Stopping at a safe file boundary.")
+                                      : QStringLiteral("Pause requested. Finishing the current render safely."))
+                               : QStringLiteral("Paused before processing started.");
+    record.updated_at = iso_now();
+    record.metadata_json.insert(QStringLiteral("pauseRequested"), was_running);
+    record.metadata_json.insert(QStringLiteral("pauseRequestedAt"), record.updated_at);
+    return upsertPersistedJobRecord(record, error_message);
+  }
+  if (error_message != nullptr) {
+    *error_message = QStringLiteral("The selected job could not be found.");
+  }
+  return false;
+}
+
+bool resumePersistedJobRecord(const QString& job_id, QString* error_message) {
+  const auto trimmed_id = job_id.trimmed();
+  const auto records = loadPersistedJobRecords();
+  for (auto record : records) {
+    if (record.job_id != trimmed_id) {
+      continue;
+    }
+    if ((record.job_kind != QStringLiteral("catalog_import") &&
+         record.job_kind != QStringLiteral("asset_export") &&
+         record.job_kind != QStringLiteral("timeline_render")) ||
+        record.status != QStringLiteral("Paused")) {
+      if (error_message != nullptr) {
+        *error_message = QStringLiteral("Only paused imports and renders can be resumed.");
+      }
+      return false;
+    }
+
+    record.status = QStringLiteral("Queued");
+    record.error_message.clear();
+    record.progress = 0;
+    record.updated_at = iso_now();
+    record.metadata_json.remove(QStringLiteral("pauseRequested"));
+    if (record.metadata_json.value(QStringLiteral("requiresRecoveryConfirmation")).toBool()) {
+      record.metadata_json.insert(QStringLiteral("requiresRecoveryConfirmation"), false);
+      record.metadata_json.insert(
+          QStringLiteral("recoveryAction"),
+          QStringLiteral("resumed-after-confirmation"));
+    }
+    const auto resume_count = record.metadata_json.value(QStringLiteral("resumeCount")).toInt();
+    record.metadata_json.insert(QStringLiteral("resumeCount"), resume_count + 1);
+    return upsertPersistedJobRecord(record, error_message);
+  }
+  if (error_message != nullptr) {
+    *error_message = QStringLiteral("The selected job could not be found.");
+  }
+  return false;
+}
+
+bool pausePersistedImportJobRecord(const QString& job_id, QString* error_message) {
+  return pausePersistedJobRecord(job_id, error_message);
+}
+
+bool resumePersistedImportJobRecord(const QString& job_id, QString* error_message) {
+  return resumePersistedJobRecord(job_id, error_message);
 }
 
 }  // namespace photo_editor::desktop

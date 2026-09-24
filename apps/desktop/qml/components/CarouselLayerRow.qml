@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -12,6 +12,7 @@ Rectangle {
     property bool primarySelected: false
     property bool hidden: false
     property bool locked: false
+    property bool grouped: false
     property color accent: theme.accentCool400
     readonly property string carouselLayerRowContract: "carousel-layer-row:v2|zones:primary-edge-label-state-secondary-edge|selected:" +
                                                        String(selected) +
@@ -26,6 +27,7 @@ Rectangle {
     readonly property string zoneContract: "carousel-layer-row-zones:v2|primary-edge|type-icon|label|hidden-state|locked-state|secondary-edge"
     readonly property string statePriorityContract: "layer-row-state-priority:v2|primary-selected>multi-selected-secondary>locked>hidden>hover"
     readonly property string interactionContract: "carousel-layer-row-interaction:v1|keyboard:true|multi-select:true|canvas-drag:true|state-icons:true|tooltip-full:true"
+    readonly property string interactionStateContract: theme.interactionStateContract
 
     signal activated(int modifiers)
 
@@ -37,6 +39,8 @@ Rectangle {
             return "edit"
         if (value === "shape")
             return "grid"
+        if (value === "brush")
+            return "edit"
         if (value === "video")
             return "source"
         return "media"
@@ -48,6 +52,8 @@ Rectangle {
            ? theme.alpha(accent, 0.14)
            : selected
              ? theme.alpha(accent, 0.07)
+           : rowTap.pressed
+             ? theme.alpha(accent, 0.12)
            : hidden
              ? theme.alpha(theme.ink900, 0.40)
              : rowHover.hovered
@@ -58,8 +64,11 @@ Rectangle {
     clip: true
     activeFocusOnTab: true
     Accessible.name: label
-    Accessible.description: (hidden ? "Hidden. " : "") + (locked ? "Locked." : "Unlocked.")
+    Accessible.description: (primarySelected ? "Primary selected. " : selected ? "Selected. " : "") +
+                            (hidden ? "Hidden. " : "") + (locked ? "Locked. " : "Unlocked. ") +
+                            "Alt Shift Up or Down reorders this layer without dragging."
     Accessible.role: Accessible.Button
+    Accessible.checked: selected
     Keys.onReturnPressed: root.activated(0)
     Keys.onEnterPressed: root.activated(0)
     Keys.onSpacePressed: root.activated(0)
@@ -118,6 +127,30 @@ Rectangle {
             HoverHandler { id: titleHover }
         }
 
+        Rectangle {
+            visible: root.grouped
+            Layout.preferredWidth: 20
+            Layout.preferredHeight: 18
+            radius: theme.radius4
+            color: theme.alpha(root.accent, 0.12)
+            border.width: 1
+            border.color: theme.alpha(root.accent, 0.28)
+
+            Label {
+                anchors.centerIn: parent
+                text: "G"
+                color: root.accent
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                font.weight: Font.Bold
+            }
+
+            ToolTip.visible: groupHover.hovered
+            ToolTip.text: "Grouped layer"
+            ToolTip.delay: 300
+            HoverHandler { id: groupHover }
+        }
+
         AppIcon {
             visible: root.hidden
             Layout.preferredWidth: 12
@@ -146,6 +179,7 @@ Rectangle {
     }
 
     MouseArea {
+        id: rowTap
         anchors.fill: parent
         hoverEnabled: false
         cursorShape: Qt.PointingHandCursor

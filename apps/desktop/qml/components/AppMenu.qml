@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 Menu {
     id: root
@@ -15,20 +15,20 @@ Menu {
     padding: theme.space4
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-    background: Rectangle {
+    background: PopupSurface {
         implicitWidth: root.minimumMenuWidth
         radius: theme.radiusPanel
-        color: theme.alpha(theme.glassBase, 0.98)
-        border.width: 1
-        border.color: theme.alpha(theme.glassEdge, 0.34)
+        fillColor: theme.alpha(theme.glassBase, 0.98)
+        borderColor: theme.alpha(theme.glassEdge, 0.34)
+    }
 
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 1
-            height: 1
-            color: theme.alpha(theme.polar, 0.08)
+    Connections {
+        target: root.parent
+        ignoreUnknownSignals: true
+
+        function onVisibleChanged() {
+            if (root.parent && !root.parent.visible)
+                root.close()
         }
     }
 }

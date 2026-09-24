@@ -1,5 +1,7 @@
 #include "raw_image_decoder.h"
+#include "raw_image_decoder_libraw.h"
 #include "working_image.h"
+#include "capture_camera_metadata.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreImage/CoreImage.h>
@@ -8,11 +10,14 @@
 #include <QColor>
 #include <QColorSpace>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QStringList>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <limits>
 
 namespace photo_editor::desktop {
 
@@ -66,6 +71,11 @@ NSURL* file_url_for_path(const QString& file_path) {
   return path == nil ? nil : [NSURL fileURLWithPath:path];
 }
 
+CIContext* shared_default_ci_context() {
+  static CIContext* context = [CIContext context];
+  return context;
+}
+
 CIContext* shared_ci_context() {
   static CIContext* context = [CIContext contextWithOptions:@{
     kCIContextUseSoftwareRenderer : @NO,
@@ -73,52 +83,215 @@ CIContext* shared_ci_context() {
   return context;
 }
 
-[[maybe_unused]] QImage qimage_from_cgimage(CGImageRef cg_image) {
+CIContext* shared_software_ci_context() {
+  static CIContext* context = [CIContext contextWithOptions:@{
+    kCIContextUseSoftwareRenderer : @YES,
+  }];
+  return context;
+}
+
+quint64 ci_render_sentinel_sample_count(const QImage& image) {
+  if (image.isNull() || image.format() != QImage::Format_RGBA16FPx4) {
+    return std::numeric_limits<quint64>::max();
+  }
+  constexpr auto kSentinel = static_cast<quint16>(0xFFFFU);
+  auto count = quint64{0U};
+  for (int y = 0; y < image.height(); ++y) {
+    const auto* scanline =
+        reinterpret_cast<const quint16*>(image.constScanLine(y));
+    for (int x = 0; x < image.width(); ++x) {
+      const auto offset = static_cast<std::size_t>(x) * 4U;
+      for (std::size_t channel = 0; channel < 4U; ++channel) {
+        if (scanline[offset + channel] == kSentinel) {
+          ++count;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+void replace_ci_render_sentinels(QImage* image) {
+  constexpr auto kSentinel = static_cast<quint16>(0xFFFFU);
+  for (int y = 0; y < image->height(); ++y) {
+    auto* scanline = reinterpret_cast<quint16*>(image->scanLine(y));
+    for (int x = 0; x < image->width(); ++x) {
+      const auto offset = static_cast<std::size_t>(x) * 4U;
+      for (std::size_t channel = 0; channel < 4U; ++channel) {
+        if (scanline[offset + channel] == kSentinel) {
+          scanline[offset + channel] = 0U;
+        }
+      }
+    }
+  }
+}
+
+bool render_ciimage_to_verified_bitmap(
+    CIContext* context,
+    CIImage* input_image,
+    CGRect extent,
+    CGColorSpaceRef color_space,
+    QImage* image) {
+  if (context == nil || input_image == nil || color_space == nullptr ||
+      image == nullptr) {
+    return false;
+  }
+  const auto width = static_cast<int>(CGRectGetWidth(extent));
+  const auto height = static_cast<int>(CGRectGetHeight(extent));
+  QImage candidate(width, height, QImage::Format_RGBA16FPx4);
+  if (candidate.isNull()) {
+    return false;
+  }
+  std::memset(
+      candidate.bits(), 0xFF, static_cast<std::size_t>(candidate.sizeInBytes()));
+  [context render:input_image
+           toBitmap:candidate.bits()
+           rowBytes:static_cast<ptrdiff_t>(candidate.bytesPerLine())
+             bounds:extent
+             format:kCIFormatRGBAh
+         colorSpace:color_space];
+  const auto sentinel_count = ci_render_sentinel_sample_count(candidate);
+  const auto sample_count = static_cast<quint64>(candidate.width()) *
+                            static_cast<quint64>(candidate.height()) * 4U;
+  if (sentinel_count >= sample_count) {
+    return false;
+  }
+  if (sentinel_count != 0U) {
+    replace_ci_render_sentinels(&candidate);
+  }
+  candidate.setColorSpace(linear_srgb_color_space());
+  *image = std::move(candidate);
+  return true;
+}
+
+bool render_ciimage_to_verified_destination(
+    CIContext* context,
+    CIImage* input_image,
+    CGRect extent,
+    CGColorSpaceRef color_space,
+    QImage* image) {
+  if (context == nil || input_image == nil || color_space == nullptr ||
+      image == nullptr) {
+    return false;
+  }
+  const auto width = static_cast<int>(CGRectGetWidth(extent));
+  const auto height = static_cast<int>(CGRectGetHeight(extent));
+  QImage candidate(width, height, QImage::Format_RGBA16FPx4);
+  if (candidate.isNull()) {
+    return false;
+  }
+  std::memset(
+      candidate.bits(), 0xFF, static_cast<std::size_t>(candidate.sizeInBytes()));
+  auto* destination = [[CIRenderDestination alloc]
+      initWithBitmapData:candidate.bits()
+                   width:static_cast<NSUInteger>(width)
+                  height:static_cast<NSUInteger>(height)
+             bytesPerRow:static_cast<NSUInteger>(candidate.bytesPerLine())
+                  format:kCIFormatRGBAh];
+  if (destination == nil) {
+    return false;
+  }
+  destination.colorSpace = color_space;
+  destination.alphaMode = CIRenderDestinationAlphaUnpremultiplied;
+  destination.flipped = YES;
+  destination.clamped = NO;
+  NSError* scheduling_error = nil;
+  CIRenderTask* task = [context startTaskToRender:input_image
+                                         fromRect:extent
+                                    toDestination:destination
+                                          atPoint:CGPointZero
+                                            error:&scheduling_error];
+  if (task == nil || scheduling_error != nil) {
+    return false;
+  }
+  NSError* completion_error = nil;
+  CIRenderInfo* render_info =
+      [task waitUntilCompletedAndReturnError:&completion_error];
+  if (render_info == nil || completion_error != nil) {
+    return false;
+  }
+  const auto sentinel_count = ci_render_sentinel_sample_count(candidate);
+  const auto sample_count = static_cast<quint64>(candidate.width()) *
+                            static_cast<quint64>(candidate.height()) * 4U;
+  if (sentinel_count >= sample_count) {
+    return false;
+  }
+  if (sentinel_count != 0U) {
+    replace_ci_render_sentinels(&candidate);
+  }
+  candidate.setColorSpace(linear_srgb_color_space());
+  *image = std::move(candidate);
+  return true;
+}
+
+bool create_verified_ciimage_bitmap(
+    CIContext* context,
+    CIImage* input_image,
+    CGRect extent,
+    CGColorSpaceRef color_space,
+    QImage* image) {
+  if (context == nil || input_image == nil || color_space == nullptr ||
+      image == nullptr) {
+    return false;
+  }
+  CGImageRef cg_image = [context createCGImage:input_image
+                                      fromRect:extent
+                                        format:kCIFormatRGBAh
+                                    colorSpace:color_space
+                                      deferred:NO];
   if (cg_image == nullptr) {
-    return {};
+    return false;
+  }
+  const auto width = static_cast<int>(CGRectGetWidth(extent));
+  const auto height = static_cast<int>(CGRectGetHeight(extent));
+  const auto pixel_bytes = static_cast<std::size_t>(width) * 8U;
+  const auto source_row_bytes = CGImageGetBytesPerRow(cg_image);
+  const auto bitmap_info = CGImageGetBitmapInfo(cg_image);
+  const auto byte_order = bitmap_info & kCGBitmapByteOrderMask;
+  const auto alpha_info = CGImageGetAlphaInfo(cg_image);
+  const auto format_valid =
+      CGImageGetWidth(cg_image) == static_cast<std::size_t>(width) &&
+      CGImageGetHeight(cg_image) == static_cast<std::size_t>(height) &&
+      CGImageGetBitsPerComponent(cg_image) == 16U &&
+      CGImageGetBitsPerPixel(cg_image) == 64U &&
+      (bitmap_info & kCGBitmapFloatComponents) != 0U &&
+      (byte_order == kCGBitmapByteOrderDefault ||
+       byte_order == kCGBitmapByteOrder16Little) &&
+      (alpha_info == kCGImageAlphaPremultipliedLast ||
+       alpha_info == kCGImageAlphaLast ||
+       alpha_info == kCGImageAlphaNoneSkipLast) &&
+      source_row_bytes >= pixel_bytes;
+  CGDataProviderRef provider = CGImageGetDataProvider(cg_image);
+  CFDataRef data = provider == nullptr ? nullptr : CGDataProviderCopyData(provider);
+  if (!format_valid || data == nullptr || CFDataGetLength(data) < 0 ||
+      static_cast<quint64>(CFDataGetLength(data)) <
+          static_cast<quint64>(source_row_bytes) *
+              static_cast<quint64>(height)) {
+    if (data != nullptr) {
+      CFRelease(data);
+    }
+    CGImageRelease(cg_image);
+    return false;
   }
 
-  const auto width = static_cast<int>(CGImageGetWidth(cg_image));
-  const auto height = static_cast<int>(CGImageGetHeight(cg_image));
-  if (width <= 0 || height <= 0) {
-    return {};
+  QImage candidate(width, height, QImage::Format_RGBA16FPx4);
+  if (candidate.isNull()) {
+    CFRelease(data);
+    CGImageRelease(cg_image);
+    return false;
   }
-
-  QImage image(width, height, QImage::Format_ARGB32_Premultiplied);
-  if (image.isNull()) {
-    return {};
+  const auto* source = CFDataGetBytePtr(data);
+  for (int y = 0; y < height; ++y) {
+    std::memcpy(
+        candidate.scanLine(y),
+        source + static_cast<std::size_t>(y) * source_row_bytes,
+        pixel_bytes);
   }
-
-  CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-  if (color_space == nullptr) {
-    color_space = CGColorSpaceCreateDeviceRGB();
-  }
-  CGContextRef context = CGBitmapContextCreate(
-      image.bits(),
-      static_cast<size_t>(width),
-      static_cast<size_t>(height),
-      8,
-      static_cast<size_t>(image.bytesPerLine()),
-      color_space,
-      static_cast<uint32_t>(kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host));
-
-  if (context == nullptr) {
-    CGColorSpaceRelease(color_space);
-    return {};
-  }
-
-  CGContextTranslateCTM(context, 0.0, static_cast<CGFloat>(height));
-  CGContextScaleCTM(context, 1.0, -1.0);
-  CGContextDrawImage(
-      context,
-      CGRectMake(0.0, 0.0, static_cast<CGFloat>(width), static_cast<CGFloat>(height)),
-      cg_image);
-
-  CGContextRelease(context);
-  CGColorSpaceRelease(color_space);
-  auto output = image.convertToFormat(QImage::Format_ARGB32);
-  output.setColorSpace(preview_color_space());
-  return output;
+  CFRelease(data);
+  CGImageRelease(cg_image);
+  candidate.setColorSpace(linear_srgb_color_space());
+  *image = std::move(candidate);
+  return true;
 }
 
 bool render_ciimage_to_linear_qimage(CIImage* input_image, QImage* image) {
@@ -137,26 +310,69 @@ bool render_ciimage_to_linear_qimage(CIImage* input_image, QImage* image) {
     return false;
   }
 
-  QImage linear_image(width, height, QImage::Format_RGBA16FPx4);
-  if (linear_image.isNull()) {
-    return false;
-  }
-  linear_image.setColorSpace(linear_srgb_color_space());
-
   CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
   if (color_space == nullptr) {
     return false;
   }
-
-  [shared_ci_context() render:input_image
-                     toBitmap:linear_image.bits()
-                     rowBytes:static_cast<ptrdiff_t>(linear_image.bytesPerLine())
-                       bounds:extent
-                       format:kCIFormatRGBAh
-                   colorSpace:color_space];
+  auto rendered = render_ciimage_to_verified_destination(
+      shared_default_ci_context(), input_image, extent, color_space, image);
+  if (!rendered) {
+    rendered = render_ciimage_to_verified_destination(
+      shared_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = render_ciimage_to_verified_destination(
+        shared_software_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = render_ciimage_to_verified_bitmap(
+        shared_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = render_ciimage_to_verified_bitmap(
+        shared_software_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = create_verified_ciimage_bitmap(
+        shared_default_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = create_verified_ciimage_bitmap(
+        shared_ci_context(), input_image, extent, color_space, image);
+  }
+  if (!rendered) {
+    rendered = create_verified_ciimage_bitmap(
+        shared_software_ci_context(), input_image, extent, color_space, image);
+  }
   CGColorSpaceRelease(color_space);
+  return rendered;
+}
 
-  *image = std::move(linear_image);
+bool decode_native_linear_qt_fallback(
+    const QString& file_path,
+    QImage* image,
+    int max_edge) {
+  if (image == nullptr) {
+    return false;
+  }
+  QImageReader reader(file_path);
+  reader.setAutoTransform(true);
+  const auto source_size = reader.size();
+  if (max_edge > 0 && source_size.isValid() &&
+      std::max(source_size.width(), source_size.height()) > max_edge) {
+    reader.setScaledSize(source_size.scaled(
+        max_edge, max_edge, Qt::KeepAspectRatio));
+  }
+  auto decoded = reader.read();
+  if (decoded.isNull()) {
+    return false;
+  }
+  if (!decoded.colorSpace().isValid()) {
+    decoded.setColorSpace(preview_color_space());
+  }
+  *image = working_image_qimage(
+      std::move(decoded),
+      QStringLiteral("Linear sRGB"));
   return !image->isNull();
 }
 
@@ -196,57 +412,6 @@ QSize image_source_size(CGImageSourceRef source) {
     return {};
   }
   return QSize(pixel_width, pixel_height);
-}
-
-QString string_property_from_dictionary(NSDictionary* dictionary, NSString* key) {
-  if (dictionary == nil || key == nil) {
-    return {};
-  }
-  id value = dictionary[key];
-  if (![value isKindOfClass:[NSString class]]) {
-    return {};
-  }
-  const auto* string_value = static_cast<NSString*>(value);
-  return QString::fromUtf8(string_value.UTF8String).trimmed();
-}
-
-void populate_decoded_metadata_from_source(
-    CGImageSourceRef source,
-    photo_editor::pipeline::DecodedImageMetadata* metadata) {
-  if (source == nullptr || metadata == nullptr) {
-    return;
-  }
-
-  CFDictionaryRef properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr);
-  if (properties == nullptr) {
-    return;
-  }
-
-  NSDictionary* dictionary = CFBridgingRelease(properties);
-  NSDictionary* tiff = dictionary[(__bridge NSString*)kCGImagePropertyTIFFDictionary];
-  metadata->camera_make =
-      string_property_from_dictionary(tiff, (__bridge NSString*)kCGImagePropertyTIFFMake).toStdString();
-  metadata->camera_model =
-      string_property_from_dictionary(tiff, (__bridge NSString*)kCGImagePropertyTIFFModel).toStdString();
-}
-
-void populate_decoded_metadata_from_filter(
-    CIRAWFilter* filter,
-    const RawDecodeSettings& settings,
-    photo_editor::pipeline::DecodedImageMetadata* metadata) {
-  if (filter == nil || metadata == nullptr) {
-    return;
-  }
-
-  metadata->valid = true;
-  metadata->is_raw = true;
-  metadata->input_profile_name =
-      photo_editor::pipeline::normalize_input_color_profile_name(settings.input_color_profile.toStdString());
-  metadata->as_shot_temperature =
-      std::clamp(static_cast<double>(filter.neutralTemperature), 2000.0, 12000.0);
-  metadata->as_shot_tint = std::clamp(static_cast<double>(filter.neutralTint), -150.0, 150.0);
-  metadata->baseline_exposure = 0.0;
-  metadata->highlight_headroom = 1.0;
 }
 
 CGSize raw_native_size(const QString& file_path) {
@@ -294,99 +459,45 @@ CGImageRef decode_native_cgimage(CGImageSourceRef source, int max_edge) {
       });
 }
 
-bool configure_raw_filter(
-    CIRAWFilter* filter,
-    int max_edge,
-    const RawDecodeSettings& settings) {
-  if (filter == nil) {
-    return false;
-  }
-
-  const CGSize native_size = filter.nativeSize;
-  const auto long_edge = std::max(native_size.width, native_size.height);
-  auto scale_factor = 1.0f;
-  if (max_edge > 0 && long_edge > 0.0) {
-    scale_factor = static_cast<float>(std::clamp(
-        static_cast<double>(max_edge) / static_cast<double>(long_edge),
-        0.01,
-        1.0));
-  }
-
-  filter.scaleFactor = scale_factor;
-  filter.draftModeEnabled =
-      raw_decode_uses_draft_demosaic(settings, max_edge > 0 && scale_factor < 1.0f);
-  const auto input_transform_enabled = settings.input_transform_enabled;
-  const auto highlight_mode =
-      settings.highlight_reconstruction_mode.trimmed().compare(QStringLiteral("Disabled"), Qt::CaseInsensitive) == 0
-          ? 0
-          : (settings.highlight_reconstruction_mode.trimmed().compare(
-                     QStringLiteral("Camera Default"), Qt::CaseInsensitive) == 0
-                 ? 1
-                 : 2);
-  const auto decode_boost = std::clamp(settings.boost_amount, 0.0, 2.0);
-  const auto shadow_boost = std::clamp(settings.boost_shadow_amount, 0.0, 2.0);
-  const auto edr_amount =
-      input_transform_enabled ? std::clamp(0.45 + decode_boost * 0.25, 0.0, 1.0) : 0.0;
-  const auto local_tone_amount = std::clamp((shadow_boost - 1.0) * 0.65, 0.0, 1.0);
-
-  filter.exposure = static_cast<float>(input_transform_enabled ? settings.exposure : 0.0);
-  filter.boostAmount = static_cast<float>(decode_boost);
-  filter.boostShadowAmount = static_cast<float>(shadow_boost);
-  filter.extendedDynamicRangeAmount = static_cast<float>(edr_amount);
-  filter.gamutMappingEnabled = settings.gamut_mapping_enabled ? YES : NO;
-  if (filter.isLensCorrectionSupported) {
-    filter.lensCorrectionEnabled = settings.lens_correction_enabled ? YES : NO;
-  }
-  if (filter.isLocalToneMapSupported) {
-    filter.localToneMapAmount = static_cast<float>(local_tone_amount);
-  }
-  if (filter.isDetailSupported) {
-    filter.detailAmount = static_cast<float>(settings.detail_amount);
-  }
-  const auto chroma_noise_reduction =
-      static_cast<float>(raw_decode_chroma_noise_reduction_amount(settings));
-  const auto noise_reduction_selector = NSSelectorFromString(@"setNoiseReductionAmount:");
-  if ([filter respondsToSelector:noise_reduction_selector]) {
-    auto* set_noise_reduction_method = reinterpret_cast<void (*)(id, SEL, float)>(
-        [filter methodForSelector:noise_reduction_selector]);
-    set_noise_reduction_method(filter, noise_reduction_selector, chroma_noise_reduction);
-  }
-  const auto moire_reduction = static_cast<float>(raw_decode_moire_reduction_amount(settings));
-  const auto moire_reduction_selector = NSSelectorFromString(@"setMoireReductionAmount:");
-  if ([filter respondsToSelector:moire_reduction_selector]) {
-    auto* set_moire_reduction_method = reinterpret_cast<void (*)(id, SEL, float)>(
-        [filter methodForSelector:moire_reduction_selector]);
-    set_moire_reduction_method(filter, moire_reduction_selector, moire_reduction);
-  }
-  if (@available(macOS 16.0, *)) {
-    const auto supported_selector = NSSelectorFromString(@"isHighlightRecoverySupported");
-    const auto set_enabled_selector = NSSelectorFromString(@"setHighlightRecoveryEnabled:");
-    if ([filter respondsToSelector:supported_selector] &&
-        [filter respondsToSelector:set_enabled_selector]) {
-      auto* supported_method = reinterpret_cast<BOOL (*)(id, SEL)>(
-          [filter methodForSelector:supported_selector]);
-      auto* set_enabled_method = reinterpret_cast<void (*)(id, SEL, BOOL)>(
-          [filter methodForSelector:set_enabled_selector]);
-      if (supported_method(filter, supported_selector)) {
-        set_enabled_method(
-            filter,
-            set_enabled_selector,
-            (highlight_mode == 2 || (highlight_mode == 1 && settings.highlight_recovery_enabled)) ? YES : NO);
-      }
-    }
-  }
-  if (input_transform_enabled && settings.white_balance_override_enabled) {
-    filter.neutralTemperature = static_cast<float>(settings.white_balance_temperature);
-    filter.neutralTint = static_cast<float>(settings.white_balance_tint);
-  }
-  return true;
-}
-
 }  // namespace
+
+QVariantMap read_capture_camera_metadata(const QString& path) {
+  if (has_raw_extension(path)) {
+    const auto raw = read_libraw_capture_camera_metadata(path);
+    if (raw.value("available").toBool()) return raw;
+  }
+  @autoreleasepool {
+    CGImageSourceRef source = image_source_for_path(path);
+    if (!source) return {{"available", false}, {"backend", "ImageIO"}};
+    CFDictionaryRef properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr);
+    CFRelease(source);
+    if (!properties) return {{"available", false}, {"backend", "ImageIO"}};
+    NSDictionary* dictionary = CFBridgingRelease(properties);
+    NSDictionary* tiff = dictionary[(__bridge NSString*)kCGImagePropertyTIFFDictionary];
+    NSDictionary* exif = dictionary[(__bridge NSString*)kCGImagePropertyExifDictionary];
+    if (![tiff isKindOfClass:[NSDictionary class]]) tiff = @{};
+    if (![exif isKindOfClass:[NSDictionary class]]) exif = @{};
+    const auto text = [](id value) {
+      return [value isKindOfClass:[NSString class]] ? QString::fromNSString(value).trimmed().left(256) : QString();
+    };
+    const auto number = [](id value) {
+      const auto result = [value isKindOfClass:[NSNumber class]] ? [value doubleValue] : 0.0;
+      return std::isfinite(result) && result > 0 && result <= 10000 ? result : 0.0;
+    };
+    return {{"available", true}, {"backend", "ImageIO"},
+        {"make", text(tiff[(__bridge NSString*)kCGImagePropertyTIFFMake])},
+        {"model", text(tiff[(__bridge NSString*)kCGImagePropertyTIFFModel])},
+        {"lens", text(exif[(__bridge NSString*)kCGImagePropertyExifLensModel])},
+        {"bodySerial", text(exif[(__bridge NSString*)kCGImagePropertyExifBodySerialNumber])},
+        {"focalMm", number(exif[(__bridge NSString*)kCGImagePropertyExifFocalLength])},
+        {"focal35Mm", number(exif[(__bridge NSString*)kCGImagePropertyExifFocalLenIn35mmFilm])}};
+  }
+}
 
 bool raw_image_supported(const QString& file_path) { return has_raw_extension(file_path); }
 
 bool raw_decode_uses_draft_demosaic(const RawDecodeSettings& settings, bool scaled_preview) {
+  Q_UNUSED(scaled_preview);
   const auto quality = settings.demosaic_quality.trimmed();
   if (quality.compare(QStringLiteral("Preview"), Qt::CaseInsensitive) == 0 ||
       quality.compare(QStringLiteral("Draft"), Qt::CaseInsensitive) == 0) {
@@ -396,15 +507,11 @@ bool raw_decode_uses_draft_demosaic(const RawDecodeSettings& settings, bool scal
       quality.compare(QStringLiteral("Best"), Qt::CaseInsensitive) == 0) {
     return false;
   }
-  return scaled_preview;
-}
-
-double raw_decode_chroma_noise_reduction_amount(const RawDecodeSettings& settings) {
-  return std::clamp(settings.chroma_noise_reduction_amount, 0.0, 1.0);
-}
-
-double raw_decode_moire_reduction_amount(const RawDecodeSettings& settings) {
-  return std::clamp(settings.moire_reduction_amount, 0.0, 1.0);
+  // A bounded preview may use fewer output pixels, but Balanced must retain
+  // the same demosaic/color semantics as the full-resolution render. Core
+  // Image's draft mode is a separate RAW rendering path and can visibly move
+  // white balance and camera color when the full render replaces it.
+  return false;
 }
 
 double raw_decode_hot_dead_pixel_cleanup_amount(const RawDecodeSettings& settings) {
@@ -415,9 +522,16 @@ double raw_decode_false_color_suppression_amount(const RawDecodeSettings& settin
   return std::clamp(settings.false_color_suppression_amount, 0.0, 1.0);
 }
 
-bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
+bool apply_raw_hot_dead_pixel_cleanup(
+    QImage* image,
+    double amount,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
   amount = std::clamp(amount, 0.0, 1.0);
-  if (image == nullptr || image->isNull() || amount <= 0.0 || image->width() < 3 || image->height() < 3) {
+  if (image == nullptr || image->isNull() ||
+      amount <= 0.0 || image->width() < 3 ||
+      image->height() < 3 ||
+      cancellation.cancelled()) {
     return false;
   }
 
@@ -434,6 +548,9 @@ bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
   auto changed = false;
   const auto threshold_scale = 0.45 - amount * 0.37;
   for (int y = 1; y < source.height() - 1; ++y) {
+    if (cancellation.cancelled()) {
+      return false;
+    }
     for (int x = 1; x < source.width() - 1; ++x) {
       std::array<double, 8> red{};
       std::array<double, 8> green{};
@@ -480,15 +597,22 @@ bool apply_raw_hot_dead_pixel_cleanup(QImage* image, double amount) {
     }
   }
 
-  if (changed) {
+  if (changed && !cancellation.cancelled()) {
     *image = std::move(output);
   }
-  return changed;
+  return changed && !cancellation.cancelled();
 }
 
-bool apply_raw_false_color_suppression(QImage* image, double amount) {
+bool apply_raw_false_color_suppression(
+    QImage* image,
+    double amount,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
   amount = std::clamp(amount, 0.0, 1.0);
-  if (image == nullptr || image->isNull() || amount <= 0.0 || image->width() < 3 || image->height() < 3) {
+  if (image == nullptr || image->isNull() ||
+      amount <= 0.0 || image->width() < 3 ||
+      image->height() < 3 ||
+      cancellation.cancelled()) {
     return false;
   }
 
@@ -505,6 +629,9 @@ bool apply_raw_false_color_suppression(QImage* image, double amount) {
   auto changed = false;
   const auto threshold = 0.18 - amount * 0.12;
   for (int y = 1; y < source.height() - 1; ++y) {
+    if (cancellation.cancelled()) {
+      return false;
+    }
     for (int x = 1; x < source.width() - 1; ++x) {
       std::array<double, 8> red{};
       std::array<double, 8> green{};
@@ -558,10 +685,10 @@ bool apply_raw_false_color_suppression(QImage* image, double amount) {
     }
   }
 
-  if (changed) {
+  if (changed && !cancellation.cancelled()) {
     *image = std::move(output);
   }
-  return changed;
+  return changed && !cancellation.cancelled();
 }
 
 bool native_image_supported(const QString& file_path) { return has_native_extension(file_path); }
@@ -569,6 +696,11 @@ bool native_image_supported(const QString& file_path) { return has_native_extens
 QSize raw_image_size(const QString& file_path) {
   if (!has_raw_extension(file_path)) {
     return {};
+  }
+
+  const auto libraw_size = libraw_camera_linear_image_size(file_path);
+  if (libraw_size.isValid()) {
+    return libraw_size;
   }
 
   @autoreleasepool {
@@ -609,42 +741,33 @@ bool decode_raw_image(
     QImage* image,
     int max_edge,
     const RawDecodeSettings& settings,
-    photo_editor::pipeline::DecodedImageMetadata* metadata) {
+    photo_editor::pipeline::DecodedImageMetadata* metadata,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
+  if (image == nullptr || !has_raw_extension(file_path) ||
+      cancellation.cancelled()) {
+    return false;
+  }
   QImage linear_image;
-  if (!decode_raw_linear_image(file_path, &linear_image, max_edge, settings, metadata)) {
+  auto characterized_settings = settings;
+  characterized_settings.input_transform_enabled = false;
+  if (!decode_raw_linear_image(file_path, &linear_image, max_edge,
+                               characterized_settings, metadata,
+                               cancellation)) {
     return false;
   }
-
-  *image = finalize_output_image(std::move(linear_image), preview_color_space());
-  return !image->isNull();
-}
-
-bool decode_raw_preview_image(const QString& file_path, QImage* image, int max_edge) {
-  if (image == nullptr || !has_raw_extension(file_path)) {
+  if (cancellation.cancelled()) {
     return false;
   }
-
-  const QFileInfo source_info(file_path);
-  if (!source_info.exists() || !source_info.isReadable()) {
+  auto finalized = finalize_output_image(
+      std::move(linear_image),
+      preview_color_space());
+  if (finalized.isNull() ||
+      cancellation.cancelled()) {
     return false;
   }
-
-  @autoreleasepool {
-    CGImageSourceRef source = image_source_for_path(file_path);
-    if (source == nullptr) {
-      return false;
-    }
-
-    CGImageRef cg_image = decode_native_cgimage(source, max_edge);
-    CFRelease(source);
-    if (cg_image == nullptr) {
-      return false;
-    }
-
-    *image = qimage_from_cgimage(cg_image);
-    CGImageRelease(cg_image);
-    return !image->isNull();
-  }
+  *image = std::move(finalized);
+  return true;
 }
 
 bool decode_raw_linear_image(
@@ -652,8 +775,11 @@ bool decode_raw_linear_image(
     QImage* image,
     int max_edge,
     const RawDecodeSettings& settings,
-    photo_editor::pipeline::DecodedImageMetadata* metadata) {
-  if (image == nullptr || !has_raw_extension(file_path)) {
+    photo_editor::pipeline::DecodedImageMetadata* metadata,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
+  if (image == nullptr || !has_raw_extension(file_path) ||
+      cancellation.cancelled()) {
     return false;
   }
 
@@ -662,46 +788,62 @@ bool decode_raw_linear_image(
     return false;
   }
 
-  @autoreleasepool {
-    NSURL* url = file_url_for_path(file_path);
-    if (url == nil) {
-      return false;
-    }
-
-    CGImageSourceRef source = image_source_for_path(file_path);
-    CIRAWFilter* filter = [CIRAWFilter filterWithImageURL:url];
-    if (filter == nil || !configure_raw_filter(filter, max_edge, settings)) {
-      if (source != nullptr) {
-        CFRelease(source);
-      }
-      return false;
-    }
-
-    if (metadata != nullptr) {
-      *metadata = {};
-      populate_decoded_metadata_from_source(source, metadata);
-      populate_decoded_metadata_from_filter(filter, settings, metadata);
-    }
-    if (source != nullptr) {
-      CFRelease(source);
-    }
-
-    CIImage* output_image = filter.outputImage;
-    if (output_image == nil) {
-      return false;
-    }
-
-    if (!render_ciimage_to_linear_qimage(output_image, image)) {
+  if (raw_decode_requests_camera_linear_backend(settings)) {
+    if (!decode_libraw_camera_linear_image(
+            file_path,
+            image,
+            max_edge,
+            settings,
+            metadata,
+            cancellation)) {
       return false;
     }
     apply_raw_hot_dead_pixel_cleanup(
         image,
-        raw_decode_hot_dead_pixel_cleanup_amount(settings));
+        raw_decode_hot_dead_pixel_cleanup_amount(settings),
+        cancellation);
     apply_raw_false_color_suppression(
         image,
-        raw_decode_false_color_suppression_amount(settings));
-    return !image->isNull();
+        raw_decode_false_color_suppression_amount(settings),
+        cancellation);
+    return !cancellation.cancelled();
   }
+
+  const auto decode_portable_fallback = [&]() {
+    auto fallback_image = QImage{};
+    auto fallback_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+    if (!decode_libraw_scene_linear_image(
+            file_path,
+            &fallback_image,
+            max_edge,
+            settings,
+            metadata == nullptr ? nullptr : &fallback_metadata,
+            cancellation)) {
+      return false;
+    }
+    apply_raw_hot_dead_pixel_cleanup(
+        &fallback_image,
+        raw_decode_hot_dead_pixel_cleanup_amount(settings),
+        cancellation);
+    apply_raw_false_color_suppression(
+        &fallback_image,
+        raw_decode_false_color_suppression_amount(settings),
+        cancellation);
+    if (fallback_image.isNull() ||
+        cancellation.cancelled()) {
+      return false;
+    }
+    *image = std::move(fallback_image);
+    if (metadata != nullptr) {
+      *metadata = std::move(fallback_metadata);
+    }
+    return true;
+  };
+
+  // Settled/final RAW color must not change with the host platform. Core
+  // Image remains available only for the separately labelled embedded/native
+  // navigation preview; the editable linear image always comes from LibRaw.
+  return decode_portable_fallback();
 }
 
 bool read_raw_decoded_metadata(
@@ -717,49 +859,53 @@ bool read_raw_decoded_metadata(
     return false;
   }
 
-  @autoreleasepool {
-    NSURL* url = file_url_for_path(file_path);
-    if (url == nil) {
-      return false;
-    }
-
-    CGImageSourceRef source = image_source_for_path(file_path);
-    CIRAWFilter* filter = [CIRAWFilter filterWithImageURL:url];
-    if (filter == nil) {
-      if (source != nullptr) {
-        CFRelease(source);
-      }
-      return false;
-    }
-
-    *metadata = {};
-    populate_decoded_metadata_from_source(source, metadata);
-    populate_decoded_metadata_from_filter(filter, settings, metadata);
-    if (source != nullptr) {
-      CFRelease(source);
-    }
-    return metadata->valid;
+  if (raw_decode_requests_camera_linear_backend(settings)) {
+    return read_libraw_camera_linear_metadata(
+        file_path,
+        metadata,
+        settings);
   }
+
+  return read_libraw_scene_linear_metadata(file_path, metadata, settings);
 }
 
 bool decode_native_image(
     const QString& file_path,
     QImage* image,
-    int max_edge) {
+    int max_edge,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
+  if (cancellation.cancelled()) {
+    return false;
+  }
   QImage linear_image;
-  if (!decode_native_linear_image(file_path, &linear_image, max_edge)) {
+  if (!decode_native_linear_image(
+          file_path,
+          &linear_image,
+          max_edge,
+          cancellation)) {
     return false;
   }
 
-  *image = finalize_output_image(std::move(linear_image), preview_color_space());
-  return !image->isNull();
+  auto finalized = finalize_output_image(
+      std::move(linear_image),
+      preview_color_space());
+  if (finalized.isNull() ||
+      cancellation.cancelled()) {
+    return false;
+  }
+  *image = std::move(finalized);
+  return true;
 }
 
 bool decode_native_linear_image(
     const QString& file_path,
     QImage* image,
-    int max_edge) {
-  if (image == nullptr || !has_native_extension(file_path)) {
+    int max_edge,
+    photo_editor::pipeline::CancellationToken
+        cancellation) {
+  if (image == nullptr || !has_native_extension(file_path) ||
+      cancellation.cancelled()) {
     return false;
   }
 
@@ -771,22 +917,39 @@ bool decode_native_linear_image(
   @autoreleasepool {
     CGImageSourceRef source = image_source_for_path(file_path);
     if (source == nullptr) {
-      return false;
+      return !cancellation.cancelled() &&
+             decode_native_linear_qt_fallback(file_path, image, max_edge) &&
+             !cancellation.cancelled();
     }
 
     CGImageRef cg_image = decode_native_cgimage(source, max_edge);
     CFRelease(source);
-    if (cg_image == nullptr) {
+    if (cancellation.cancelled()) {
+      if (cg_image != nullptr) {
+        CGImageRelease(cg_image);
+      }
       return false;
+    }
+    if (cg_image == nullptr) {
+      return decode_native_linear_qt_fallback(file_path, image, max_edge) &&
+             !cancellation.cancelled();
     }
 
     CIImage* ci_image = [[CIImage alloc] initWithCGImage:cg_image];
     CGImageRelease(cg_image);
     if (ci_image == nil) {
-      return false;
+      return decode_native_linear_qt_fallback(file_path, image, max_edge) &&
+             !cancellation.cancelled();
     }
 
-    return render_ciimage_to_linear_qimage(ci_image, image);
+    if (!cancellation.cancelled() &&
+        render_ciimage_to_linear_qimage(ci_image, image) &&
+        !cancellation.cancelled()) {
+      return true;
+    }
+    return !cancellation.cancelled() &&
+           decode_native_linear_qt_fallback(file_path, image, max_edge) &&
+           !cancellation.cancelled();
   }
 }
 

@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Button {
@@ -7,7 +7,7 @@ Button {
 
     property bool active: false
     property color accent: theme.accentWarm400
-    property color lineColor: "#22292D"
+    property color lineColor: theme.controlEdge
     property color hairline: theme.alpha(lineColor, 0.58)
     property string iconName: ""
     property color iconColor: "transparent"
@@ -30,7 +30,7 @@ Button {
     readonly property bool visualIconOnly: iconOnly || (!labelVisible && iconName.length > 0)
     readonly property bool customIconColor: iconColor.a > 0
     readonly property bool commandShape: !iconOnly && !segmented && !ghost
-    readonly property bool slashEdge: commandShape && (root.primary || root.destructive)
+    readonly property bool slashEdge: false
     readonly property bool accentEdgeVisible: root.enabled && root.slashEdge &&
                                              (root.primary || root.destructive || root.active)
     readonly property bool accentBorderVisible: false
@@ -46,8 +46,8 @@ Button {
                                                      ? root.disabledReason
                                                      : root.disabledFallbackReason)
                                                   : root.tooltip
-    readonly property string miniButtonContract: "mini-button:v4|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|mint-primary:true|slash-primary-only:true|rounded-secondary:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
-    readonly property string readableTextContract: "readable-text:v2|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:9|readable-width:true"
+    readonly property string miniButtonContract: "mini-button:v6|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|neutral-primary:true|flat-surface:true|borderless-rest:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
+    readonly property string readableTextContract: "readable-text:v3|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:10|readable-width:true"
     readonly property string disabledReasonContract: "disabled-reason:v2|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true|fallback-reason:true"
     readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
     readonly property string toolbarButtonContract: "toolbar-button:v1|baseline-aligned:true|stable-height:true|role:" +
@@ -103,79 +103,25 @@ Button {
     ToolTip.timeout: 4200
     ToolTip.text: resolvedTooltipText.length > 0 ? resolvedTooltipText : text
 
-    background: Item {
-        anchors.fill: parent
-
-        CommandButtonSurface {
-            anchors.fill: parent
-            visible: !root.ghost
-            cut: root.commandCut
-            cornerRadius: root.slashEdge ? 0 : (root.iconOnly ? Math.round(width / 2) : theme.radiusControl)
-            borderWidth: root.visualFocus ? 2 : 0
-            fillColor: {
-                if (!root.enabled)
-                    return "#141719"
-                if (root.role === "primary")
-                    return theme.alpha(root.accent, root.down ? 0.20 : (root.hovered || root.active ? 0.14 : 0.08))
-                if (root.destructive)
-                    return root.hovered || root.active ? theme.alpha(theme.error, 0.10) : theme.alpha(theme.glassBase, 0.54)
-                if (root.active)
-                    return root.iconOnly ? theme.alpha(theme.glassLift, 0.40) : theme.alpha(theme.glassLift, 0.34)
-                if (root.down)
-                    return "#171D20"
-                return root.hovered ? theme.alpha(theme.glassLift, 0.44) : theme.alpha(theme.glassBase, 0.48)
-            }
-            borderColor: {
-                if (!root.enabled)
-                    return theme.alpha(root.lineColor, 0.32)
-                if (root.visualFocus)
-                    return theme.alpha(theme.focusRing, 0.88)
-                if (root.destructive)
-                    return theme.alpha(theme.error, root.hovered || root.active ? 0.48 : 0.28)
-                if (root.primary)
-                    return theme.alpha(root.accent, root.hovered || root.active ? 0.48 : 0.30)
-                if (root.active)
-                    return theme.alpha(theme.glassEdge, 0.42)
-                return root.hovered ? theme.alpha(root.lineColor, 0.44) : root.hairline
-            }
-            borderOpacity: 1
-            accentColor: root.destructive ? theme.error : root.accent
-            accentWidth: root.slashEdge ? 4 : 0
-            accentOpacity: root.accentEdgeVisible ? 1.0 : 0
-            topLineOpacity: root.slashEdge && root.enabled ? (root.hovered || root.active ? 0.18 : 0.08) : 0
-        }
-
-        Rectangle {
-            visible: root.segmented && root.active
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 2
-            color: root.accent
-        }
-
-        Rectangle {
-            visible: root.ghost && (root.hovered || root.active)
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: root.destructive ? theme.error : root.accent
-        }
-
-        CommandButtonSurface {
-            visible: root.active && !root.ghost && root.slashEdge
-            anchors.fill: parent
-            cut: root.commandCut
-            cornerRadius: root.slashEdge ? 0 : (root.iconOnly ? Math.round(width / 2) : theme.radiusControl)
-            fillColor: "transparent"
-            borderWidth: 0
-            borderColor: root.destructive ? theme.alpha(theme.error, 0.34) : theme.alpha(root.accent, 0.34)
-            accentColor: root.destructive ? theme.error : root.accent
-            accentWidth: root.slashEdge ? 4 : 0
-            accentOpacity: root.accentEdgeVisible ? 1.0 : 0
-            topLineOpacity: 0
-        }
+    background: CommandButtonSurface {
+        cornerRadius: theme.radiusControl
+        fillColor: !root.enabled ? theme.alpha(theme.surfaceInset, 0.45)
+                   : root.primary && !root.destructive ? (root.down ? theme.actionPrimaryPressed
+                                                             : root.hovered ? theme.actionPrimaryHover : theme.actionPrimaryFill)
+                   : root.down ? theme.surfaceInset
+                   : root.active ? theme.ink750
+                   : root.hovered ? theme.editorControlHover
+                   : "transparent"
+        borderWidth: root.visualFocus ? theme.focusBorderWidth
+                     : root.destructive ? 1 : 0
+        borderColor: root.visualFocus ? theme.focusRing
+                     : root.destructive ? theme.alpha(theme.error, 0.48)
+                     : root.active || root.primary ? theme.alpha(root.accent, 0.42)
+                     : theme.alpha(theme.controlEdge, root.hovered ? 1 : 0.65)
+        accentColor: root.destructive ? theme.error : root.accent
+        accentWidth: root.active || root.primary ? 2 : 0
+        accentOpacity: root.enabled ? (root.active ? 0.9 : 0.4) : 0
+        topLineOpacity: root.hovered || root.active ? 0.09 : 0.04
     }
 
     contentItem: Item {
@@ -189,9 +135,10 @@ Button {
             AppIcon {
                 visible: root.iconName.length > 0
                 name: root.iconName
-                color: root.customIconColor ? root.iconColor : (root.destructive ? theme.error : (root.active && root.primary ? root.accent : theme.textMain))
-                Layout.preferredWidth: 14
-                Layout.preferredHeight: 14
+                color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
+                       : root.customIconColor ? root.iconColor : (root.destructive ? theme.error : theme.textMain)
+                Layout.preferredWidth: theme.scaled(14)
+                Layout.preferredHeight: theme.scaled(14)
                 Layout.alignment: Qt.AlignCenter
             }
 
@@ -199,9 +146,10 @@ Button {
                 id: label
                 visible: !root.visualIconOnly
                 text: root.text
-                color: root.destructive ? theme.error : (root.active ? theme.textStrong : theme.textMain)
+                color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
+                       : root.destructive ? theme.error : (root.active ? theme.textStrong : theme.textMain)
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeLabel
                 font.weight: root.active || root.role === "primary" ? Font.DemiBold : Font.Medium
                 font.letterSpacing: 0
                 Layout.fillWidth: true
@@ -210,7 +158,7 @@ Button {
                 maximumLineCount: root.allowLabelWrap ? 2 : 1
                 elide: Text.ElideNone
                 fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-                minimumPixelSize: 9
+                minimumPixelSize: 10
                 clip: !root.allowLabelWrap
                 verticalAlignment: Text.AlignVCenter
             }

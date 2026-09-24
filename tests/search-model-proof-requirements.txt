@@ -1,0 +1,8 @@
+# Isolated encoder proof only; not a packaged app dependency declaration.
+# All resolved transitive versions are retained with each inference receipt.
+torch==2.10.0
+transformers==4.57.6
+pillow==12.1.1
+tokenizers==0.22.2
+numpy==2.5.3
+safetensors==0.8.0

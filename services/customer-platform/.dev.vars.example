@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local/staging use. Never commit the completed file.
+ENTITLEMENT_PRIVATE_KEY="<PKCS8 Ed25519 PEM, with escaped newlines>"
+LEMON_API_KEY="<staging API key>"
+LEMON_WEBHOOK_SECRET="<at least 32 random characters>"
+RATE_LIMIT_SECRET="<a separate random secret, at least 32 characters>"

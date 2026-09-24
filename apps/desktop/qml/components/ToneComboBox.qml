@@ -1,6 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 
 ComboBox {
     id: root
@@ -14,7 +14,7 @@ ComboBox {
     implicitHeight: theme.controlHeight
     implicitWidth: Math.max(theme.menuMinWidth, selectedLabel.implicitWidth + theme.space24 + theme.space16)
     font.family: theme.fontUi
-    font.pixelSize: 11
+    font.pixelSize: theme.typeBody
     hoverEnabled: true
     activeFocusOnTab: true
     ToolTip.visible: root.hovered && root.showFullTextTooltip && selectedLabel.contentWidth > selectedLabel.width + 1
@@ -26,7 +26,11 @@ ComboBox {
         id: optionDelegate
         required property int index
         required property var modelData
-        width: root.width
+        implicitHeight: theme.controlHeightDense
+        padding: 0
+        topPadding: theme.space4
+        bottomPadding: theme.space4
+        width: root.popup.width - root.popup.leftPadding - root.popup.rightPadding
         highlighted: root.highlightedIndex === index
         ToolTip.visible: optionDelegate.hovered && root.showFullTextTooltip && optionLabel.contentWidth > optionLabel.width + 1
         ToolTip.delay: 250
@@ -38,19 +42,19 @@ ComboBox {
             text: optionDelegate.modelData
             color: optionDelegate.highlighted ? theme.textStrong : theme.textMain
             font.family: root.font.family
-            font.pixelSize: 11
+            font.pixelSize: theme.typeBody
             verticalAlignment: Text.AlignVCenter
             maximumLineCount: 1
             elide: Text.ElideNone
             fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-            minimumPixelSize: 9
+            minimumPixelSize: 10
             clip: true
             leftPadding: theme.space12
             rightPadding: theme.space12
         }
 
         background: Rectangle {
-            color: optionDelegate.highlighted ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.glassBase, 0.9)
+            color: optionDelegate.highlighted ? theme.ink750 : "transparent"
         }
     }
 
@@ -58,8 +62,8 @@ ComboBox {
         name: "chevron-right"
         color: root.enabled ? theme.textFaint : theme.alpha(theme.textMuted, 0.62)
         rotation: 90
-        width: 10
-        height: 10
+        width: theme.scaled(10)
+        height: theme.scaled(10)
         anchors.right: parent.right
         anchors.rightMargin: theme.space12
         anchors.verticalCenter: parent.verticalCenter
@@ -77,25 +81,16 @@ ComboBox {
         maximumLineCount: 1
         elide: Text.ElideNone
         fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
-        minimumPixelSize: 9
+        minimumPixelSize: 10
         clip: true
     }
 
     background: Rectangle {
         radius: theme.radiusControl
-        color: root.enabled ? theme.alpha(theme.glassBase, 0.38) : theme.alpha(theme.glassBase, 0.26)
-        border.width: root.visualFocus ? 2 : 1
-        border.color: root.visualFocus
-                      ? theme.alpha(theme.focusRing, 0.9)
-                      : (root.hovered ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.glassEdge, 0.2))
-
-        Rectangle {
-            anchors.fill: parent
-            anchors.margins: 1
-            radius: Math.max(1, parent.radius - 1)
-            visible: root.visualFocus
-            color: theme.alpha(theme.focusFill, 0.2)
-        }
+        color: !root.enabled ? theme.alpha(theme.fieldFill, 0.45)
+               : root.hovered ? theme.fieldHoverFill : theme.fieldFill
+        border.width: root.visualFocus ? theme.focusBorderWidth : 0
+        border.color: theme.focusRing
     }
 
     popup: Popup {
@@ -111,8 +106,8 @@ ComboBox {
         }
 
         background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.alpha(theme.glassBase, 0.96)
+            radius: theme.radiusControl
+            color: theme.ink850
             border.width: 1
             border.color: theme.alpha(theme.glassEdge, 0.28)
         }

@@ -35,6 +35,13 @@ namespace photo_editor::desktop {
 
 [[nodiscard]] QVariantMap agent_memory_vault_snapshot(const QString& app_data_location);
 
+[[nodiscard]] QVariantMap agent_memory_continuity_state(
+    const QString& app_data_location);
+
+[[nodiscard]] QVariantMap write_agent_memory_continuity_state(
+    const QString& app_data_location,
+    const QVariantMap& continuity_state);
+
 [[nodiscard]] QVariantMap export_agent_memory_vault(
     const QString& app_data_location,
     const QString& destination_directory,

@@ -1,10 +1,13 @@
 use std::env;
 use std::time::Instant;
 
-use photo_catalog::{observability::Logger, LocalCatalogDatabaseManager};
+use photo_catalog::{observability::Logger, run_catalog_helper, LocalCatalogDatabaseManager};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn main() -> std::process::ExitCode {
+    run_catalog_helper(run)
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let logger = Logger::from_env("catalog_local_db")?;
     let started_at = Instant::now();
     let arguments: Vec<String> = env::args().collect();
@@ -44,6 +47,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let status = manager.status().await?;
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
+        "backup" => {
+            println!("{}", manager.backup_now().await?.display());
+        }
+        "restore-latest" => {
+            println!("{}", manager.restore_latest_backup().await?.display());
+        }
         "stop" => {
             manager.stop()?;
             println!("Catalog database stopped.");
@@ -64,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 fn print_usage(program_name: &str) {
     eprintln!(
-        "Usage: {program_name} <ensure-running|connection-url [--ensure-running]|status|stop>"
+        "Usage: {program_name} <ensure-running|connection-url [--ensure-running]|status|backup|restore-latest|stop>"
     );
 }
 

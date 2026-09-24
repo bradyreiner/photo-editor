@@ -4,12 +4,41 @@
 #include <QString>
 #include <QStringList>
 
+class QProcess;
+
 namespace photo_editor::desktop {
 
 class WorkerQueueRegistry final {
  public:
   static QStringList registeredPoolIds();
   static bool isRegisteredPool(const QString& pool_id);
+
+  // Publishes the currently visible editing surface and its latency-sensitive
+  // intent. Background producers query the same policy before taking work so
+  // playback and direct manipulation win without each queue inventing its own
+  // meaning of "high priority".
+  static void publishUserIntent(
+      const QString& surface,
+      bool workspace_visible,
+      bool playback_active,
+      bool interaction_active,
+      const QStringList& visible_item_ids = {},
+      const QString& focused_item_id = QString());
+  static void clearUserIntent(const QString& surface);
+  static QVariantMap userIntentSnapshot();
+  static QVariantMap priorityDecision(
+      const QString& workflow,
+      const QString& surface,
+      const QString& affected_item_id = QString(),
+      const QString& requested_priority = QStringLiteral("normal"));
+  static bool shouldDefer(
+      const QString& workflow,
+      const QString& surface,
+      const QString& affected_item_id = QString());
+  static void configureBackgroundProcess(
+      QProcess* process,
+      const QString& workflow,
+      int niceness = 10);
 
   static QVariantMap sampleFields(
       const QString& pool_id,

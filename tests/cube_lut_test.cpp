@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/color_transform.h"
 
 namespace {
 
@@ -18,6 +19,15 @@ bool almost_equal(double left, double right, double tolerance = 1.0e-6) {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
+}
+
+void use_linear_srgb_working(photo_editor::pipeline::ColorAdjustmentState* state) {
+  if (state == nullptr) {
+    return;
+  }
+  state->color_pipeline.working_profile.profile_name = "Linear sRGB";
+  state->color_pipeline.working_profile.color_space =
+      photo_editor::pipeline::make_linear_srgb_color_space();
 }
 
 }  // namespace
@@ -78,6 +88,7 @@ int main() {
   }
 
   photo_editor::pipeline::ColorAdjustmentState lut_strength_state;
+  use_linear_srgb_working(&lut_strength_state);
   lut_strength_state.lut_enabled = true;
   lut_strength_state.lut_strength = 50.0;
   lut_strength_state.lut_size = parsed.lut.size;
@@ -117,6 +128,7 @@ int main() {
     }
   }
   photo_editor::pipeline::ColorAdjustmentState lut_stack_state;
+  use_linear_srgb_working(&lut_stack_state);
   lut_stack_state.lut_stack = {
       photo_editor::pipeline::LutAdjustment{
           .enabled = true,
@@ -142,6 +154,71 @@ int main() {
       !almost_equal(lut_stack_pixels[0].green, 1.0, 1.0e-5) ||
       !almost_equal(lut_stack_pixels[0].blue, 0.0, 1.0e-5)) {
     return fail("LUT stack should apply enabled LUTs sequentially");
+  }
+
+  photo_editor::pipeline::LutAdjustment encoded_square_lut;
+  encoded_square_lut.name = "sRGB encoded square";
+  encoded_square_lut.size = 3;
+  encoded_square_lut.input_color_space = "sRGB";
+  encoded_square_lut.output_color_space = "sRGB";
+  for (int red = 0; red < encoded_square_lut.size; ++red) {
+    for (int green = 0; green < encoded_square_lut.size; ++green) {
+      for (int blue = 0; blue < encoded_square_lut.size; ++blue) {
+        const auto normalized_red = static_cast<double>(red) / 2.0;
+        const auto normalized_green = static_cast<double>(green) / 2.0;
+        const auto normalized_blue = static_cast<double>(blue) / 2.0;
+        encoded_square_lut.table.push_back(photo_editor::pipeline::ColorPixel{
+            .red = static_cast<float>(normalized_red * normalized_red),
+            .green = static_cast<float>(normalized_green * normalized_green),
+            .blue = static_cast<float>(normalized_blue * normalized_blue),
+            .alpha = 1.0F,
+        });
+      }
+    }
+  }
+  photo_editor::pipeline::ColorAdjustmentState encoded_lut_state;
+  use_linear_srgb_working(&encoded_lut_state);
+  encoded_lut_state.lut_stack = {encoded_square_lut};
+  std::vector<photo_editor::pipeline::ColorPixel> encoded_lut_pixels = {
+      photo_editor::pipeline::ColorPixel{
+          .red = 0.18F,
+          .green = 0.18F,
+          .blue = 0.18F,
+          .alpha = 0.75F,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &encoded_lut_pixels, 1, 1, encoded_lut_state);
+  const auto encoded_input = photo_editor::pipeline::linear_to_srgb(0.18);
+  const auto expected_encoded_output = encoded_input * 0.5;
+  const auto expected_linear_output =
+      photo_editor::pipeline::srgb_to_linear(expected_encoded_output);
+  if (!almost_equal(encoded_lut_pixels[0].red, expected_linear_output, 1.0e-5) ||
+      !almost_equal(encoded_lut_pixels[0].green, expected_linear_output, 1.0e-5) ||
+      !almost_equal(encoded_lut_pixels[0].blue, expected_linear_output, 1.0e-5) ||
+      !almost_equal(encoded_lut_pixels[0].alpha, 0.75, 1.0e-6)) {
+    return fail("sRGB LUTs should encode working-linear input and decode LUT output exactly once");
+  }
+
+  auto unsupported_lut = encoded_square_lut;
+  unsupported_lut.input_color_space = "Unknown LUT Input";
+  photo_editor::pipeline::ColorAdjustmentState unsupported_lut_state;
+  use_linear_srgb_working(&unsupported_lut_state);
+  unsupported_lut_state.lut_stack = {unsupported_lut};
+  auto unsupported_lut_pixels = std::vector<photo_editor::pipeline::ColorPixel>{
+      photo_editor::pipeline::ColorPixel{
+          .red = 0.18F,
+          .green = 0.18F,
+          .blue = 0.18F,
+          .alpha = 1.0F,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &unsupported_lut_pixels, 1, 1, unsupported_lut_state);
+  if (!almost_equal(unsupported_lut_pixels[0].red, 0.18, 1.0e-6) ||
+      !almost_equal(unsupported_lut_pixels[0].green, 0.18, 1.0e-6) ||
+      !almost_equal(unsupported_lut_pixels[0].blue, 0.18, 1.0e-6)) {
+    return fail("unsupported LUT color spaces should fail closed instead of using the working domain");
   }
 
   const auto exported = photo_editor::pipeline::serialize_cube_lut(parsed.lut, "Round Trip");

@@ -1,0 +1,65 @@
+{
+  "authority": "Digital Negative (DNG) Specification 1.7.1.0",
+  "case_count": 11,
+  "comparison_tolerance": {
+    "camera_to_xyz_d50_absolute": 2e-08,
+    "custom_calibration_temperature_kelvin_absolute": 0.001,
+    "white_xy_absolute": 1e-12
+  },
+  "fixture_csv": "dng-conformance-camera-transform-v1.csv",
+  "fixture_csv_sha256": "c3b8b0fe0288e6ee812ce0b0ff8f5df348153423942f60a38775c506c4312e39",
+  "generator": "tests/generate_dng_conformance_reference.py",
+  "generator_sha256": "77fe5307ede811bf4d05c3af8ac286db6a482725837e3753ab22152cb111cf9b",
+  "license": "Project-authored test vectors generated from public DNG, CIE, and color-science formulas",
+  "method": "Independent reciprocal-temperature interpolation, DNG matrix normalization, camera-white normalization, forward-matrix execution, and triple-illuminant weighting",
+  "profile": {
+    "analog_balance": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "calibration_illuminant1": "Standard Light A (17)",
+    "calibration_illuminant2": "D65 (21)",
+    "camera_calibration_signature": "shared-calibration",
+    "matrix_values": "defined verbatim in the generator source",
+    "profile_calibration_signature": "shared-calibration",
+    "profile_models": [
+      "standard illuminants",
+      "custom xy IlluminantData1",
+      "DNG 1.6 triple illuminants",
+      "DNG 1.6 spectrum-form IlluminantData1"
+    ],
+    "spectrum": {
+      "minimum_wavelength_nm": 380,
+      "observer": "CIE 1931 2-degree standard observer at 20 nm",
+      "sample_denominator": 10000,
+      "sample_numerators": [
+        3500,
+        4100,
+        5200,
+        6500,
+        7800,
+        9000,
+        9800,
+        10000,
+        9700,
+        9200,
+        8800,
+        8500,
+        8300,
+        8200,
+        8100,
+        8000,
+        7800,
+        7500,
+        7200,
+        6900,
+        6500,
+        6100,
+        5700
+      ],
+      "wavelength_spacing_nm": 20
+    }
+  },
+  "schema": "dng-conformance-camera-transform:v1"
+}

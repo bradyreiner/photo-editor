@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Looksy customers</title><link rel="stylesheet" href="/admin/style.css"><script type="module" src="/admin/app.js"></script></head>
+<body><main><header><p class="eyebrow">LOOKSY / OPERATIONS</p><h1>Customers</h1><p>Purchases, device access, and support history.</p></header>
+<form id="search"><label for="query">Email or customer ID</label><div class="search"><input id="query" type="search" autocomplete="off" placeholder="Exact email or ID"><button>Search</button></div></form>
+<p id="status" role="status">Loading…</p><section id="customers" aria-label="Customers"></section><button id="next" hidden>Next page</button>
+<section id="detail" hidden><h2 id="customer-name"></h2><h3>Licenses</h3><div id="licenses"></div><h3>Devices</h3><div id="devices"></div><h3>Support history</h3><div id="audit"></div></section>
+<dialog id="action-dialog"><form id="action-form"><h2 id="action-title"></h2><label for="reason">Support reason</label><textarea id="reason" required maxlength="500"></textarea><p id="action-error" role="alert"></p><div class="actions"><button id="cancel" type="button">Cancel</button><button>Confirm</button></div></form></dialog>
+</main></body></html>

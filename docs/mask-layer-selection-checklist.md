@@ -1,5 +1,9 @@
 # Mask, Layer, and Selection System Checklist
 
+Current qualification refresh (2026-09-19): the user's broader professional-tool request is assessed in the supporting [professional editing tools audit and upgrade plan](professional-editing-tools-upgrade-plan.md). It covers masking, selection, color painting/erasing, inpainting, typography and photo effects, with delivery dependencies and native performance/quality gates. Existing item receipts below remain scoped to their named tests; they do not establish completion of these broader workflows. Use this owner for implementation status and the supporting plan for the current specification.
+
+First implementation batch (2026-09-19): incremental live brush coverage, asynchronous auto-mask feedback, safe direct mask switching and draft typography fidelity are implemented. See [test results, native text screenshots and measurement limits](evidence/editing-tools-2026-09-19/README.md). These results qualify those fixes, not the entire professional-tool program. Continue with related tools in complete workflows; diagnosis and verification accompany each fix rather than becoming separate delivery phases.
+
 This checklist tracks the work required to make masking, selection, and layer editing feel like a professional editor. Status keys:
 
 - `[x]` implemented and validated in the current code path

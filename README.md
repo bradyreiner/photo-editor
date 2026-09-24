@@ -1,20 +1,20 @@
-# Photo Editor
+# Looksy
 
-Native desktop photo editor scaffold for a Lightroom-class product:
+Native desktop visual workspace for photography, motion, and design:
 
 - `Qt 6 + QML` desktop UI
 - `C++20` image engine
 - `Rust` catalog, metadata, and workflow services
-- `PostgreSQL` local-first catalog service scaffold
+- managed or externally configured PostgreSQL catalog
 - managed and referenced libraries
 - multi-drive aware asset tracking
 
 Current production direction in code:
 
-- `PostgreSQL`-backed catalog service for development and early product packaging
-- Git-tracked SQL migrations in `rust/crates/catalog/migrations`
+- PostgreSQL catalog authority for the desktop product
+- Git-tracked SQLx PostgreSQL migrations
 - app-owned runtime directories for logs, backups, and local support files
-- app-managed local Postgres bootstrap when `PHOTO_EDITOR_DATABASE_URL` is not provided
+- managed loopback-only PostgreSQL runtime for self-contained desktop installs
 
 Near-term product focus:
 
@@ -49,6 +49,88 @@ Desktop configure expects Qt 6 development packages to be installed.
 
 The headless preset now skips Qt-dependent desktop tests so it can run in Linux CI and Docker without a Qt toolchain.
 
+## Color validation
+
+The color engine keeps proprietary production behavior while validating against pinned open
+standards and independent open-source engines. It does not depend on Adobe APIs, SDKs, services, or
+Adobe-generated fixtures. DNG documentation is used as a public interoperability specification;
+the DNG/CIE oracles and conformance fixtures are project-authored. CI enforces this boundary across
+dependency declarations, runtime sources, and color-fixture provenance with
+`scripts/color/validate-proprietary-color-boundary.py`.
+
+The deterministic chart gate covers 6 cameras, 2 controlled illuminants, and 4 exposures. Its
+shipping desktop renders are compared with direct float-intermediate OpenColorIO ACES 2 references
+using strict Delta E 00, Delta E ITP, alpha, hash, profile, recipe, and provenance contracts. See
+[docs/color-engine-industry-leading-plan.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/color-engine-industry-leading-plan.md)
+for the measured results, exact remaining physical-device gates, and reproduction commands.
+Release builds also publish pass-only rendering-migration proofs bound to the exact executable;
+they prove that ACES 2 preview is non-mutating, apply changes only the rendering-model identity,
+and undo, redo, and clean reload recover byte-identical recipes.
+
+The candidate renderer can be promoted only by one fail-closed command over an evidence volume and
+a clean checkout at the exact recorded Git revision:
+
+```sh
+python3 -B scripts/color/validate-color-default-promotion.py \
+  /path/to/evidence/color-default-promotion.json \
+  --repository-root . \
+  --allowed-signers perf-corpora/color-validation-required/color-promotion-allowed-signers
+```
+
+That command reruns the Apple Metal/Core Image, Windows RAW, macOS and Windows migration, licensed
+corpus, all-built-in-preset, physical Windows SDR/HDR display, and printer/paper validators. It also
+regenerates the corpus aggregate and requires two final approvers who did not prepare any nested
+evidence. No individual hardware or editorial artifact is allowed to promote the default alone.
+Physical-output summaries are not trusted directly: v2 proofs hash the raw Lab/ICtCp patch data and
+recompute CIEDE2000 and BT.2124 Delta E ITP percentiles and maxima during validation.
+Import a lab or instrument worksheet that has been normalized to the documented canonical CSV
+columns with:
+
+```sh
+python3 -B scripts/color/import-physical-color-measurements.py measurements.csv \
+  --output measurements.json
+```
+
+The importer rejects reordered or missing columns, duplicate patches, non-finite samples, fewer
+than 24 patches, and overwrites; its JSON output includes the exact hashes and recomputed values to
+copy into the display or printer proof manifest.
+Final approvals are OpenSSH detached signatures over the evidence hash, source revision, reviewer
+identity, date, decision, categories, independence claim, and notes. The allowed-signers file must
+already be committed at the recorded source revision; start from
+`perf-corpora/color-validation-required/color-promotion-allowed-signers.example` and replace its
+comment-only contents with the real reviewers' public keys before evidence collection. Generate
+the canonical bytes to sign with `scripts/color/create-color-promotion-approval-statement.py`, then
+sign them using the namespace `photo-editor-color-approval`; editing any signed field invalidates
+promotion.
+
+Promotion assembly is also fail-safe. Place every downloaded proof and executable inside one
+evidence directory, then use `scripts/color/prepare-color-default-promotion.py --help` to create a
+`pending-approval` draft. The preparer refuses files outside that directory, a dirty checkout,
+missing inputs, existing output, or an unresolved revision and computes the complete evidence hash.
+For each reviewer:
+
+```sh
+python3 -B scripts/color/create-color-promotion-approval-statement.py \
+  --promotion-manifest /evidence/promotion-draft.json \
+  --reviewer-record /evidence/reviewer-1.json \
+  --output /evidence/reviewer-1.statement.json
+ssh-keygen -Y sign -f /path/to/reviewer-key \
+  -n photo-editor-color-approval /evidence/reviewer-1.statement.json
+```
+
+After two trusted reviewers sign independently, finalize without hand-editing the decision:
+
+```sh
+python3 -B scripts/color/finalize-color-default-promotion.py \
+  --draft /evidence/promotion-draft.json \
+  --approval /evidence/reviewer-1.json /evidence/reviewer-1.statement.json.sig \
+  --approval /evidence/reviewer-2.json /evidence/reviewer-2.statement.json.sig \
+  --allowed-signers perf-corpora/color-validation-required/color-promotion-allowed-signers \
+  --repository-root . --output /evidence/color-default-promotion.json
+```
+
+Finalization writes nothing unless the complete v2 promotion validator passes.
+
 ## Run Natively
 
 Install the macOS host dependencies first:
@@ -63,17 +145,39 @@ Then run the app with:
 ./scripts/run-native.sh
 ```
 
-That script now:
+The launcher incrementally builds the Rust helpers and the `photo_editor_app`
+target, reusing the existing CMake configuration. Tests and benchmarks are built
+separately. It then prepares the existing PostgreSQL catalog and launches the app.
 
-- builds the Rust catalog binaries first
-- prepares app runtime directories
-- starts a local managed catalog database when no external DB URL is configured
-- otherwise runs migrations against the configured database
-- launches the desktop app
+```sh
+./scripts/run-native.sh --no-build           # Reopen the existing optimized app
+./scripts/run-native.sh --release            # Build and launch the optimized app
+./scripts/run-native.sh --release --no-build # Reopen the existing Release app
+./scripts/run-native.sh --build-only --jobs 4 # Build without starting the app or database
+./scripts/run-native.sh --configure          # Explicitly refresh CMake configuration
+```
+
+Release is the default so local photo editing uses optimized rendering. Use `--debug` for debugger sessions; use `--debug --no-build` to reopen that build.
+`--no-build` requires an existing app and catalog helpers. App arguments can be
+forwarded after `--`. The launcher waits up to ten seconds for an existing
+Debug or Release instance from this checkout to exit before starting its replacement.
+If shutdown stalls, it reports the problem without force-killing the app.
+
+The launcher preserves `PHOTO_EDITOR_DATABASE_URL` and the existing runtime,
+log, and backup directory overrides. Run the isolated launcher checks with
+`python3 scripts/test-run-native.py`.
+
+For focused thumbnail and recipe recovery tests, see [the editor stall verification notes](docs/editor-stall-fixes-2026-09-10.md#focused-local-commands).
 
 You can also double-click [PhotoEditor.command](/Users/bradyreiner/projects/PersonalProjects/photo-editor/PhotoEditor.command) in Finder to build and launch the app in Terminal.
 
-## PostgreSQL
+## Catalog storage
+
+Without `PHOTO_EDITOR_DATABASE_URL`, the desktop app manages a private loopback-only PostgreSQL
+cluster under the application-data directory. Packaged releases bundle the required PostgreSQL
+runtime. See [docs/local-postgres-service.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/local-postgres-service.md).
+
+### External PostgreSQL compatibility
 
 For external development databases, start PostgreSQL yourself:
 
@@ -87,9 +191,10 @@ The default connection string is:
 postgresql://photo_editor:photo_editor@localhost:5433/photo_editor
 ```
 
-You can copy [.env.example](/Users/bradyreiner/projects/PersonalProjects/photo-editor/.env.example) into your own environment when the catalog service is wired up.
-
-If `PHOTO_EDITOR_DATABASE_URL` is not set, the desktop app now defaults to a managed local Postgres instance under the app data directory. That path requires Postgres command-line tools (`initdb`, `pg_ctl`) to be available on `PATH` or exposed through `PHOTO_EDITOR_POSTGRES_BIN_DIR`.
+You can copy [.env.example](/Users/bradyreiner/projects/PersonalProjects/photo-editor/.env.example)
+to configure an explicitly provisioned server. `PHOTO_EDITOR_DATABASE_URL` is honored by the
+desktop app and every catalog helper; when it is absent, they use the managed local PostgreSQL
+cluster instead.
 
 Schema changes are versioned in Git as `sqlx` migration files under [rust/crates/catalog/migrations](/Users/bradyreiner/projects/PersonalProjects/photo-editor/rust/crates/catalog/migrations).
 
@@ -100,18 +205,19 @@ cd rust
 cargo run -p photo-catalog --bin catalog_migrate
 ```
 
-To inspect or manage the local bundled-style catalog service:
+To inspect, back up, or restore the managed PostgreSQL catalog:
 
 ```sh
 cd rust
 cargo run -p photo-catalog --bin catalog_local_db -- status
 cargo run -p photo-catalog --bin catalog_local_db -- ensure-running
-cargo run -p photo-catalog --bin catalog_local_db -- stop
+cargo run -p photo-catalog --bin catalog_local_db -- backup
+cargo run -p photo-catalog --bin catalog_local_db -- restore-latest
 ```
 
-## Import a folder into PostgreSQL
+## Import a folder into the catalog
 
-After the database is running, you can import a folder with:
+You can import a folder with:
 
 ```sh
 cd rust

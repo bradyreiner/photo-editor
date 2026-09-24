@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList id="photo-editor-clf-scale-v1" name="Photo Editor CLF Scale" compCLFversion="3.0">
+  <Description>Deterministic RGB scale used by the OCIO project-config contract.</Description>
+  <InputDescriptor>Linear RGB</InputDescriptor>
+  <OutputDescriptor>Scaled Linear RGB</OutputDescriptor>
+  <Matrix inBitDepth="32f" outBitDepth="32f">
+    <Array dim="3 4">
+      1.25 0 0 0
+      0 0.75 0 0
+      0 0 0.5 0
+    </Array>
+  </Matrix>
+</ProcessList>

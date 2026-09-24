@@ -1,5 +1,9 @@
 # Max-Resolution Preview Rendering Plan
 
+> Supporting preview/performance plan. Its measurements and architecture notes feed the current
+> program, but completion is governed by
+> `docs/color-engine-and-app-foundations-completion-strategy.md`.
+
 This document defines the top-to-bottom plan for making preview rendering feel like a professional photo editor: max-resolution where it matters, immediate visual feedback during edits, and measured proof that each change improves the system.
 
 The current preview path is centered around `EditorPreviewController::renderPreview()` and `render_preview_request()` in `apps/desktop/src/editor_preview_controller.cpp`. It already has useful pieces: render coalescing, decoded-image caching, linear-image caching, Metal support, in-memory preview publication, native texture display, observability, and benchmark artifacts. The problem is that the layers are still too tightly coupled. Frontend setters directly imply render work, the render request executes too much as one large job, the scheduler has coarse priority, and full-resolution work can sit too close to the interactive feedback loop.

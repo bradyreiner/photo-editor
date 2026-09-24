@@ -3,6 +3,8 @@ import QtQuick
 Item {
     id: root
 
+    Theme { id: theme }
+
     property bool active: false
     property bool locked: false
     property real imageX: 0
@@ -19,6 +21,10 @@ Item {
     property real layerRotation: 0
 
     signal transformEdited(int x, int y, real scale, real rotation)
+    signal editRequested()
+    signal layerPickRequested(real viewportX, real viewportY)
+    signal interactionStarted()
+    signal interactionFinished()
 
     visible: active && canvasWidth > 0 && canvasHeight > 0 && layerWidth > 0 && layerHeight > 0
     enabled: visible && !locked
@@ -33,7 +39,7 @@ Item {
     readonly property real frameHeight: layerHeight * boundedScale * viewportScaleY
     readonly property real centerX: frameX + frameWidth / 2
     readonly property real centerY: frameY + frameHeight / 2
-    readonly property color guideColor: locked ? "#8f98a2" : "#72cbb2"
+    readonly property color guideColor: locked ? theme.textMuted : theme.primaryAccent
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
@@ -117,6 +123,7 @@ Item {
             enabled: root.enabled
             cursorShape: Qt.SizeAllCursor
             onPressed: function(mouse) {
+                root.interactionStarted()
                 const point = frame.mapToItem(root, mouse.x, mouse.y)
                 dragState.startX = point.x
                 dragState.startY = point.y
@@ -132,6 +139,13 @@ Item {
                                    root.layerScale,
                                    root.layerRotation)
             }
+            onDoubleClicked: root.editRequested()
+            onClicked: function(mouse) {
+                const point = frame.mapToItem(root, mouse.x, mouse.y)
+                root.layerPickRequested(point.x, point.y)
+            }
+            onReleased: root.interactionFinished()
+            onCanceled: root.interactionFinished()
         }
 
         Rectangle {
@@ -160,6 +174,7 @@ Item {
                 enabled: root.enabled
                 cursorShape: Qt.CrossCursor
                 onPressed: function(mouse) {
+                    root.interactionStarted()
                     const point = parent.mapToItem(root, mouse.x, mouse.y)
                     dragState.startRotation = root.layerRotation
                     dragState.startAngle = root.angleForPoint(point)
@@ -173,6 +188,8 @@ Item {
                                        root.layerScale,
                                        dragState.startRotation + root.angleForPoint(point) - dragState.startAngle)
                 }
+                onReleased: root.interactionFinished()
+                onCanceled: root.interactionFinished()
             }
         }
 
@@ -203,6 +220,7 @@ Item {
                     enabled: root.enabled
                     cursorShape: Qt.SizeFDiagCursor
                     onPressed: function(mouse) {
+                        root.interactionStarted()
                         const point = parent.mapToItem(root, mouse.x, mouse.y)
                         dragState.startScale = root.boundedScale
                         dragState.startDistance = root.distanceForPoint(point)
@@ -216,6 +234,8 @@ Item {
                                            dragState.startScale * root.distanceForPoint(point) / dragState.startDistance,
                                            root.layerRotation)
                     }
+                    onReleased: root.interactionFinished()
+                    onCanceled: root.interactionFinished()
                 }
             }
         }

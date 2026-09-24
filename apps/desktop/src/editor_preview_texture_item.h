@@ -3,6 +3,7 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QSize>
+#include <memory>
 
 namespace photo_editor::desktop {
 
@@ -35,6 +36,7 @@ class EditorPreviewTextureItem : public QQuickItem {
 
   QPointer<EditorPreviewController> controller_;
   quint64 native_texture_handle_ = 0;
+  std::shared_ptr<void> native_texture_lease_;
   QSize native_texture_size_;
   int native_texture_revision_ = 0;
   bool native_texture_available_ = false;

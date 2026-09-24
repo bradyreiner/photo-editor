@@ -22,7 +22,7 @@
 
 - Keep the core logic deterministic and testable outside the UI.
 - Expand smoke tests into render, catalog, and metadata regression suites.
-- Add SQLite migrations early.
+- Add versioned PostgreSQL migrations early; PostgreSQL is the sole catalog authority.
 - Add logging, diagnostics, and crash reporting before alpha.
 
 ### Release engineering

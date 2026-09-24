@@ -4,27 +4,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Download Virel Studio, a local-first native photo editor for macOS and Windows.">
-  <meta property="og:title" content="Virel Studio — native, local-first photo editing">
-  <meta property="og:description" content="Import, cull, edit, mask, and export without sending your photo library to a cloud service.">
+  <meta name="description" content="Evaluate Looksy, a local-first photo editor for Apple silicon Macs. Buy a one-time license for personal and client work.">
+  <meta property="og:title" content="Looksy — a better way to see">
+  <meta property="og:description" content="Organize, edit, sequence, design, and export without sending your media library to a cloud service.">
   <meta property="og:type" content="website">
-  <meta property="og:image" content="./assets/og-virel.png">
+  <meta property="og:image" content="./assets/og-looksy.png">
   <meta name="theme-color" content="#090a0b">
-  <title>Virel Studio — Download</title>
-  <link rel="icon" href="./assets/virel-icon.png?v=1" type="image/png">
-  <link rel="stylesheet" href="./styles.css?v=5">
-  <script defer src="./download-config.js?v=5"></script>
-  <script defer src="./download-page.js?v=5"></script>
+  <title>Looksy — Download</title>
+  <link rel="icon" href="./assets/looksy-icon.png?v=1" type="image/png">
+  <link rel="stylesheet" href="./styles.css?v=6">
+  <script defer src="./download-config.js?v=6"></script>
+  <script defer src="./download-page.js?v=6"></script>
+  <script defer src="./legal-page.js?v=1"></script>
 </head>
 <body>
   <header class="topbar" aria-label="Site header">
-    <a class="brand-mark" href="./" aria-label="Virel Studio home">
-      <img class="brand-image" src="./assets/virel-icon.png" alt="">
-      <span>Virel Studio</span>
+    <a class="brand-mark" href="./" aria-label="Looksy home">
+      <img class="brand-image" src="./assets/looksy-icon.png" alt="">
+      <span>Looksy</span>
     </a>
     <nav class="topnav" aria-label="Page sections">
       <a href="#downloads">Download</a>
-      <a href="#support-development">Support</a>
+      <a id="commerce-nav" href="#support-development">Support</a>
       <a href="#included">Included</a>
       <a href="./support.html">Help</a>
     </nav>
@@ -34,10 +35,10 @@
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
         <div class="release-pill" id="channel-pill">Public alpha</div>
-        <h1 id="page-title">Your photos.<br>Your machine.</h1>
+        <h1 id="page-title">A better way<br>to see.</h1>
         <p class="lede">
-          Virel Studio is a native, local-first workspace for importing, culling,
-          editing, masking, and exporting photo libraries on macOS and Windows.
+          Looksy is a native, local-first photo editor for organizing and shaping
+          photography, motion, and visual design on Apple silicon Macs.
         </p>
 
         <div class="hero-proof" aria-label="Release qualities">
@@ -71,12 +72,12 @@
         </p>
       </div>
 
-      <div class="product-panel app-preview" aria-label="Virel Studio interface preview">
+      <div class="product-panel app-preview" aria-label="Looksy interface preview">
         <div class="window-chrome">
           <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
-          <span class="window-title">Virel Studio · Edited · sRGB</span>
+          <span class="window-title">Looksy · Edited · sRGB</span>
         </div>
-        <img class="app-screenshot public-preview" src="./assets/app-preview.png?v=1" alt="Virel Studio edit workspace with image preview, filmstrip, histogram, and tone controls.">
+        <img class="app-screenshot public-preview" src="./assets/app-preview.png?v=1" alt="Looksy photo editor with image preview, filmstrip, histogram, and tone controls.">
       </div>
     </section>
 
@@ -114,7 +115,7 @@
       <div class="commerce-copy">
         <p class="section-kicker">Independent software</p>
         <h2 id="commerce-title">Use the alpha freely. Support the work if it earns it.</h2>
-        <p>
+        <p id="commerce-description">
           The public alpha does not require an activation server. Optional support helps fund signing,
           hardware testing, camera coverage, and the unglamorous work of making catalogs and exports dependable.
         </p>
@@ -122,20 +123,23 @@
       <div class="commerce-actions">
         <a id="support-payment" class="commerce-button primary disabled" href="#" aria-disabled="true">Support development</a>
         <a id="purchase-button" class="commerce-button disabled" href="#" aria-disabled="true">Buy a supporter license</a>
-        <small>Payments are not represented as tax-deductible charitable donations.</small>
+        <a id="subscription-button" class="commerce-button disabled" href="#" aria-disabled="true" hidden>Subscriptions opening soon</a>
+        <a id="purchase-recovery" class="commerce-button disabled" href="#" aria-disabled="true" hidden>Find my purchase</a>
+        <small id="commerce-detail">Payments are not represented as tax-deductible charitable donations.</small>
+        <small><a href="./terms.html">License terms</a> · <a href="./refunds.html">Refund policy</a></small>
       </div>
     </section>
 
     <section id="included" class="feature-section" aria-labelledby="included-title">
       <div class="section-heading">
         <p class="section-kicker">Alpha scope</p>
-        <h2 id="included-title">A complete photo workflow is the product.</h2>
+        <h2 id="included-title">A complete visual workflow is the product.</h2>
       </div>
       <div class="feature-grid">
         <article><h3>Import and cull</h3><p>Bring in focused libraries, review photographs quickly, and keep catalog state local.</p></article>
-        <article><h3>Tone and color</h3><p>Work with exposure, tonal controls, curves, profiles, and non-destructive recipes.</p></article>
-        <article><h3>Masks and layers</h3><p>Refine edits through selection-aware masks, local adjustments, and a visible active target.</p></article>
-        <article><h3>Export and recover</h3><p>Queue exports, preserve edits across relaunches, and create backups before catalog migrations.</p></article>
+        <article><h3>Studio</h3><p>Work with tone, color, masks, layers, profiles, and non-destructive recipes.</p></article>
+        <article><h3>Timeline and design</h3><p>Sequence motion, build visual layouts, and move between media without leaving the workspace.</p></article>
+        <article><h3>Export and recover</h3><p>Queue deliverables, preserve edits across relaunches, and create backups before catalog migrations.</p></article>
       </div>
     </section>
 
@@ -157,8 +161,8 @@
   </main>
 
   <footer class="site-footer">
-    <span>© 2026 Virel</span>
-    <span>Virel Studio public alpha</span>
+    <span>© 2026 <span data-legal-publisher>Publisher identity pending release approval</span></span>
+    <span>Looksy public alpha</span>
   </footer>
 </body>
 </html>

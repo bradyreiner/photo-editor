@@ -1,5 +1,9 @@
 # Color Science Roadmap
 
+> Historical roadmap: most core milestones below have been implemented. The current execution and
+> completion authority is `docs/color-engine-and-app-foundations-completion-strategy.md`;
+> `docs/color-engine-industry-leading-plan.md` is also historical.
+
 ## Goal
 
 Turn the current photo pipeline into a color-managed render architecture that can compete on trust,

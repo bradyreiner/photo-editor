@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 MenuItem {
@@ -28,8 +28,8 @@ MenuItem {
                    : root.danger
                      ? theme.error
                      : (root.highlighted ? root.accent : theme.textMain)
-            Layout.preferredWidth: 13
-            Layout.preferredHeight: 13
+            Layout.preferredWidth: theme.typeSection
+            Layout.preferredHeight: theme.typeSection
             Layout.alignment: Qt.AlignVCenter
         }
 
@@ -42,7 +42,7 @@ MenuItem {
                      ? theme.error
                      : theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: 11
+            font.pixelSize: theme.typeBody
             font.weight: root.highlighted ? Font.DemiBold : Font.Medium
             font.letterSpacing: 0
             verticalAlignment: Text.AlignVCenter
@@ -58,7 +58,7 @@ MenuItem {
             text: root.shortcutText
             color: root.enabled ? theme.textMuted : theme.alpha(theme.textMuted, 0.42)
             font.family: theme.fontMono
-            font.pixelSize: 9
+            font.pixelSize: theme.typeCaption
             font.letterSpacing: 0
             maximumLineCount: 1
             elide: Text.ElideNone
@@ -78,7 +78,7 @@ MenuItem {
                  : root.highlighted
                    ? theme.alpha(root.accent, 0.12)
                    : "transparent"
-        border.width: root.visualFocus ? 1 : 0
+        border.width: root.visualFocus ? theme.hairlineWidth : 0
         border.color: theme.alpha(theme.focusRing, 0.82)
     }
 }

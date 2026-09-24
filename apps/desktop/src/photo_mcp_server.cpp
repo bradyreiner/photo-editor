@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include "automation_capability_policy.h"
 #include "photo_automation_bridge.h"
 
 namespace photo_editor::desktop {
@@ -123,6 +124,23 @@ QJsonObject metrics_properties(bool include_confirmed) {
 QVector<PhotoMcpTool> photo_mcp_tools() {
   return {
       {
+          "photo.search_edit_start", "Find Photos for an Edit",
+          "Start local visual search from one search-and-edit instruction. Never edits or confirms targets. The user must review matches and confirm in the app. Poll photo.search_edit_status.",
+          "photo_search_edit_start",
+          object_schema(QJsonObject{{"instruction", string_property()}}, QJsonArray{"instruction"}),
+          false, false, false,
+      },
+      {
+          "photo.search_edit_status", "Search and Edit Status",
+          "Read search progress, interpreted instructions and candidate ids. Approval is only available in the local app.",
+          "photo_search_edit_status", empty_object_schema(), true, false, false,
+      },
+      {
+          "photo.search_edit_cancel", "Cancel Search",
+          "Stop an unconfirmed photo search. Does not cancel or commit an active draft.",
+          "photo_search_edit_cancel", empty_object_schema(), false, false, false,
+      },
+      {
           "photo.live_status",
           "Photo Live Status",
           "Read the current app, selection, agent, and draft status.",
@@ -163,9 +181,19 @@ QVector<PhotoMcpTool> photo_mcp_tools() {
           false,
       },
       {
+          "photo.read_adjustments",
+          "Read Adjustments",
+          "Read the selected asset as a canonical asset-bound adjustment patch.",
+          "photo_read_adjustments",
+          empty_object_schema(),
+          true,
+          false,
+          false,
+      },
+      {
           "photo.read_recipe",
-          "Read Recipe",
-          "Read the selected asset recipe JSON.",
+          "Read Legacy Recipe",
+          "Compatibility-only read of the selected asset's legacy recipe projection.",
           "photo_read_recipe",
           empty_object_schema(),
           true,
@@ -358,6 +386,27 @@ QVector<PhotoMcpTool> photo_mcp_tools() {
           true,
       },
       {
+          "photo.resolve_agent_review_issue",
+          "Resolve Agent Review Issue",
+          "Resolve one flagged draft photo by fixing it, accepting it anyway, or rolling back that photo.",
+          "photo_resolve_agent_review_issue",
+          object_schema(
+              QJsonObject{
+                  {QStringLiteral("assetId"), string_property()},
+                  {QStringLiteral("action"),
+                   string_property(QStringLiteral(
+                       "fix, accept_anyway, or rollback_photo"))},
+                  {QStringLiteral("confirmed"),
+                   boolean_property(QStringLiteral("Must be true."))},
+              },
+              QJsonArray{QStringLiteral("assetId"),
+                         QStringLiteral("action"),
+                         QStringLiteral("confirmed")}),
+          false,
+          true,
+          true,
+      },
+      {
           "photo.cancel_agent_run",
           "Cancel Agent Run",
           "Cancel an active agent run.",
@@ -391,6 +440,19 @@ const PhotoMcpTool* find_tool(const QString& name) {
   return iterator == tools.cend() ? nullptr : &(*iterator);
 }
 
+QString required_capability(const PhotoMcpTool& tool) {
+  return automation_capability_for_command(
+      QString::fromLatin1(tool.automation_command));
+}
+
+QStringList all_capabilities() {
+  return automation_capability_names();
+}
+
+bool permits_tool(const PhotoMcpTool& tool, const QStringList& capabilities) {
+  return capabilities.contains(required_capability(tool));
+}
+
 QJsonObject tool_annotations(const PhotoMcpTool& tool) {
   return QJsonObject{
       {QStringLiteral("readOnlyHint"), tool.read_only},
@@ -407,6 +469,7 @@ QJsonObject mcp_tool_object(const PhotoMcpTool& tool) {
       {QStringLiteral("description"), QString::fromLatin1(tool.description)},
       {QStringLiteral("inputSchema"), tool.input_schema},
       {QStringLiteral("annotations"), tool_annotations(tool)},
+      {QStringLiteral("requiredCapability"), required_capability(tool)},
   };
 }
 
@@ -420,14 +483,27 @@ PhotoMcpServer::PhotoMcpServer(PhotoAutomationBridge* automation_bridge, QObject
     : QObject(parent), automation_bridge_(automation_bridge) {}
 
 QJsonObject PhotoMcpServer::toolsListResult() const {
+  return toolsListResult(all_capabilities());
+}
+
+QJsonObject PhotoMcpServer::toolsListResult(const QStringList& capabilities) const {
   QJsonArray tools;
   for (const auto& tool : photo_mcp_tools()) {
-    tools.append(mcp_tool_object(tool));
+    if (permits_tool(tool, capabilities)) {
+      tools.append(mcp_tool_object(tool));
+    }
   }
   return QJsonObject{{QStringLiteral("tools"), tools}};
 }
 
 QJsonObject PhotoMcpServer::callTool(const QString& name, const QJsonObject& arguments) const {
+  return callTool(name, arguments, all_capabilities());
+}
+
+QJsonObject PhotoMcpServer::callTool(
+    const QString& name,
+    const QJsonObject& arguments,
+    const QStringList& capabilities) const {
   const auto* tool = find_tool(name.trimmed());
   if (tool == nullptr) {
     return QJsonObject{
@@ -436,6 +512,24 @@ QJsonObject PhotoMcpServer::callTool(const QString& name, const QJsonObject& arg
              {QStringLiteral("type"), QStringLiteral("text")},
              {QStringLiteral("text"), QStringLiteral("Unknown photo tool: %1").arg(name)},
          }}},
+        {QStringLiteral("isError"), true},
+    };
+  }
+  if (!permits_tool(*tool, capabilities)) {
+    const auto capability = required_capability(*tool);
+    return QJsonObject{
+        {QStringLiteral("content"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("type"), QStringLiteral("text")},
+             {QStringLiteral("text"),
+              QStringLiteral("MCP capability '%1' is required for %2.")
+                  .arg(capability, name)},
+         }}},
+        {QStringLiteral("structuredContent"),
+         QJsonObject{
+             {QStringLiteral("error"), QStringLiteral("insufficient_capability")},
+             {QStringLiteral("requiredCapability"), capability},
+         }},
         {QStringLiteral("isError"), true},
     };
   }
@@ -479,6 +573,12 @@ QJsonObject PhotoMcpServer::callTool(const QString& name, const QJsonObject& arg
 }
 
 QJsonObject PhotoMcpServer::handleJsonRpc(const QJsonObject& request) const {
+  return handleJsonRpc(request, all_capabilities());
+}
+
+QJsonObject PhotoMcpServer::handleJsonRpc(
+    const QJsonObject& request,
+    const QStringList& capabilities) const {
   const auto id = request.value(QStringLiteral("id"));
   if (request.value(QStringLiteral("jsonrpc")).toString() != QStringLiteral("2.0")) {
     return json_rpc_error(id, -32600, QStringLiteral("MCP requests must use JSON-RPC 2.0."));
@@ -489,7 +589,7 @@ QJsonObject PhotoMcpServer::handleJsonRpc(const QJsonObject& request) const {
     if (!params.isUndefined() && !params.isObject()) {
       return json_rpc_error(id, -32602, QStringLiteral("tools/list params must be an object when provided."));
     }
-    return json_rpc_result(id, toolsListResult());
+    return json_rpc_result(id, toolsListResult(capabilities));
   }
   if (method == QStringLiteral("tools/call")) {
     const auto params = request.value(QStringLiteral("params")).toObject();
@@ -501,7 +601,7 @@ QJsonObject PhotoMcpServer::handleJsonRpc(const QJsonObject& request) const {
           -32602,
           QStringLiteral("tools/call requires params.name and optional object params.arguments."));
     }
-    return json_rpc_result(id, callTool(name, arguments_value.toObject()));
+    return json_rpc_result(id, callTool(name, arguments_value.toObject(), capabilities));
   }
   return json_rpc_error(id, -32601, QStringLiteral("Unsupported MCP method: %1").arg(method));
 }

@@ -5,14 +5,16 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputDir,
 
+    # PackageName and AppId intentionally keep the private-alpha identity so an
+    # installed build can upgrade in place. They are not user-visible branding.
     [string]$PackageName = "Virel.Studio",
-    [string]$PackageDisplayName = "Virel Studio",
+    [string]$PackageDisplayName = "Looksy",
     [string]$Publisher = "",
-    [string]$PublisherDisplayName = "Virel",
-    [string]$Description = "Virel Studio professional photo editor",
+    [string]$PublisherDisplayName = "",
+    [string]$Description = "Looksy photo editor",
     [string]$Version = "0.1.0",
     [string]$Architecture = "x64",
-    [string]$Executable = "bin\VirelStudio.exe",
+    [string]$Executable = "bin\Looksy.exe",
     [string]$AppId = "VirelStudio",
     [string]$MinVersion = "10.0.19045.0",
     [string]$MaxVersionTested = "10.0.26100.0",
@@ -122,10 +124,9 @@ if (-not (Test-Path $InstallRoot)) {
 }
 
 $PackageName = Get-DefaultIfEmpty -Value $PackageName -Fallback "Virel.Studio"
-$PackageDisplayName = Get-DefaultIfEmpty -Value $PackageDisplayName -Fallback "Virel Studio"
-$PublisherDisplayName = Get-DefaultIfEmpty -Value $PublisherDisplayName -Fallback "Virel"
-$Description = Get-DefaultIfEmpty -Value $Description -Fallback "Virel Studio professional photo editor"
-$Executable = Get-DefaultIfEmpty -Value $Executable -Fallback "bin\VirelStudio.exe"
+$PackageDisplayName = Get-DefaultIfEmpty -Value $PackageDisplayName -Fallback "Looksy"
+$Description = Get-DefaultIfEmpty -Value $Description -Fallback "Looksy photo editor"
+$Executable = Get-DefaultIfEmpty -Value $Executable -Fallback "bin\Looksy.exe"
 $AppId = Get-DefaultIfEmpty -Value $AppId -Fallback "VirelStudio"
 $Architecture = Get-DefaultIfEmpty -Value $Architecture -Fallback "x64"
 $MinVersion = Get-DefaultIfEmpty -Value $MinVersion -Fallback "10.0.19045.0"
@@ -135,8 +136,8 @@ $BackgroundColor = Get-DefaultIfEmpty -Value $BackgroundColor -Fallback "transpa
 $resolvedInstallRoot = (Resolve-Path $InstallRoot).Path
 $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $packageVersion = Convert-ToQuadVersion $Version
-$packageFileName = "VirelStudio-$packageVersion-$Architecture.msix"
-$appInstallerFileName = "VirelStudio.appinstaller"
+$packageFileName = "Looksy-$packageVersion-$Architecture.msix"
+$appInstallerFileName = "Looksy.appinstaller"
 $stagingRoot = Join-Path $resolvedOutputDir "msix-root"
 $assetsDir = Join-Path $stagingRoot "Assets"
 $packagePath = Join-Path $resolvedOutputDir $packageFileName
@@ -172,6 +173,9 @@ foreach ($assetName in @(
 
 if ([string]::IsNullOrWhiteSpace($Publisher)) {
     throw "Publisher must match the subject of the production code-signing certificate. Set PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER."
+}
+if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
+    throw "PublisherDisplayName must be the approved legal publisher name. Set LOOKSY_LEGAL_PUBLISHER."
 }
 
 $manifestPath = Join-Path $stagingRoot "AppxManifest.xml"

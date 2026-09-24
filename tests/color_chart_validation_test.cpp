@@ -116,6 +116,9 @@ int main() {
 
   auto rendered_patches = reference_patches;
   photo_editor::pipeline::ColorAdjustmentState neutral_state;
+  neutral_state.color_pipeline.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::
+          LegacyOklchV1;
   neutral_state.color_pipeline.working_profile =
       photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
   neutral_state.color_pipeline.preview_output_profile =
@@ -189,7 +192,7 @@ int main() {
 
   auto exposure_patches = reference_patches;
   auto exposure_state = neutral_state;
-  exposure_state.exposure = 0.35;
+  exposure_state.input_transform.exposure = 0.35;
   exposure_state.contrast = 12.0;
   photo_editor::pipeline::apply_color_adjustments(
       &exposure_patches,
@@ -210,6 +213,9 @@ int main() {
   }
 
   auto compression_config = photo_editor::pipeline::default_color_pipeline_config();
+  compression_config.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::
+          LegacyOklchV1;
   compression_config.working_profile =
       photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
   compression_config.preview_output_profile =
@@ -264,6 +270,10 @@ int main() {
       photo_editor::pipeline::DecodedImageMetadata{
           .valid = true,
           .is_raw = true,
+          .pixel_encoding = photo_editor::pipeline::DecodedPixelEncoding::CameraLinearRgb,
+          .decoder_backend = "reference-camera-linear-backend",
+          .decoded_color_space_name = "Camera RGB",
+          .demosaic_applied = true,
           .input_profile_name = "Camera Native",
           .camera_make = "Canon",
           .camera_model = "EOS R5",

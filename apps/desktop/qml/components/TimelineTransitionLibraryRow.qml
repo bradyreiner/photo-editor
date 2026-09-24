@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -27,12 +27,8 @@ Rectangle {
     color: transitionHover.hovered || activeFocus
            ? theme.alpha(theme.ink850, 0.96)
            : theme.alpha(theme.ink900, 0.88)
-    border.width: activeFocus ? 2 : 1
-    border.color: activeFocus
-                  ? theme.alpha(theme.focusRing, 0.9)
-                  : transitionHover.hovered
-                    ? theme.alpha(theme.accentCool400, 0.34)
-                    : theme.alpha(theme.lineSoft, 0.34)
+    border.width: activeFocus ? theme.focusBorderWidth : 0
+    border.color: activeFocus ? theme.alpha(theme.focusRing, 0.9) : "transparent"
     clip: true
     activeFocusOnTab: true
     Accessible.name: transitionName
@@ -66,7 +62,7 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 2
+            spacing: theme.space2
 
             Label {
                 id: titleLabel
@@ -74,7 +70,7 @@ Rectangle {
                 text: root.transitionName
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeBody
                 font.weight: Font.Medium
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
@@ -86,7 +82,7 @@ Rectangle {
                 text: root.transitionDescription
                 color: theme.textMuted
                 font.family: theme.fontMono
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone

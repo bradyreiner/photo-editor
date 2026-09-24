@@ -1,0 +1,12 @@
+{
+  "accessMode": "paid-both",
+  "supportedPlatforms": ["mac-arm"],
+  "paymentProvider": "lemonsqueezy",
+  "licenseSummary": "Choose a subscription or a one-time license for one user, including personal and client work. One-time licenses include maintenance updates for the purchased major version. Plan prices, activation requirements and renewal terms are shown before checkout.",
+  "priceLabel": "",
+  "purchaseUrl": "",
+  "subscriptionPurchaseUrl": "",
+  "subscriptionPriceLabel": "",
+  "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",
+  "commercialTermsApproved": false
+}

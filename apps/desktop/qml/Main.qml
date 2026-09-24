@@ -1,6 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Window
 import "components"
@@ -13,10 +13,78 @@ ApplicationWindow {
     minimumWidth: 1024
     minimumHeight: 720
     visible: true
-    title: "Virel Studio"
+    title: "Looksy"
     color: theme.ink950
     font.family: theme.fontUi
-    font.pixelSize: 12
+    font.pixelSize: theme.typeControl
+    property var closeCoordinator: null
+    property bool allowUnconfirmedExportClose: false
+    onClosing: function(event) {
+        if (exportJobs.pendingAdmissionCount > 0 || (!allowUnconfirmedExportClose && exportJobs.admissionError.length > 0)) {
+            event.accepted = false
+            exportAdmissionCloseDialog.open()
+            return
+        }
+        if (closeCoordinator) event.accepted = closeCoordinator.handleWindowClose()
+    }
+
+    Popup {
+        id: exportAdmissionCloseDialog
+        objectName: "exportAdmissionCloseDialog"
+        parent: Overlay.overlay
+        modal: true
+        focus: true
+        width: Math.min(480, parent.width - 32)
+        x: (parent.width - width) / 2
+        y: Math.max(16, (parent.height - height) / 2)
+        padding: 20
+        background: Rectangle { color: theme.ink900; radius: 18; border.color: theme.lineSoft }
+        contentItem: ColumnLayout {
+            spacing: 16
+            Label {
+                Layout.fillWidth: true
+                text: "Confirming your export jobs"
+                color: theme.textStrong
+                font.pixelSize: 18
+            }
+            Label {
+                Layout.fillWidth: true
+                text: exportJobs.status + " Keep this window open until the catalog confirms the jobs. Closing without confirmation may lose unsaved requests; any jobs already saved in the catalog are preserved."
+                color: theme.textMuted
+                wrapMode: Text.WordWrap
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                ActionButton { Layout.fillWidth: true; text: "Keep editing"; onClicked: { window.allowUnconfirmedExportClose = false; exportAdmissionCloseDialog.close() } }
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Retry saving"
+                    visible: exportJobs.admissionError.length > 0
+                    enabled: exportJobs.pendingAdmissionCount === 0 && exportJobs.historyMutationsEnabled
+                    onClicked: exportJobs.retryUnconfirmedExports()
+                }
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Close without confirmation"
+                    visible: exportJobs.admissionError.length > 0
+                    enabled: exportJobs.pendingAdmissionCount === 0
+                    onClicked: { window.allowUnconfirmedExportClose = true; exportAdmissionCloseDialog.close(); window.close() }
+                }
+            }
+        }
+    }
+
+    Connections {
+        target: exportJobs
+        function onAdmissionChanged() {
+            if (exportJobs.pendingAdmissionCount > 0) window.allowUnconfirmedExportClose = false
+        }
+    }
+
+    EditorCloseDialog {
+        parent: Overlay.overlay
+        coordinator: window.closeCoordinator
+    }
 
     Theme { id: theme }
 
@@ -28,6 +96,9 @@ ApplicationWindow {
     property bool editWorkspaceLoaded: false
     property bool timelineWorkspaceLoaded: false
     property bool exportWorkspaceLoaded: false
+    property bool sceneWorkspaceLoaded: false
+    readonly property bool sceneImmersiveActive: currentWorkspace === sceneWorkspaceIndex
+        && sceneWorkspaceLoader.item !== null && sceneWorkspaceLoader.item.immersive
     property bool secondaryWorkspacesPrewarmStarted: false
     property int secondaryWorkspacePrewarmStep: 0
     property bool workspaceTransitionActive: false
@@ -49,9 +120,15 @@ ApplicationWindow {
     property string libraryWorkspaceMode: "catalog"
     property string editWorkspaceMode: "adjust"
     property bool editorUsesLocalAsset: false
+    property string localEditorAssetId: ""
     property string localEditorFilePath: ""
     property string localEditorPreviewSource: ""
     property string localEditorDisplayName: ""
+    property string localEditorAdjustmentPatchJson: ""
+    property bool carouselPhotoEditActive: false
+    property string carouselPhotoEditTargetKey: ""
+    property string carouselPhotoEditDisplayName: ""
+    property int carouselPhotoEditGeneration: 0
     readonly property var catalogAssetModel: catalogAssets
     readonly property bool macStyle: Qt.platform.os === "osx"
     readonly property int libraryWorkspaceIndex: 0
@@ -59,19 +136,55 @@ ApplicationWindow {
     readonly property int carouselWorkspaceIndex: 2
     readonly property int timelineWorkspaceIndex: 3
     readonly property int exportWorkspaceIndex: 4
+    readonly property int sceneWorkspaceIndex: 5
+    readonly property bool timelineProgramFullScreenActive: currentWorkspace === timelineWorkspaceIndex
+                                                              && timelineWorkspaceLoader.item !== null
+                                                              && timelineWorkspaceLoader.item.fullScreenProgramActive === true
     property int pendingPreferencesDialogPage: -1
     property bool pendingKeyboardShortcutsDialogOpen: false
     property bool pendingCommandPaletteDialogOpen: false
     property bool pendingAboutDialogOpen: false
-    readonly property var workspaceTitles: ["Library", "Edit", "Carousel", "Timeline", "Export"]
-    readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export"]
+    property bool pendingFirstRunGuideOpen: false
+    property bool sessionRestoreApplied: false
+    property bool recoveryDetailsExpanded: false
+    readonly property var workspaceTitles: ["Library", "Edit", "Carousel", "Timeline", "Export", "Scene"]
+    readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export", "scene"]
     readonly property string pageVisibilityAuditContract: "page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export|buckets:always,contextual,one-expansion,hover-focus,diagnostic,preserve|runtime-active:true|functionality:preserved|major-shape:preserved"
+    readonly property string activityProgressPlacementContract: "activity-progress-placement:v2|header-overlay:true|layout-shift:false|text:false|cancel-action:true"
+    readonly property bool catalogRecoveryNeeded: !catalogAssets.loading
+                                                   && String(catalogAssets.errorMessage || "").length > 0
+                                                   && String(catalogAssets.status || "") === "Catalog unavailable"
+    readonly property bool jobRecoveryNeeded: jobQueue && String(jobQueue.startupRecoveryError || "").length > 0
+    readonly property bool recoveryBannerVisible: appShell.sessionRecoveryAvailable
+                                                 && !catalogRecoveryNeeded
+                                                 && !jobRecoveryNeeded
+                                                 && !(jobQueue && jobQueue.hasRecoveryReport)
+                                                 && !appShell.catalogRepairConfirmationPending
+                                                 && !appActivityErrorVisible
+    readonly property bool recoverySurfaceVisible: (appShell.sessionRecoveryAvailable
+                                                     || (jobQueue && jobQueue.hasRecoveryReport)
+                                                     || catalogRecoveryNeeded
+                                                     || jobRecoveryNeeded
+                                                     || appShell.catalogRepairConfirmationPending)
+                                                    && !recoveryBannerVisible
+    readonly property string recoverySurfaceSummary: {
+        if (catalogRecoveryNeeded)
+            return "The Library could not open. Your originals are unchanged."
+        if (jobRecoveryNeeded)
+            return "Background jobs are paused. You can still browse your Library; job history has not been discarded."
+        if (appShell.sessionRecoveryAvailable)
+            return appShell.sessionRecoverySummary
+        if (jobQueue && jobQueue.hasRecoveryReport)
+            return jobQueue.recoverySummary
+        return appShell.catalogRecoveryStatus
+    }
     readonly property var workspaceSubtitles: [
         "Browse imported assets or bring media into the catalog.",
         "Refine tone, color, crop, retouch, and local adjustments.",
         "Assemble social slides and mixed-media carousel layouts.",
         "Cut video on a dedicated editing timeline.",
-        "Prepare deliveries and export jobs."
+        "Prepare deliveries and export jobs.",
+        "Reconstruct static 3D Gaussian scenes from overlapping captures."
     ]
 
     readonly property var latestImportJob: {
@@ -106,30 +219,46 @@ ApplicationWindow {
     readonly property bool shellNavigationActivityVisible: workspaceTransitionActive
     readonly property bool previewUpdateVisible: editorPreview.processing
                                                && primaryActivityKind === "preview_render"
+    readonly property bool editorPreviewFailureVisible: {
+        const stage = String(editorPreview.previewFailureStage || "").trim()
+        const detail = String(editorPreview.previewFailureDetail || "").trim()
+        const status = String(editorPreview.status || "").toLowerCase()
+        const failed = stage.length > 0 || detail.length > 0
+                || status.indexOf("fail") >= 0
+                || status.indexOf("error") >= 0
+                || status.indexOf("unavailable") >= 0
+                || status.indexOf("unable") >= 0
+        return currentWorkspace === editWorkspaceIndex && failed
+    }
     readonly property string primaryFailureKind: {
         if (!jobQueue)
             return "none"
         jobQueue.jobCount
         jobQueue.status
-        if (currentWorkspace === timelineWorkspaceIndex && jobQueue.failedJobCountForKind("timeline_render") > 0)
+        if (currentWorkspace === timelineWorkspaceIndex && jobQueue.hasCurrentFailureForKind("timeline_render"))
             return "timeline_render"
-        if (currentWorkspace === exportWorkspaceIndex && jobQueue.failedJobCountForKind("asset_export") > 0)
+        if (currentWorkspace === exportWorkspaceIndex && jobQueue.hasCurrentFailureForKind("asset_export"))
             return "asset_export"
-        if (currentWorkspace === libraryWorkspaceIndex && jobQueue.failedJobCountForKind("catalog_import") > 0)
+        if (currentWorkspace === libraryWorkspaceIndex && jobQueue.hasCurrentFailureForKind("catalog_import"))
             return "catalog_import"
-        if (jobQueue.failedJobCountForKind("asset_export") > 0)
+        if (jobQueue.hasCurrentFailureForKind("asset_export"))
             return "asset_export"
-        if (jobQueue.failedJobCountForKind("timeline_render") > 0)
+        if (jobQueue.hasCurrentFailureForKind("timeline_render"))
             return "timeline_render"
-        if (jobQueue.failedJobCountForKind("catalog_import") > 0)
+        if (jobQueue.hasCurrentFailureForKind("catalog_import"))
             return "catalog_import"
         return "none"
     }
-    readonly property var latestFailureJob: jobQueue && primaryFailureKind !== "none"
-                                            ? (jobQueue.jobCount, jobQueue.status, jobQueue.latestFailedJobForKind(primaryFailureKind))
-                                            : ({})
-    readonly property bool primaryFailureRetryable: primaryFailureKind === "asset_export"
-                                                 || primaryFailureKind === "timeline_render"
+    readonly property var latestFailureJob: {
+        if (!jobQueue || primaryFailureKind === "none")
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestFailedJobForKind(primaryFailureKind)
+    }
+    readonly property bool primaryFailureRetryable: jobQueue && jobQueue.historyMutationsEnabled
+                                                 && (primaryFailureKind === "asset_export"
+                                                     || primaryFailureKind === "timeline_render")
     readonly property string primaryFailureTitle: {
         if (primaryFailureKind === "asset_export")
             return "Export failed"
@@ -146,6 +275,33 @@ ApplicationWindow {
         const label = latestFailureJob && latestFailureJob.displayLabel ? String(latestFailureJob.displayLabel) : ""
         return label.length > 0 ? label : "Open Export for details."
     }
+    readonly property bool appActivityErrorVisible: !workspaceTransitionActive &&
+                                                   (editorPreviewFailureVisible
+                                                    || (!anyAppActivity && primaryFailureKind !== "none"))
+    readonly property bool appActivityStatusVisible: workspaceTransitionActive || anyAppActivity || appActivityErrorVisible
+    readonly property string appActivityStatusTitle: {
+        if (workspaceTransitionActive)
+            return shellTransitionTitle
+        if (appActivityErrorVisible)
+            return editorPreviewFailureVisible ? "Preview failed" : primaryFailureTitle
+        if (catalogAssets.loading && catalogAssets.assetCount === 0 && catalogAssets.totalAssetCount === 0)
+            return "Opening Looksy"
+        return primaryActivityTitle
+    }
+    readonly property string appActivityStatusDetail: {
+        if (workspaceTransitionActive)
+            return shellTransitionDetail
+        if (editorPreviewFailureVisible)
+            return String(editorPreview.previewFailureDetail || editorPreview.status || "The preview could not be rendered.")
+        if (appActivityErrorVisible)
+            return primaryFailureDetail
+        return primaryActivityDetail
+    }
+    readonly property bool appActivityStatusRetryable: appActivityErrorVisible &&
+                                                       (editorPreviewFailureVisible || primaryFailureRetryable)
+    readonly property bool appActivityStatusCancelable: !appActivityErrorVisible
+                                                        && !workspaceTransitionActive
+                                                        && primaryActivityCancelable
     readonly property color primaryActivityAccent: {
         if (catalogAssets.deleting)
             return theme.error
@@ -230,18 +386,6 @@ ApplicationWindow {
         return "none"
     }
     readonly property bool primaryActivityCancelable: canCancelActivityKind(primaryActivityKind)
-    readonly property int activityIndicatorBottomMargin: currentWorkspace === editWorkspaceIndex ? 104 : 12
-    readonly property int activityIndicatorRightMargin: {
-        const workspace = activeWorkspaceItem()
-        if (currentWorkspace === editWorkspaceIndex &&
-                workspace &&
-                workspace.editingChromeVisible &&
-                workspace.editInspectorPanelVisible) {
-            return Math.max(12, Number(workspace.editInspectorPanelWidth || 0) + 24)
-        }
-        return 12
-    }
-
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
     }
@@ -302,18 +446,7 @@ ApplicationWindow {
     }
 
     function workspaceAccent(index) {
-        const kind = workspaceKinds[index]
-        if (kind === "library")
-            return theme.accentCool400
-        if (kind === "edit")
-            return theme.accentWarm300
-        if (kind === "carousel")
-            return theme.success
-        if (kind === "timeline")
-            return theme.warning
-        if (kind === "export")
-            return theme.accentCool300
-        return theme.textMuted
+        return theme.interaction400
     }
 
     function normalizedJobProgress(job) {
@@ -422,18 +555,29 @@ ApplicationWindow {
         return jobQueue.retryJob(jobId)
     }
 
+    function handleAppActivityStatusAction() {
+        if (editorPreviewFailureVisible)
+            return editorPreview.retryThumbnailRender()
+        if (primaryFailureRetryable)
+            return retryPrimaryFailure()
+        return cancelPrimaryActivity()
+    }
+
     function workspaceBadgeCount(index) {
         if (!jobQueue)
             return 0
 
         if (index === libraryWorkspaceIndex)
-            return jobQueue.activeJobCountForKind("catalog_import") + jobQueue.failedJobCountForKind("catalog_import")
+            return jobQueue.activeJobCountForKind("catalog_import")
+                    + (jobQueue.hasCurrentFailureForKind("catalog_import") ? 1 : 0)
 
         if (index === timelineWorkspaceIndex)
-            return jobQueue.activeJobCountForKind("timeline_render") + jobQueue.failedJobCountForKind("timeline_render")
+            return jobQueue.activeJobCountForKind("timeline_render")
+                    + (jobQueue.hasCurrentFailureForKind("timeline_render") ? 1 : 0)
 
         if (index === exportWorkspaceIndex)
-            return jobQueue.activeJobCount + jobQueue.failedJobCount
+            return jobQueue.activeJobCount
+                    + (jobQueue.hasCurrentFailureForKind("asset_export") ? 1 : 0)
 
         return 0
     }
@@ -448,18 +592,20 @@ ApplicationWindow {
             return false
 
         if (index === libraryWorkspaceIndex)
-            return jobQueue.failedJobCountForKind("catalog_import") > 0
+            return jobQueue.hasCurrentFailureForKind("catalog_import")
 
         if (index === timelineWorkspaceIndex)
-            return jobQueue.failedJobCountForKind("timeline_render") > 0
+            return jobQueue.hasCurrentFailureForKind("timeline_render")
 
         if (index === exportWorkspaceIndex)
-            return jobQueue.hasFailures
+            return jobQueue.hasCurrentFailureForKind("asset_export")
 
         return false
     }
 
     function activeWorkspaceItem() {
+        if (currentWorkspace === sceneWorkspaceIndex)
+            return sceneWorkspaceLoader.item
         if (currentWorkspace === editWorkspaceIndex)
             return editWorkspaceLoader.item ? editWorkspaceLoader.item : null
         if (currentWorkspace === carouselWorkspaceIndex)
@@ -472,6 +618,8 @@ ApplicationWindow {
     }
 
     function workspaceLoaded(index) {
+        if (index === sceneWorkspaceIndex)
+            return sceneWorkspaceLoaded
         if (index === libraryWorkspaceIndex)
             return libraryWorkspaceLoaded
         if (index === editWorkspaceIndex)
@@ -486,6 +634,8 @@ ApplicationWindow {
     }
 
     function loadedWorkspaceItem(index) {
+        if (index === sceneWorkspaceIndex)
+            return sceneWorkspaceLoader.item
         if (index === libraryWorkspaceIndex)
             return workspaceLoader.item
         if (index === editWorkspaceIndex)
@@ -500,6 +650,10 @@ ApplicationWindow {
     }
 
     function markWorkspaceLoaded(index) {
+        if (index === sceneWorkspaceIndex) {
+            sceneWorkspaceLoaded = true
+            return
+        }
         if (index === libraryWorkspaceIndex)
             libraryWorkspaceLoaded = true
         else if (index === editWorkspaceIndex)
@@ -635,6 +789,8 @@ ApplicationWindow {
         if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
             return false
 
+        // A previous route's completion must not clear a newer destination.
+        workspaceTransitionFinishTimer.stop()
         pendingWorkspaceIndex = workspaceIndex
         pendingEditToolActivation = String(editToolName || "")
         qmlRouteSurface = workspacePerformanceSurface(workspaceIndex, pendingEditToolActivation)
@@ -658,6 +814,8 @@ ApplicationWindow {
     }
 
     function completeShellTransition() {
+        workspaceTransitionCommitTimer.stop()
+        workspaceTransitionFinishTimer.stop()
         workspaceTransitionActive = false
         pendingWorkspaceIndex = -1
         pendingEditToolActivation = ""
@@ -832,6 +990,23 @@ ApplicationWindow {
         if (cleanTool.length === 0)
             return false
 
+        // Tool commands must leave text-entry focus behind so the next tool's
+        // keyboard commands are not silently suppressed by a stale editor field.
+        if (contentItem)
+            contentItem.forceActiveFocus(Qt.ShortcutFocusReason)
+
+        const selectionTool = cleanTool === "masks" || cleanTool === "brush" || cleanTool === "retouch"
+        const editWorkspace = currentWorkspace === editWorkspaceIndex ? activeWorkspaceItem() : null
+        if (selectionTool && editWorkspace &&
+                editWorkspace.objectName === "editStudioWorkspace" &&
+                typeof editWorkspace.activateEditTool === "function") {
+            editWorkspaceMode = cleanTool
+            logInstantQmlRoute(workspacePerformanceSurface(editWorkspaceIndex, cleanTool),
+                               editWorkspaceIndex)
+            editWorkspace.activateEditTool(cleanTool)
+            return true
+        }
+
         return beginShellTransition(editWorkspaceIndex,
                                     "Switching to " + editToolTitle(cleanTool),
                                     workspaceSubtitles[editWorkspaceIndex],
@@ -844,8 +1019,12 @@ ApplicationWindow {
         if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
             return false
 
-        if (workspaceIndex === currentWorkspace && workspaceLoaded(workspaceIndex) && loadedWorkspaceItem(workspaceIndex))
+        if (workspaceIndex === currentWorkspace && workspaceLoaded(workspaceIndex) && loadedWorkspaceItem(workspaceIndex)) {
+            // Clicking the current page also cancels a not-yet-committed route.
+            if (workspaceTransitionActive)
+                completeShellTransition()
             return true
+        }
 
         return beginShellTransition(workspaceIndex,
                                     "Opening " + workspaceTitles[workspaceIndex],
@@ -975,6 +1154,75 @@ ApplicationWindow {
         return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
     }
 
+    readonly property bool photoRecipeWorkspace: currentWorkspace === libraryWorkspaceIndex
+                                                || currentWorkspace === editWorkspaceIndex
+    property bool applyingPhotoRecipe: false
+    property string photoRecipeNoticeText: ""
+    property bool photoRecipeNoticeUndo: false
+
+    function canCopyPhotoRecipe() {
+        return photoRecipeWorkspace && !copyPhotoEditsDialog.visible
+                && !focusItemSupports("copy")
+                && !(currentWorkspace === editWorkspaceIndex && editorUsesLocalAsset)
+                && catalogAssets.selectedAssetId.length > 0
+                && catalogAssets.selectedMediaType === "photo"
+    }
+
+    function canPastePhotoRecipe() {
+        return photoRecipeWorkspace && !copyPhotoEditsDialog.visible
+                && !focusItemSupports("paste")
+                && !(currentWorkspace === editWorkspaceIndex && editorUsesLocalAsset)
+                && (catalogAssets.selectedAssetCount > 0
+                    || (catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo"))
+                && editorPreview.hasCopiedPhotoRecipe
+    }
+
+    function showPhotoRecipeNotice(text, undoAvailable) {
+        photoRecipeNoticeText = text
+        photoRecipeNoticeUndo = undoAvailable
+        photoRecipeNotice.open()
+        photoRecipeNoticeTimer.restart()
+    }
+
+    function openCopyPhotoEdits() {
+        if (!canCopyPhotoRecipe()) return
+        // Freeze the source before showing the chooser, including unsaved edits.
+        copyPhotoEditsDialog.sourcePatch = currentWorkspace === editWorkspaceIndex
+                && editorPreview.assetId === catalogAssets.selectedAssetId
+                ? editorPreview.currentAssetBoundAdjustmentPatchJson()
+                : catalogAssets.selectedAdjustmentPatchJson
+        copyPhotoEditsDialog.sourceLabel = currentSelectionLabel()
+        copyPhotoEditsDialog.errorText = ""
+        copyPhotoEditsDialog.open()
+    }
+
+    function pastePhotoEdits() {
+        if (!canPastePhotoRecipe()) return 0
+        const targets = catalogAssets.selectedAssetIds.slice()
+        if (targets.length === 0) targets.push(catalogAssets.selectedAssetId)
+        const patch = editorPreview.copiedPhotoRecipePatchJson
+        applyingPhotoRecipe = true
+        let count = 0
+        try {
+            // Merge onto the latest live edit, not an older catalog snapshot.
+            if (currentWorkspace === editWorkspaceIndex) syncEditorRecipeToCatalog()
+            count = catalogAssets.pasteAdjustmentPatchJsonToAssetIds(targets, patch)
+        } finally {
+            applyingPhotoRecipe = false
+        }
+        showPhotoRecipeNotice(count > 0
+                ? "Pasted edits to " + count + (count === 1 ? " photo." : " photos.")
+                : "No photos changed. Select photos with different edits to paste.", count > 0)
+        return count
+    }
+
+    function undoPastedPhotoEdits() {
+        applyingPhotoRecipe = true
+        try { catalogAssets.undoBatchRecipe() }
+        finally { applyingPhotoRecipe = false }
+        showPhotoRecipeNotice("Pasted edits undone.", false)
+    }
+
     function currentSelectionLabel() {
         if (editorUsesLocalAsset && currentWorkspace === editWorkspaceIndex && localEditorFilePath.length > 0)
             return localEditorDisplayName.length > 0 ? localEditorDisplayName : baseNameFromPath(localEditorFilePath)
@@ -1033,7 +1281,7 @@ ApplicationWindow {
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": timelineDocument.savedRenderPath,
                 "editedPreviewSource": "",
-                "recipeJson": ""
+                "adjustmentPatchJson": ""
             }
         }
 
@@ -1044,7 +1292,7 @@ ApplicationWindow {
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": localEditorFilePath,
                 "editedPreviewSource": editorPreview.previewSource,
-                "recipeJson": editorPreview.currentRecipeJson()
+                "adjustmentPatchJson": editorPreview.currentAssetBoundAdjustmentPatchJson()
             }
         }
 
@@ -1058,7 +1306,7 @@ ApplicationWindow {
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": catalogAssets.selectedFilePath,
                 "editedPreviewSource": editorPreview.previewSource,
-                "recipeJson": editorPreview.currentRecipeJson()
+                "adjustmentPatchJson": editorPreview.currentAssetBoundAdjustmentPatchJson()
             }
         }
 
@@ -1069,7 +1317,7 @@ ApplicationWindow {
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": catalogAssets.selectedFilePath,
                 "editedPreviewSource": editorPreview.previewSource,
-                "recipeJson": catalogAssets.selectedRecipeJson
+                "adjustmentPatchJson": catalogAssets.selectedAdjustmentPatchJson
             }
         }
 
@@ -1096,7 +1344,7 @@ ApplicationWindow {
                     payload.displayLabel,
                     payload.sourcePath,
                     payload.editedPreviewSource,
-                    payload.recipeJson,
+                    payload.adjustmentPatchJson,
                     preset,
                     destinationFolder))
             switchToWorkspaceIndex(exportWorkspaceIndex)
@@ -1127,7 +1375,7 @@ ApplicationWindow {
             catalogAssets.selectedCameraLabel,
             catalogAssets.selectedCaptureDate,
             catalogAssets.selectedLensModel,
-            catalogAssets.selectedRecipeJson
+            catalogAssets.selectedAdjustmentPatchJson
         )
     }
 
@@ -1136,14 +1384,65 @@ ApplicationWindow {
             return
 
         editorPreview.loadAsset(
-            localEditorFilePath,
+            localEditorAssetId.length > 0 ? localEditorAssetId : localEditorFilePath,
             localEditorFilePath,
             localEditorPreviewSource,
             localEditorDisplayName,
             "",
             "",
-            ""
+            localEditorAdjustmentPatchJson
         )
+    }
+
+    function beginCarouselPhotoEdit(payload) {
+        const targetKey = String(payload.targetKey || "")
+        const filePath = String(payload.filePath || "")
+        if (targetKey.length === 0 || filePath.length === 0)
+            return
+
+        carouselPhotoEditActive = true
+        carouselPhotoEditTargetKey = targetKey
+        carouselPhotoEditDisplayName = String(payload.displayLabel || baseNameFromPath(filePath))
+        carouselPhotoEditGeneration += 1
+        editorUsesLocalAsset = true
+        localEditorAssetId = targetKey + "|edit:" + carouselPhotoEditGeneration
+        localEditorFilePath = filePath
+        localEditorPreviewSource = String(payload.previewSource || "")
+        localEditorDisplayName = carouselPhotoEditDisplayName
+        localEditorAdjustmentPatchJson =
+                String(payload.adjustmentPatchJson || "")
+        beginShellTransition(editWorkspaceIndex,
+                             "Editing Carousel Photo",
+                             "Adjust the source photo, then apply it back to the same Carousel instance.",
+                             workspaceAccent(editWorkspaceIndex),
+                             "adjust")
+    }
+
+    function finishCarouselPhotoEdit(applyChanges) {
+        if (!carouselPhotoEditActive)
+            return
+        if (applyChanges
+                && !carouselDocument.applyAdjustmentPatchToPhotoEditTarget(
+                       carouselPhotoEditTargetKey,
+                       editorPreview.currentAssetBoundAdjustmentPatchJson()))
+            return
+
+        carouselPhotoEditActive = false
+        carouselPhotoEditTargetKey = ""
+        carouselPhotoEditDisplayName = ""
+        editorUsesLocalAsset = false
+        localEditorAssetId = ""
+        localEditorFilePath = ""
+        localEditorPreviewSource = ""
+        localEditorDisplayName = ""
+        localEditorAdjustmentPatchJson = ""
+        beginShellTransition(carouselWorkspaceIndex,
+                             applyChanges ? "Applied Photo Edit" : "Returning to Carousel",
+                             applyChanges
+                                 ? "The Carousel instance now uses the updated non-destructive recipe."
+                                 : "The Carousel photo was left unchanged.",
+                             workspaceAccent(carouselWorkspaceIndex),
+                             "")
     }
 
     function syncEditorRecipeToCatalog(nextAssetId) {
@@ -1157,16 +1456,117 @@ ApplicationWindow {
         if (nextAssetId !== undefined && nextAssetId.length > 0 && nextAssetId === currentAssetId)
             return
 
-        catalogAssets.applyRecipeJsonToAssetIds(
+        // This is the same asset, not a reusable settings paste. Preserve its
+        // layers, history and source/profile bindings as well as global edits.
+        catalogAssets.applyAdjustmentPatchJsonToAssetIds(
                     [currentAssetId],
-                    editorPreview.currentRecipeJson(),
-                    ["raw", "tone", "color", "crop", "masks", "detail"])
+                    editorPreview.currentAssetBoundAdjustmentPatchJson())
     }
 
     function beginImportWorkspace() {
         libraryWorkspaceMode = "import"
         switchToWorkspaceIndex(libraryWorkspaceIndex)
         catalogAssets.refreshImportSources()
+    }
+
+    function openFirstRunGuide() {
+        pendingFirstRunGuideOpen = true
+        if (recoverySurfaceVisible) {
+            firstRunGuideOpenTimer.restart()
+            return
+        }
+        firstRunGuideLoader.active = true
+        if (firstRunGuideLoader.item) {
+            firstRunGuideLoader.item.start()
+            pendingFirstRunGuideOpen = false
+        }
+    }
+
+    function restoreRecoveredSession() {
+        if (sessionRestoreApplied || !appShell.sessionRecoveryAvailable)
+            return true
+        if (catalogAssets.loading)
+            return false
+
+        const recoveredProject = String(appShell.recoveredProject() || "")
+        const recoveredAssetId = String(appShell.recoveredAssetId() || "")
+        const recoveredAdjustments =
+                String(appShell.recoveredAdjustmentPatchJson() || "")
+        const recoveredTimeline = String(appShell.recoveredTimelinePath() || "")
+        const recoveredMode = String(appShell.recoveredEditMode() || "")
+
+        if (recoveredProject.length > 0)
+            catalogAssets.openProject(recoveredProject)
+        if (recoveredAssetId.length > 0 && !catalogAssets.selectAssetById(recoveredAssetId, true))
+            return false
+        if (recoveredAssetId.length > 0
+                && recoveredAdjustments.length > 0) {
+            catalogAssets.applyAdjustmentPatchJsonToAssetIds(
+                        [recoveredAssetId], recoveredAdjustments)
+        }
+        if (recoveredTimeline.length > 0)
+            timelineDocument.loadTimeline(recoveredTimeline)
+        if (recoveredMode.length > 0)
+            editWorkspaceMode = recoveredMode
+
+        sessionRestoreApplied = true
+        if (currentWorkspace === editWorkspaceIndex)
+            loadSelectedAssetIntoEditor()
+        return true
+    }
+
+    function recoveryDetailItems() {
+        const items = []
+        if (jobRecoveryNeeded)
+            items.push(String(jobQueue.startupRecoveryError))
+        if (appShell.sessionRecoveryAvailable) {
+            const sessionItems = appShell.sessionRecoveryDetails
+            for (let index = 0; index < sessionItems.length; ++index)
+                items.push(String(sessionItems[index]))
+        }
+        if (jobQueue && jobQueue.hasRecoveryReport) {
+            const jobItems = jobQueue.recoveryDetails
+            for (let index = 0; index < jobItems.length; ++index)
+                items.push(String(jobItems[index]))
+        }
+        if (catalogRecoveryNeeded)
+            items.push(String(catalogAssets.errorMessage || "Catalog startup failed."))
+        if (appShell.catalogRecoveryStatus.length > 0)
+            items.push(appShell.catalogRecoveryStatus)
+        return items
+    }
+
+    function dismissRecoverySurface() {
+        if (jobRecoveryNeeded)
+            return
+        if (appShell.sessionRecoveryAvailable)
+            appShell.dismissSessionRecovery()
+        if (jobQueue && jobQueue.hasRecoveryReport)
+            jobQueue.acknowledgeRecoveryReport()
+        recoveryDetailsExpanded = false
+    }
+
+    function reviewRecoveredWork() {
+        if (appShell.sessionRecoveryAvailable) {
+            const recoveredWorkspace = appShell.recoveredWorkspace()
+            appShell.dismissSessionRecovery()
+            switchToWorkspaceIndex(recoveredWorkspace)
+            return
+        }
+        if (jobRecoveryNeeded) {
+            switchToWorkspaceIndex(exportWorkspaceIndex)
+            return
+        }
+        if (jobQueue) {
+            const exportJob = jobQueue.latestJobForKind("asset_export")
+            if (exportJob && exportJob.metadata
+                    && exportJob.metadata.recoveredAfterRestart
+                    && !exportJob.metadata.recoveryAcknowledged) {
+                switchToWorkspaceIndex(exportWorkspaceIndex)
+                return
+            }
+        }
+        switchToWorkspaceIndex(libraryWorkspaceIndex)
     }
 
     function openSelectedPhotoInEdit() {
@@ -1176,6 +1576,8 @@ ApplicationWindow {
         if (catalogAssets.selectedAssetId.length === 0 && catalogAssets.assetCount > 0)
             catalogAssets.selectIndex(0)
 
+        carouselPhotoEditActive = false
+        carouselPhotoEditTargetKey = ""
         editorUsesLocalAsset = false
         beginShellTransition(editWorkspaceIndex,
                              "Opening Edit",
@@ -1303,7 +1705,7 @@ ApplicationWindow {
     Action {
         id: queueExportAction
         text: "Start Export"
-        shortcut: window.primaryShiftShortcut("E")
+        shortcut: appShell.shortcutSequence("queue-export", window.primaryShiftShortcut("E"))
         enabled: window.canQueueExportFromMenu()
         onTriggered: window.queueExportFromMenu()
     }
@@ -1319,10 +1721,13 @@ ApplicationWindow {
         id: undoEditAction
         text: "Undo"
         shortcut: window.primaryShortcut("Z")
-        enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo)
+        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && catalogAssets.canUndoCulling)
+                 || (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo)
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canUndo)
         onTriggered: {
-            if (window.currentWorkspace === window.timelineWorkspaceIndex)
+            if (window.currentWorkspace === window.libraryWorkspaceIndex)
+                catalogAssets.undoCulling()
+            else if (window.currentWorkspace === window.timelineWorkspaceIndex)
                 timelineDocument.undo()
             else
                 editorPreview.undo()
@@ -1333,14 +1738,49 @@ ApplicationWindow {
         id: redoEditAction
         text: "Redo"
         shortcut: window.primaryShiftShortcut("Z")
-        enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo)
+        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && catalogAssets.canRedoCulling)
+                 || (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo)
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canRedo)
         onTriggered: {
-            if (window.currentWorkspace === window.timelineWorkspaceIndex)
+            if (window.currentWorkspace === window.libraryWorkspaceIndex)
+                catalogAssets.redoCulling()
+            else if (window.currentWorkspace === window.timelineWorkspaceIndex)
                 timelineDocument.redo()
             else
                 editorPreview.redo()
         }
+    }
+
+    Action {
+        id: copyPhotoEditsAction
+        text: "Copy Edits…"
+        shortcut: window.primaryShortcut("C")
+        enabled: window.canCopyPhotoRecipe()
+        onTriggered: window.openCopyPhotoEdits()
+    }
+    Action {
+        id: pastePhotoEditsAction
+        text: "Paste Edits"
+        shortcut: window.primaryShortcut("V")
+        enabled: window.canPastePhotoRecipe()
+        onTriggered: window.pastePhotoEdits()
+    }
+    Shortcut {
+        sequence: "Ctrl+C"
+        enabled: window.macStyle && copyPhotoEditsAction.enabled
+        onActivated: window.openCopyPhotoEdits()
+    }
+    Shortcut {
+        sequence: "Ctrl+V"
+        enabled: window.macStyle && pastePhotoEditsAction.enabled
+        onActivated: window.pastePhotoEdits()
+    }
+    Action {
+        id: undoPastedPhotoEditsAction
+        text: "Undo Pasted Edits"
+        enabled: window.photoRecipeWorkspace && catalogAssets.canUndoBatchRecipe
+                 && catalogAssets.batchRecipeUndoLabel.indexOf("Pasted edits") === 0
+        onTriggered: window.undoPastedPhotoEdits()
     }
 
     Action {
@@ -1398,7 +1838,7 @@ ApplicationWindow {
     Action {
         id: adjustToolAction
         text: "Adjust Tool"
-        shortcut: window.primaryAltShortcut("A")
+        shortcut: appShell.shortcutSequence("tool-adjust", window.primaryAltShortcut("A"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("adjust")
     }
@@ -1406,7 +1846,7 @@ ApplicationWindow {
     Action {
         id: cropToolAction
         text: "Crop Tool"
-        shortcut: window.primaryAltShortcut("C")
+        shortcut: appShell.shortcutSequence("tool-crop", window.primaryAltShortcut("C"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("crop")
     }
@@ -1414,7 +1854,7 @@ ApplicationWindow {
     Action {
         id: masksToolAction
         text: "Masks Tool"
-        shortcut: window.primaryAltShortcut("M")
+        shortcut: appShell.shortcutSequence("tool-masks", window.primaryAltShortcut("M"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("masks")
     }
@@ -1422,7 +1862,7 @@ ApplicationWindow {
     Action {
         id: brushToolAction
         text: "Brush Tool"
-        shortcut: window.primaryAltShortcut("B")
+        shortcut: appShell.shortcutSequence("tool-brush", window.primaryAltShortcut("B"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("brush")
     }
@@ -1430,7 +1870,7 @@ ApplicationWindow {
     Action {
         id: compareToolAction
         text: "Compare Tool"
-        shortcut: window.primaryAltShortcut("P")
+        shortcut: appShell.shortcutSequence("tool-compare", window.primaryAltShortcut("P"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("compare")
     }
@@ -1438,7 +1878,7 @@ ApplicationWindow {
     Action {
         id: exportToolAction
         text: "Export Tool"
-        shortcut: window.primaryAltShortcut("E")
+        shortcut: appShell.shortcutSequence("tool-export", window.primaryAltShortcut("E"))
         enabled: catalogAssets.selectedAssetId.length > 0 || editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("export")
     }
@@ -1474,7 +1914,7 @@ ApplicationWindow {
     Action {
         id: clearFinishedExportsAction
         text: "Clear Finished Jobs"
-        enabled: jobQueue.jobCount > 0
+        enabled: jobQueue.historyMutationsEnabled && jobQueue.jobCount > 0
         onTriggered: jobQueue.clearFinishedJobs()
     }
 
@@ -1705,7 +2145,7 @@ ApplicationWindow {
     Action {
         id: switchToLibraryAction
         text: "Library"
-        shortcut: window.primaryShortcut("1")
+        shortcut: appShell.shortcutSequence("workspace-library", window.primaryShortcut("1"))
         checkable: true
         checked: window.currentWorkspace === window.libraryWorkspaceIndex
         onTriggered: window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
@@ -1714,7 +2154,7 @@ ApplicationWindow {
     Action {
         id: switchToEditAction
         text: "Edit"
-        shortcut: window.primaryShortcut("2")
+        shortcut: appShell.shortcutSequence("workspace-edit", window.primaryShortcut("2"))
         checkable: true
         checked: window.currentWorkspace === window.editWorkspaceIndex
         onTriggered: window.switchToWorkspaceIndex(window.editWorkspaceIndex)
@@ -1841,6 +2281,15 @@ ApplicationWindow {
     }
 
     Action {
+        id: quickStartAction
+        text: "Quick Start"
+        onTriggered: {
+            appShell.restartFirstRunExperience()
+            window.openFirstRunGuide()
+        }
+    }
+
+    Action {
         id: checkForUpdatesAction
         text: "Check for Updates"
         enabled: window.macStyle && macosUpdater && macosUpdater.available
@@ -1848,21 +2297,21 @@ ApplicationWindow {
     }
 
     Action {
-        id: toggleDarkModeAction
-        text: appShell.darkMode ? "Switch to Light Theme" : "Switch to Dark Theme"
-        onTriggered: appShell.darkMode = !appShell.darkMode
-    }
-
-    Action {
         id: commandPaletteAction
         text: "Command Palette"
-        shortcut: window.primaryShortcut("K")
-        onTriggered: window.openCommandPaletteDialog()
+        shortcut: appShell.shortcutSequence("command-palette", window.primaryShortcut("K"))
+        onTriggered: {
+            const carouselView = window.activeCarouselView()
+            if (carouselView && typeof carouselView.openCarouselCommandPalette === "function")
+                carouselView.openCarouselCommandPalette()
+            else
+                window.openCommandPaletteDialog()
+        }
     }
 
     Action {
         id: aboutAction
-        text: "About Virel Studio"
+        text: "About Looksy"
         onTriggered: window.openAboutDialog()
     }
 
@@ -1920,6 +2369,10 @@ ApplicationWindow {
             title: "&Edit"
             MenuItem { action: undoEditAction }
             MenuItem { action: redoEditAction }
+            MenuItem { action: undoPastedPhotoEditsAction }
+            MenuSeparator {}
+            MenuItem { action: copyPhotoEditsAction }
+            MenuItem { action: pastePhotoEditsAction }
             MenuItem { action: selectAllAction }
             MenuItem { action: deselectAction }
             MenuSeparator {}
@@ -2000,12 +2453,12 @@ ApplicationWindow {
 
         Menu {
             title: "&View"
-            MenuItem { action: toggleDarkModeAction }
             MenuItem { action: commandPaletteAction }
         }
 
         Menu {
             title: "&Help"
+            MenuItem { action: quickStartAction }
             MenuItem { action: keyboardShortcutsAction }
             MenuItem { action: checkForUpdatesAction }
             MenuSeparator {}
@@ -2020,7 +2473,9 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
-        currentWorkspace = appShell.preferredStartupWorkspace
+        currentWorkspace = appShell.sessionRecoveryAvailable
+                ? appShell.recoveredWorkspace()
+                : appShell.preferredStartupWorkspace
         const startupSurface = activePerformanceSurface()
         const startupStartedAt = qmlNowMs()
         if (hasQmlPerformance())
@@ -2050,6 +2505,19 @@ ApplicationWindow {
         })
         if (currentWorkspace !== editWorkspaceIndex)
             editWorkspacePrewarmTimer.restart()
+        if (appShell.firstRunExperiencePending)
+            firstRunGuideOpenTimer.restart()
+        if (appShell.sessionRecoveryAvailable)
+            recoveryRestoreTimer.restart()
+    }
+
+    onRecoverySurfaceVisibleChanged: {
+        if (recoverySurfaceVisible && appShell.firstRunExperiencePending) {
+            if (firstRunGuideLoader.item && firstRunGuideLoader.item.visible)
+                firstRunGuideLoader.item.close()
+            pendingFirstRunGuideOpen = false
+            firstRunGuideOpenTimer.restart()
+        }
     }
 
     onCurrentWorkspaceChanged: {
@@ -2094,13 +2562,36 @@ ApplicationWindow {
     }
 
     Timer {
+        id: recoveryRestoreTimer
+        interval: 250
+        repeat: false
+        onTriggered: {
+            if (!window.restoreRecoveredSession())
+                restart()
+        }
+    }
+
+    Timer {
         id: editWorkspacePrewarmTimer
         interval: 700
         repeat: false
         onTriggered: {
-            if (!window.workspaceTransitionActive && !window.anyAppActivity)
+            if (!window.workspaceTransitionActive && !window.anyAppActivity && window.currentWorkspace !== window.sceneWorkspaceIndex)
                 window.preloadEditWorkspace()
             else
+                restart()
+        }
+    }
+
+    Timer {
+        id: firstRunGuideOpenTimer
+        interval: 900
+        repeat: false
+        onTriggered: {
+            if ((appShell.firstRunExperiencePending || window.pendingFirstRunGuideOpen)
+                    && !catalogAssets.loading && !window.recoverySurfaceVisible)
+                window.openFirstRunGuide()
+            else if (appShell.firstRunExperiencePending || window.pendingFirstRunGuideOpen)
                 restart()
         }
     }
@@ -2110,7 +2601,7 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: {
-            if (!window.workspaceTransitionActive && !window.anyAppActivity)
+            if (!window.workspaceTransitionActive && !window.anyAppActivity && window.currentWorkspace !== window.sceneWorkspaceIndex)
                 window.preloadNextSecondaryWorkspace()
             else
                 restart()
@@ -2139,13 +2630,58 @@ ApplicationWindow {
         onTriggered: window.completeShellTransition()
     }
 
+    CopyPhotoEditsDialog {
+        id: copyPhotoEditsDialog
+        parent: Overlay.overlay
+        onCopyRequested: (patch, groups) => {
+            if (editorPreview.copyPhotoRecipe(patch, groups)) {
+                close()
+                window.showPhotoRecipeNotice("Edits copied. Select photos and paste.", false)
+            } else {
+                errorText = "These edits could not be copied. Choose valid edit groups and try again."
+            }
+        }
+    }
+    Popup {
+        id: photoRecipeNotice
+        objectName: "photoRecipeNotice"
+        parent: Overlay.overlay
+        x: parent ? (parent.width - width) / 2 : 0
+        y: parent ? parent.height - height - 32 : 0
+        width: Math.min(520, parent ? parent.width - 32 : 520)
+        padding: 14
+        closePolicy: Popup.NoAutoClose
+        background: Rectangle { color: theme.ink800; radius: 12; border.color: theme.lineSoft }
+        contentItem: RowLayout {
+            Label { Layout.fillWidth: true; text: window.photoRecipeNoticeText; color: theme.textStrong; wrapMode: Text.WordWrap }
+            ActionButton {
+                objectName: "undoPastedPhotoEdits"
+                text: "Undo"
+                visible: window.photoRecipeNoticeUndo
+                enabled: undoPastedPhotoEditsAction.enabled
+                onClicked: window.undoPastedPhotoEdits()
+            }
+        }
+    }
+    Timer { id: photoRecipeNoticeTimer; interval: 7000; onTriggered: photoRecipeNotice.close() }
+
     Connections {
         target: catalogAssets
 
+        function onPhotoRecipeChanged(assetId, filePath, previousPatch, nextPatch, restoringHistory) {
+            editorPreview.applyCatalogRecipeChange(assetId, filePath, previousPatch, nextPatch, restoringHistory)
+        }
+
         function onSelectedAssetChanged() {
+            if (window.applyingPhotoRecipe) return
             window.editorUsesLocalAsset = false
             if (window.currentWorkspace === window.editWorkspaceIndex)
                 window.loadSelectedAssetIntoEditor()
+        }
+
+        function onLoadingChanged() {
+            if (appShell.sessionRecoveryAvailable && !window.sessionRestoreApplied)
+                recoveryRestoreTimer.restart()
         }
     }
 
@@ -2158,10 +2694,30 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
-        Rectangle {
+        RowLayout {
+            objectName: "customerReadOnlyNotice"
             Layout.fillWidth: true
-            Layout.preferredHeight: 52
-            color: theme.alpha(theme.ink900, 0.94)
+            Layout.margins: visible ? 8 : 0
+            visible: typeof customerAccess !== "undefined" && !customerAccess.editingAllowed
+            Label {
+                Layout.fillWidth: true
+                text: "Editing needs an active trial or purchase. You can still view, save, and export existing work."
+                color: theme.textStrong
+                wrapMode: Text.WordWrap
+            }
+            ActionButton {
+                text: "Account"
+                compact: true
+                onClicked: window.openPreferencesDialog(5)
+            }
+        }
+
+        Rectangle {
+            objectName: "appNavigationBar"
+            Layout.fillWidth: true
+            Layout.preferredHeight: theme.navHeight
+            visible: !window.timelineProgramFullScreenActive && !window.sceneImmersiveActive
+            color: theme.ink950
 
             Rectangle {
                 anchors.left: parent.left
@@ -2173,16 +2729,17 @@ ApplicationWindow {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 18
-                anchors.rightMargin: 18
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
                 spacing: 18
 
                 BrandWordmark {
-                    Layout.preferredWidth: 198
+                    Layout.preferredWidth: 240
                     Layout.preferredHeight: implicitHeight
                     Layout.alignment: Qt.AlignVCenter
                     compact: true
-                    showMark: false
+                    showMark: true
+                    showDescriptor: false
                 }
 
                 RowLayout {
@@ -2215,27 +2772,16 @@ ApplicationWindow {
                             ToolTip.text: workspaceSubtitles[index]
                             onClicked: window.switchToWorkspaceIndex(index)
 
-                            background: Item {
-                                Rectangle {
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.bottom: parent.bottom
-                                    height: theme.navUnderlineHeight
-                                    color: workspaceTab.index === window.currentWorkspace
-                                           ? window.workspaceAccent(workspaceTab.index)
-                                           : "transparent"
-                                }
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    anchors.topMargin: 7
-                                    anchors.bottomMargin: 7
-                                    color: workspaceTab.down
-                                           ? theme.alpha(theme.polar, 0.08)
-                                           : workspaceTab.hovered
-                                             ? theme.alpha(theme.polar, 0.045)
-                                             : "transparent"
-                                }
+                            background: Rectangle {
+                                anchors.fill: parent
+                                anchors.topMargin: 9
+                                anchors.bottomMargin: 9
+                                radius: 2
+                                color: workspaceTab.down ? theme.surfaceInset
+                                       : workspaceTab.index === window.currentWorkspace ? theme.ink750
+                                       : workspaceTab.hovered ? theme.ink850 : "transparent"
+                                border.width: workspaceTab.visualFocus ? theme.focusBorderWidth : 0
+                                border.color: theme.focusRing
                             }
 
                             contentItem: Item {
@@ -2308,11 +2854,71 @@ ApplicationWindow {
                     }
                 }
             }
+
+            ProgressStrip {
+                objectName: "additiveActivityProgressLine"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 4
+                visible: window.appActivityStatusVisible && !window.appActivityErrorVisible
+                         && !window.recoveryBannerVisible
+                         && !window.timelineProgramFullScreenActive && !window.sceneImmersiveActive
+                progress: window.primaryActivityProgress
+                accent: window.primaryActivityAccent
+                z: 2
+            }
+
+            ActionButton {
+                objectName: "cancelActivityInNavigation"
+                anchors.right: parent.right
+                anchors.rightMargin: 278
+                anchors.verticalCenter: parent.verticalCenter
+                visible: window.appActivityStatusVisible && !window.appActivityErrorVisible
+                         && !window.recoveryBannerVisible && window.appActivityStatusCancelable
+                width: 22
+                height: 22
+                compact: true
+                embedded: true
+                tone: "tertiary"
+                iconName: "close"
+                showText: false
+                tooltipText: "Cancel current task"
+                Accessible.name: "Cancel current task"
+                onClicked: window.cancelPrimaryActivity()
+                z: 3
+            }
+        }
+
+        ActivityStatusBar {
+            id: appActivityStatusBar
+            objectName: window.recoveryBannerVisible ? "recoveryStatusIndicator"
+                        : window.appActivityErrorVisible ? "failureActivityIndicator" : "floatingActivityIndicator"
+            visible: (window.appActivityErrorVisible || window.recoveryBannerVisible)
+                     && !window.timelineProgramFullScreenActive
+                     && !window.sceneImmersiveActive
+            title: window.recoveryBannerVisible ? "Work recovered" : window.appActivityStatusTitle
+            detail: window.recoveryBannerVisible ? appShell.sessionRecoverySummary : window.appActivityStatusDetail
+            progressValue: window.recoveryBannerVisible ? 1
+                           : window.appActivityErrorVisible ? -1 : window.primaryActivityProgress
+            failed: window.appActivityErrorVisible
+            accent: window.recoveryBannerVisible ? theme.success : window.primaryActivityAccent
+            statusIcon: window.recoveryBannerVisible ? "check" : ""
+            dismissible: window.recoveryBannerVisible
+            actionText: window.recoveryBannerVisible ? "Review work" : ""
+            cancelable: !window.recoveryBannerVisible && window.appActivityStatusCancelable
+            retryable: window.appActivityStatusRetryable
+            onCancelRequested: if (!window.recoveryBannerVisible) window.cancelPrimaryActivity()
+            onRetryRequested: window.handleAppActivityStatusAction()
+            onActionRequested: if (window.recoveryBannerVisible) window.reviewRecoveredWork()
+            onDismissRequested: if (window.recoveryBannerVisible) window.dismissRecoverySurface()
         }
 
         Rectangle {
+            objectName: "mainWorkspaceSurface"
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.topMargin: 0
             radius: 0
             color: theme.alpha(theme.glassBase, 0.78)
             border.width: 0
@@ -2412,10 +3018,20 @@ ApplicationWindow {
                 }
             }
 
+            Connections {
+                target: carouselWorkspaceLoader.item
+                enabled: carouselWorkspaceLoader.item !== null
+                ignoreUnknownSignals: true
+
+                function onEditPhotoRequested(payload) {
+                    window.beginCarouselPhotoEdit(payload)
+                }
+            }
+
             Loader {
                 id: timelineWorkspaceLoader
                 anchors.fill: parent
-                anchors.margins: 6
+                anchors.margins: window.timelineProgramFullScreenActive ? 0 : 6
                 active: window.timelineWorkspaceLoaded || window.currentWorkspace === window.timelineWorkspaceIndex
                 visible: window.currentWorkspace === window.timelineWorkspaceIndex
                 source: Qt.resolvedUrl("workspaces/TimelineView.qml")
@@ -2437,6 +3053,46 @@ ApplicationWindow {
                     window.noteWorkspaceComponentCreated(window.exportWorkspaceIndex)
                     window.markWorkspaceLoaded(window.exportWorkspaceIndex)
                     window.maybeFinishWorkspaceTransition(window.exportWorkspaceIndex)
+                }
+            }
+
+            Loader {
+                id: sceneWorkspaceLoader
+                anchors.fill: parent
+                anchors.margins: 0
+                active: window.sceneWorkspaceLoaded || window.currentWorkspace === window.sceneWorkspaceIndex
+                visible: window.currentWorkspace === window.sceneWorkspaceIndex
+                source: Qt.resolvedUrl("workspaces/SceneWorkspace.qml")
+                onLoaded: {
+                    item.controller = gaussianScene
+                    item.catalog = catalogAssets
+                    window.noteWorkspaceComponentCreated(window.sceneWorkspaceIndex)
+                    // Do not mutate Loader.active's dependency inside its load.
+                    Qt.callLater(function() {
+                        window.markWorkspaceLoaded(window.sceneWorkspaceIndex)
+                        window.maybeFinishWorkspaceTransition(window.sceneWorkspaceIndex)
+                    })
+                }
+            }
+
+            Connections {
+                target: sceneWorkspaceLoader.item
+                enabled: sceneWorkspaceLoader.item !== null
+                function onExitViewerRequested() {
+                    window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
+                }
+                function onPhotoReadyForEditing(assetId, openEditor) {
+                    // Import may finish after navigation or a different scene was opened.
+                    // Keep the imported photo, but do not steal the current workspace.
+                    if (!openEditor || window.currentWorkspace !== window.sceneWorkspaceIndex)
+                        return
+                    window.syncEditorRecipeToCatalog(assetId)
+                    catalogAssets.clearFilters()
+                    if (!catalogAssets.selectAssetById(assetId, true))
+                        return
+                    window.editorUsesLocalAsset = false
+                    window.carouselPhotoEditActive = false
+                    window.switchToWorkspaceIndex(window.editWorkspaceIndex)
                 }
             }
 
@@ -2466,124 +3122,94 @@ ApplicationWindow {
             }
 
             Rectangle {
+                id: carouselPhotoEditBar
+                objectName: "carouselPhotoEditReturnBar"
+                visible: window.carouselPhotoEditActive
+                         && window.currentWorkspace === window.editWorkspaceIndex
+                         && !window.shellNavigationActivityVisible
+                z: 7
+                anchors.top: parent.top
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.topMargin: 14
+                width: Math.min(720, parent.width - 48)
+                height: carouselPhotoEditBarContent.implicitHeight + 18
+                radius: 9
+                color: theme.alpha(theme.ink900, 0.96)
+                border.width: 1
+                border.color: theme.alpha(theme.accentCool400, 0.62)
+
+                RowLayout {
+                    id: carouselPhotoEditBarContent
+                    anchors.fill: parent
+                    anchors.margins: 9
+                    spacing: 10
+
+                    Rectangle {
+                        Layout.preferredWidth: 7
+                        Layout.preferredHeight: 7
+                        radius: width / 2
+                        color: theme.accentCool400
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Editing for Carousel"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideNone
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 8
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: window.carouselPhotoEditDisplayName
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            elide: Text.ElideNone
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 7
+                        }
+                    }
+
+                    ActionButton {
+                        compact: true
+                        text: "Return Without Applying"
+                        tooltipText: "Discard this round-trip and leave the Carousel instance unchanged."
+                        onClicked: window.finishCarouselPhotoEdit(false)
+                    }
+
+                    ActionButton {
+                        objectName: "applyCarouselPhotoEditButton"
+                        compact: true
+                        text: "Apply & Return"
+                        tone: "primary"
+                        tooltipText: "Apply this non-destructive recipe to the same Carousel photo and return."
+                        onClicked: window.finishCarouselPhotoEdit(true)
+                    }
+                }
+            }
+
+            Rectangle {
                 id: workspaceTransitionOverlay
                 objectName: "workspaceTransitionOverlay"
                 visible: window.shellNavigationActivityVisible
                 anchors.fill: parent
                 z: 8
-                color: theme.alpha(theme.ink950, 0.36)
-                opacity: visible ? 1 : 0
-
-                Behavior on opacity {
-                    NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
-                }
+                color: "transparent"
 
                 MouseArea {
                     anchors.fill: parent
                     acceptedButtons: Qt.AllButtons
                     hoverEnabled: true
                 }
-
-                Rectangle {
-                    width: Math.min(360, Math.max(240, parent.width * 0.28))
-                    height: transitionContent.implicitHeight + 22
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 22
-                    radius: 8
-                    color: theme.alpha(theme.glassBase, 0.84)
-                    border.width: 1
-                    border.color: theme.alpha(window.shellTransitionAccent, 0.38)
-
-                    ColumnLayout {
-                        id: transitionContent
-                        anchors.fill: parent
-                        anchors.margins: 11
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Rectangle {
-                                Layout.preferredWidth: 7
-                                Layout.preferredHeight: 7
-                                radius: width / 2
-                                color: window.shellTransitionAccent
-                                opacity: 0.94
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: window.shellTransitionTitle
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideNone
-                                fontSizeMode: Text.HorizontalFit
-                                minimumPixelSize: 9
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: window.shellTransitionDetail
-                            visible: text.length > 0
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            maximumLineCount: 2
-                            elide: Text.ElideNone
-                        }
-
-                        ProgressStrip {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 3
-                            progress: -1
-                            accent: window.shellTransitionAccent
-                        }
-                    }
-                }
-            }
-
-            InlineActivityIndicator {
-                id: floatingActivityIndicator
-                objectName: "floatingActivityIndicator"
-                visible: window.blockingActivityVisible && !window.shellNavigationActivityVisible
-                width: Math.min(320, Math.max(190, parent.width * 0.26))
-                height: implicitHeight
-                z: 2
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.rightMargin: window.activityIndicatorRightMargin
-                anchors.bottomMargin: window.activityIndicatorBottomMargin
-                title: window.primaryActivityTitle
-                detail: window.primaryActivityDetail
-                progressValue: window.primaryActivityProgress
-                accent: window.primaryActivityAccent
-                cancelable: window.primaryActivityCancelable
-                onCancelRequested: window.cancelPrimaryActivity()
-            }
-
-            InlineActivityIndicator {
-                id: failureActivityIndicator
-                objectName: "failureActivityIndicator"
-                visible: !window.blockingActivityVisible && window.primaryFailureKind !== "none"
-                width: Math.min(340, Math.max(210, parent.width * 0.28))
-                height: implicitHeight
-                z: 2
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.rightMargin: window.activityIndicatorRightMargin
-                anchors.bottomMargin: window.activityIndicatorBottomMargin
-                title: window.primaryFailureTitle
-                detail: window.primaryFailureDetail
-                progressValue: 0
-                accent: theme.error
-                retryable: window.primaryFailureRetryable
-                onRetryRequested: window.retryPrimaryFailure()
             }
 
             RowLayout {
@@ -2598,7 +3224,7 @@ ApplicationWindow {
                 z: 1
 
                 Text {
-                    text: "Virel Studio"
+                    text: "Looksy"
                     color: theme.textMuted
                     font.family: theme.fontUi
                     font.pixelSize: 9
@@ -2643,9 +3269,15 @@ ApplicationWindow {
     }
 
     Loader {
-        id: startupLoadingPopupLoader
-        active: catalogAssets.loading
-        sourceComponent: startupLoadingPopupComponent
+        id: firstRunGuideLoader
+        active: appShell.firstRunExperiencePending || window.pendingFirstRunGuideOpen
+        sourceComponent: firstRunGuideComponent
+        onLoaded: {
+            if (window.pendingFirstRunGuideOpen && !window.recoverySurfaceVisible) {
+                item.start()
+                window.pendingFirstRunGuideOpen = false
+            }
+        }
     }
 
     Loader {
@@ -2694,12 +3326,33 @@ ApplicationWindow {
     }
 
     Component {
-        id: startupLoadingPopupComponent
+        id: firstRunGuideComponent
 
-        StartupLoadingPopup {
+        FirstRunGuideDialog {
             parent: Overlay.overlay
-            catalogLoading: catalogAssets.loading
-            catalogStatus: catalogAssets.status
+            canOpenSelectedPhoto: window.canOpenSelectedPhotoInEdit()
+            onSampleRequested: {
+                const samplePath = appShell.prepareSampleProject()
+                if (samplePath.length === 0) {
+                    errorText = "The sample photos could not be prepared. Choose your own folder instead."
+                    return
+                }
+                window.libraryWorkspaceMode = "catalog"
+                window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
+                window.catalogAssetModel.importFolderPath(samplePath)
+            }
+            onImportRequested: window.beginImportWorkspace()
+            onLibraryRequested: window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
+            onEditRequested: window.openSelectedPhotoInEdit()
+            onExportRequested: window.switchToWorkspaceIndex(window.exportWorkspaceIndex)
+            onGuideFinished: {
+                appShell.completeFirstRunExperience()
+                close()
+            }
+            onSkipped: {
+                appShell.completeFirstRunExperience()
+                close()
+            }
         }
     }
 
@@ -2807,7 +3460,6 @@ ApplicationWindow {
                 { action: carouselExportAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘C" : "Ctrl+Shift+C" },
                 { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
                 { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
-                { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
                 { action: commandPaletteAction, category: "View", shortcutHint: macStyle ? "⌘K" : "Ctrl+K" },
                 { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
                 { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
@@ -2835,7 +3487,7 @@ ApplicationWindow {
             modal: true
             width: 420
             standardButtons: Dialog.Ok
-            title: "About Virel Studio"
+            title: "About Looksy"
 
             background: Rectangle {
                 radius: theme.radius16
@@ -2847,9 +3499,10 @@ ApplicationWindow {
             contentItem: ColumnLayout {
                 spacing: 12
 
-                BrandWordmark {
+                LooksyLetterhead {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
+                    animated: true
                 }
 
                 Label {
@@ -2887,6 +3540,190 @@ ApplicationWindow {
         }
     }
 
+    PopupSurface {
+        id: recoverySurface
+        objectName: "recoverySummarySurface"
+        visible: window.recoverySurfaceVisible
+        z: 500
+        anchors.top: parent.top
+        anchors.topMargin: theme.scaled(78)
+        anchors.right: parent.right
+        anchors.rightMargin: theme.scaled(18)
+        width: Math.min(parent.width - theme.scaled(36),
+                        theme.scaled(window.catalogRecoveryNeeded ? 480 : 380))
+        height: Math.max(theme.scaled(80), recoverySurfaceColumn.implicitHeight + theme.scaled(16))
+        radius: theme.radius16
+        opacity: visible ? 1 : 0
+        scale: visible ? 1 : 0.97
+        transformOrigin: Item.TopRight
+        Behavior on opacity { NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic } }
+        Behavior on scale { NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutBack } }
+        accent: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? theme.error : theme.success
+        accentRail: true
+        fillColor: theme.ink850
+        borderColor: theme.alpha(theme.glassEdge, 0.72)
+        shadowColor: visible ? theme.alpha(theme.ink950, 0.56) : "transparent"
+
+        ColumnLayout {
+            id: recoverySurfaceColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.margins: theme.scaled(8)
+            spacing: theme.scaled(6)
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.scaled(8)
+
+                AppIcon {
+                    name: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? "info" : "check"
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    color: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? theme.error : theme.success
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.scaled(1)
+
+                    Label {
+                        objectName: "recoverySummaryTitle"
+                        Layout.fillWidth: true
+                        text: window.catalogRecoveryNeeded ? "Catalog recovery"
+                              : window.jobRecoveryNeeded ? "Job recovery needs attention" : "Work recovered"
+                        color: theme.textMain
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: window.recoverySurfaceSummary
+                        color: theme.textMuted
+                        font.pixelSize: theme.typeCaption
+                        maximumLineCount: 1
+                        elide: Text.ElideRight
+                    }
+                }
+
+                ActionButton {
+                    objectName: "recoveryDoneButton"
+                    visible: !window.catalogRecoveryNeeded && !window.jobRecoveryNeeded && !appShell.catalogRepairConfirmationPending
+                    iconName: "close"
+                    showText: false
+                    compact: true
+                    tone: "tertiary"
+                    tooltipText: "Dismiss recovery notice"
+                    Accessible.name: "Dismiss recovery summary"
+                    onClicked: window.dismissRecoverySurface()
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.scaled(6)
+
+                ActionButton {
+                    objectName: "recoveryDetailsButton"
+                    text: window.recoveryDetailsExpanded ? "Hide details" : "Details"
+                    compact: true
+                    tone: "tertiary"
+                    Accessible.name: text
+                    onClicked: window.recoveryDetailsExpanded = !window.recoveryDetailsExpanded
+                }
+
+                Item { Layout.fillWidth: true }
+
+                ActionButton {
+                    objectName: "recoveryReviewWorkButton"
+                    visible: !window.catalogRecoveryNeeded
+                    text: window.jobRecoveryNeeded ? "Review jobs" : "Review work"
+                    compact: true
+                    tone: "primary"
+                    Accessible.name: window.jobRecoveryNeeded ? "Review paused background jobs" : "Review recovered work"
+                    onClicked: window.reviewRecoveredWork()
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: window.recoveryDetailsExpanded
+                spacing: theme.scaled(4)
+
+                Repeater {
+                    model: window.recoveryDetailItems()
+                    delegate: Label {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        text: "• " + modelData
+                        color: theme.textMuted
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                    }
+                }
+            }
+
+            RowLayout {
+                objectName: "catalogRecoveryActions"
+                Layout.fillWidth: true
+                visible: window.catalogRecoveryNeeded || appShell.catalogRepairConfirmationPending
+                spacing: theme.scaled(6)
+
+                Item { Layout.fillWidth: true }
+
+                ActionButton {
+                    objectName: "catalogRetryButton"
+                    visible: window.catalogRecoveryNeeded
+                    text: "Retry"
+                    compact: true
+                    Accessible.name: "Retry opening the catalog"
+                    onClicked: catalogAssets.refresh()
+                }
+
+                ActionButton {
+                    objectName: "catalogBackupButton"
+                    visible: window.catalogRecoveryNeeded
+                    text: "Create backup"
+                    compact: true
+                    Accessible.name: "Create a catalog backup"
+                    onClicked: appShell.createCatalogBackup()
+                }
+
+                ActionButton {
+                    objectName: "catalogRepairButton"
+                    visible: window.catalogRecoveryNeeded && !appShell.catalogRepairConfirmationPending
+                    text: "Repair from backup"
+                    compact: true
+                    Accessible.name: "Review catalog repair"
+                    onClicked: appShell.requestCatalogRepair()
+                }
+
+                ActionButton {
+                    objectName: "catalogRepairConfirmButton"
+                    visible: appShell.catalogRepairConfirmationPending
+                    text: "Confirm repair"
+                    compact: true
+                    Accessible.name: "Confirm catalog repair from the latest backup"
+                    onClicked: {
+                        if (appShell.confirmCatalogRepair())
+                            catalogAssets.refresh()
+                    }
+                }
+
+                ActionButton {
+                    objectName: "catalogRepairCancelButton"
+                    visible: appShell.catalogRepairConfirmationPending
+                    text: "Cancel"
+                    compact: true
+                    Accessible.name: "Cancel catalog repair"
+                    onClicked: appShell.cancelCatalogRepair()
+                }
+
+            }
+        }
+    }
+
     Component {
         id: libraryView
 
@@ -2895,6 +3732,7 @@ ApplicationWindow {
             page: "library"
             catalogAssets: window.catalogAssetModel
             importModeOpen: window.libraryWorkspaceMode === "import"
+            interfaceMode: appShell.interfaceDensity === "clean" ? "compact" : appShell.interfaceDensity
 
             Component.onCompleted: {
                 window.restorePrimaryStudioPanels(this)
@@ -2943,10 +3781,13 @@ ApplicationWindow {
                 window.openProjectWorkspace(destination, projectName)
             }
             onLocalAssetActivated: function(filePath, previewSource, displayName) {
+                window.carouselPhotoEditActive = false
                 window.editorUsesLocalAsset = true
+                window.localEditorAssetId = filePath
                 window.localEditorFilePath = filePath
                 window.localEditorPreviewSource = previewSource
                 window.localEditorDisplayName = displayName
+                window.localEditorAdjustmentPatchJson = ""
                 window.loadLocalAssetIntoEditor()
                 window.activatePrimaryEditTool("adjust")
             }
@@ -2962,6 +3803,7 @@ ApplicationWindow {
             catalogAssets: window.catalogAssetModel
             editTool: window.resolvedEditTool()
             workspaceActive: window.currentWorkspace === window.editWorkspaceIndex
+            interfaceMode: appShell.interfaceDensity === "clean" ? "compact" : appShell.interfaceDensity
 
             Component.onCompleted: window.restorePrimaryStudioPanels(this)
 

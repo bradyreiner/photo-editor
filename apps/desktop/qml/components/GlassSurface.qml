@@ -6,15 +6,15 @@ Rectangle {
     property color accent: theme.accentWarm400
     property bool accentRail: false
     property bool elevated: false
-    property real surfaceOpacity: elevated ? 0.68 : 0.48
-    property real edgeOpacity: elevated ? 0.22 : 0.10
+    property real surfaceOpacity: 1.0
+    property real edgeOpacity: 0
     property real highlightOpacity: 0
 
     Theme { id: theme }
 
-    radius: theme.radius8
-    color: theme.alpha(theme.glassBase, root.surfaceOpacity)
-    border.width: 1
+    radius: theme.radiusSurface
+    color: root.elevated ? theme.glassLift : theme.glassBase
+    border.width: root.edgeOpacity > 0 ? 1 : 0
     border.color: theme.alpha(theme.glassEdge, root.edgeOpacity)
 
     Rectangle {

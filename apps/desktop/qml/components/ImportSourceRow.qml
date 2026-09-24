@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -21,8 +21,8 @@ Rectangle {
     Theme { id: theme }
 
     width: ListView.view ? ListView.view.width : implicitWidth
-    implicitHeight: Math.max(64, sourceRow.implicitHeight + theme.space16)
-    radius: theme.radius10
+    implicitHeight: Math.max(50, sourceRow.implicitHeight + theme.space12)
+    radius: theme.radius8
     color: selected
            ? theme.alpha(theme.accentCool500, 0.12)
            : (sourceHover.hovered || activeFocus ? theme.alpha(theme.ink800, 0.88) : theme.alpha(theme.ink900, 0.82))
@@ -57,8 +57,8 @@ Rectangle {
     RowLayout {
         id: sourceRow
         anchors.fill: parent
-        anchors.margins: theme.sectionPadding
-        spacing: theme.space10
+        anchors.margins: theme.space8
+        spacing: theme.space8
 
         Rectangle {
             Layout.alignment: Qt.AlignVCenter
@@ -80,10 +80,10 @@ Rectangle {
                 text: root.label
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 13
+                font.pixelSize: 12
                 font.weight: Font.DemiBold
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                maximumLineCount: 2
+                maximumLineCount: 1
                 elide: Text.ElideNone
                 ToolTip.visible: sourceHover.hovered && titleLabel.contentHeight > titleLabel.height + 1
                 ToolTip.delay: 350
@@ -97,9 +97,9 @@ Rectangle {
                 text: root.subtitle
                 color: root.selected ? theme.textMain : theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 10
+                font.pixelSize: 9
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                maximumLineCount: 2
+                maximumLineCount: 1
                 elide: Text.ElideNone
                 ToolTip.visible: sourceHover.hovered && subtitleLabel.contentHeight > subtitleLabel.height + 1
                 ToolTip.delay: 350

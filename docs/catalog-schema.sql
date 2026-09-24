@@ -1,5 +1,7 @@
--- Legacy local schema draft kept for reference.
--- The active product-backed schema is postgres-schema.sql.
+-- Historical, non-executable schema draft retained only for archaeology.
+-- It is not a runtime catalog schema and must not be used to provision a database.
+-- PostgreSQL is the sole catalog authority; the executable schema lives in
+-- rust/crates/catalog/migrations and docs/postgres-schema.sql is its reviewed snapshot.
 
 CREATE TABLE drives (
     drive_id TEXT PRIMARY KEY,
@@ -40,6 +42,29 @@ CREATE INDEX idx_assets_camera
 CREATE TABLE edit_recipes (
     asset_id TEXT PRIMARY KEY REFERENCES assets(asset_id),
     recipe_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE canonical_edit_recipes_v13 (
+    asset_id TEXT PRIMARY KEY REFERENCES assets(asset_id),
+    recipe_payload TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    provenance_payload TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE recipe_migration_records (
+    asset_id TEXT PRIMARY KEY REFERENCES assets(asset_id),
+    source_recipe_version INTEGER NOT NULL,
+    source_renderer TEXT NOT NULL,
+    target_renderer TEXT NOT NULL,
+    profile_identities TEXT NOT NULL,
+    plan_hash TEXT NOT NULL,
+    evidence_hash TEXT NOT NULL,
+    approval_time TEXT,
+    rollback_pointer TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 

@@ -1,12 +1,21 @@
 #include "ai_model_runtime.h"
+#include <QtGui/qrgbafloat.h>
 
 #include <QColor>
 #include <QColorSpace>
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRect>
+#include <QSet>
 #include <QSize>
+#include <QStandardPaths>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -17,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if defined(PHOTO_EDITOR_HAS_ONNXRUNTIME) && PHOTO_EDITOR_HAS_ONNXRUNTIME
@@ -36,6 +46,7 @@ constexpr bool kOnnxRuntimeLinked = false;
 #endif
 constexpr bool kSamRuntimeImplemented = false;
 constexpr bool kLamaRuntimeImplemented = kOnnxRuntimeLinked;
+[[maybe_unused]] constexpr auto kHighTextureExemplarResidualMean = 6.0;
 
 QString default_model_root() {
   const auto env_root = qEnvironmentVariable("PHOTO_EDITOR_AI_MODEL_DIR");
@@ -60,6 +71,309 @@ bool model_file_exists(const QString& root, const QString& relative_path) {
 
 QString inpaint_model_path(const QString& root) {
   return QDir(root).filePath(QStringLiteral("inpaint/lama.onnx"));
+}
+
+AiModelBundleVerification invalid_model_bundle(
+    const QString& root,
+    const QString& manifest_path,
+    bool manifest_available,
+    const QString& error_code,
+    const QString& error_message) {
+  AiModelBundleVerification result;
+  result.root = root;
+  result.manifest_path = manifest_path;
+  result.manifest_available = manifest_available;
+  result.error_code = error_code;
+  result.error_message = error_message;
+  return result;
+}
+
+bool valid_sha256(const QString& value) {
+  if (value.size() != 64 || value != value.toLower()) {
+    return false;
+  }
+  return std::all_of(
+      value.cbegin(), value.cend(), [](const QChar character) {
+        return character.isDigit() ||
+               (character >= QLatin1Char('a') && character <= QLatin1Char('f'));
+      });
+}
+
+QString required_json_string(
+    const QJsonObject& object,
+    const QString& key) {
+  const auto value = object.value(key);
+  return value.isString() ? value.toString().trimmed() : QString{};
+}
+
+AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
+  const auto absolute_root = QFileInfo(model_root).absoluteFilePath();
+  const auto canonical_root = QFileInfo(absolute_root).canonicalFilePath();
+  const auto normalized_root = QDir::cleanPath(
+      canonical_root.isEmpty() ? absolute_root : canonical_root);
+  const auto manifest_path = QDir(normalized_root).filePath(QStringLiteral("manifest.json"));
+  const QFileInfo manifest_info(manifest_path);
+  if (!manifest_info.isFile()) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        false,
+        QStringLiteral("manifest_missing"),
+        QStringLiteral("Model manifest is missing: %1").arg(manifest_path));
+  }
+
+  QFile manifest_file(manifest_path);
+  if (!manifest_file.open(QIODevice::ReadOnly)) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        true,
+        QStringLiteral("manifest_unreadable"),
+        QStringLiteral("Unable to read model manifest: %1")
+            .arg(manifest_file.errorString()));
+  }
+  QJsonParseError parse_error;
+  const auto document =
+      QJsonDocument::fromJson(manifest_file.readAll(), &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !document.isObject()) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        true,
+        QStringLiteral("manifest_invalid_json"),
+        QStringLiteral("Model manifest must contain one valid JSON object."));
+  }
+  const auto manifest = document.object();
+  if (required_json_string(manifest, QStringLiteral("schema")) !=
+      QStringLiteral("framehouse-ai-model-bundle-v1")) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        true,
+        QStringLiteral("manifest_schema_mismatch"),
+        QStringLiteral("Model manifest schema must be framehouse-ai-model-bundle-v1."));
+  }
+  if (!manifest.value(QStringLiteral("version")).isDouble() ||
+      manifest.value(QStringLiteral("version")).toInt() != 1) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        true,
+        QStringLiteral("manifest_version_mismatch"),
+        QStringLiteral("Model manifest version must be 1."));
+  }
+  const auto artifacts_value = manifest.value(QStringLiteral("artifacts"));
+  if (!artifacts_value.isArray() || artifacts_value.toArray().isEmpty()) {
+    return invalid_model_bundle(
+        normalized_root,
+        manifest_path,
+        true,
+        QStringLiteral("manifest_artifacts_missing"),
+        QStringLiteral("Model manifest artifacts must be a non-empty array."));
+  }
+
+  QSet<QString> artifact_ids;
+  QSet<QString> artifact_paths;
+  auto verified_artifact_count = 0;
+  auto verified_inpaint_count = 0;
+  QString verified_inpaint_path;
+  QString verified_inpaint_sha256;
+  qint64 verified_inpaint_bytes = 0;
+  const auto artifacts = artifacts_value.toArray();
+  for (auto index = 0; index < artifacts.size(); ++index) {
+    if (!artifacts.at(index).isObject()) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_invalid"),
+          QStringLiteral("Model artifact %1 must be an object.").arg(index));
+    }
+    const auto artifact = artifacts.at(index).toObject();
+    const auto artifact_id = required_json_string(artifact, QStringLiteral("id"));
+    const auto role = required_json_string(artifact, QStringLiteral("role"));
+    const auto contract = required_json_string(artifact, QStringLiteral("contract"));
+    auto relative_path = required_json_string(artifact, QStringLiteral("path"));
+    const auto expected_sha256 =
+        required_json_string(artifact, QStringLiteral("sha256"));
+    const auto source_url =
+        required_json_string(artifact, QStringLiteral("sourceUrl"));
+    const auto license_value = artifact.value(QStringLiteral("license"));
+    const auto license = license_value.isObject() ? license_value.toObject()
+                                                  : QJsonObject{};
+    const auto license_name = required_json_string(license, QStringLiteral("name"));
+    const auto license_url = required_json_string(license, QStringLiteral("url"));
+    if (artifact_id.isEmpty() || artifact_ids.contains(artifact_id)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_id_invalid"),
+          QStringLiteral("Model artifact %1 has a missing or duplicate id.").arg(index));
+    }
+    artifact_ids.insert(artifact_id);
+    if (role != QStringLiteral("inpaint") && role != QStringLiteral("selection")) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_role_invalid"),
+          QStringLiteral("Model artifact %1 has an unsupported role.").arg(index));
+    }
+    if (contract.isEmpty() ||
+        (role == QStringLiteral("inpaint") &&
+         contract != QStringLiteral("opencv-lama-image-mask-nchw-float32-512-v1"))) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_contract_invalid"),
+          QStringLiteral("Model artifact %1 has an unsupported tensor contract.").arg(index));
+    }
+    relative_path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const auto path_parts = relative_path.split(QLatin1Char('/'), Qt::KeepEmptyParts);
+    if (relative_path.isEmpty() || QDir::isAbsolutePath(relative_path) ||
+        path_parts.contains(QStringLiteral("..")) || artifact_paths.contains(relative_path)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_path_invalid"),
+          QStringLiteral("Model artifact %1 path must be unique and stay inside the bundle.")
+              .arg(index));
+    }
+    artifact_paths.insert(relative_path);
+    const auto artifact_path = QDir(normalized_root).filePath(relative_path);
+    const QFileInfo artifact_info(artifact_path);
+    const auto canonical_artifact_path = artifact_info.canonicalFilePath();
+    const auto root_prefix = normalized_root + QDir::separator();
+    if (!artifact_info.isFile() || canonical_artifact_path.isEmpty() ||
+        !canonical_artifact_path.startsWith(root_prefix)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_missing_or_escaped"),
+          QStringLiteral("Model artifact is missing or escapes the bundle: %1")
+              .arg(artifact_path));
+    }
+    if (!artifact.value(QStringLiteral("bytes")).isDouble()) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_bytes_invalid"),
+          QStringLiteral("Model artifact %1 bytes must be a positive integer.").arg(index));
+    }
+    const auto expected_bytes_value =
+        artifact.value(QStringLiteral("bytes")).toDouble();
+    const auto expected_bytes = static_cast<qint64>(expected_bytes_value);
+    if (!std::isfinite(expected_bytes_value) ||
+        std::floor(expected_bytes_value) != expected_bytes_value ||
+        expected_bytes <= 0 || artifact_info.size() != expected_bytes) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_size_mismatch"),
+          QStringLiteral("Model artifact %1 byte size does not match its manifest.")
+              .arg(index));
+    }
+    if (!valid_sha256(expected_sha256)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_sha256_invalid"),
+          QStringLiteral("Model artifact %1 SHA-256 is invalid.").arg(index));
+    }
+    QFile artifact_file(canonical_artifact_path);
+    if (!artifact_file.open(QIODevice::ReadOnly)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_unreadable"),
+          QStringLiteral("Unable to read model artifact: %1")
+              .arg(canonical_artifact_path));
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&artifact_file)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_hash_failed"),
+          QStringLiteral("Unable to hash model artifact: %1")
+              .arg(canonical_artifact_path));
+    }
+    const auto actual_sha256 = QString::fromLatin1(hash.result().toHex());
+    if (actual_sha256 != expected_sha256) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_sha256_mismatch"),
+          QStringLiteral("Model artifact %1 checksum does not match its manifest.")
+              .arg(index));
+    }
+    if (source_url.isEmpty() || license_name.isEmpty() || license_url.isEmpty()) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_provenance_missing"),
+          QStringLiteral("Model artifact %1 must include source and license evidence.")
+              .arg(index));
+    }
+    ++verified_artifact_count;
+    if (role == QStringLiteral("inpaint") &&
+        relative_path == QStringLiteral("inpaint/lama.onnx")) {
+      ++verified_inpaint_count;
+      verified_inpaint_path = canonical_artifact_path;
+      verified_inpaint_sha256 = actual_sha256;
+      verified_inpaint_bytes = artifact_info.size();
+    }
+  }
+  if (verified_inpaint_count != 1) {
+    return invalid_model_bundle(
+        normalized_root, manifest_path, true,
+        QStringLiteral("inpaint_artifact_missing"),
+        QStringLiteral("The bundle must contain exactly one verified inpaint/lama.onnx artifact."));
+  }
+
+  AiModelBundleVerification result;
+  result.ok = true;
+  result.manifest_available = true;
+  result.inpaint_artifact_verified = true;
+  result.root = normalized_root;
+  result.manifest_path = manifest_path;
+  result.inpaint_model_path = verified_inpaint_path;
+  result.inpaint_sha256 = verified_inpaint_sha256;
+  result.inpaint_bytes = verified_inpaint_bytes;
+  result.artifact_count = verified_artifact_count;
+  return result;
+}
+
+AiModelBundleVerification verified_model_bundle_for_runtime(
+    const QString& model_root) {
+  struct Cache final {
+    QString root;
+    qint64 manifest_bytes = -1;
+    qint64 manifest_modified_ms = -1;
+    qint64 inpaint_bytes = -1;
+    qint64 inpaint_modified_ms = -1;
+    AiModelBundleVerification verification;
+  };
+  static std::mutex cache_mutex;
+  static Cache cache;
+
+  const auto absolute_root = QFileInfo(model_root).absoluteFilePath();
+  const QFileInfo manifest_info(
+      QDir(absolute_root).filePath(QStringLiteral("manifest.json")));
+  const QFileInfo inpaint_info(inpaint_model_path(absolute_root));
+  const auto manifest_modified_ms =
+      manifest_info.lastModified().toMSecsSinceEpoch();
+  const auto inpaint_modified_ms =
+      inpaint_info.lastModified().toMSecsSinceEpoch();
+  std::lock_guard<std::mutex> lock(cache_mutex);
+  if (cache.root == absolute_root &&
+      cache.manifest_bytes == manifest_info.size() &&
+      cache.manifest_modified_ms == manifest_modified_ms &&
+      cache.inpaint_bytes == inpaint_info.size() &&
+      cache.inpaint_modified_ms == inpaint_modified_ms) {
+    return cache.verification;
+  }
+  cache.root = absolute_root;
+  cache.manifest_bytes = manifest_info.size();
+  cache.manifest_modified_ms = manifest_modified_ms;
+  cache.inpaint_bytes = inpaint_info.size();
+  cache.inpaint_modified_ms = inpaint_modified_ms;
+  cache.verification = verify_model_bundle_impl(absolute_root);
+  return cache.verification;
+}
+
+bool inpaint_cancelled(const AiInpaintRequest& request) {
+  return request.control && request.control->cancelled();
+}
+AiInpaintResult cancelled_inpaint_result() {
+  AiInpaintResult result; result.cancelled=true;
+  result.error_message=QStringLiteral("Inpaint cancelled.");
+  return result;
 }
 
 bool valid_inpaint_mask(const AiInpaintRequest& request) {
@@ -179,21 +493,42 @@ double inpaint_mask_coverage(const AiInpaintRequest& request, const QRect& bound
   return area > 0 ? static_cast<double>(masked) / static_cast<double>(area) : 0.0;
 }
 
-QString inpaint_region_kind(const AiInpaintRequest& request, double coverage) {
+QString inpaint_region_kind(
+    const AiInpaintRequest& request,
+    double coverage,
+    const QRect& bounds) {
   const auto mode = request.retouch_mode.trimmed().toLower();
-  if (mode == QStringLiteral("heal") && coverage <= 0.10) {
+  const auto source_area =
+      static_cast<double>(std::max(1, request.source_image.width())) *
+      static_cast<double>(std::max(1, request.source_image.height()));
+  const auto padded_footprint =
+      static_cast<double>(std::max(0, bounds.width())) *
+      static_cast<double>(std::max(0, bounds.height())) / source_area;
+  const auto footprint = padded_footprint * std::clamp(coverage, 0.0, 1.0);
+  if (mode == QStringLiteral("heal") && footprint <= 0.03) {
     return QStringLiteral("detail-heal");
   }
   if (mode == QStringLiteral("patch")) {
-    return coverage >= 0.28 ? QStringLiteral("large-patch") : QStringLiteral("patch-region");
+    return footprint >= 0.12 ? QStringLiteral("large-patch")
+                             : QStringLiteral("patch-region");
   }
-  if (coverage <= 0.05) {
+  if (footprint <= 0.015) {
     return QStringLiteral("spot");
   }
-  if (coverage >= 0.28) {
+  if (footprint >= 0.12) {
     return QStringLiteral("large-object");
   }
   return QStringLiteral("object");
+}
+
+bool prompt_requests_texture(const QString& prompt) {
+  const auto normalized = prompt.trimmed().toLower();
+  return normalized.contains(QStringLiteral("texture")) ||
+         normalized.contains(QStringLiteral("grain")) ||
+         normalized.contains(QStringLiteral("detail")) ||
+         normalized.contains(QStringLiteral("fabric")) ||
+         normalized.contains(QStringLiteral("weave")) ||
+         normalized.contains(QStringLiteral("bark"));
 }
 
 double prompt_texture_multiplier(const QString& prompt) {
@@ -206,9 +541,7 @@ double prompt_texture_multiplier(const QString& prompt) {
       normalized.contains(QStringLiteral("clean"))) {
     return 0.65;
   }
-  if (normalized.contains(QStringLiteral("texture")) ||
-      normalized.contains(QStringLiteral("grain")) ||
-      normalized.contains(QStringLiteral("detail"))) {
+  if (prompt_requests_texture(prompt)) {
     return 1.25;
   }
   return 1.0;
@@ -228,7 +561,7 @@ void populate_inpaint_region_result(
   result->quality_mode =
       quality_mode == QStringLiteral("final") ? QStringLiteral("final") : QStringLiteral("preview");
   result->seed = std::max(1, request.seed);
-  result->region_kind = inpaint_region_kind(request, coverage);
+  result->region_kind = inpaint_region_kind(request, coverage, bounds);
   result->region_coverage = coverage;
   result->region_x = bounds.x();
   result->region_y = bounds.y();
@@ -253,9 +586,7 @@ AiInpaintResult run_source_region_patch(const AiInpaintRequest& request) {
   if (!source.colorSpace().isValid()) {
     source.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
-  if (source.format() != QImage::Format_ARGB32) {
-    source = source.convertToFormat(QImage::Format_ARGB32);
-  }
+  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_RGBA64);
   const auto source_rect = patch_source_rect(request, source.size());
   if (!source_rect.isValid() || source_rect.isEmpty()) {
     result.error_message = QStringLiteral("Patch source region is empty.");
@@ -264,11 +595,12 @@ AiInpaintResult run_source_region_patch(const AiInpaintRequest& request) {
 
   auto patch = source.copy(source_rect).scaled(
       bounds.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-  if (patch.format() != QImage::Format_ARGB32) {
-    patch = patch.convertToFormat(QImage::Format_ARGB32);
+  if (patch.format() != QImage::Format_RGBA64) {
+    patch = patch.convertToFormat(QImage::Format_RGBA64);
   }
   patch.setColorSpace(source.colorSpace());
 
+  if (inpaint_cancelled(request)) return cancelled_inpaint_result();
   result.success = true;
   result.model_name = QStringLiteral("source-region-patch-v1");
   populate_inpaint_region_result(&result, request, bounds);
@@ -300,9 +632,7 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
   if (!source.colorSpace().isValid()) {
     source.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
-  if (source.format() != QImage::Format_ARGB32) {
-    source = source.convertToFormat(QImage::Format_ARGB32);
-  }
+  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
 
   auto patch = source.copy(bounds);
   const auto patch_width = patch.width();
@@ -326,10 +656,104 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
 
   const auto fallback_color = average_patch_boundary_color(source, bounds);
   const auto fallback_rgb = fallback_color.rgba();
+  const auto source_pixels = pixels;
+  if (result.region_kind == QStringLiteral("spot")) {
+    std::vector<int> nearest_left(pixels.size(), -1);
+    std::vector<int> nearest_right(pixels.size(), -1);
+    std::vector<int> nearest_top(pixels.size(), -1);
+    std::vector<int> nearest_bottom(pixels.size(), -1);
+    for (int y = 0; y < patch_height; ++y) {
+      auto known_x = -1;
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          known_x = x;
+        }
+        nearest_left[index] = known_x;
+      }
+      known_x = -1;
+      for (int x = patch_width - 1; x >= 0; --x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          known_x = x;
+        }
+        nearest_right[index] = known_x;
+      }
+    }
+    for (int x = 0; x < patch_width; ++x) {
+      auto known_y = -1;
+      for (int y = 0; y < patch_height; ++y) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          known_y = y;
+        }
+        nearest_top[index] = known_y;
+      }
+      known_y = -1;
+      for (int y = patch_height - 1; y >= 0; --y) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          known_y = y;
+        }
+        nearest_bottom[index] = known_y;
+      }
+    }
+    const auto interpolate = [](QRgb first, QRgb second, double amount) {
+      const auto blend = [&](int first_channel, int second_channel) {
+        return static_cast<int>(std::lround(std::lerp(
+            static_cast<double>(first_channel),
+            static_cast<double>(second_channel),
+            std::clamp(amount, 0.0, 1.0))));
+      };
+      return qRgba(
+          blend(qRed(first), qRed(second)),
+          blend(qGreen(first), qGreen(second)),
+          blend(qBlue(first), qBlue(second)),
+          blend(qAlpha(first), qAlpha(second)));
+    };
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+      if (!masked[index]) {
+        continue;
+      }
+      const auto x = static_cast<int>(index % static_cast<std::size_t>(patch_width));
+      const auto y = static_cast<int>(index / static_cast<std::size_t>(patch_width));
+      std::array<QRgb, 2> estimates{fallback_rgb, fallback_rgb};
+      std::size_t estimate_count = 0;
+      const auto left = nearest_left[index];
+      const auto right = nearest_right[index];
+      if (left >= 0 && right >= 0 && right > left) {
+        estimates[estimate_count++] = interpolate(
+            source_pixels[static_cast<std::size_t>(y * patch_width + left)],
+            source_pixels[static_cast<std::size_t>(y * patch_width + right)],
+            static_cast<double>(x - left) / static_cast<double>(right - left));
+      }
+      const auto top = nearest_top[index];
+      const auto bottom = nearest_bottom[index];
+      if (top >= 0 && bottom >= 0 && bottom > top) {
+        estimates[estimate_count++] = interpolate(
+            source_pixels[static_cast<std::size_t>(top * patch_width + x)],
+            source_pixels[static_cast<std::size_t>(bottom * patch_width + x)],
+            static_cast<double>(y - top) / static_cast<double>(bottom - top));
+      }
+      if (estimate_count == 2U) {
+        pixels[index] = qRgba(
+            (qRed(estimates[0]) + qRed(estimates[1])) / 2,
+            (qGreen(estimates[0]) + qGreen(estimates[1])) / 2,
+            (qBlue(estimates[0]) + qBlue(estimates[1])) / 2,
+            (qAlpha(estimates[0]) + qAlpha(estimates[1])) / 2);
+      } else if (estimate_count == 1U) {
+        pixels[index] = estimates[0];
+      } else {
+        pixels[index] = fallback_rgb;
+      }
+      known[index] = 1U;
+    }
+  }
   const auto max_iterations = std::max(8, patch_width + patch_height);
   std::vector<QRgb> next_pixels = pixels;
   std::vector<uint8_t> next_known = known;
   for (int iteration = 0; iteration < max_iterations; ++iteration) {
+    if (inpaint_cancelled(request)) return cancelled_inpaint_result();
     auto progressed = false;
     for (int y = 0; y < patch_height; ++y) {
       for (int x = 0; x < patch_width; ++x) {
@@ -410,14 +834,19 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
   }
 
   next_pixels = pixels;
-  const auto smoothing_passes = result.region_kind == QStringLiteral("detail-heal") ||
-                                      result.region_kind == QStringLiteral("spot")
+  // The spot initializer interpolates independently along each row and column.
+  // Relax it into a harmonic fill so smooth backgrounds (especially skies)
+  // do not retain faint row/column bands from that initialization.
+  const auto smoothing_passes = result.region_kind == QStringLiteral("spot")
+                                  ? (prompt_requests_texture(result.prompt) ? 1 : 6)
+                                  : result.region_kind == QStringLiteral("detail-heal")
                                   ? 1
                                   : result.region_kind == QStringLiteral("large-object") ||
                                         result.region_kind == QStringLiteral("large-patch")
                                       ? 3
                                       : 2;
   for (int pass = 0; pass < smoothing_passes; ++pass) {
+    if (inpaint_cancelled(request)) return cancelled_inpaint_result();
     for (int y = 0; y < patch_height; ++y) {
       for (int x = 0; x < patch_width; ++x) {
         const auto index = static_cast<std::size_t>(y * patch_width + x);
@@ -452,6 +881,138 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
       }
     }
     pixels.swap(next_pixels);
+  }
+
+  if (result.region_kind == QStringLiteral("spot") &&
+      prompt_requests_texture(result.prompt)) {
+    std::vector<std::size_t> target_indices;
+    std::vector<std::size_t> boundary_indices;
+    auto target_left = patch_width;
+    auto target_top = patch_height;
+    auto target_right = -1;
+    auto target_bottom = -1;
+    for (int y = 0; y < patch_height; ++y) {
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (masked[index]) {
+          target_indices.push_back(index);
+          target_left = std::min(target_left, x);
+          target_top = std::min(target_top, y);
+          target_right = std::max(target_right, x);
+          target_bottom = std::max(target_bottom, y);
+          continue;
+        }
+        auto near_target = false;
+        for (int offset_y = -2; offset_y <= 2 && !near_target; ++offset_y) {
+          const auto sample_y = y + offset_y;
+          if (sample_y < 0 || sample_y >= patch_height) {
+            continue;
+          }
+          for (int offset_x = -2; offset_x <= 2; ++offset_x) {
+            const auto sample_x = x + offset_x;
+            if (sample_x < 0 || sample_x >= patch_width) {
+              continue;
+            }
+            if (masked[static_cast<std::size_t>(sample_y * patch_width + sample_x)]) {
+              near_target = true;
+              break;
+            }
+          }
+        }
+        if (near_target) {
+          boundary_indices.push_back(index);
+        }
+      }
+    }
+
+    if (!target_indices.empty() && boundary_indices.size() >= 8U) {
+      const auto target_width = target_right - target_left + 1;
+      const auto target_height = target_bottom - target_top + 1;
+      const auto search_x = std::max(target_width * 2, 24);
+      const auto search_y = std::max(target_height * 2, 24);
+      const auto step = std::max(1, std::min(target_width, target_height) / 10);
+      auto best_score = -1.0;
+      auto best_dx = 0;
+      auto best_dy = 0;
+      const auto evaluate_offset = [&](int offset_x, int offset_y) {
+        if (offset_x == 0 && offset_y == 0) {
+          return;
+        }
+        if (std::abs(offset_x) < target_width &&
+            std::abs(offset_y) < target_height) {
+          return;
+        }
+        const auto shifted_left = bounds.x() + target_left + offset_x;
+        const auto shifted_top = bounds.y() + target_top + offset_y;
+        const auto shifted_right = bounds.x() + target_right + offset_x;
+        const auto shifted_bottom = bounds.y() + target_bottom + offset_y;
+        if (shifted_left < 0 || shifted_top < 0 ||
+            shifted_right >= source.width() || shifted_bottom >= source.height()) {
+          return;
+        }
+        for (const auto index : target_indices) {
+          const auto x = static_cast<int>(index % static_cast<std::size_t>(patch_width));
+          const auto y = static_cast<int>(index / static_cast<std::size_t>(patch_width));
+          const auto source_x = bounds.x() + x + offset_x;
+          const auto source_y = bounds.y() + y + offset_y;
+          if (static_cast<unsigned char>(
+                  request.mask_data.at(source_y * request.mask_width + source_x)) > 0U) {
+            return;
+          }
+        }
+        auto score = 0.0;
+        for (const auto index : boundary_indices) {
+          const auto x = static_cast<int>(index % static_cast<std::size_t>(patch_width));
+          const auto y = static_cast<int>(index / static_cast<std::size_t>(patch_width));
+          const auto source_x = bounds.x() + x + offset_x;
+          const auto source_y = bounds.y() + y + offset_y;
+          if (source_x < 0 || source_x >= source.width() ||
+              source_y < 0 || source_y >= source.height()) {
+            return;
+          }
+          const auto reference = source_pixels[index];
+          const auto candidate = source.pixel(source_x, source_y);
+          const auto red = qRed(reference) - qRed(candidate);
+          const auto green = qGreen(reference) - qGreen(candidate);
+          const auto blue = qBlue(reference) - qBlue(candidate);
+          score += static_cast<double>(red * red + green * green + blue * blue);
+        }
+        score /= static_cast<double>(boundary_indices.size());
+        score += 0.02 * static_cast<double>(offset_x * offset_x + offset_y * offset_y);
+        if (best_score < 0.0 || score < best_score) {
+          best_score = score;
+          best_dx = offset_x;
+          best_dy = offset_y;
+        }
+      };
+      for (int offset_y = -search_y; offset_y <= search_y; offset_y += step) {
+        for (int offset_x = -search_x; offset_x <= search_x; offset_x += step) {
+          evaluate_offset(offset_x, offset_y);
+        }
+      }
+      if (best_score >= 0.0 && step > 1) {
+        const auto coarse_dx = best_dx;
+        const auto coarse_dy = best_dy;
+        for (int offset_y = coarse_dy - step; offset_y <= coarse_dy + step;
+             ++offset_y) {
+          for (int offset_x = coarse_dx - step; offset_x <= coarse_dx + step;
+               ++offset_x) {
+            evaluate_offset(offset_x, offset_y);
+          }
+        }
+      }
+      if (best_score >= 0.0) {
+        for (const auto index : target_indices) {
+          const auto x = static_cast<int>(index % static_cast<std::size_t>(patch_width));
+          const auto y = static_cast<int>(index / static_cast<std::size_t>(patch_width));
+          pixels[index] = source.pixel(
+              bounds.x() + x + best_dx, bounds.y() + y + best_dy);
+        }
+        result.texture_exemplar = true;
+        result.texture_synthesis = true;
+        result.texture_strength = 1.0;
+      }
+    }
   }
 
   std::vector<std::array<int, 3>> texture_residuals;
@@ -507,9 +1068,26 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
   }
 
   if (!texture_residuals.empty()) {
+    auto residual_sum = 0.0;
+    for (const auto& residual : texture_residuals) {
+      residual_sum += static_cast<double>(
+          std::abs(residual[0]) + std::abs(residual[1]) +
+          std::abs(residual[2]));
+    }
+    result.texture_residual_mean =
+        residual_sum /
+        (static_cast<double>(texture_residuals.size()) * 3.0);
+  }
+
+  const auto synthesize_texture =
+      !texture_residuals.empty() &&
+      !result.texture_exemplar &&
+      (result.region_kind != QStringLiteral("spot") ||
+       prompt_requests_texture(result.prompt));
+  if (synthesize_texture) {
     const auto base_texture_strength = result.region_kind == QStringLiteral("detail-heal") ||
                                                result.region_kind == QStringLiteral("spot")
-                                           ? 0.22
+                                           ? 0.36
                                            : result.region_kind == QStringLiteral("large-object") ||
                                                  result.region_kind == QStringLiteral("large-patch")
                                                ? 0.34
@@ -568,7 +1146,9 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
   };
 
   auto smooth_candidate = pixels;
-  for (int y = 0; y < patch_height; ++y) {
+  for (int y = 0;
+       result.region_kind != QStringLiteral("spot") && y < patch_height;
+       ++y) {
     for (int x = 0; x < patch_width; ++x) {
       const auto index = static_cast<std::size_t>(y * patch_width + x);
       if (!masked[index]) {
@@ -657,9 +1237,7 @@ AiInpaintResult run_fake_inpaint(const AiInpaintRequest& request) {
   }
 
   auto source = request.source_image;
-  if (source.format() != QImage::Format_ARGB32) {
-    source = source.convertToFormat(QImage::Format_ARGB32);
-  }
+  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
 
   auto patch = source.copy(bounds);
   const auto fill_color = average_patch_boundary_color(source, bounds);
@@ -708,13 +1286,35 @@ QSize model_input_size_for_patch(const QSize& patch_size) {
     return {};
   }
 
-  const auto round_up_to_multiple = [](int value, int multiple) {
-    return std::max(multiple, ((value + multiple - 1) / multiple) * multiple);
-  };
-  return {
-      round_up_to_multiple(patch_size.width(), 8),
-      round_up_to_multiple(patch_size.height(), 8),
-  };
+  return {512, 512};
+}
+
+QRect model_context_bounds(
+    const AiInpaintRequest& request,
+    const QRect& reviewed_bounds) {
+  const auto source_bounds = QRect(
+      0,
+      0,
+      request.source_image.width(),
+      request.source_image.height());
+  if (!reviewed_bounds.isValid() || !source_bounds.isValid()) {
+    return {};
+  }
+  const auto requested_edge = std::max(
+      256,
+      std::max(reviewed_bounds.width(), reviewed_bounds.height()) * 2);
+  const auto context_width = std::min(requested_edge, source_bounds.width());
+  const auto context_height = std::min(requested_edge, source_bounds.height());
+  const auto center = reviewed_bounds.center();
+  const auto context_x = std::clamp(
+      center.x() - (context_width / 2),
+      source_bounds.left(),
+      source_bounds.right() - context_width + 1);
+  const auto context_y = std::clamp(
+      center.y() - (context_height / 2),
+      source_bounds.top(),
+      source_bounds.bottom() - context_height + 1);
+  return QRect(context_x, context_y, context_width, context_height);
 }
 
 std::string lower_ascii(std::string value) {
@@ -725,11 +1325,10 @@ std::string lower_ascii(std::string value) {
 }
 
 struct NamedOrtValue final {
-  Ort::AllocatedStringPtr allocated_name;
-  std::string fallback_name;
+  std::string value;
 
   [[nodiscard]] const char* name() const {
-    return allocated_name ? allocated_name.get() : fallback_name.c_str();
+    return value.c_str();
   }
 };
 
@@ -740,15 +1339,14 @@ NamedOrtValue ort_value_name(
     const char* fallback) {
   Ort::AllocatorWithDefaultOptions allocator;
   try {
+    auto allocated_name = input ? session->GetInputNameAllocated(index, allocator)
+                                : session->GetOutputNameAllocated(index, allocator);
     return NamedOrtValue{
-        .allocated_name = input ? session->GetInputNameAllocated(index, allocator)
-                                : session->GetOutputNameAllocated(index, allocator),
-        .fallback_name = fallback,
+        .value = allocated_name ? allocated_name.get() : fallback,
     };
   } catch (const Ort::Exception&) {
     return NamedOrtValue{
-        .allocated_name = nullptr,
-        .fallback_name = fallback,
+        .value = fallback,
     };
   }
 }
@@ -768,7 +1366,15 @@ class OnnxAiRuntime final {
       return result;
     }
 
-    const auto model_path = inpaint_model_path(default_model_root());
+    const auto bundle = verify_model_bundle_impl(default_model_root());
+    if (!bundle.ok || !bundle.inpaint_artifact_verified) {
+      result.error_message =
+          bundle.error_message.isEmpty()
+              ? QStringLiteral("LaMa inpaint model bundle failed integrity verification.")
+              : bundle.error_message;
+      return result;
+    }
+    const auto model_path = bundle.inpaint_model_path;
     const QFileInfo model_info(model_path);
     if (!model_info.exists()) {
       result.error_message = QStringLiteral("LaMa inpaint model is missing at %1.").arg(model_path);
@@ -776,35 +1382,96 @@ class OnnxAiRuntime final {
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!ensureInpaintSession(model_info.absoluteFilePath(), &result.error_message)) {
+    if (inpaint_cancelled(request)) return cancelled_inpaint_result();
+    if (!ensureInpaintSession(
+            model_info.absoluteFilePath(),
+            bundle.inpaint_sha256,
+            &result.error_message)) {
       return result;
     }
 
-    return runInpaintSession(request, bounds);
+    const auto context_bounds = model_context_bounds(request, bounds);
+    if (!context_bounds.isValid()) {
+      result.error_message = QStringLiteral("Unable to construct LaMa context bounds.");
+      return result;
+    }
+    return runInpaintSession(request, context_bounds, bounds);
   }
 
  private:
-  [[nodiscard]] bool ensureInpaintSession(const QString& model_path, QString* error_message) {
-    if (inpaint_session_ && inpaint_model_path_ == model_path) {
+  [[nodiscard]] bool ensureInpaintSession(
+      const QString& model_path,
+      const QString& model_sha256,
+      QString* error_message) {
+    if (inpaint_session_ && inpaint_model_path_ == model_path &&
+        inpaint_model_sha256_ == model_sha256) {
       return true;
     }
 
     try {
       if (!env_) {
-        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "photo_editor_ai");
+        env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_ERROR, "photo_editor_ai");
       }
 
-      Ort::SessionOptions options;
-      options.SetIntraOpNumThreads(1);
-      options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+      const auto make_options = []() {
+        Ort::SessionOptions options;
+        options.SetIntraOpNumThreads(8);
+        options.SetInterOpNumThreads(1);
+        options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        return options;
+      };
 #if defined(PHOTO_EDITOR_ONNXRUNTIME_ENABLE_COREML) && PHOTO_EDITOR_ONNXRUNTIME_ENABLE_COREML
-      OrtSessionOptionsAppendExecutionProvider_CoreML(options, 0);
+      auto cache_base = QStandardPaths::writableLocation(
+          QStandardPaths::GenericCacheLocation);
+      if (cache_base.isEmpty()) {
+        cache_base = QDir::tempPath();
+      }
+      auto cache_root = QDir(cache_base).filePath(
+          QStringLiteral("Framehouse/onnxruntime-coreml/%1")
+              .arg(model_sha256));
+      if (!QDir().mkpath(cache_root)) {
+        cache_root = QDir(QDir::tempPath()).filePath(
+            QStringLiteral("Framehouse/onnxruntime-coreml/%1")
+                .arg(model_sha256));
+      }
+      if (QDir().mkpath(cache_root)) {
+        try {
+          auto coreml_options = make_options();
+          coreml_options.AppendExecutionProvider(
+              "CoreML",
+              std::unordered_map<std::string, std::string>{
+                  {kCoremlProviderOption_ModelFormat, "MLProgram"},
+                  {kCoremlProviderOption_MLComputeUnits, "ALL"},
+                  {kCoremlProviderOption_RequireStaticInputShapes, "1"},
+                  {kCoremlProviderOption_EnableOnSubgraphs, "0"},
+                  {kCoremlProviderOption_ModelCacheDirectory,
+                   cache_root.toStdString()},
+              });
+          inpaint_session_ = std::make_unique<Ort::Session>(
+              *env_, model_path.toUtf8().constData(), coreml_options);
+          inpaint_provider_ = QStringLiteral("coreml");
+          inpaint_acceleration_warning_.clear();
+        } catch (const Ort::Exception& exception) {
+          // CoreML is acceleration only. The verified ONNX graph remains the
+          // production model and must continue through ONNX Runtime CPU.
+          inpaint_session_.reset();
+          inpaint_acceleration_warning_ =
+              QStringLiteral("CoreML acceleration unavailable: %1")
+                  .arg(QString::fromUtf8(exception.what()));
+        }
+      } else {
+        inpaint_acceleration_warning_ =
+            QStringLiteral("CoreML acceleration cache directory is not writable.");
+      }
 #endif
-      inpaint_session_ = std::make_unique<Ort::Session>(
-          *env_,
-          model_path.toUtf8().constData(),
-          options);
+      if (!inpaint_session_) {
+        auto cpu_options = make_options();
+        inpaint_session_ = std::make_unique<Ort::Session>(
+            *env_, model_path.toUtf8().constData(), cpu_options);
+        inpaint_provider_ = QStringLiteral("cpu");
+      }
       inpaint_model_path_ = model_path;
+      inpaint_model_sha256_ = model_sha256;
       return true;
     } catch (const Ort::Exception& exception) {
       if (error_message != nullptr) {
@@ -820,12 +1487,15 @@ class OnnxAiRuntime final {
 
     inpaint_session_.reset();
     inpaint_model_path_.clear();
+    inpaint_model_sha256_.clear();
+    inpaint_provider_.clear();
     return false;
   }
 
   [[nodiscard]] AiInpaintResult runInpaintSession(
       const AiInpaintRequest& request,
-      const QRect& bounds) {
+      const QRect& bounds,
+      const QRect& reviewed_bounds) {
     AiInpaintResult result;
     if (!inpaint_session_) {
       result.error_message = QStringLiteral("LaMa inpaint session is not loaded.");
@@ -845,9 +1515,7 @@ class OnnxAiRuntime final {
       if (!source.colorSpace().isValid()) {
         source.setColorSpace(QColorSpace(QColorSpace::SRgb));
       }
-      if (source.format() != QImage::Format_ARGB32) {
-        source = source.convertToFormat(QImage::Format_ARGB32);
-      }
+      source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_RGBA32FPx4);
       const auto patch_source = source.copy(bounds);
       const auto patch_mask = mask_patch_bytes(request, bounds);
       const auto model_size = model_input_size_for_patch(bounds.size());
@@ -858,34 +1526,33 @@ class OnnxAiRuntime final {
 
       const auto model_width = model_size.width();
       const auto model_height = model_size.height();
-      const auto scaled_patch =
-          patch_source.scaled(model_size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-              .convertToFormat(QImage::Format_ARGB32);
+      const auto scaled_content=patch_source.scaled(model_size,Qt::KeepAspectRatio,Qt::SmoothTransformation)
+          .convertToFormat(QImage::Format_RGBA32FPx4);
+      const QPoint padding((model_width-scaled_content.width())/2,(model_height-scaled_content.height())/2);
+      QImage scaled_patch(model_size,QImage::Format_RGBA32FPx4);
+      for(int y=0;y<model_height;++y) {
+        auto* out=reinterpret_cast<QRgbaFloat32*>(scaled_patch.scanLine(y));
+        const auto* in=reinterpret_cast<const QRgbaFloat32*>(scaled_content.constScanLine(
+            std::clamp(y-padding.y(),0,scaled_content.height()-1)));
+        for(int x=0;x<model_width;++x) out[x]=in[std::clamp(x-padding.x(),0,scaled_content.width()-1)];
+      }
       std::vector<float> image_tensor(static_cast<std::size_t>(3 * model_width * model_height), 0.0F);
       std::vector<float> mask_tensor(static_cast<std::size_t>(model_width * model_height), 0.0F);
       const auto plane_size = static_cast<std::size_t>(model_width * model_height);
       for (int y = 0; y < model_height; ++y) {
-        const auto* scanline = reinterpret_cast<const QRgb*>(scaled_patch.constScanLine(y));
-        const auto source_y =
-            std::clamp(static_cast<int>((static_cast<double>(y) / std::max(1, model_height)) *
-                                        static_cast<double>(bounds.height())),
-                       0,
-                       std::max(0, bounds.height() - 1));
-        for (int x = 0; x < model_width; ++x) {
-          const auto source_x =
-              std::clamp(static_cast<int>((static_cast<double>(x) / std::max(1, model_width)) *
-                                          static_cast<double>(bounds.width())),
-                         0,
-                         std::max(0, bounds.width() - 1));
-          const auto tensor_index = static_cast<std::size_t>(y * model_width + x);
-          const auto pixel = scanline[x];
-          image_tensor[tensor_index] = static_cast<float>(qRed(pixel)) / 255.0F;
-          image_tensor[plane_size + tensor_index] = static_cast<float>(qGreen(pixel)) / 255.0F;
-          image_tensor[(plane_size * 2) + tensor_index] = static_cast<float>(qBlue(pixel)) / 255.0F;
-          mask_tensor[tensor_index] =
-              static_cast<unsigned char>(patch_mask.at(source_y * bounds.width() + source_x)) > 0U
-                  ? 1.0F
-                  : 0.0F;
+        if (inpaint_cancelled(request)) return cancelled_inpaint_result();
+        const auto* scanline=reinterpret_cast<const QRgbaFloat32*>(scaled_patch.constScanLine(y));
+        const int source_y=std::clamp((y-padding.y())*bounds.height()/scaled_content.height(),0,bounds.height()-1);
+        for (int x=0;x<model_width;++x) {
+          const int source_x=std::clamp((x-padding.x())*bounds.width()/scaled_content.width(),0,bounds.width()-1);
+          const auto index=static_cast<std::size_t>(y*model_width+x);
+          const auto pixel=scanline[x];
+          image_tensor[index]=std::clamp(pixel.red(),0.0F,1.0F);
+          image_tensor[plane_size+index]=std::clamp(pixel.green(),0.0F,1.0F);
+          image_tensor[2*plane_size+index]=std::clamp(pixel.blue(),0.0F,1.0F);
+          const bool inside=x>=padding.x() && y>=padding.y() &&
+              x<padding.x()+scaled_content.width() && y<padding.y()+scaled_content.height();
+          mask_tensor[index]=inside && static_cast<unsigned char>(patch_mask.at(source_y*bounds.width()+source_x))>0 ? 1.0F:0.0F;
         }
       }
 
@@ -931,13 +1598,21 @@ class OnnxAiRuntime final {
 
       auto output_name = ort_value_name(inpaint_session_.get(), 0, false, "output");
       std::array<const char*, 1> output_name_ptrs{output_name.name()};
+      Ort::RunOptions run_options;
+      struct InterruptScope {
+        std::shared_ptr<AiInpaintControl> control;
+        ~InterruptScope() { if (control) control->setInterrupt({}); }
+      } interrupt_scope{request.control};
+      if (request.control) request.control->setInterrupt([&run_options] { run_options.SetTerminate(); });
+      if (inpaint_cancelled(request)) return cancelled_inpaint_result();
       auto outputs = inpaint_session_->Run(
-          Ort::RunOptions{nullptr},
+          run_options,
           input_name_ptrs.data(),
           input_tensors.data(),
           input_tensors.size(),
           output_name_ptrs.data(),
           output_name_ptrs.size());
+      if (inpaint_cancelled(request)) return cancelled_inpaint_result();
       if (outputs.empty() || !outputs.front().IsTensor()) {
         result.error_message = QStringLiteral("LaMa ONNX model did not return an image tensor.");
         return result;
@@ -967,7 +1642,7 @@ class OnnxAiRuntime final {
         return result;
       }
 
-      QImage output_image(output_width, output_height, QImage::Format_ARGB32);
+      QImage output_image(output_width, output_height, QImage::Format_RGBA64);
       const auto output_plane_size = static_cast<std::size_t>(output_width * output_height);
       auto output_max = 0.0F;
       for (std::size_t index = 0; index < output_info.GetElementCount(); ++index) {
@@ -981,15 +1656,20 @@ class OnnxAiRuntime final {
                               static_cast<std::size_t>(y * output_width + x)]
                 : output_data[(static_cast<std::size_t>(y * output_width + x) * 3U) +
                               static_cast<std::size_t>(channel)];
-        return std::clamp(static_cast<int>(std::lround((value / output_scale) * 255.0F)), 0, 255);
+        return std::clamp(static_cast<int>(std::lround((value / output_scale) * 65535.0F)), 0, 65535);
       };
       for (int y = 0; y < output_height; ++y) {
-        auto* scanline = reinterpret_cast<QRgb*>(output_image.scanLine(y));
+        auto* scanline = reinterpret_cast<QRgba64*>(output_image.scanLine(y));
         for (int x = 0; x < output_width; ++x) {
-          scanline[x] = qRgb(sample_output(x, y, 0), sample_output(x, y, 1), sample_output(x, y, 2));
+          scanline[x] = QRgba64::fromRgba64(static_cast<quint16>(sample_output(x,y,0)), static_cast<quint16>(sample_output(x,y,1)), static_cast<quint16>(sample_output(x,y,2)), 65535);
         }
       }
 
+      const QRect content_rect(qRound(padding.x()*double(output_width)/model_width),
+          qRound(padding.y()*double(output_height)/model_height),
+          qRound(scaled_content.width()*double(output_width)/model_width),
+          qRound(scaled_content.height()*double(output_height)/model_height));
+      output_image=output_image.copy(content_rect);
       if (output_image.size() != bounds.size()) {
         output_image =
             output_image.scaled(bounds.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
@@ -997,7 +1677,9 @@ class OnnxAiRuntime final {
       output_image.setColorSpace(QColorSpace(QColorSpace::SRgb));
       result.success = true;
       result.model_name = QStringLiteral("lama-onnx");
-      populate_inpaint_region_result(&result, request, bounds);
+      result.runtime_provider = inpaint_provider_;
+      result.acceleration_warning = inpaint_acceleration_warning_;
+      populate_inpaint_region_result(&result, request, reviewed_bounds);
       result.patch_image = output_image;
       result.candidate_images = {output_image};
       result.patch_x = bounds.x();
@@ -1019,15 +1701,39 @@ class OnnxAiRuntime final {
   std::unique_ptr<Ort::Env> env_;
   std::unique_ptr<Ort::Session> inpaint_session_;
   QString inpaint_model_path_;
+  QString inpaint_model_sha256_;
+  QString inpaint_provider_;
+  QString inpaint_acceleration_warning_;
 };
 
+struct OnnxAiRuntimeStorage final {
+  std::mutex mutex;
+  std::unique_ptr<OnnxAiRuntime> runtime;
+};
+
+OnnxAiRuntimeStorage& onnx_ai_runtime_storage() {
+  // The storage itself is process-lifetime so its mutex remains valid while
+  // ONNX Runtime finishes background work during an explicit shutdown.
+  static auto* storage = new OnnxAiRuntimeStorage();
+  return *storage;
+}
+
 OnnxAiRuntime& onnx_ai_runtime() {
-  static OnnxAiRuntime runtime;
-  return runtime;
+  auto& storage = onnx_ai_runtime_storage();
+  std::lock_guard<std::mutex> lock(storage.mutex);
+  if (!storage.runtime) {
+    storage.runtime = std::make_unique<OnnxAiRuntime>();
+  }
+  return *storage.runtime;
 }
 #endif
 
 }  // namespace
+
+AiModelBundleVerification verify_ai_model_bundle(
+    const QString& model_root) {
+  return verify_model_bundle_impl(model_root);
+}
 
 AiModelRuntimeStatus ai_model_runtime_status() {
   AiModelRuntimeStatus status;
@@ -1036,6 +1742,8 @@ AiModelRuntimeStatus ai_model_runtime_status() {
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_AI_MODELS")) {
     status.smart_selection_available = true;
     status.inpaint_available = true;
+    status.bundle_verified = true;
+    status.inpaint_artifact_verified = true;
     status.smart_selection_runtime_label = QStringLiteral("SAM Smart Select");
     status.inpaint_runtime_label = QStringLiteral("LaMa Model Inpaint");
     status.diagnostics = QStringLiteral(
@@ -1048,16 +1756,19 @@ AiModelRuntimeStatus ai_model_runtime_status() {
     return status;
   }
 
-  const auto manifest_available =
-      model_file_exists(status.model_root, QStringLiteral("manifest.json"));
+  const auto bundle = verified_model_bundle_for_runtime(status.model_root);
+  const auto manifest_available = bundle.manifest_available;
+  status.bundle_verified = bundle.ok;
+  status.inpaint_artifact_verified = bundle.inpaint_artifact_verified;
+  status.bundle_verification_error_code = bundle.error_code;
+  status.bundle_verification_error = bundle.error_message;
   const auto smart_selection_files_available =
-      manifest_available &&
+      bundle.ok &&
       model_file_exists(
           status.model_root,
           QStringLiteral("selection/sam2.1_hiera_tiny.onnx"));
   const auto inpaint_files_available =
-      manifest_available &&
-      QFileInfo::exists(inpaint_model_path(status.model_root));
+      bundle.ok && bundle.inpaint_artifact_verified;
   status.smart_selection_available =
       kSamRuntimeImplemented && smart_selection_files_available;
   status.inpaint_available =
@@ -1077,19 +1788,29 @@ AiModelRuntimeStatus ai_model_runtime_status() {
   const auto lama_state =
       status.inpaint_available
           ? QStringLiteral("ready")
-          : (!inpaint_files_available ? QStringLiteral("model-missing")
-                                      : QStringLiteral("runtime-missing"));
+          : (!bundle.ok ? QStringLiteral("bundle-unverified")
+                        : (!inpaint_files_available
+                               ? QStringLiteral("model-missing")
+                               : QStringLiteral("runtime-missing")));
+
   status.diagnostics =
-      QStringLiteral("root:%1|manifest:%2|sam:%3|lama:%4|onnx:%5")
+      QStringLiteral("root:%1|manifest:%2|bundle:%3|sam:%4|lama:%5|onnx:%6|bundleError:%7")
           .arg(
               status.model_root,
               manifest_available ? QStringLiteral("present") : QStringLiteral("missing"),
+              bundle.ok ? QStringLiteral("verified") : QStringLiteral("unverified"),
               sam_state,
               lama_state,
-              kOnnxRuntimeLinked ? QStringLiteral("linked") : QStringLiteral("not-linked"));
+              kOnnxRuntimeLinked ? QStringLiteral("linked") : QStringLiteral("not-linked"),
+              bundle.error_code.isEmpty() ? QStringLiteral("none") : bundle.error_code);
 
   if (status.smart_selection_available && status.inpaint_available) {
     status.summary = QStringLiteral("Bundled SAM Smart Select and LaMa Model Inpaint runtimes ready.");
+  } else if (manifest_available && !bundle.ok) {
+    status.summary = QStringLiteral("Local image-model bundle failed integrity verification (%1); retouch uses Local CPU Fill.")
+                         .arg(bundle.error_code.isEmpty()
+                                  ? QStringLiteral("invalid bundle")
+                                  : bundle.error_code);
   } else if (inpaint_files_available && !kLamaRuntimeImplemented) {
     status.summary = QStringLiteral("Bundled LaMa inpaint model found, but ONNX Runtime is not linked in this build; retouch uses Local CPU Fill.");
   } else if (smart_selection_files_available && !kSamRuntimeImplemented) {
@@ -1100,6 +1821,14 @@ AiModelRuntimeStatus ai_model_runtime_status() {
     status.summary = QStringLiteral("Bundled SAM/LaMa models missing; retouch uses Local CPU Fill.");
   }
   return status;
+}
+
+void shutdown_ai_model_runtime() {
+#if defined(PHOTO_EDITOR_HAS_ONNXRUNTIME) && PHOTO_EDITOR_HAS_ONNXRUNTIME
+  auto& storage = onnx_ai_runtime_storage();
+  std::lock_guard<std::mutex> lock(storage.mutex);
+  storage.runtime.reset();
+#endif
 }
 
 SegmentationResult generate_ai_smart_selection_mask(
@@ -1116,6 +1845,7 @@ SegmentationResult generate_ai_smart_selection_mask(
 }
 
 AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request) {
+  if (inpaint_cancelled(request)) return cancelled_inpaint_result();
   if (request.retouch_mode.trimmed().toLower() == QStringLiteral("patch") &&
       request.patch_source_set) {
     return run_source_region_patch(request);
@@ -1132,9 +1862,49 @@ AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request) {
   }
 
 #if defined(PHOTO_EDITOR_HAS_ONNXRUNTIME) && PHOTO_EDITOR_HAS_ONNXRUNTIME
+  const auto bounds = inpaint_mask_bounds(request);
+  AiInpaintResult spot_preflight;
+  if (bounds.isValid()) {
+    const auto coverage = inpaint_mask_coverage(request, bounds);
+    if (inpaint_region_kind(request, coverage, bounds) ==
+        QStringLiteral("spot")) {
+      spot_preflight = run_cpu_diffusion_inpaint(request);
+      if (spot_preflight.success && !prompt_requests_texture(request.prompt)) {
+        spot_preflight.candidate_selection =
+            QStringLiteral("smooth-spot-harmonic-fill");
+        spot_preflight.alternate_model_name = QStringLiteral("lama-onnx");
+        return spot_preflight;
+      }
+      if (spot_preflight.success && spot_preflight.texture_exemplar &&
+          spot_preflight.texture_residual_mean >=
+              kHighTextureExemplarResidualMean) {
+        spot_preflight.candidate_selection =
+            QStringLiteral("high-texture-local-exemplar");
+        spot_preflight.alternate_model_name = QStringLiteral("lama-onnx");
+        return spot_preflight;
+      }
+    }
+  }
   result = onnx_ai_runtime().runInpaint(request);
+  if (inpaint_cancelled(request)) return cancelled_inpaint_result();
   if (result.success) {
+    if (spot_preflight.success) {
+      result.alternate_candidate_evaluated = true;
+      result.alternate_model_name = spot_preflight.model_name;
+      result.candidate_selection =
+          QStringLiteral("moderate-texture-lama-model");
+      result.texture_residual_mean =
+          spot_preflight.texture_residual_mean;
+    }
     return result;
+  }
+  if (spot_preflight.success) {
+    spot_preflight.alternate_candidate_evaluated = true;
+    spot_preflight.alternate_model_name = QStringLiteral("lama-onnx");
+    spot_preflight.candidate_selection =
+        QStringLiteral("lama-runtime-failure-cpu-fallback");
+    spot_preflight.error_message = result.error_message;
+    return spot_preflight;
   }
   return run_cpu_diffusion_inpaint(request, result.error_message);
 #else

@@ -5,7 +5,7 @@ This is the implementation checklist for the remaining editor-quality work. The 
 ## Completion Standard
 
 - [x] Every visible tool has a clear purpose, a visible effect, predictable reset/default behavior, and a test that proves it changes the render when it should.
-  - Status: Completed. The phase checklist below now covers the visible Adjust, Presets, Color, Tone Curve/Input Levels, Layers/Text, Masks/Brush/Object selection, Detail, histogram/scopes, thumbnails, and export surfaces with explicit acceptance criteria and verification. Focused verification passed in `build/dev-macos-debug` with `desktop_shell_smoke_test`, `editor_preview_controller_test`, `editor_preview_math_test`, `render_parity_test`, `color_tool_invariant_test`, `color_science_sweep_test`, `edit_recipe_state_test`, `render_golden_test`, `catalog_asset_model_test`, `export_job_controller_test`, `raw_corpus_test`, and `color_pipeline_test`.
+  - Status: Completed. The phase checklist below now covers the visible Adjust, Presets, Color, Tone Curve/Input Levels, Layers/Text, Masks/Brush/Object selection, Detail, histogram/scopes, thumbnails, and export surfaces with explicit acceptance criteria and verification. Focused verification passed in `build/dev-macos-debug` with `desktop_shell_smoke_test`, `editor_preview_controller_test`, `editor_preview_math_test`, `render_parity_test`, `color_tool_invariant_test`, `color_science_sweep_test`, `edit_recipe_state_test`, `render_golden_test`, `catalog_asset_model_test`, `export_job_controller_test`, the test now accurately named `synthetic_raw_pipeline_invariant_test`, and `color_pipeline_test`.
 - [x] The main Adjust surface only contains core editing tools. Experimental or technical controls are either redesigned or moved behind a Lab/Advanced affordance.
   - Status: Completed. Presets are separated into their own tab, technical color controls are consolidated into clearer Color Grading/Color Mix/Lab affordances, Levels is treated as optional input-level control beside the Tone Curve, and the smoke suite verifies the key editor states are visible and non-overlapping at desktop and compact sizes.
 - [x] Preview, histogram, scopes, thumbnails, export, and preset thumbnails agree on the same edit recipe and color pipeline.
@@ -107,17 +107,17 @@ This is the implementation checklist for the remaining editor-quality work. The 
 
 - [x] **Preset UI looks unfinished**
   - Problem: cards are cramped, thumbnails/gradients do not communicate the look, and management controls are dense.
-  - Goal: Presets feel like a real library of Virel and custom looks.
+  - Goal: Presets feel like a real library of Framehouse and custom looks.
   - Complete it by: building larger cards with real rendered thumbnails, category filters, pack sections, favorite state, preview-on-hover/press, one Apply button, and secondary management actions in a menu.
-  - Acceptance: built-in Virel presets and user presets are searchable, previewable, saveable, renameable, movable, deletable, importable, and exportable without crowding the editor.
+  - Acceptance: built-in Framehouse presets and user presets are searchable, previewable, saveable, renameable, movable, deletable, importable, and exportable without crowding the editor.
   - Status: Completed. The Presets tab now has category filters, pack filtering, favorites filtering, grouped pack headers, larger rendered-thumbnail cards, hover/press preview, one primary Apply action, and a management popup for rename/move/delete/import/export actions. Focused verification passed with `desktop_shell_smoke_test` in `build/dev-macos-debug`.
 
 - [x] **Preset quality and coverage**
   - Problem: presets cannot be trusted if they are not tuned against real images and if their thumbnails do not match their applied result.
-  - Goal: Virel presets are useful starting points for portrait, landscape, monochrome, night, drone, RAW recovery, and high-dynamic-range scenes.
+  - Goal: Framehouse presets are useful starting points for portrait, landscape, monochrome, night, drone, RAW recovery, and high-dynamic-range scenes.
   - Complete it by: retuning built-ins after tone/color fixes, rendering preset thumbnails from the same pipeline, adding preset golden tests, and storing user preset packs outside volatile cache.
   - Acceptance: applying a preset matches its thumbnail and can be undone, faded by intensity, saved as custom, synced/imported, and batch-applied.
-  - Status: Completed. Built-in Virel presets now include portrait, landscape, monochrome, night, drone, RAW recovery, and HDR looks; preset thumbnails render through the same color pipeline against a fixture scene instead of a synthetic ramp; controller tests verify thumbnail/render agreement, category/pack coverage, favorites, undo, intensity fade, partial groups, safety warnings, save/apply behavior, and sync/import/export paths. User presets persist to `AppBootstrap::appDataLocation()/editor-presets.json` rather than cache. Focused verification passed with `editor_preview_controller_test` and `render_golden_test` in `build/dev-macos-debug`.
+  - Status: Completed. Built-in Framehouse presets now include portrait, landscape, monochrome, night, drone, RAW recovery, and HDR looks; preset thumbnails render through the same color pipeline against a fixture scene instead of a synthetic ramp; controller tests verify thumbnail/render agreement, category/pack coverage, favorites, undo, intensity fade, partial groups, safety warnings, save/apply behavior, and sync/import/export paths. User presets persist to `AppBootstrap::appDataLocation()/editor-presets.json` rather than cache. Focused verification passed with `editor_preview_controller_test` and `render_golden_test` in `build/dev-macos-debug`.
 
 ## Phase 3: Color Tools Scope Reduction
 

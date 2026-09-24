@@ -21,6 +21,13 @@ int fail(std::string_view message) {
 
 ColorAdjustmentState base_state() {
   ColorAdjustmentState state;
+  state.color_pipeline.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::
+          LegacyOklchV1;
+  // This suite measures working-space editing controls. Its fixture includes
+  // scene-linear values above 1.0, which are valid HDR colors rather than RAW
+  // sensor samples and must not be classified as sensor clipping.
+  state.input_transform.raw_input_transform_enabled = false;
   state.color_pipeline.working_profile =
       photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
   state.color_pipeline.preview_output_profile =
@@ -110,7 +117,7 @@ int main() {
     std::array<ColorAdjustmentState, 8> states = {
         base_state(), base_state(), base_state(), base_state(),
         base_state(), base_state(), base_state(), base_state()};
-    states[0].exposure = value / 50.0;
+    states[0].input_transform.exposure = value / 50.0;
     states[1].contrast = value;
     states[2].highlights = value;
     states[3].shadows = value;
@@ -143,7 +150,7 @@ int main() {
       ColorPixel{0.12F, 0.12F, 0.12F, 1.0F},
       ColorPixel{0.46F, 0.46F, 0.46F, 1.0F},
       ColorPixel{0.88F, 0.88F, 0.88F, 1.0F},
-      ColorPixel{0.44F, 0.18F, 0.08F, 1.0F},
+      ColorPixel{0.52F, 0.08F, 0.05F, 1.0F},
       ColorPixel{0.10F, 0.36F, 0.12F, 1.0F},
       ColorPixel{0.08F, 0.16F, 0.52F, 1.0F},
       ColorPixel{1.35F, 0.18F, 0.08F, 1.0F},
@@ -163,7 +170,7 @@ int main() {
   };
   {
     auto state = base_state();
-    state.exposure = 0.10;
+    state.input_transform.exposure = 0.10;
     if (!require_visible_delta("small exposure", state, 0.012)) {
       return EXIT_FAILURE;
     }
@@ -223,8 +230,8 @@ int main() {
         base_state(), base_state(), base_state(), base_state(), base_state(), base_state(),
         base_state(), base_state(), base_state(), base_state(), base_state(), base_state(),
         base_state(), base_state()};
-    endpoint_states[0].exposure = -2.0;
-    endpoint_states[1].exposure = 2.0;
+    endpoint_states[0].input_transform.exposure = -2.0;
+    endpoint_states[1].input_transform.exposure = 2.0;
     endpoint_states[2].contrast = 100.0;
     endpoint_states[3].contrast = -100.0;
     endpoint_states[4].highlights = -100.0;
@@ -291,7 +298,7 @@ int main() {
       ColorPixel{0.24F, 0.07F, 0.21F, 1.0F},
   };
   auto tone_state = base_state();
-  tone_state.exposure = 0.75;
+  tone_state.input_transform.exposure = 0.75;
   tone_state.contrast = 35.0;
   tone_state.highlights = -35.0;
   tone_state.shadows = 28.0;
@@ -303,7 +310,7 @@ int main() {
   }
 
   auto dark_recovery_state = base_state();
-  dark_recovery_state.exposure = 2.0;
+  dark_recovery_state.input_transform.exposure = 2.0;
   dark_recovery_state.shadows = 100.0;
   dark_recovery_state.brightness = 100.0;
   const auto dark_recovery_output = apply_pixels(

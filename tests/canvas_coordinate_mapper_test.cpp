@@ -239,6 +239,47 @@ int main(int argc, char** argv) {
   if (!crop_overlay) {
     return fail("CropOverlay.qml should instantiate for the deep-zoom canvas memory guard");
   }
+  if (crop_overlay->metaObject()->indexOfSignal("interactionStarted()") < 0 ||
+      crop_overlay->metaObject()->indexOfSignal("interactionFinished()") < 0) {
+    return fail("crop drags should expose interaction boundaries for coalesced undo and persistence");
+  }
+
+  const auto layer_transform_overlay_qml_path =
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/LayerTransformOverlay.qml"));
+  QQmlComponent layer_transform_overlay_component(
+      &engine,
+      QUrl::fromLocalFile(layer_transform_overlay_qml_path));
+  if (layer_transform_overlay_component.isError()) {
+    for (const auto& error : layer_transform_overlay_component.errors()) {
+      std::cerr << error.toString().toStdString() << '\n';
+    }
+    return fail("LayerTransformOverlay.qml should load for the coalesced interaction contract");
+  }
+  std::unique_ptr<QObject> layer_transform_overlay(layer_transform_overlay_component.create());
+  if (!layer_transform_overlay ||
+      layer_transform_overlay->metaObject()->indexOfSignal("interactionStarted()") < 0 ||
+      layer_transform_overlay->metaObject()->indexOfSignal("interactionFinished()") < 0) {
+    return fail("layer transforms should expose interaction boundaries for coalesced undo and persistence");
+  }
+  const auto transform_overlay_qml_path =
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TransformOverlay.qml"));
+  QQmlComponent transform_overlay_component(
+      &engine,
+      QUrl::fromLocalFile(transform_overlay_qml_path));
+  if (transform_overlay_component.isError()) {
+    for (const auto& error : transform_overlay_component.errors()) {
+      std::cerr << error.toString().toStdString() << '\n';
+    }
+    return fail("TransformOverlay.qml should load for the coalesced interaction contract");
+  }
+  std::unique_ptr<QObject> transform_overlay(transform_overlay_component.create());
+  if (!transform_overlay ||
+      transform_overlay->metaObject()->indexOfSignal("interactionStarted()") < 0 ||
+      transform_overlay->metaObject()->indexOfSignal("interactionFinished()") < 0) {
+    return fail("crop transforms should expose interaction boundaries for coalesced undo and persistence");
+  }
   crop_overlay->setProperty("width", 1200.0);
   crop_overlay->setProperty("height", 800.0);
   crop_overlay->setProperty("active", true);
@@ -376,6 +417,33 @@ int main(int argc, char** argv) {
 
   const auto studio_workspace_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/StudioWorkspace.qml"));
+  const auto studio_pixel_grid_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioPixelGridOverlay.qml"));
+  const auto studio_thumbnail_card_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioThumbnailCard.qml"));
+  const auto studio_brush_cursor_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioViewportBrushCursors.qml"));
+  const auto studio_retouch_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioRetouchOverlayCommandSurface.qml"));
+  const auto studio_viewport_input_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioViewportInputCommandSurface.qml"));
+  const auto studio_image_viewport_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioImageViewport.qml"));
+  const auto studio_viewport_source =
+      studio_workspace_source + studio_image_viewport_source +
+      studio_retouch_overlay_source + studio_viewport_input_source;
+  if (!studio_workspace_source.contains(
+          QStringLiteral("onInteractionStarted: editorPreview.beginCoalescedEdit()")) ||
+      !studio_workspace_source.contains(
+          QStringLiteral("onInteractionFinished: editorPreview.endCoalescedEdit()")) ||
+      !studio_workspace_source.contains(
+          QStringLiteral("text-layer-editor:v2|single-instance:true|live-content:true|empty-text:true")) ||
+      !studio_workspace_source.contains(
+          QStringLiteral("property bool cropLiquifyToolAvailable: true")) ||
+      !studio_workspace_source.contains(
+          QStringLiteral("liquify-tool:v1|engine-backed:true|interactive-preview:true|coalesced-undo:true|visible:true"))) {
+    return fail("Studio crop, layer transform, text, and liquify tools should expose responsive coalesced interaction contracts");
+  }
   const auto mask_view_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml"));
   const auto mask_canvas_overlay_source =
@@ -390,9 +458,10 @@ int main(int argc, char** argv) {
       mask_view_source.isEmpty() ||
       mask_canvas_overlay_source.isEmpty() ||
       shared_mask_overlay_source.isEmpty() ||
-      !studio_workspace_source.contains(QStringLiteral("function normalizedPointForViewport(x, y)")) ||
-      !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
-      !studio_workspace_source.contains(QStringLiteral("fitMode: viewport.fitMode")) ||
+      studio_image_viewport_source.isEmpty() ||
+      !studio_image_viewport_source.contains(QStringLiteral("function normalizedPointForViewport(x, y)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("fitMode: viewport.fitMode")) ||
       !mask_view_source.contains(QStringLiteral("mask-view-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs")) ||
       !mask_view_source.contains(QStringLiteral("function imagePointFromItem(")) ||
       !mask_view_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
@@ -402,6 +471,15 @@ int main(int argc, char** argv) {
       !mask_canvas_overlay_source.contains(QStringLiteral("const point = root.viewPointForImage(normalizedX, normalizedY)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("const firstPoint = root.previewOutlinePoint(")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("shape-handle-interaction:v1|linear,radial,ellipse,rectangle|coalesced-undo:true|coalesced-persist:true|interactive-preview:true")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("visible: mask.kind === \"radial\" || mask.kind === \"ellipse\" || mask.kind === \"rectangle\"")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("onPressed: editRoot.beginMaskShapeEditTransaction()")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("onReleased: editRoot.endMaskShapeEditTransaction()")) ||
+      !mask_inspector_source.contains(QStringLiteral("component MaskSlider: InspectorSlider")) ||
+      !mask_inspector_source.contains(QStringLiteral("mask-slider-interaction:v1|coalesced-undo:true|coalesced-persist:true|interactive-preview:true")) ||
+      !mask_inspector_source.contains(QStringLiteral("onInteractionStarted: editorPreview.beginCoalescedEdit()")) ||
+      !mask_inspector_source.contains(QStringLiteral("onInteractionFinished: editorPreview.endCoalescedEdit()")) ||
+      mask_inspector_source.contains(QStringLiteral("\n        InspectorSlider {")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("fitMode: \"overlay\"")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("const point = root.imagePointFromLocal(mouseX, mouseY)")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("root.activeOutlineClicked(point.x, point.y)")) ||
@@ -412,23 +490,23 @@ int main(int argc, char** argv) {
       mask_canvas_overlay_source.contains(QStringLiteral("root.previewPointY(root.pointYValue(")) ||
       shared_mask_overlay_source.contains(QStringLiteral("root.width * root.pointXValue(")) ||
       shared_mask_overlay_source.contains(QStringLiteral("root.height * root.pointYValue("))) {
-    return fail("Studio, MaskView, MaskCanvasOverlay, and SharedMaskOverlay should expose mapper-backed pointer contracts with explicit layout modes");
+    return fail("Studio, MaskView, MaskCanvasOverlay, MaskInspectorSections, and SharedMaskOverlay should expose mapper-backed and coalesced interaction contracts");
   }
   const QStringList studio_tool_routing_contract = {
-      QStringLiteral("function normalizedPointForViewport(x, y) {\n            const point = viewportCoordinateMapper.viewToImagePoint(x, y)"),
-      QStringLiteral("function updatePixelInspectorAt(x, y) {\n            const point = normalizedPointForViewport(x, y)"),
-      QStringLiteral("function handleSamplingPointerPressed(mouse) {\n            if (!editorPreview.hasAsset || editorPreview.compareMode)\n                return false\n            const point = normalizedPointForViewport(mouse.x, mouse.y)"),
-      QStringLiteral("editorPreview.sampleActiveColorRangeAt(point.x, point.y)"),
-      QStringLiteral("editorPreview.beginActiveLuminanceRangeSample(point.x, point.y)"),
-      QStringLiteral("editorPreview.commitActiveLuminanceRangeSample(point.x, point.y)"),
-      QStringLiteral("function handleMaskPointerPressed(mouse) {\n            if (!maskPointerActive())\n                return false\n            const point = normalizedPointForViewport(mouse.x, mouse.y)"),
-      QStringLiteral("return editorPreview.applyActiveSelectionPixel(point.x, point.y, operation)"),
-      QStringLiteral("editorPreview.addBrushPointWithPressure(point.x, point.y, 1.0)"),
-      QStringLiteral("editorPreview.appendActivePolygonPoint(point.x, point.y)"),
-      QStringLiteral("editorPreview.smartSelectAddAt(point.x, point.y, !editorPreview.hasActiveMask)"),
+      QStringLiteral("function normalizedPointForViewport(x, y) {\n        const point = viewportCoordinateMapper.viewToImagePoint(x, y)"),
+      QStringLiteral("function updatePixelInspectorAt(x, y) {\n        const point = normalizedPointForViewport(x, y)"),
+      QStringLiteral("function handleSamplingPointerPressed(mouse) {\n        if (!previewContext.hasAsset || previewContext.compareMode)\n            return false\n        const point = normalizedPointForViewport(mouse.x, mouse.y)"),
+      QStringLiteral("previewContext.sampleActiveColorRangeAt(point.x, point.y)"),
+      QStringLiteral("previewContext.beginActiveLuminanceRangeSample(point.x, point.y)"),
+      QStringLiteral("previewContext.commitActiveLuminanceRangeSample(point.x, point.y)"),
+      QStringLiteral("function handleMaskPointerPressed(mouse) {\n        if (!maskPointerActive())\n            return false\n        const point = normalizedPointForViewport(mouse.x, mouse.y)"),
+      QStringLiteral("return previewContext.applyActiveSelectionPixel(point.x, point.y, operation)"),
+      QStringLiteral("previewContext.addBrushPointWithPressure(point.x, point.y, 1.0)"),
+      QStringLiteral("previewContext.appendActivePolygonPoint(point.x, point.y)"),
+      QStringLiteral("previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)"),
       QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)"),
-      QStringLiteral("editorPreview.setActiveMaskPatchSourceRegion("),
-      QStringLiteral("editorPreview.setActiveMaskCloneSource(")};
+      QStringLiteral("previewController.setActiveMaskPatchSourceRegion("),
+      QStringLiteral("previewController.setActiveMaskCloneSource(")};
   const QStringList mask_canvas_tool_routing_contract = {
       QStringLiteral("function imagePointFromItem(item, itemX, itemY) {\n        const mapped = item && item !== previewItem"),
       QStringLiteral("const point = maskCoordinateMapper.viewToImagePoint(mapped.x, mapped.y)"),
@@ -459,7 +537,7 @@ int main(int argc, char** argv) {
       QStringLiteral("const point = root.imagePointFromLocal(mouseX, mouseY)"),
       QStringLiteral("root.activeOutlineClicked(point.x, point.y)")};
   if (!require_source_patterns(
-          studio_workspace_source,
+          studio_viewport_source,
           studio_tool_routing_contract,
           "Studio workspace should route pixel inspector, sampling, brush, lasso, polygon, object, clone, and patch tools through the mapper") ||
       !require_source_patterns(
@@ -491,12 +569,12 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("root.beginSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)")) ||
       !mask_view_source.contains(QStringLiteral("root.updateSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)")) ||
       mask_view_source.contains(QStringLiteral("scheduleSmartSelectPreview(point.position.x")) ||
-      !studio_workspace_source.contains(QStringLiteral("function normalizedPointForViewport(x, y) {\n            const point = viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
-      !studio_workspace_source.contains(QStringLiteral("if (!editorPreview.hasActiveMask || kind === \"object\") {\n                const objectMode = root.applyObjectPickModeForModifierState(mouse.modifiers)")) ||
-      !studio_workspace_source.contains(QStringLiteral("editorPreview.smartSelectSubtractAt(point.x, point.y, !editorPreview.hasActiveMask)")) ||
-      !studio_workspace_source.contains(QStringLiteral("editorPreview.smartSelectAddAt(point.x, point.y, !editorPreview.hasActiveMask)")) ||
-      studio_workspace_source.contains(QStringLiteral("smartSelectAddAt(mouse.x")) ||
-      studio_workspace_source.contains(QStringLiteral("smartSelectSubtractAt(mouse.x"))) {
+      !studio_image_viewport_source.contains(QStringLiteral("function normalizedPointForViewport(x, y) {\n        const point = viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("if (!previewContext.hasActiveMask || kind === \"object\") {\n            const objectMode = workspaceContext.applyObjectPickModeForModifierState(mouse.modifiers)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("previewContext.smartSelectSubtractAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("previewContext.smartSelectAddAt(point.x, point.y, !previewContext.hasActiveMask)")) ||
+      studio_image_viewport_source.contains(QStringLiteral("smartSelectAddAt(mouse.x")) ||
+      studio_image_viewport_source.contains(QStringLiteral("smartSelectSubtractAt(mouse.x"))) {
     return fail("Smart/Object selection hover, prompt, stroke, and one-click commit paths should all use mapper-backed normalized image coordinates");
   }
   const QStringList forbidden_mask_direct_normalization_patterns = {
@@ -547,20 +625,22 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("selectedMaskHeader.fallbackState.length > 0"))) {
     return fail("Smart selection rough fallback masks should expose a visible editable preview state in mask status UI");
   }
-  if (!studio_workspace_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
-      !studio_workspace_source.contains(QStringLiteral("function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight)")) ||
-      !studio_workspace_source.contains(QStringLiteral("function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter)")) ||
-      !studio_workspace_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(x, y)")) ||
-      !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.pointerMappingDiagnosticSignature(x, y)")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property var sampleViewRect: viewportAvailable")) ||
-      !studio_workspace_source.contains(QStringLiteral("property var sourceRect: viewport.viewRectForImage(sourceX, sourceY, sourceWidth, sourceHeight)")) ||
-      !studio_workspace_source.contains(QStringLiteral("property var sourcePoint: viewport.viewPointForImage(editorPreview.activeMaskCloneSourceX, editorPreview.activeMaskCloneSourceY)")) ||
-      !studio_workspace_source.contains(QStringLiteral("property var targetPoint: viewport.viewPointForImage(root.activeCloneTargetX(), root.activeCloneTargetY())")) ||
-      !studio_workspace_source.contains(QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)")) ||
-      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + editorPreview.activeMaskCloneSourceX * viewport.paintedContentWidth")) ||
-      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + root.activeCloneTargetX() * viewport.paintedContentWidth")) ||
-      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + sourceX * viewport.paintedContentWidth")) ||
-      studio_workspace_source.contains(QStringLiteral("(mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth)")) ||
+  if (!studio_image_viewport_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(x, y)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("viewportCoordinateMapper.pointerMappingDiagnosticSignature(x, y)")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("readonly property var sampleViewRect: viewport.viewRectForImage(")) ||
+      !studio_image_viewport_source.contains(QStringLiteral("objectName: \"luminanceRangeSamplePatch\"")) ||
+      studio_thumbnail_card_source.contains(QStringLiteral("luminanceRangeSamplePatch")) ||
+      !studio_retouch_overlay_source.contains(QStringLiteral("property var sourceRect: viewport.viewRectForImage(sourceX, sourceY, sourceWidth, sourceHeight)")) ||
+      !studio_retouch_overlay_source.contains(QStringLiteral("property var sourcePoint: viewport.viewPointForImage(previewController.activeMaskCloneSourceX, previewController.activeMaskCloneSourceY)")) ||
+      !studio_retouch_overlay_source.contains(QStringLiteral("property var targetPoint: viewport.viewPointForImage(workspace.activeCloneTargetX(), workspace.activeCloneTargetY())")) ||
+      !studio_retouch_overlay_source.contains(QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)")) ||
+      studio_viewport_source.contains(QStringLiteral("viewport.paintedContentX + previewController.activeMaskCloneSourceX * viewport.paintedContentWidth")) ||
+      studio_viewport_source.contains(QStringLiteral("viewport.paintedContentX + workspace.activeCloneTargetX() * viewport.paintedContentWidth")) ||
+      studio_viewport_source.contains(QStringLiteral("viewport.paintedContentX + sourceX * viewport.paintedContentWidth")) ||
+      studio_viewport_source.contains(QStringLiteral("(mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(item, itemX, itemY)")) ||
@@ -602,33 +682,33 @@ int main(int argc, char** argv) {
     return fail("Range sample patches and retouch source/target guides should use image-to-view mapping and mapper-backed drag coordinates");
   }
   const QStringList pixel_grid_alignment_contract = {
-      QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v5|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\""),
-      QStringLiteral("readonly property bool pixelGridFullResolutionBacked: (nativePreviewActive &&\n                                                              editorPreview.displayPreviewNativeFullResolution) ||"),
-      QStringLiteral("Number(editorPreview.sourceImageWidth || 0) <= editorPreview.previewTargetEdge"),
-      QStringLiteral("Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge"),
-      QStringLiteral("readonly property bool pixelGridVisible: pixelInspectionActive"),
-      QStringLiteral("readonly property bool highCostInspectionOverlaysVisible: true"),
-      QStringLiteral("pixel-inspection-performance:v3|allow-loupe-and-analysis-overlays-while-source-pixels-visible:true|viewport-publish-signature-dedup:true|callLater-coalesced:true|deferred-source-patch-refresh:520ms"),
+      QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v6|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|source-backed-required:true|visible-region-coverage-required:true|crop-output-coordinates:true\""),
+      QStringLiteral("readonly property bool pixelGridFullResolutionBacked: nativePreviewActive &&\n                                                          previewContext.displayPreviewNativeViewportFullResolution"),
+      QStringLiteral("readonly property bool pixelGridVisible: pixelGridRequested &&\n                                             pixelGridFullResolutionBacked"),
+      QStringLiteral("readonly property bool highCostInspectionOverlaysVisible: inspectionDisplayReady"),
+      QStringLiteral("pixel-inspection-performance:v5|full-resolution-visible-tile-required:true|proxy-display-while-inspecting:false|viewport-publisher-service:true|signature-dedup:true|event-loop-coalesced:true|source-patch-refresh:immediate"),
+      QStringLiteral("one-to-one:one-source-pixel-per-device-pixel"),
+      QStringLiteral("basePaintedContentWidth * inspectionDevicePixelRatio"),
       QStringLiteral("sourcePixelInspectionZoom * deepInspectionZoomMultiplier"),
       QStringLiteral("function wheelZoomFactor(wheel)"),
-      QStringLiteral("(zoom <= 1.01 && !pixelInspectionActive)"),
-      QStringLiteral("function publishedPreviewViewportSignature("),
-      QStringLiteral("if (nextSignature === lastPublishedPreviewViewportSignature)"),
-      QStringLiteral("property bool publishedPreviewViewportUpdateQueued: false"),
-      QStringLiteral("onPixelInspectionActiveChanged: schedulePublishedPreviewViewportUpdate(false)"),
-      QStringLiteral("readonly property real sourcePixelScreenWidth: Number(editorPreview.sourceImageWidth || 0) > 0\n            ? paintedContentWidth / Math.max(1, Number(editorPreview.sourceImageWidth || 1))"),
-      QStringLiteral("readonly property real sourcePixelScreenHeight: Number(editorPreview.sourceImageHeight || 0) > 0\n            ? paintedContentHeight / Math.max(1, Number(editorPreview.sourceImageHeight || 1))"),
-      QStringLiteral("const rect = viewRectForImage(\n                        pixelX / sourceWidth,\n                        pixelY / sourceHeight,\n                        1.0 / sourceWidth,\n                        1.0 / sourceHeight)"),
+      QStringLiteral("(zoom <= 1.01 && !pixelInspectionRequested)"),
+      QStringLiteral("previewContext.schedulePreviewViewportPublication("),
+      QStringLiteral("onPixelInspectionRequestedChanged: schedulePublishedPreviewViewportUpdate(true)"),
+      QStringLiteral("readonly property real sourcePixelScreenWidth: inspectionPixelWidth > 0\n        ? paintedContentWidth / Math.max(1, inspectionPixelWidth)"),
+      QStringLiteral("readonly property real sourcePixelScreenHeight: inspectionPixelHeight > 0\n        ? paintedContentHeight / Math.max(1, inspectionPixelHeight)"),
+      QStringLiteral("const rect = viewRectForImage(\n                    pixelX / sourceWidth,\n                    pixelY / sourceHeight,\n                    1.0 / sourceWidth,\n                    1.0 / sourceHeight)"),
       QStringLiteral("readonly property string pixelBrushCursorSnapContract: \"pixel-brush-cursor:v2|source-cell:floor|screen-rect:mapper|visible:pixel-grid|source-backed:pixelGridFullResolutionBacked\""),
-      QStringLiteral("visible: root.pixelExactToolReady() && viewport.pixelGridVisible && cell.valid"),
-      QStringLiteral("readonly property real contentLeft: viewport.paintedContentX"),
-      QStringLiteral("readonly property real contentTop: viewport.paintedContentY"),
+      QStringLiteral("pixelBrushVisible: workspaceContext.pixelExactToolReady() && viewport.pixelGridVisible"),
+      QStringLiteral("readonly property real contentLeft: pixelGridOverlay.paintedContentX"),
+      QStringLiteral("readonly property real contentTop: pixelGridOverlay.paintedContentY"),
       QStringLiteral("Math.floor((visibleLeft - contentLeft) / stepX)"),
       QStringLiteral("Math.floor((visibleTop - contentTop) / stepY)"),
-      QStringLiteral("Math.round(pixelGridOverlay.contentLeft + sourceIndex * pixelGridOverlay.stepX)"),
-      QStringLiteral("Math.round(pixelGridOverlay.contentTop + sourceIndex * pixelGridOverlay.stepY)")};
+      QStringLiteral("x: pixelGridOverlay.contentLeft + sourceIndex * pixelGridOverlay.stepX"),
+      QStringLiteral("y: pixelGridOverlay.contentTop + sourceIndex * pixelGridOverlay.stepY")};
   if (!require_source_patterns(
-          studio_workspace_source,
+          studio_workspace_source + QStringLiteral("\n") + studio_image_viewport_source +
+              QStringLiteral("\n") + studio_pixel_grid_source +
+              QStringLiteral("\n") + studio_brush_cursor_source,
           pixel_grid_alignment_contract,
           "Pixel grid, snapped pixel cursor, and source-pixel overlays should share the same source-pixel image-to-view geometry")) {
     return fail("Pixel-grid alignment should be guarded against parallel hand-rolled geometry");

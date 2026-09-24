@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Button {
@@ -21,6 +21,7 @@ Button {
     property bool compact: true
     property bool showLabel: false
     property bool showMenuIndicator: false
+    property int toolIconSize: compact ? 14 : 16
 
     signal menuRequested()
 
@@ -30,7 +31,7 @@ Button {
                                        : pending ? theme.accentCool400
                                        : active ? accent
                                        : theme.textMuted
-    readonly property string toolDiscoveryContract: "tool-button-discovery:v2|family-label:" +
+    readonly property string toolDiscoveryContract: "tool-button-discovery:v3|keyboard:true|focus-visible:true|accessible-name-role-state:true|pointer-target:32-dense-44-primary|family-label:" +
                                                     String(label || text) +
                                                     "|variant-visible:" +
                                                     String(variantLabel.length > 0) +
@@ -83,17 +84,22 @@ Button {
     }
 
     implicitWidth: showLabel ? Math.max(compact ? 58 : 68, toolContent.implicitWidth + 16)
-                             : (compact ? theme.iconButtonSizeCompact : theme.iconButtonSize)
-    implicitHeight: compact ? theme.iconButtonSizeCompact : theme.iconButtonSize
+                             : (compact ? theme.iconButtonSizeCompact : theme.railButtonSize)
+    implicitHeight: compact ? theme.iconButtonSizeCompact : theme.railButtonSize
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
     Accessible.name: label.length > 0 ? label : text
     Accessible.description: !enabled || !commandEnabled ? resolvedTooltip : variantLabel
+    Accessible.role: Accessible.Button
+    Accessible.checked: root.checkable && root.checked
 
-    ToolTip.visible: hovered && resolvedTooltip.length > 0
-    ToolTip.delay: 300
-    ToolTip.timeout: 3000
-    ToolTip.text: resolvedTooltip
+    AppToolTip {
+        targetItem: root
+        visible: root.hovered && root.resolvedTooltip.length > 0
+        delay: 300
+        timeout: 3000
+        text: root.resolvedTooltip
+    }
 
     onPressAndHold: if (showMenuIndicator) menuRequested()
 
@@ -103,19 +109,19 @@ Button {
         onTapped: root.menuRequested()
     }
 
-    background: Rectangle {
-        radius: Math.round(Math.min(width, height) / 2)
-        color: !root.enabled || !root.commandEnabled
-               ? theme.alpha(theme.glassBase, 0.26)
-               : root.down
-                 ? theme.alpha(root.stateColor, 0.16)
-                 : root.active
-                   ? theme.alpha(root.stateColor, 0.13)
-                   : root.hovered
-                     ? theme.alpha(theme.glassLift, 0.34)
-                     : "transparent"
-        border.width: root.visualFocus ? 2 : 0
-        border.color: root.visualFocus ? theme.focusRing : "transparent"
+    background: CommandButtonSurface {
+        cornerRadius: theme.radius6
+        fillColor: !root.enabled || !root.commandEnabled ? theme.alpha(theme.surfaceInset, 0.35)
+                   : root.down ? theme.surfaceInset
+                   : root.active ? theme.interactionFill
+                   : root.hovered ? theme.surfaceTop : "transparent"
+        borderWidth: root.visualFocus ? theme.focusBorderWidth : 0
+        borderColor: root.visualFocus ? theme.focusRing
+                     : root.active || root.hovered ? theme.controlEdge : "transparent"
+        accentWidth: 2
+        accentColor: root.stateColor
+        accentOpacity: root.active && root.enabled && root.commandEnabled ? 0.65 : 0
+        topLineOpacity: root.hovered || root.active ? 0.08 : 0
     }
 
     contentItem: Item {
@@ -131,21 +137,21 @@ Button {
 
             AppIcon {
                 visible: root.iconName.length > 0
-                Layout.preferredWidth: root.compact ? 14 : 16
-                Layout.preferredHeight: root.compact ? 14 : 16
+                Layout.preferredWidth: root.toolIconSize
+                Layout.preferredHeight: root.toolIconSize
                 Layout.alignment: Qt.AlignCenter
                 name: root.iconName
-                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.52)
+                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.82)
                                       : (root.active || root.pending || root.warning ? root.stateColor : theme.textMain)
             }
 
             Text {
                 visible: root.iconName.length === 0 && root.iconText.length > 0
                 text: root.iconText
-                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.52)
+                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.82)
                                       : (root.active || root.pending || root.warning ? root.stateColor : theme.textMain)
                 font.family: theme.fontMono
-                font.pixelSize: root.compact ? 11 : 12
+                font.pixelSize: root.compact ? theme.typeLabel : theme.typeControl
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -154,16 +160,16 @@ Button {
             Text {
                 visible: root.showLabel
                 text: root.label
-                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.56)
+                color: !root.enabled || !root.commandEnabled ? theme.alpha(theme.textMuted, 0.84)
                                       : (root.active ? theme.textStrong : theme.textMain)
                 font.family: theme.fontUi
-                font.pixelSize: root.compact ? 11 : 12
+                font.pixelSize: root.compact ? theme.typeLabel : theme.typeControl
                 font.weight: root.active ? Font.DemiBold : Font.Medium
                 font.letterSpacing: 0
                 maximumLineCount: 1
                 elide: Text.ElideNone
                 fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 8
+                minimumPixelSize: 10
                 verticalAlignment: Text.AlignVCenter
             }
         }
@@ -185,8 +191,8 @@ Button {
             anchors.bottom: parent.bottom
             anchors.rightMargin: 2
             anchors.bottomMargin: 2
-            width: 10
-            height: 10
+            width: theme.scaled(10)
+            height: theme.scaled(10)
             visible: root.showMenuIndicator && (root.hovered || root.active || root.visualFocus)
             name: "chevron-right"
             rotation: 90
@@ -204,7 +210,7 @@ Button {
             text: root.variantBadgeLabel()
             color: root.stateColor
             font.family: theme.fontMono
-            font.pixelSize: 8
+            font.pixelSize: theme.typeMicro
             font.weight: Font.DemiBold
         }
     }

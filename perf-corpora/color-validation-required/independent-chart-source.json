@@ -1,0 +1,82 @@
+{
+  "schema": "photo-editor-independent-chart-source:v1",
+  "inventory_id": "middlebury-checker24-independent-reference-v1",
+  "description": "Non-shipping independent chart-render inventory for six camera manufacturers, two controlled illuminants, four exposures, and paired dcraw-linear/camera-JPEG registered samples.",
+  "promotion_eligible": false,
+  "promotion_blockers": [
+    "no-sensor-raw-files",
+    "untagged-reference-images",
+    "eight-bit-registered-chart-crops",
+    "no-measured-spectral-patch-values",
+    "project-license-review-pending",
+    "colorchecker-target-rights-review-pending",
+    "no-real-dcp-profile",
+    "no-rights-cleared-skin-capture"
+  ],
+  "dataset": {
+    "dataset_id": "middlebury-color-checker24",
+    "name": "Middlebury Registered ColorChecker 24 RAW and JPEG Dataset",
+    "source_page": "https://vision.middlebury.edu/color/data/",
+    "archive_url": "https://vision.middlebury.edu/color/data/checker/zip/checker24-RAW-JPG.zip",
+    "archive_sha256": "e0f58600116121406004717a1dbc1d4e41296f7fac615005988400945a8a3990",
+    "archive_byte_size": 128651408,
+    "independent_producer": "Middlebury Computer Vision color dataset authors",
+    "attribution": "A. Chakrabarti, D. Scharstein, and T. Zickler, An empirical camera model for Internet color vision, BMVC 2009.",
+    "citation_url": "https://vision.middlebury.edu/color/EmpiricalColor-BMVC2009.pdf",
+    "distribution": "private-ci-only",
+    "permission_evidence": {
+      "status": "explicit-use-and-publish-permission",
+      "summary": "The authoritative dataset page explicitly grants permission to use and publish its images and requests citation of the BMVC 2009 paper.",
+      "evidence_url": "https://vision.middlebury.edu/color/data/",
+      "accessed_on": "2026-07-15",
+      "project_review": {
+        "status": "pending-project-review",
+        "reviewed_on": "2026-07-15",
+        "reviewer_id": "automation-source-audit"
+      }
+    },
+    "content_contract": {
+      "target": "X-Rite ColorChecker 24",
+      "registered_width": 606,
+      "registered_height": 404,
+      "png_bit_depth": 8,
+      "png_color_type": "rgb",
+      "linear_render_description": "dcraw-rendered standard linear RGB using the camera white-balance multipliers",
+      "camera_render_description": "registered camera JPEG output",
+      "embedded_color_profile": false,
+      "sensor_raw_files_in_archive": false
+    }
+  },
+  "selection": {
+    "white_balance_code": "wb1",
+    "white_balance_description": "fixed tungsten white balance",
+    "cameras": [
+      {"directory": "CanonEOS5D", "manufacturer": "Canon", "model": "EOS 5D"},
+      {"directory": "FujifilmFinePixS5Pro", "manufacturer": "Fujifilm", "model": "FinePix S5 Pro"},
+      {"directory": "LeicaM8", "manufacturer": "Leica", "model": "M8"},
+      {"directory": "NikonD3", "manufacturer": "Nikon", "model": "D3"},
+      {"directory": "PanasonicDMCLX3", "manufacturer": "Panasonic", "model": "DMC-LX3"},
+      {"directory": "SonyDSLR-A300", "manufacturer": "Sony", "model": "DSLR-A300"}
+    ],
+    "illuminants": [
+      {"code": "i1", "kelvin": 3200, "description": "tungsten photo flood"},
+      {"code": "i2", "kelvin": 4800, "description": "daylight photo flood"}
+    ],
+    "exposures": [
+      {"code": "e1", "stops": -2},
+      {"code": "e2", "stops": -1},
+      {"code": "e3", "stops": 0},
+      {"code": "e4", "stops": 1}
+    ],
+    "artifacts": [
+      {"suffix": "-raw.png", "role": "independent-linear-render"},
+      {"suffix": "-raw-std.txt", "role": "independent-linear-noise-estimate"},
+      {"suffix": "-jpg.png", "role": "camera-jpeg-render"},
+      {"suffix": "-jpg-std.txt", "role": "camera-jpeg-noise-estimate"}
+    ],
+    "selected_member_count": 192,
+    "selected_byte_size": 22013141,
+    "selected_member_set_sha256": "fe1d007e9ee88032350d40ada86b755dcbb511b05fae161e7ac1ee177aa530e8",
+    "member_set_hash_algorithm": "sha256(sorted(member_path + NUL + byte_size + NUL + member_sha256 + LF))"
+  }
+}

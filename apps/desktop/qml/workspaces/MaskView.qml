@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import PhotoEditor
@@ -10,6 +11,18 @@ Rectangle {
     objectName: "maskWorkspace"
 
     Theme { id: theme }
+    MaskRowActions {
+        id: maskRowActions
+        previewController: editorPreview
+        nameEditor: activeMaskNameField
+    }
+    MaskSearchModel {
+        id: maskSearchModel
+        query: root.maskSearchQuery
+        maskSets: editorPreview.maskSets || []
+        toolItems: root.maskSearchToolItems()
+        adjustmentItems: root.maskSearchAdjustmentItems()
+    }
 
     color: "transparent"
     readonly property string maskVisibilityContract: "mask-visibility:v1|always:canvas-inspector-active-context-source-controls-overlay-state|contextual:brush-cursor-lasso-polygon-handles-alpha-import-refine-toolbar-pending-apply-cancel|one-expansion:mask-source-variants-context-menu-refine-options-adjustment-groups|hover-focus:mask-source-actions-reorder-visibility-solo-lock|diagnostic:generated-unsupported-preview-failure-runtime-detail|preserve:functionality"
@@ -401,7 +414,7 @@ Rectangle {
                "|operation:" + String(editorPreview.hasActiveMask ? editorPreview.activeMaskOperation : root.maskCreationOperation) +
                "|preview:" + String(editorPreview.maskPreviewDisplayMode || "overlay") +
                "|create-open:" + String(root.createMaskChooserOpen) +
-               "|search:" + String(root.maskSearchText().length > 0) +
+               "|search:" + String(maskSearchModel.searchText().length > 0) +
                "|pending:" + String(pending) +
                "|inspector:true|canvas:true|source-list:true" +
                "|preserve:object-subject-sky-background-brush-lasso-polygon-gradient-range-alpha-import-combine-preview-invert-refine-rename-reorder-duplicate-delete"
@@ -442,52 +455,6 @@ Rectangle {
                "|solo:" + editorPreview.activeMaskSolo.toString() +
                "|locked:" + editorPreview.activeMaskLocked.toString() +
                "|opacity:" + root.percentText(editorPreview.activeMaskOpacity)
-    }
-
-    function renameMaskRow(flatIndex) {
-        editorPreview.activeMaskIndex = flatIndex
-        activeMaskNameField.forceActiveFocus()
-        activeMaskNameField.selectAll()
-    }
-
-    function toggleMaskRowEnabled(flatIndex, enabled) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.activeMaskEnabled = !enabled
-    }
-
-    function toggleMaskRowSolo(flatIndex, solo) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.activeMaskSolo = !solo
-    }
-
-    function toggleMaskRowLocked(flatIndex, locked) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.activeMaskLocked = !locked
-    }
-
-    function moveMaskRow(flatIndex, offset) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.moveActiveMask(offset)
-    }
-
-    function duplicateMaskRow(flatIndex) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.duplicateActiveMask()
-    }
-
-    function deleteMaskRow(flatIndex) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.removeActiveMask()
-    }
-
-    function applyRetouchRow(flatIndex) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.applyActiveRetouch()
-    }
-
-    function cancelRetouchRow(flatIndex) {
-        editorPreview.activeMaskIndex = flatIndex
-        editorPreview.cancelActiveRetouch()
     }
 
     function activeToolLabel() {
@@ -568,39 +535,6 @@ Rectangle {
         editorPreview.maskCompareAdjustmentGroups = groups
     }
 
-    function maskSearchText() {
-        return root.maskSearchQuery.trim().toLowerCase()
-    }
-
-    function maskSearchMatches(text) {
-        const query = root.maskSearchText()
-        return query.length === 0 || String(text || "").toLowerCase().indexOf(query) >= 0
-    }
-
-    function maskMatchesSearch(mask) {
-        const searchable = ((mask.name || "") + " " +
-                            (mask.kind || "") + " " +
-                            (mask.operation || "") + " " +
-                            (mask.maskSetName || "") + " " +
-                            (mask.sourceBadge || "") + " " +
-                            (mask.operationBadge || "") + " " +
-                            (mask.sourceAuditLabel || ""))
-        return root.maskSearchMatches(searchable)
-    }
-
-    function maskSetMatchesSearch(maskSet) {
-        if (root.maskSearchText().length === 0)
-            return true
-        if (root.maskSearchMatches((maskSet.name || "") + " " + (maskSet.id || "")))
-            return true
-        const sources = maskSet.sources || []
-        for (let index = 0; index < sources.length; ++index) {
-            if (root.maskMatchesSearch(sources[index]))
-                return true
-        }
-        return false
-    }
-
     function maskSearchToolItems() {
         return [
             { category: "Tool", label: "Smart Select", detail: "Create or refine with object selection", keywords: "smart select object subject ai local runtime", action: "smart" },
@@ -630,33 +564,6 @@ Rectangle {
             { category: "Control", label: "Heal Texture", detail: "Detail adjustment", keywords: "heal texture detail retouch local adjustment" },
             { category: "Control", label: "Heal Color", detail: "Detail adjustment", keywords: "heal color detail retouch local adjustment" }
         ]
-    }
-
-    function maskSearchResults() {
-        const query = root.maskSearchText()
-        if (query.length === 0)
-            return []
-        const results = []
-        const addIfMatch = function(item) {
-            if (root.maskSearchMatches(item.label + " " + item.detail + " " + item.keywords))
-                results.push(item)
-        }
-        root.maskSearchToolItems().forEach(addIfMatch)
-        const sets = editorPreview.maskSets || []
-        for (let setIndex = 0; setIndex < sets.length; ++setIndex) {
-            const sources = sets[setIndex].sources || []
-            if (root.maskSearchMatches((sets[setIndex].name || "") + " mask components")) {
-                results.push({ category: "Mask", label: sets[setIndex].name, detail: sources.length + " components", flatIndex: sources.length > 0 ? sources[0].flatIndex : -1 })
-            }
-            for (let sourceIndex = 0; sourceIndex < sources.length; ++sourceIndex) {
-                const source = sources[sourceIndex]
-                if (root.maskMatchesSearch(source)) {
-                    results.push({ category: "Mask", label: source.name || source.kind, detail: (source.maskSetName || sets[setIndex].name || "Mask") + " · " + (source.operationBadge || source.operation || "add"), flatIndex: source.flatIndex })
-                }
-            }
-        }
-        root.maskSearchAdjustmentItems().forEach(addIfMatch)
-        return results.slice(0, 12)
     }
 
     function activateMaskSearchResult(result) {
@@ -1180,15 +1087,15 @@ Rectangle {
                                         ctx.lineWidth = active ? 1.8 : 1.2
                                         ctx.fillStyle = Qt.alpha(overlayAccent, active ? 0.18 : 0.10)
                                         ctx.beginPath()
-                                        ctx.ellipse(width / 2, height / 2, Math.max(1, width / 2 - 1), Math.max(1, height / 2 - 1), 0, 0, Math.PI * 2)
+                                        ctx.ellipse(1, 1, Math.max(1, width - 2), Math.max(1, height - 2))
                                         ctx.fill()
                                         ctx.stroke()
                                         ctx.strokeStyle = "rgba(244,247,250,0.45)"
                                         ctx.beginPath()
-                                        ctx.ellipse(width / 2, height / 2,
-                                                    Math.max(1, (width / 2 - 1) * innerScale),
-                                                    Math.max(1, (height / 2 - 1) * innerScale),
-                                                    0, 0, Math.PI * 2)
+                                        ctx.ellipse(width / 2 - Math.max(1, (width / 2 - 1) * innerScale),
+                                                    height / 2 - Math.max(1, (height / 2 - 1) * innerScale),
+                                                    Math.max(1, (width / 2 - 1) * innerScale) * 2,
+                                                    Math.max(1, (height / 2 - 1) * innerScale) * 2)
                                         ctx.stroke()
                                     }
                                 }
@@ -2050,14 +1957,14 @@ Rectangle {
                                 radius: 8
                                 color: "#11161a"
                                 border.width: 1
-                                border.color: root.maskSearchText().length > 0 ? Qt.alpha("#8ab8d8", 0.52) : "#2a3138"
+                                border.color: maskSearchModel.searchText().length > 0 ? Qt.alpha("#8ab8d8", 0.52) : "#2a3138"
                             }
                         }
 
                         Rectangle {
                             objectName: "maskSearchResultsPanel"
                             Layout.fillWidth: true
-                            visible: root.maskSearchText().length > 0
+                            visible: maskSearchModel.searchText().length > 0
                             implicitHeight: visible ? maskSearchResultsColumn.implicitHeight + 12 : 0
                             radius: 8
                             color: "#11161a"
@@ -2071,7 +1978,7 @@ Rectangle {
                                 spacing: 6
 
                                 Repeater {
-                                    model: root.maskSearchResults()
+                                    model: maskSearchModel.results()
 
                                     delegate: ActionButton {
                                         required property var modelData
@@ -2087,7 +1994,7 @@ Rectangle {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    visible: root.maskSearchResults().length === 0
+                                    visible: maskSearchModel.results().length === 0
                                     text: "No matching mask tools, masks, or local controls."
                                     color: "#8f98a2"
                                     font.family: "Avenir Next"
@@ -2621,7 +2528,7 @@ Rectangle {
                                     required property var modelData
 
                                     Layout.fillWidth: true
-                                    visible: root.maskSetMatchesSearch(modelData)
+                                    visible: maskSearchModel.setMatches(modelData)
                                     radius: 10
                                     color: "#171b1f"
                                     border.width: 1
@@ -2726,7 +2633,7 @@ Rectangle {
                                         }
 
                                         Repeater {
-                                            model: (modelData.sources || []).filter(root.maskMatchesSearch)
+                                            model: (modelData.sources || []).filter(maskSearchModel.sourceMatches)
 
                                             delegate: Rectangle {
                                                 id: maskSourceDelegate
@@ -2812,7 +2719,7 @@ Rectangle {
                                                         text: "Rename"
                                                         iconName: "edit"
                                                         accent: maskSourceContextMenu.accent
-                                                        onTriggered: root.renameMaskRow(modelData.flatIndex)
+                                                        onTriggered: maskRowActions.rename(modelData.flatIndex)
                                                     }
 
                                                     AppMenuItem {
@@ -2821,7 +2728,7 @@ Rectangle {
                                                         iconName: modelData.enabled ? "hidden" : "visible"
                                                         accent: maskSourceContextMenu.accent
                                                         enabled: !modelData.locked
-                                                        onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                                        onTriggered: maskRowActions.toggleEnabled(modelData.flatIndex, modelData.enabled)
                                                     }
 
                                                     AppMenuItem {
@@ -2830,7 +2737,7 @@ Rectangle {
                                                         iconName: "star"
                                                         accent: maskSourceContextMenu.accent
                                                         enabled: !modelData.locked
-                                                        onTriggered: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
+                                                        onTriggered: maskRowActions.toggleSolo(modelData.flatIndex, modelData.solo)
                                                     }
 
                                                     AppMenuItem {
@@ -2838,7 +2745,7 @@ Rectangle {
                                                         text: modelData.locked ? "Unlock" : "Lock"
                                                         iconName: "lock"
                                                         accent: maskSourceContextMenu.accent
-                                                        onTriggered: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
+                                                        onTriggered: maskRowActions.toggleLocked(modelData.flatIndex, modelData.locked)
                                                     }
 
                                                     MenuSeparator {}
@@ -2849,7 +2756,7 @@ Rectangle {
                                                         iconName: "move-up"
                                                         accent: maskSourceContextMenu.accent
                                                         enabled: modelData.flatIndex > 0
-                                                        onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                                                        onTriggered: maskRowActions.move(modelData.flatIndex, -1)
                                                     }
 
                                                     AppMenuItem {
@@ -2858,7 +2765,7 @@ Rectangle {
                                                         iconName: "move-down"
                                                         accent: maskSourceContextMenu.accent
                                                         enabled: modelData.flatIndex < editorPreview.maskCount - 1
-                                                        onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                                                        onTriggered: maskRowActions.move(modelData.flatIndex, 1)
                                                     }
 
                                                     AppMenuItem {
@@ -2866,7 +2773,7 @@ Rectangle {
                                                         text: "Duplicate"
                                                         iconName: "plus"
                                                         accent: maskSourceContextMenu.accent
-                                                        onTriggered: root.duplicateMaskRow(modelData.flatIndex)
+                                                        onTriggered: maskRowActions.duplicate(modelData.flatIndex)
                                                     }
 
                                                     AppMenuItem {
@@ -2875,7 +2782,7 @@ Rectangle {
                                                         iconName: "delete"
                                                         danger: true
                                                         accent: maskSourceContextMenu.accent
-                                                        onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                                                        onTriggered: maskRowActions.remove(modelData.flatIndex)
                                                     }
                                                 }
 
@@ -2949,7 +2856,7 @@ Rectangle {
                                                     ActionButton {
                                                         text: modelData.enabled ? "On" : "Off"
                                                         active: modelData.enabled
-                                                        onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                                        onClicked: maskRowActions.toggleEnabled(modelData.flatIndex, modelData.enabled)
                                                     }
                                                 }
                                             }
@@ -3068,7 +2975,7 @@ Rectangle {
                                             iconName: "check"
                                             accent: retouchRowContextMenu.accent
                                             visible: !modelData.committed
-                                            onTriggered: root.applyRetouchRow(modelData.flatIndex)
+                                            onTriggered: maskRowActions.applyRetouch(modelData.flatIndex)
                                         }
 
                                         AppMenuItem {
@@ -3077,7 +2984,7 @@ Rectangle {
                                             iconName: "close"
                                             accent: retouchRowContextMenu.accent
                                             visible: !modelData.committed
-                                            onTriggered: root.cancelRetouchRow(modelData.flatIndex)
+                                            onTriggered: maskRowActions.cancelRetouch(modelData.flatIndex)
                                         }
 
                                         AppMenuItem {
@@ -3085,7 +2992,7 @@ Rectangle {
                                             text: "Rename"
                                             iconName: "edit"
                                             accent: retouchRowContextMenu.accent
-                                            onTriggered: root.renameMaskRow(modelData.flatIndex)
+                                            onTriggered: maskRowActions.rename(modelData.flatIndex)
                                         }
 
                                         AppMenuItem {
@@ -3093,7 +3000,7 @@ Rectangle {
                                             text: modelData.enabled ? "Disable" : "Enable"
                                             iconName: modelData.enabled ? "hidden" : "visible"
                                             accent: retouchRowContextMenu.accent
-                                            onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                            onTriggered: maskRowActions.toggleEnabled(modelData.flatIndex, modelData.enabled)
                                         }
 
                                         MenuSeparator {}
@@ -3104,7 +3011,7 @@ Rectangle {
                                             iconName: "move-up"
                                             accent: retouchRowContextMenu.accent
                                             enabled: modelData.flatIndex > 0
-                                            onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                                            onTriggered: maskRowActions.move(modelData.flatIndex, -1)
                                         }
 
                                         AppMenuItem {
@@ -3113,7 +3020,7 @@ Rectangle {
                                             iconName: "move-down"
                                             accent: retouchRowContextMenu.accent
                                             enabled: modelData.flatIndex < editorPreview.maskCount - 1
-                                            onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                                            onTriggered: maskRowActions.move(modelData.flatIndex, 1)
                                         }
 
                                         AppMenuItem {
@@ -3122,7 +3029,7 @@ Rectangle {
                                             iconName: "delete"
                                             danger: true
                                             accent: retouchRowContextMenu.accent
-                                            onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                                            onTriggered: maskRowActions.remove(modelData.flatIndex)
                                         }
                                     }
 
@@ -3132,8 +3039,8 @@ Rectangle {
                                         spacing: 8
 
                                         Rectangle {
-                                            width: 10
-                                            height: 10
+                                            Layout.preferredWidth: 10
+                                            Layout.preferredHeight: 10
                                             radius: 5
                                             color: root.maskAccent(modelData)
                                         }
@@ -3167,28 +3074,28 @@ Rectangle {
                                             ActionButton {
                                                 text: "Rename"
                                                 compact: true
-                                                onClicked: root.renameMaskRow(modelData.flatIndex)
+                                                onClicked: maskRowActions.rename(modelData.flatIndex)
                                             }
 
                                             ActionButton {
                                                 text: modelData.enabled ? "Off" : "On"
                                                 compact: true
                                                 accent: modelData.enabled ? "#d98962" : root.maskAccent(modelData)
-                                                onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                                onClicked: maskRowActions.toggleEnabled(modelData.flatIndex, modelData.enabled)
                                             }
 
                                             ActionButton {
                                                 text: "Up"
                                                 compact: true
                                                 enabled: modelData.flatIndex > 0
-                                                onClicked: root.moveMaskRow(modelData.flatIndex, -1)
+                                                onClicked: maskRowActions.move(modelData.flatIndex, -1)
                                             }
 
                                             ActionButton {
                                                 text: "Down"
                                                 compact: true
                                                 enabled: modelData.flatIndex < editorPreview.maskCount - 1
-                                                onClicked: root.moveMaskRow(modelData.flatIndex, 1)
+                                                onClicked: maskRowActions.move(modelData.flatIndex, 1)
                                             }
                                         }
                                     }
@@ -3204,38 +3111,9 @@ Rectangle {
                                 font.pixelSize: 12
                             }
 
-                            RowLayout {
+                            RetouchBeforeAfterControls {
                                 Layout.fillWidth: true
-                                spacing: 6
-                                visible: editorPreview.retouchCount > 0
-
-                                ActionButton {
-                                    Layout.fillWidth: false
-                                    text: "Before"
-                                    iconName: "compare"
-                                    showText: false
-                                    tooltipText: "Show retouch before"
-                                    Accessible.name: "Show retouch before"
-                                    compact: true
-                                    accent: "#8fb7d8"
-                                    tone: active ? "primary" : "secondary"
-                                    active: editorPreview.retouchBeforeAfterEnabled
-                                    onClicked: editorPreview.retouchBeforeAfterEnabled = true
-                                }
-
-                                ActionButton {
-                                    Layout.fillWidth: false
-                                    text: "After"
-                                    iconName: "compare"
-                                    showText: false
-                                    tooltipText: "Show retouch after"
-                                    Accessible.name: "Show retouch after"
-                                    compact: true
-                                    accent: "#8fb7d8"
-                                    tone: active ? "primary" : "secondary"
-                                    active: !editorPreview.retouchBeforeAfterEnabled
-                                    onClicked: editorPreview.retouchBeforeAfterEnabled = false
-                                }
+                                previewController: editorPreview
                             }
                         }
                     }
@@ -3900,9 +3778,13 @@ Rectangle {
                             Layout.fillWidth: true
                             label: "Exposure"
                             valueText: editorPreview.activeMaskExposure.toFixed(2) + " EV"
-                            from: -2
-                            to: 2
+                            from: -5
+                            to: 5
+                            precisionResponse: true
+                            stepSize: 0.01
                             value: editorPreview.activeMaskExposure
+                            onInteractionStarted: editorPreview.beginCoalescedEdit()
+                            onInteractionFinished: editorPreview.endCoalescedEdit()
                             onValueDragged: function(value) { editorPreview.activeMaskExposure = value }
                             onResetRequested: editorPreview.activeMaskExposure = 0
                         }

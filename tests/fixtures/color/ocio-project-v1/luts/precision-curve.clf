@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList id="photo-editor-precision-curve-v1" compCLFversion="3.0">
+  <LUT1D inBitDepth="32f" outBitDepth="32f" interpolation="linear">
+    <Array dim="4 3">
+      0.0 0.0 0.0
+      0.07 0.19 0.31
+      0.43 0.61 0.79
+      1.0 1.0 1.0
+    </Array>
+  </LUT1D>
+</ProcessList>

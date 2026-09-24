@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -12,7 +12,7 @@ Rectangle {
     property string statusText: "todo"
     property string statusTone: "neutral"
     property bool completed: false
-    property color accent: theme.accentWarm300
+    property color accent: theme.markerAccent
     readonly property bool hasNote: note.length > 0
     readonly property string timelineMarkerCardContract: "timeline-marker-card:v1|title-wrap:true|note-wrap:true|status-chip:true|jump-edit-done:true|keyboard:true|readable-text:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-wrap:true|note-wrap:true|timecode-fit:true|tooltip-full:true"
@@ -27,7 +27,7 @@ Rectangle {
     implicitHeight: markerColumn.implicitHeight + theme.space16
     radius: theme.radius8
     color: cardHover.hovered ? theme.alpha(accent, 0.16) : theme.alpha(accent, 0.10)
-    border.width: activeFocus ? 2 : 1
+    border.width: activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
     border.color: activeFocus ? theme.alpha(theme.focusRing, 0.9) : theme.alpha(accent, cardHover.hovered ? 0.56 : 0.36)
     clip: true
     activeFocusOnTab: true
@@ -56,7 +56,7 @@ Rectangle {
                 text: root.title
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeBody
                 font.weight: Font.DemiBold
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
@@ -84,7 +84,7 @@ Rectangle {
             text: root.hasNote ? root.note : "No note"
             color: root.hasNote ? theme.textMain : theme.textFaint
             font.family: theme.fontUi
-            font.pixelSize: 10
+            font.pixelSize: theme.typeLabel
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
             elide: Text.ElideNone
@@ -99,7 +99,7 @@ Rectangle {
                 text: root.timecode
                 color: theme.textMuted
                 font.family: theme.fontMono
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 7
                 elide: Text.ElideNone

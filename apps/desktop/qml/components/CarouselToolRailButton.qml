@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Button {
@@ -9,6 +9,7 @@ Button {
     property string activeTool: ""
     property var menuItems: []
     property int menuWidth: 238
+    property bool compactLabelMode: false
     readonly property int menuMinimumWidth: theme.menuMinWidth
     readonly property int menuMaximumWidth: theme.menuMaxWidth
     readonly property int menuPopoverPadding: theme.space6
@@ -18,7 +19,7 @@ Button {
 
     Theme { id: theme }
 
-    readonly property string carouselToolRailButtonContract: "carousel-tool-rail-button:v1|active-state:true|expandable-menu:true|checked-state:true|disabled-reasons:true|keyboard:true|readable-text:true|no-elide:true|geometry:true"
+    readonly property string carouselToolRailButtonContract: "carousel-tool-rail-button:v2|stable-symbol:true|active-fill-marker:true|shortcut-tooltip:true|accessible-name-state:true|compact-label:true|rail-width:48|expandable-menu:true|checked-state:true|disabled-reasons:true|keyboard:true|readable-text:true|no-elide:true|geometry:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|tooltip-full:true|menu-wrap:true|accessibility-full:true"
     readonly property string menuGeometryContract: "menu-geometry:v1|min-width:" +
                                                    String(root.menuMinimumWidth) +
@@ -35,8 +36,16 @@ Button {
     function toolIconName(value) {
         if (value === "select")
             return "select"
+        if (value === "hand")
+            return "hand"
+        if (value === "text")
+            return "text-tool"
         if (value === "media")
             return "media"
+        if (value === "shape")
+            return "shape-tool"
+        if (value === "brush")
+            return "brush-tool"
         return ""
     }
 
@@ -47,15 +56,24 @@ Button {
             return "U"
         if (value === "text")
             return "T"
+        if (value === "brush")
+            return "B"
         return ""
     }
 
     Layout.fillWidth: true
+    objectName: "carouselToolRail" + toolValue.charAt(0).toUpperCase() +
+                toolValue.slice(1) + "Button"
+    padding: 0
     implicitHeight: 40
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
-    Accessible.name: toolLabel + " tool"
-    Accessible.description: "Press to select. Open the menu for variants and related actions."
+    Accessible.name: toolLabel + " tool, shortcut " + toolKey
+    Accessible.description: toolActive
+                            ? "Selected tool. Open the menu for variants and related actions."
+                            : "Press to select. Open the menu for variants and related actions."
+    Accessible.role: Accessible.Button
+    Accessible.checked: toolActive
     ToolTip.visible: hovered && !carouselToolMenu.visible
     ToolTip.delay: 350
     ToolTip.timeout: 3600
@@ -71,25 +89,25 @@ Button {
         onClicked: carouselToolMenu.open()
     }
 
-    background: Rectangle {
-        radius: theme.radius6
-        color: root.toolActive
-               ? theme.alpha(theme.accentWarm500, 0.20)
-               : root.down
-                 ? theme.alpha(theme.ink800, 0.88)
-                 : root.hovered
-                   ? theme.alpha(theme.ink800, 0.72)
-                   : "transparent"
-        border.width: root.visualFocus ? 2 : 0
-        border.color: root.visualFocus
-                      ? theme.focusRing
-                      : "transparent"
+    background: CommandButtonSurface {
+        cornerRadius: theme.radius6
+        fillColor: root.down ? theme.surfaceInset
+                   : root.toolActive ? theme.interactionFill
+                   : root.hovered ? theme.surfaceTop : "transparent"
+        borderColor: root.visualFocus ? theme.focusRing
+                   : root.toolActive ? theme.alpha(theme.interaction400, 0.3) : "transparent"
+        borderWidth: root.visualFocus ? 2 : 1
+        accentColor: theme.interaction400
+        accentWidth: 2
+        accentOpacity: root.toolActive ? 0.8 : 0
+        topLineOpacity: root.hovered ? 0.1 : 0
     }
 
     contentItem: Item {
         AppIcon {
             visible: root.toolIconName(root.toolValue).length > 0
-            anchors.centerIn: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: root.compactLabelMode ? 5 : Math.round((parent.height - height) / 2)
             width: 16
             height: 16
             name: root.toolIconName(root.toolValue)
@@ -104,6 +122,24 @@ Button {
             font.family: theme.fontMono
             font.pixelSize: 13
             font.weight: Font.Bold
+            maximumLineCount: 1
+            elide: Text.ElideNone
+        }
+
+        Text {
+            visible: root.compactLabelMode
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 3
+            text: root.toolLabel
+            color: root.toolActive ? theme.accentWarm300 : theme.textMuted
+            font.family: theme.fontUi
+            font.pixelSize: 7
+            font.weight: root.toolActive ? Font.DemiBold : Font.Normal
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 6
+            horizontalAlignment: Text.AlignHCenter
             maximumLineCount: 1
             elide: Text.ElideNone
         }

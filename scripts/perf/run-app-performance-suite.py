@@ -30,7 +30,7 @@ DEFAULT_ACTUAL_APP_WORKFLOW_APP = (
     REPO_ROOT / "build/dev-macos-debug/tests/actual_app_workflow_benchmark_driver"
 )
 DEFAULT_DESKTOP_APP = (
-    REPO_ROOT / "build/dev-macos-debug/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
+    REPO_ROOT / "build/dev-macos-debug/apps/desktop/Looksy.app/Contents/MacOS/Looksy"
 )
 
 
@@ -840,6 +840,21 @@ def status_for_output(returncode: int, output: str) -> str:
         return "failed"
     if "benchmark_status=skipped" in output or "metal_proof_gate=skipped" in output:
         return "skipped"
+    return "passed"
+
+
+def overall_status_for_results(
+    results: list[SuiteResult],
+    profile: str,
+    *,
+    dry_run: bool,
+) -> str:
+    if dry_run:
+        return "dry-run"
+    if any(result.status == "failed" for result in results):
+        return "failed"
+    if any(result.status == "skipped" for result in results):
+        return "incomplete" if profile == "release-proof" else "skipped"
     return "passed"
 
 
@@ -2676,7 +2691,6 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[SuiteResult] = []
-    status = "passed"
     started_at = iso_now()
     for suite_name in selected_suites:
         suite = SUITE_DEFINITIONS[suite_name]
@@ -2704,14 +2718,13 @@ def main() -> int:
         result.status = status_for_output(returncode, output)
         result.ended_at = iso_now()
         results.append(result)
-        if returncode != 0:
-            status = "failed"
 
     ended_at = iso_now()
-    if args.dry_run:
-        status = "dry-run"
-    elif any(result.status == "failed" for result in results):
-        status = "failed"
+    status = overall_status_for_results(
+        results,
+        args.profile,
+        dry_run=args.dry_run,
+    )
 
     baseline = load_baseline(args.baseline)
     report = build_report_payload(results, baseline, args.profile)
@@ -2746,7 +2759,7 @@ def main() -> int:
     print(f"artifact_dir={artifact_dir}")
     print(f"report={artifact_dir / 'operability-report.md'}")
     print(f"status={status}")
-    return 0 if status in {"passed", "dry-run"} else 1
+    return 0 if status in {"passed", "skipped", "dry-run"} else 1
 
 
 if __name__ == "__main__":

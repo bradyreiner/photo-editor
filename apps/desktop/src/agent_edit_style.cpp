@@ -177,6 +177,7 @@ QJsonObject allowed_tools(
       {QStringLiteral("masks"), masks},
       {QStringLiteral("retouch"), retouch},
       {QStringLiteral("layers_luts"), layers_luts},
+      {QStringLiteral("graphics"), true},
       {QStringLiteral("export"), false},
   };
 }
@@ -604,6 +605,7 @@ AgentEditStyleValidationResult validate_agent_edit_style_object(
       QStringLiteral("masks"),
       QStringLiteral("retouch"),
       QStringLiteral("layers_luts"),
+      QStringLiteral("graphics"),
       QStringLiteral("export"),
   };
   for (const auto& tool : known_tools) {
@@ -696,8 +698,9 @@ AgentEditStyleValidationResult validate_agent_edit_style_object(
       result.errors.append(QStringLiteral("reference_policy.mode must be text_rulebook_only or learned_style_profile for schema v1"));
     }
     if (learned_profile_mode) {
-      if (reference_image_matching != QStringLiteral("metadata_only")) {
-        result.errors.append(QStringLiteral("reference_policy.reference_image_matching must be metadata_only for learned style profiles"));
+      if (reference_image_matching != QStringLiteral("metadata_only") &&
+          reference_image_matching != QStringLiteral("rendered_proof_and_recipe")) {
+        result.errors.append(QStringLiteral("reference_policy.reference_image_matching must be metadata_only or rendered_proof_and_recipe for learned style profiles"));
       }
       if (!reference_policy.value(QStringLiteral("examples_supported")).toBool()) {
         result.warnings.append(QStringLiteral("learned style profiles should set reference_policy.examples_supported to true"));

@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import PhotoEditor
 import "../components"
 
@@ -73,6 +74,7 @@ Item {
     readonly property string activeOutlineTraceProviderSignature: String(activeOutlineTrace.mask_alpha_provider_signature || "")
     readonly property string activeOutlineTraceMaskAlphaSignature: String(activeOutlineTrace.mask_alpha_trace_signature || "")
     readonly property string smartSelectHoverPrewarmContract: "pointer-pause|jitter-gated|cancel-stale|request-serial:v2"
+    readonly property string shapeHandleInteractionContract: "shape-handle-interaction:v1|linear,radial,ellipse,rectangle|coalesced-undo:true|coalesced-persist:true|interactive-preview:true"
 
     visible: imageWidth > 0 && imageHeight > 0
 
@@ -431,16 +433,11 @@ Item {
     }
 
     function selectionOperationOverlayColor(operationName) {
-        const operation = String(operationName || "add").trim().toLowerCase()
-        if (operation === "subtract")
-            return "#ff8a4c"
-        if (operation === "intersect")
-            return "#8fa8ff"
-        return "#24dcc2"
+        return theme.selectionPalette(operationName)
     }
 
     function defaultMaskOverlayColor() {
-        return "#24dcc2"
+        return theme.selectionPalette("add")
     }
 
     function resolvedMaskOverlayColor() {
@@ -949,11 +946,14 @@ Item {
                         onPressed: function(mouse) {
                             editorPreview.activeMaskIndex = index
                             if (active) {
+                                editRoot.beginMaskShapeEditTransaction()
                                 const point = root.imagePointFromItem(linearOverlay, mouse.x, mouse.y)
                                 if (point.valid)
                                     editorPreview.activeMaskPosition = editRoot.clamp(point.y, 0, 1)
                             }
                         }
+                        onReleased: editRoot.endMaskShapeEditTransaction()
+                        onCanceled: editRoot.endMaskShapeEditTransaction()
                     }
 
                     Rectangle {
@@ -971,6 +971,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.SizeVerCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -981,6 +982,8 @@ Item {
                                 if (point.valid)
                                     editorPreview.activeMaskPosition = editRoot.clamp(point.y, 0, 1)
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
 
@@ -999,6 +1002,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.CrossCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -1006,13 +1010,16 @@ Item {
                                 const dy = mouse.y + parent.y - linearOverlay.height / 2
                                 editorPreview.activeMaskRotation = Math.atan2(dy, dx) * 180 / Math.PI + 90
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
                 }
 
                 Item {
                     id: radialOverlay
-                    visible: mask.kind === "radial"
+                    visible: mask.kind === "radial" || mask.kind === "ellipse" || mask.kind === "rectangle"
+                    readonly property bool rectangleShape: mask.kind === "rectangle"
                     readonly property real centerXValue: mask && mask.centerX !== undefined ? mask.centerX : 0.5
                     readonly property real centerYValue: mask && mask.centerY !== undefined ? mask.centerY : 0.5
                     readonly property real radiusXValue: mask && mask.radiusX !== undefined ? mask.radiusX : 0.2
@@ -1057,15 +1064,26 @@ Item {
                             ctx.lineWidth = active ? 1.8 : 1.2
                             ctx.fillStyle = Qt.alpha(overlayAccent, active ? 0.20 : 0.11)
                             ctx.beginPath()
-                            ctx.ellipse(width / 2, height / 2, Math.max(1, width / 2 - 1), Math.max(1, height / 2 - 1), 0, 0, Math.PI * 2)
+                            if (radialOverlay.rectangleShape)
+                                ctx.rect(1, 1, Math.max(1, width - 2), Math.max(1, height - 2))
+                            else
+                                ctx.ellipse(1, 1, Math.max(1, width - 2), Math.max(1, height - 2))
                             ctx.fill()
                             ctx.stroke()
                             ctx.strokeStyle = "rgba(244,247,250,0.45)"
                             ctx.beginPath()
-                            ctx.ellipse(width / 2, height / 2,
-                                        Math.max(1, (width / 2 - 1) * innerScale),
-                                        Math.max(1, (height / 2 - 1) * innerScale),
-                                        0, 0, Math.PI * 2)
+                            if (radialOverlay.rectangleShape) {
+                                const insetX = width * (1.0 - innerScale) / 2
+                                const insetY = height * (1.0 - innerScale) / 2
+                                ctx.rect(insetX, insetY,
+                                         Math.max(1, width - insetX * 2),
+                                         Math.max(1, height - insetY * 2))
+                            } else {
+                                ctx.ellipse(width / 2 - Math.max(1, (width / 2 - 1) * innerScale),
+                                            height / 2 - Math.max(1, (height / 2 - 1) * innerScale),
+                                            Math.max(1, (width / 2 - 1) * innerScale) * 2,
+                                            Math.max(1, (height / 2 - 1) * innerScale) * 2)
+                            }
                             ctx.stroke()
                         }
                     }
@@ -1085,6 +1103,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.SizeAllCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -1097,6 +1116,8 @@ Item {
                                     editorPreview.activeMaskCenterY = editRoot.clamp(point.y, 0, 1)
                                 }
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
 
@@ -1115,6 +1136,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.SizeHorCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -1125,6 +1147,8 @@ Item {
                                 if (point.valid)
                                     editorPreview.activeMaskRadiusX = editRoot.clamp(Math.abs(point.x - radialOverlay.centerXValue), 0.05, 1.0)
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
 
@@ -1143,6 +1167,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.SizeVerCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -1153,6 +1178,8 @@ Item {
                                 if (point.valid)
                                     editorPreview.activeMaskRadiusY = editRoot.clamp(Math.abs(point.y - radialOverlay.centerYValue), 0.05, 1.0)
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
 
@@ -1171,6 +1198,7 @@ Item {
                             anchors.fill: parent
                             anchors.margins: -4
                             cursorShape: Qt.CrossCursor
+                            onPressed: editRoot.beginMaskShapeEditTransaction()
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
@@ -1178,6 +1206,8 @@ Item {
                                 const dy = mouse.y + parent.y - radialOverlay.height / 2
                                 editorPreview.activeMaskRotation = Math.atan2(dy, dx) * 180 / Math.PI + 90
                             }
+                            onReleased: editRoot.endMaskShapeEditTransaction()
+                            onCanceled: editRoot.endMaskShapeEditTransaction()
                         }
                     }
                 }

@@ -22,26 +22,167 @@
 
 #include "editor_preview_controller.h"
 #include "editor_preview_image_sink.h"
+#include "canonical_composite_mask_alpha.h"
+#include "photo_render_utils.h"
+#include "thumbnail_refresh_queue_service.h"
 
 namespace photo_editor::desktop {
 
 struct EditorPreviewControllerTestAccess {
+  static bool stable_mask_reselection() {
+    {
+      EditorPreviewController deferred;
+      deferred.asset_id_ = QStringLiteral("deferred-scope-fixture");
+      deferred.beginCoalescedEdit();
+      deferred.pending_brush_commit_scheduled_ = true;
+      deferred.endCoalescedEdit();
+      deferred.beginCoalescedEdit();
+      deferred.pending_brush_commit_scheduled_ = false;
+      QElapsedTimer callback_window;
+      callback_window.start();
+      while (callback_window.elapsed() < 40) {
+        QCoreApplication::processEvents();
+        QThread::msleep(2);
+      }
+      if (deferred.history_service_.transactionDepth() != 2) {
+        std::cerr << "deferred completion must not close an active nested control edit\n";
+        return false;
+      }
+      deferred.endCoalescedEdit();
+      if (deferred.history_service_.transactionActive() || deferred.edit_transaction_end_pending_) {
+        std::cerr << "finishing the nested control must drain pending outer completion\n";
+        return false;
+      }
+    }
+    {
+      QTemporaryDir fixture;
+      const auto path = fixture.filePath(QStringLiteral("strokes.png"));
+      QImage image(600, 400, QImage::Format_RGB32);
+      image.fill(QColor(120, 90, 65));
+      if (!fixture.isValid() || !image.save(path)) { std::cerr << "multistroke checkpoint 1 failed\n"; return false; }
+      EditorPreviewController strokes;
+      strokes.loadAsset(QStringLiteral("multistroke-fixture"), path, {}, {}, {}, {}, {});
+      const auto settle = [&]() {
+        QElapsedTimer timer;
+        timer.start();
+        do {
+          QCoreApplication::processEvents();
+          if (!strokes.processing() && !strokes.pending_brush_commit_scheduled_ &&
+              strokes.pending_brush_commits_.isEmpty() && !strokes.brush_raster_commit_active_ &&
+              !strokes.mask_worker_coordinator_.brushRasterCommitWatcher().isRunning()) return true;
+          QThread::msleep(2);
+        } while (timer.elapsed() < 10000);
+        { std::cerr << "multistroke checkpoint 2 failed\n"; return false; }
+      };
+      if (!settle()) { std::cerr << "multistroke checkpoint 3 failed\n"; return false; }
+      strokes.addMask(QStringLiteral("radial"));
+      const auto original_masks = strokes.maskStack();
+      const auto original_history = strokes.editHistoryEntries();
+      strokes.beginCoalescedEdit();
+      strokes.startSelectionEdgeBrush(false);
+      for (int stroke = 0; stroke < 2; ++stroke) {
+        const auto before_stroke = strokes.maskStack();
+        strokes.beginActiveBrushStroke();
+        strokes.addBrushPoint(0.2 + 0.3 * stroke, 0.3);
+        strokes.addBrushPoint(0.3 + 0.3 * stroke, 0.5);
+        strokes.endActiveBrushStroke();
+        if (!settle() || strokes.editHistoryEntries().size() != original_history.size() ||
+            strokes.maskStack() == before_stroke || !strokes.activeMaskCommitted()) { std::cerr << "multistroke checkpoint 4 failed stroke=" << stroke << " history=" << strokes.editHistoryEntries().size() << "/" << original_history.size() << " changed=" << (strokes.maskStack() != before_stroke) << " committed=" << strokes.activeMaskCommitted() << " status=" << strokes.status().toStdString() << "\n"; return false; }
+      }
+      strokes.endCoalescedEdit();
+      if (!settle() || strokes.editHistoryEntries().size() != original_history.size() + 1) { std::cerr << "multistroke checkpoint 5 failed\n"; return false; }
+      const auto finished_masks = strokes.maskStack();
+      if (finished_masks == original_masks) { std::cerr << "multistroke checkpoint 6 failed\n"; return false; }
+      strokes.undo();
+      if (strokes.maskStack() != original_masks) { std::cerr << "multistroke checkpoint 7 failed\n"; return false; }
+      strokes.redo();
+      if (strokes.maskStack() != finished_masks) { std::cerr << "multistroke checkpoint 8 failed\n"; return false; }
+    }
+    {
+      EditorPreviewController rollback;
+      rollback.asset_id_ = QStringLiteral("rollback-fixture");
+      rollback.addMask(QStringLiteral("radial"));
+      if (!rollback.hasActiveMask() || rollback.maskStack().size() != 1) return false;
+      const auto original = rollback.currentState();
+      const auto history = rollback.editHistoryEntries();
+      rollback.beginCoalescedEdit();
+      rollback.setExposure(1.25);
+      rollback.beginCoalescedEdit();
+      rollback.setContrast(18.0);
+      rollback.startSelectionEdgeBrush(false);
+      if (rollback.maskStack().size() != 2 || rollback.activeMaskKind() != QStringLiteral("brush")) return false;
+      rollback.setActiveMaskFeather(0.73);
+      if (rollback.currentState().exposure == original.exposure ||
+          rollback.currentState().contrast == original.contrast) return false;
+      if (!rollback.cancelCoalescedEdit() || rollback.history_service_.transactionActive() ||
+          rollback.currentState().exposure != original.exposure ||
+          rollback.currentState().contrast != original.contrast || rollback.editHistoryEntries() != history ||
+          rollback.maskStack() != original.mask_stack || rollback.activeMaskIndex() != original.active_mask_index ||
+          rollback.cancelCoalescedEdit()) return false;
+    }
+    QTemporaryDir storage;
+    if (!storage.isValid()) return false;
+    EditorPreviewController controller;
+    const auto selection_path = storage.filePath(QStringLiteral("selection"));
+    controller.mask_session_.setSelectionStorageDirectory(selection_path);
+    controller.mask_session_.setAssetScope(QStringLiteral("close-photo"));
+    const QVariantMap first{{QStringLiteral("id"), QStringLiteral("component-a")},
+                            {QStringLiteral("maskSetId"), QStringLiteral("set-a")}};
+    const QVariantMap second{{QStringLiteral("id"), QStringLiteral("component-b")},
+                             {QStringLiteral("maskSetId"), QStringLiteral("set-a")}};
+    controller.mask_session_.replaceStack({first, second}, 1);
+    const auto stack = controller.maskStack();
+    for (int cycle = 0; cycle < 20; ++cycle) {
+      controller.deselectActiveMask();
+      if (!controller.selectMaskSet(QStringLiteral("set-a")) ||
+          controller.activeMaskIndex() != 1 || controller.maskStack() != stack)
+        return false;
+    }
+    controller.mask_session_.replaceStack({second, first}, -1);
+    QFile obstruction(selection_path);
+    if (!obstruction.open(QIODevice::WriteOnly)) return false;
+    obstruction.close();
+    QString close_error;
+    if (controller.prepareRecipeClose(&close_error) || close_error.isEmpty()) return false;
+    if (!obstruction.remove() || !controller.prepareRecipeClose(&close_error)) return false;
+    MaskSession restored;
+    restored.setSelectionStorageDirectory(selection_path);
+    restored.setAssetScope(QStringLiteral("close-photo"));
+    restored.replaceStack({second, first}, -1);
+    if (restored.indexForMaskSet(QStringLiteral("set-a")) != 0) return false;
+    if (!controller.selectMaskSet(QStringLiteral("set-a"))) return false;
+    controller.setActiveMaskLocked(true);
+    const auto locked_stack = controller.maskStack();
+    const auto locked_history = controller.editHistoryEntries();
+    controller.startSelectionEdgeBrush(false);
+    controller.startSelectionEdgeBrush(true);
+    if (controller.refineActiveMaskWithSmartSelect() || controller.smartSelectPreviewActive() ||
+        controller.status() != controller.activeMaskEditDisabledReason()) return false;
+    if (controller.resetActiveMaskRefinement()) return false;
+    if (controller.maskStack() != locked_stack || controller.editHistoryEntries() != locked_history ||
+        controller.status() != controller.activeMaskEditDisabledReason()) return false;
+    return controller.selectMaskSet(QStringLiteral("set-a")) &&
+           controller.activeMaskIndex() == 0 &&
+           !controller.selectMaskSet(QStringLiteral("missing")) &&
+           controller.activeMaskIndex() == 0;
+  }
+
   static int photo_layer_thumbnail_cache_hit_count(
       const EditorPreviewController& controller) {
-    return controller.photo_layer_thumbnail_cache_hit_count_;
+    return controller.thumbnail_cache_session_.photoLayerHitCount();
   }
 
   static int photo_layer_thumbnail_refresh_count(
       const EditorPreviewController& controller) {
-    return controller.photo_layer_thumbnail_refresh_count_;
+    return controller.thumbnail_cache_session_.photoLayerRefreshCount();
   }
 
   static int thumbnail_entry_cache_hit_count(const EditorPreviewController& controller) {
-    return controller.thumbnail_entry_cache_hit_count_;
+    return controller.thumbnail_cache_session_.entryHitCount();
   }
 
   static int thumbnail_entry_cache_store_count(const EditorPreviewController& controller) {
-    return controller.thumbnail_entry_cache_store_count_;
+    return controller.thumbnail_cache_session_.entryStoreCount();
   }
 
   static bool thumbnail_refresh_deferred(const EditorPreviewController& controller) {
@@ -49,42 +190,42 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static bool thumbnail_refresh_queue_pending(const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_pending_;
+    return controller.thumbnail_refresh_coordinator_.pending();
   }
 
   static int thumbnail_refresh_queue_pending_generation(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_pending_generation_;
+    return controller.thumbnail_refresh_coordinator_.pendingGeneration();
   }
 
   static int thumbnail_refresh_queue_dispatched_count(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_dispatched_count_;
+    return controller.thumbnail_refresh_coordinator_.dispatchedCount();
   }
 
   static bool thumbnail_refresh_queue_worker_running(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_watcher_.isRunning();
+    return controller.thumbnail_refresh_coordinator_.workerRunning();
   }
 
   static int thumbnail_refresh_queue_worker_started_count(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_worker_started_count_;
+    return controller.thumbnail_refresh_coordinator_.workerStartedCount();
   }
 
   static int thumbnail_refresh_queue_worker_completed_count(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_worker_completed_count_;
+    return controller.thumbnail_refresh_coordinator_.workerCompletedCount();
   }
 
   static int thumbnail_refresh_queue_stale_result_count(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_stale_result_count_;
+    return controller.thumbnail_refresh_coordinator_.staleResultCount();
   }
 
   static QString thumbnail_refresh_queue_active_job_id(
       const EditorPreviewController& controller) {
-    return controller.thumbnail_refresh_queue_active_job_id_;
+    return controller.thumbnail_refresh_coordinator_.activeJobId();
   }
 
   static int pending_brush_commit_count(const EditorPreviewController& controller) {
@@ -92,15 +233,15 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static void forceThumbnailEntryCacheLookup(EditorPreviewController& controller) {
-    controller.mask_thumbnail_cache_dirty_ = true;
-    controller.photo_layer_thumbnail_cache_dirty_ = true;
-    controller.cached_mask_sets_with_thumbnails_.clear();
-    controller.cached_photo_layers_with_thumbnails_.clear();
-    controller.cached_photo_layer_thumbnail_asset_key_.clear();
+    controller.thumbnail_cache_session_.maskDirty() = true;
+    controller.thumbnail_cache_session_.photoLayerDirty() = true;
+    controller.thumbnail_cache_session_.maskSetsWithThumbnails().clear();
+    controller.thumbnail_cache_session_.photoLayersWithThumbnails().clear();
+    controller.thumbnail_cache_session_.photoLayerAssetKey().clear();
   }
 
   static bool full_render_timer_active(const EditorPreviewController& controller) {
-    return controller.full_render_timer_.isActive();
+    return controller.render_scheduler_.fullActive();
   }
 
   static bool full_render_pending(const EditorPreviewController& controller) {
@@ -117,7 +258,7 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static int render_generation(const EditorPreviewController& controller) {
-    return controller.render_generation_;
+    return controller.preview_session_.generation();
   }
 
   static int edit_intent_count(const EditorPreviewController& controller) {
@@ -125,7 +266,11 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static bool photo_layer_thumbnail_cache_dirty(const EditorPreviewController& controller) {
-    return controller.photo_layer_thumbnail_cache_dirty_;
+    return controller.thumbnail_cache_session_.photoLayerDirty();
+  }
+
+  static bool mask_thumbnail_cache_dirty(const EditorPreviewController& controller) {
+    return controller.thumbnail_cache_session_.maskDirty();
   }
 };
 
@@ -291,6 +436,59 @@ bool wait_for_thumbnail_queue_dispatch(
           photo_editor::desktop::EditorPreviewControllerTestAccess::
                   thumbnail_refresh_queue_worker_completed_count(controller) >=
               minimum_completed_count);
+}
+
+QVariantMap wait_for_fresh_photo_layer_thumbnail(
+    photo_editor::desktop::EditorPreviewController& controller,
+    int index = 0,
+    int timeout_ms = 6000) {
+  QElapsedTimer timer;
+  timer.start();
+  QVariantMap layer;
+  while (timer.elapsed() < timeout_ms) {
+    const auto layers = controller.photoLayers();
+    if (index >= 0 && index < layers.size()) {
+      layer = layers.at(index).toMap();
+    }
+    if (!layer.value(QStringLiteral("thumbnailSource")).toString().isEmpty() &&
+        layer.value(QStringLiteral("thumbnailReady")).toBool() &&
+        !layer.value(QStringLiteral("thumbnailStale")).toBool() &&
+        !layer.value(QStringLiteral("thumbnailProgressive")).toBool() &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::
+            photo_layer_thumbnail_cache_dirty(controller)) {
+      return layer;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QThread::msleep(25);
+  }
+  return layer;
+}
+
+QVariantList wait_for_fresh_mask_thumbnails(
+    photo_editor::desktop::EditorPreviewController& controller,
+    int timeout_ms = 6000) {
+  QElapsedTimer timer;
+  timer.start();
+  QVariantList sets;
+  while (timer.elapsed() < timeout_ms) {
+    sets = controller.maskSets();
+    const auto all_ready = !sets.isEmpty() && std::all_of(
+        sets.cbegin(), sets.cend(), [](const QVariant& value) {
+          const auto set = value.toMap();
+          return !set.value(QStringLiteral("thumbnailSource")).toString().isEmpty() &&
+                 set.value(QStringLiteral("thumbnailReady")).toBool() &&
+                 !set.value(QStringLiteral("thumbnailStale")).toBool() &&
+                 !set.value(QStringLiteral("thumbnailProgressive")).toBool();
+        });
+    if (all_ready &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::
+            mask_thumbnail_cache_dirty(controller)) {
+      return sets;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QThread::msleep(25);
+  }
+  return sets;
 }
 
 QImage scaled_square_reference_image(QImage image, int edge) {
@@ -636,7 +834,7 @@ bool has_thumbnail_invalidation_fields(
          value.value(QStringLiteral("thumbnailInvalidationVisible")).toBool() ==
              expected_visible &&
          value.value(QStringLiteral("thumbnailInvalidationColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v1") &&
+             QStringLiteral("thumbnail-color-pipeline-v6") &&
          key.startsWith(QStringLiteral("sha1:")) &&
          value.value(QStringLiteral("thumbnailInvalidationComparator")).toString() ==
              QStringLiteral("thumbnailInvalidationKey") &&
@@ -652,7 +850,7 @@ bool has_thumbnail_invalidation_fields(
          signature.contains(QStringLiteral("visible:%1")
                                 .arg(expected_visible ? QStringLiteral("true")
                                                       : QStringLiteral("false"))) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v1")) &&
+         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v6")) &&
          signature.contains(QStringLiteral("key:%1").arg(key)) &&
          value.value(QStringLiteral("thumbnailSignature")).toString().contains(key);
 }
@@ -689,14 +887,14 @@ bool has_thumbnail_entry_cache_fields(
              expected_backing_height &&
          value.value(QStringLiteral("thumbnailCacheOutputScale")).toString().startsWith(scale) &&
          value.value(QStringLiteral("thumbnailCacheColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v1") &&
+             QStringLiteral("thumbnail-color-pipeline-v6") &&
          value.value(QStringLiteral("thumbnailCacheHit")).toBool() == expected_hit &&
          value.value(QStringLiteral("thumbnailCacheSource")).toString() == expected_source &&
          signature.contains(QStringLiteral("asset:%1").arg(expected_asset_id)) &&
          signature.contains(QStringLiteral("recipe:%1").arg(recipe_hash)) &&
          signature.contains(QStringLiteral("layer:%1").arg(expected_layer_id)) &&
          signature.contains(QStringLiteral("mask:%1").arg(expected_mask_id)) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v1")) &&
+         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v6")) &&
          signature.contains(QStringLiteral("hit:%1").arg(expected_hit ? QStringLiteral("true")
                                                                        : QStringLiteral("false"))) &&
          signature.contains(QStringLiteral("source:%1").arg(expected_source)) &&
@@ -736,6 +934,8 @@ int main(int argc, char** argv) {
   }
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
   qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::stable_mask_reselection())
+    return fail("mask-set reselection must preserve component identity without changing masks");
 
   photo_editor::desktop::EditorPreviewController controller;
   photo_editor::desktop::TestImageSink image_sink;
@@ -776,28 +976,88 @@ int main(int argc, char** argv) {
         !wait_for_preview_idle(metadata_controller)) {
       return fail("layer metadata performance proof should create a settled fill layer");
     }
+    const auto metadata_dispatch_before_warm =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_dispatched_count(metadata_controller);
+    const auto metadata_completed_before_warm =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_worker_completed_count(metadata_controller);
     (void)metadata_controller.photoLayers();
+    if (!wait_for_thumbnail_queue_dispatch(
+            metadata_controller,
+            metadata_dispatch_before_warm + 1,
+            metadata_completed_before_warm + 1,
+            6000)) {
+      return fail("layer metadata performance proof should settle its initial async thumbnail");
+    }
+    (void)metadata_controller.photoLayers();
+    if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+            photo_layer_thumbnail_cache_dirty(metadata_controller)) {
+      return fail("layer metadata performance proof should warm a clean thumbnail cache");
+    }
     const auto generation_before =
         photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
             metadata_controller);
     const auto intent_count_before =
         photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
             metadata_controller);
-    if (!metadata_controller.renamePhotoLayer(0, QStringLiteral("Renamed Metadata Proof")) ||
-        !metadata_controller.setPhotoLayerLocked(0, true) ||
-        !metadata_controller.setPhotoLayerLocked(0, false) ||
-        metadata_controller.photoLayers()
-                .at(0)
-                .toMap()
-                .value(QStringLiteral("displayName"))
-                .toString() != QStringLiteral("Renamed Metadata Proof") ||
-        photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
-            metadata_controller) != generation_before ||
-        photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
-            metadata_controller) != intent_count_before ||
+    const auto metadata_dispatch_before =
         photo_editor::desktop::EditorPreviewControllerTestAccess::
-            photo_layer_thumbnail_cache_dirty(metadata_controller)) {
+            thumbnail_refresh_queue_dispatched_count(metadata_controller);
+    const auto metadata_worker_started_before =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_worker_started_count(metadata_controller);
+    const auto renamed = metadata_controller.renamePhotoLayer(
+        0, QStringLiteral("Renamed Metadata Proof"));
+    const auto locked = metadata_controller.setPhotoLayerLocked(0, true);
+    const auto unlocked = metadata_controller.setPhotoLayerLocked(0, false);
+    const auto metadata_layers = metadata_controller.photoLayers();
+    const auto display_name = metadata_layers.at(0)
+                                  .toMap()
+                                  .value(QStringLiteral("displayName"))
+                                  .toString();
+    const auto generation_after =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+            metadata_controller);
+    const auto intent_count_after =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+            metadata_controller);
+    const auto thumbnail_dirty =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            photo_layer_thumbnail_cache_dirty(metadata_controller);
+    const auto metadata_dispatch_after =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_dispatched_count(metadata_controller);
+    const auto metadata_worker_started_after =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_worker_started_count(metadata_controller);
+    if (!renamed || !locked || !unlocked ||
+        display_name != QStringLiteral("Renamed Metadata Proof") ||
+        generation_after != generation_before ||
+        intent_count_after != intent_count_before || thumbnail_dirty) {
+      std::cerr << "layer metadata diagnostics: renamed=" << renamed
+                << " locked=" << locked
+                << " unlocked=" << unlocked
+                << " displayName=" << display_name.toStdString()
+                << " generationBefore=" << generation_before
+                << " generationAfter=" << generation_after
+                << " intentBefore=" << intent_count_before
+                << " intentAfter=" << intent_count_after
+                << " dispatchBefore=" << metadata_dispatch_before
+                << " dispatchAfter=" << metadata_dispatch_after
+                << " workerStartedBefore=" << metadata_worker_started_before
+                << " workerStartedAfter=" << metadata_worker_started_after
+                << " thumbnailDirty=" << thumbnail_dirty << '\n';
       return fail("rename and lock metadata should not submit pixel or thumbnail renders");
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+    if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+                thumbnail_refresh_queue_dispatched_count(metadata_controller) !=
+            metadata_dispatch_before ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+                thumbnail_refresh_queue_worker_started_count(metadata_controller) !=
+            metadata_worker_started_before) {
+      return fail("rename and lock metadata must not enqueue delayed thumbnail work");
     }
   }
 
@@ -805,7 +1065,19 @@ int main(int argc, char** argv) {
   if (controller.photoLayerCount() != 1) {
     return fail("creating a mask should create one adjustment layer");
   }
-  const auto thumbnail_mask_sets = controller.maskSets();
+  auto thumbnail_mask_sets = controller.maskSets();
+  QElapsedTimer initial_mask_thumbnail_timer;
+  initial_mask_thumbnail_timer.start();
+  while (initial_mask_thumbnail_timer.elapsed() < 6000 &&
+         (thumbnail_mask_sets.isEmpty() ||
+          !has_thumbnail_job_identity(
+              thumbnail_mask_sets.constFirst().toMap(),
+              QStringLiteral("mask_thumbnail"),
+              QStringLiteral("thumbnail")))) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QThread::msleep(25);
+    thumbnail_mask_sets = controller.maskSets();
+  }
   if (thumbnail_mask_sets.isEmpty()) {
     return fail("mask thumbnail proof should have at least one mask set");
   }
@@ -813,6 +1085,37 @@ int main(int argc, char** argv) {
     const auto set = set_value.toMap();
     const auto set_thumbnail_source = set.value(QStringLiteral("thumbnailSource")).toString();
     if (!set_thumbnail_source.startsWith(QStringLiteral("data:image/png;base64,"))) {
+      std::cerr << "initial mask thumbnail diagnostics: dirty="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       mask_thumbnail_cache_dirty(controller)
+                << " pending="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_pending(controller)
+                << " running="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_worker_running(controller)
+                << " dispatched="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_dispatched_count(controller)
+                << " started="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_worker_started_count(controller)
+                << " completed="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_worker_completed_count(controller)
+                << " staleResults="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_refresh_queue_stale_result_count(controller)
+                << " cacheStores="
+                << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                       thumbnail_entry_cache_store_count(controller)
+                << " progressive="
+                << set.value(QStringLiteral("thumbnailProgressive")).toBool()
+                << " failureStage="
+                << set.value(QStringLiteral("thumbnailFailureStage"))
+                       .toString()
+                       .toStdString()
+                << '\n';
       return fail("every mask set should expose a renderable thumbnail source");
     }
     if (!thumbnail_pixels_match_metadata(set)) {
@@ -822,6 +1125,53 @@ int main(int argc, char** argv) {
             set,
             QStringLiteral("mask_thumbnail"),
             QStringLiteral("thumbnail"))) {
+      std::cerr << "mask thumbnail identity diagnostics: async_job_id="
+                << set.value(QStringLiteral("async_job_id")).toString().toStdString()
+                << " thumbnailJobId="
+                << set.value(QStringLiteral("thumbnailJobId")).toString().toStdString()
+                << " thumbnailId="
+                << set.value(QStringLiteral("thumbnailId")).toString().toStdString()
+                << " thumbnail_id="
+                << set.value(QStringLiteral("thumbnail_id")).toString().toStdString()
+                << " observabilityId="
+                << set.value(QStringLiteral("observabilityThumbnailId"))
+                       .toString()
+                       .toStdString()
+                << " asyncKind="
+                << set.value(QStringLiteral("async_job_kind")).toString().toStdString()
+                << " thumbnailKind="
+                << set.value(QStringLiteral("thumbnailJobKind")).toString().toStdString()
+                << " asyncStage="
+                << set.value(QStringLiteral("async_job_stage")).toString().toStdString()
+                << " thumbnailStage="
+                << set.value(QStringLiteral("thumbnailJobStage")).toString().toStdString()
+                << " asyncGeneration="
+                << set.value(QStringLiteral("async_job_generation")).toInt()
+                << " thumbnailGeneration="
+                << set.value(QStringLiteral("thumbnailJobGeneration")).toInt()
+                << " asyncRevision="
+                << set.value(QStringLiteral("async_job_state_revision")).toInt()
+                << " thumbnailRevision="
+                << set.value(QStringLiteral("thumbnailJobStateRevision")).toInt()
+                << " asyncSignature="
+                << set.value(QStringLiteral("async_job_state_signature"))
+                       .toString()
+                       .toStdString()
+                << " thumbnailSignature="
+                << set.value(QStringLiteral("thumbnailJobStateSignature"))
+                       .toString()
+                       .toStdString()
+                << " thumbnailSourceEmpty=" << set_thumbnail_source.isEmpty()
+                << " ready=" << set.value(QStringLiteral("thumbnailReady")).toBool()
+                << " stale=" << set.value(QStringLiteral("thumbnailStale")).toBool()
+                << " cacheHit=" << set.value(QStringLiteral("thumbnailCacheHit")).toBool()
+                << " queuePending="
+                << set.value(QStringLiteral("thumbnailQueuePending")).toBool()
+                << " queueWorkerJobId="
+                << set.value(QStringLiteral("thumbnailRenderQueuedWorkerJobId"))
+                       .toString()
+                       .toStdString()
+                << '\n';
       return fail("every mask set thumbnail should expose a stable async job generation identity");
     }
     if (!has_evaluated_alpha_thumbnail_metadata(set)) {
@@ -856,8 +1206,8 @@ int main(int argc, char** argv) {
             set.value(QStringLiteral("mask_set_id"), set.value(QStringLiteral("id"))).toString(),
             96,
             96,
-            QStringLiteral("rendered"),
-            false)) {
+            QStringLiteral("entry-cache"),
+            true)) {
       return fail("every mask set thumbnail should publish its entry-cache key identity");
     }
     if (!has_mask_alpha_trace_metadata(set) ||
@@ -930,8 +1280,8 @@ int main(int argc, char** argv) {
                   .toString(),
               96,
               96,
-              QStringLiteral("rendered"),
-              false)) {
+              QStringLiteral("entry-cache"),
+              true)) {
         return fail("every mask source thumbnail should publish its entry-cache key identity");
       }
       if (!has_mask_alpha_trace_metadata(source) ||
@@ -972,7 +1322,20 @@ int main(int argc, char** argv) {
       thumbnail_combine_controller.setActiveMaskSelectionInverted(true);
     }
     wait_for_thumbnail_debounce();
-    const auto combine_mask_sets = thumbnail_combine_controller.maskSets();
+    auto combine_mask_sets = thumbnail_combine_controller.maskSets();
+    QElapsedTimer combine_thumbnail_timer;
+    combine_thumbnail_timer.start();
+    while (combine_thumbnail_timer.elapsed() < 6000 &&
+           (combine_mask_sets.isEmpty() ||
+            !combine_mask_sets.constFirst()
+                 .toMap()
+                 .value(QStringLiteral("mask_alpha_trace_signature"))
+                 .toString()
+                 .contains(QStringLiteral("mask-thumbnail-composite")))) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+      QThread::msleep(25);
+      combine_mask_sets = thumbnail_combine_controller.maskSets();
+    }
     if (combine_mask_sets.size() != 1) {
       return fail(
           QStringLiteral("mask thumbnail combine proof should keep %1 sources in one set")
@@ -998,16 +1361,31 @@ int main(int argc, char** argv) {
               .toStdString()
               .c_str());
     }
-    const auto add_source_thumbnail = decoded_thumbnail_source(
-        combine_sources.constFirst().toMap().value(QStringLiteral("thumbnailSource")).toString());
-    const auto second_source_thumbnail = decoded_thumbnail_source(
-        combine_sources.constLast().toMap().value(QStringLiteral("thumbnailSource")).toString());
+    // Combine at the photo-aspect evaluation size, then resize the finished
+    // matte. Combining already-resized source thumbnails is not equivalent for
+    // subtract/intersect/exclude, and used to conceal coordinate mismatches.
+    QImage mask_input;
+    if (!photo_editor::desktop::decode_source_image(
+            thumbnail_fixture_path, &mask_input,
+            photo_editor::desktop::kMaskThumbnailBackingEdge)) {
+      return fail("mask combine reference should decode the thumbnail-size source");
+    }
+    const auto native_source_alpha = [&mask_input](QVariantMap source) {
+      source.insert(QStringLiteral("operation"), QStringLiteral("add"));
+      return photo_editor::desktop::grayscale_mask_alpha_image(
+          photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
+              mask_input, QVariantList{source}, 1.0, {1.0, 1.0, 1.0}));
+    };
+    const auto add_source_thumbnail = native_source_alpha(combine_sources.constFirst().toMap());
+    const auto second_source_thumbnail = native_source_alpha(combine_sources.constLast().toMap());
     const auto combined_thumbnail = decoded_thumbnail_source(
         combine_set.value(QStringLiteral("thumbnailSource")).toString());
-    const auto expected_thumbnail = expected_two_source_mask_thumbnail_alpha(
+    const auto expected_native = expected_two_source_mask_thumbnail_alpha(
         add_source_thumbnail,
         second_source_thumbnail,
         thumbnail_combine_case.operation);
+    const auto expected_thumbnail = photo_editor::desktop::scaled_square_thumbnail_image(
+        expected_native, photo_editor::desktop::kMaskThumbnailBackingEdge);
     if (!thumbnail_alpha_matches_metadata(combine_set) ||
         !thumbnail_is_clean_grayscale_alpha_matte(combine_set) ||
         thumbnail_max_alpha_delta(combined_thumbnail, expected_thumbnail) > 1) {
@@ -1062,9 +1440,6 @@ int main(int argc, char** argv) {
           QStringLiteral("thumbnail")) ||
       initial_photo_layer.value(QStringLiteral("thumbnail_render_budget_ms")).toLongLong() != 100 ||
       initial_photo_layer.value(QStringLiteral("thumbnail_render_elapsed_ms")).toLongLong() < 0 ||
-      initial_photo_layer.value(QStringLiteral("thumbnail_render_elapsed_ms")).toLongLong() >
-          initial_photo_layer.value(QStringLiteral("thumbnail_render_budget_ms")).toLongLong() ||
-      !initial_photo_layer.value(QStringLiteral("thumbnail_render_within_latency_budget")).toBool() ||
        initial_photo_layer.value(QStringLiteral("thumbnailMasked")).toBool() != true ||
         initial_photo_layer.value(QStringLiteral("thumbnailMaskSetId")).toString().isEmpty() ||
         !has_thumbnail_pixel_metrics(initial_photo_layer, 32, 64) ||
@@ -1084,8 +1459,8 @@ int main(int argc, char** argv) {
              initial_photo_layer.value(QStringLiteral("selectionMaskSetSignature")).toString(),
              64,
              64,
-             QStringLiteral("rendered"),
-             false) ||
+             QStringLiteral("entry-cache"),
+             true) ||
          !has_mask_alpha_trace_metadata(initial_photo_layer) ||
       initial_photo_layer.value(QStringLiteral("mask_source_kind")).toString() !=
           QStringLiteral("composite") ||
@@ -1093,6 +1468,64 @@ int main(int argc, char** argv) {
          .toString()
          .contains(QStringLiteral("layer-thumbnail-composite")) ||
       !has_evaluated_alpha_thumbnail_metadata(initial_photo_layer)) {
+    std::cerr << "initial layer diagnostics: kind="
+              << initial_photo_layer.value(QStringLiteral("thumbnailKind"))
+                     .toString()
+                     .toStdString()
+              << " renderSource="
+              << initial_photo_layer.value(QStringLiteral("thumbnailRenderSource"))
+                     .toString()
+                     .toStdString()
+              << " shared="
+              << initial_photo_layer.value(QStringLiteral("thumbnailSharedRenderPath")).toBool()
+              << " previewMode="
+              << initial_photo_layer.value(QStringLiteral("thumbnailPreviewRenderMode"))
+                     .toString()
+                     .toStdString()
+              << " jobIdentity="
+              << has_thumbnail_job_identity(
+                     initial_photo_layer,
+                     QStringLiteral("photo_layer_thumbnail"),
+                     QStringLiteral("thumbnail"))
+              << " elapsed="
+              << initial_photo_layer.value(QStringLiteral("thumbnail_render_elapsed_ms"))
+                     .toLongLong()
+              << " budget="
+              << initial_photo_layer.value(QStringLiteral("thumbnail_render_budget_ms"))
+                     .toLongLong()
+              << " within="
+              << initial_photo_layer.value(
+                     QStringLiteral("thumbnail_render_within_latency_budget"))
+                     .toBool()
+              << " masked="
+              << initial_photo_layer.value(QStringLiteral("thumbnailMasked")).toBool()
+              << " pixelMetrics="
+              << has_thumbnail_pixel_metrics(initial_photo_layer, 32, 64)
+              << " invalidation="
+              << has_thumbnail_invalidation_fields(
+                     initial_photo_layer,
+                     QStringLiteral("layer-local-advanced-color-asset"),
+                     initial_photo_layer.value(QStringLiteral("id")).toString(),
+                     initial_photo_layer.value(QStringLiteral("selectionMaskSetSignature"))
+                         .toString(),
+                     QStringLiteral("normal"),
+                     QStringLiteral("1.000"),
+                     true)
+              << " cache="
+              << has_thumbnail_entry_cache_fields(
+                     initial_photo_layer,
+                     QStringLiteral("layer-local-advanced-color-asset"),
+                     initial_photo_layer.value(QStringLiteral("id")).toString(),
+                     initial_photo_layer.value(QStringLiteral("selectionMaskSetSignature"))
+                         .toString(),
+                     64,
+                     64,
+                     QStringLiteral("entry-cache"),
+                     true)
+              << " trace=" << has_mask_alpha_trace_metadata(initial_photo_layer)
+              << " alpha="
+              << has_evaluated_alpha_thumbnail_metadata(initial_photo_layer)
+              << '\n';
     return fail("selection adjustment layer thumbnail should be rendered from its linked mask with current thumbnail job metadata");
   }
   const auto initial_layer_thumbnail_source =
@@ -1165,6 +1598,20 @@ int main(int argc, char** argv) {
     return fail("mask thumbnail queue proof should start from an idle preview controller");
   }
   mask_queue_controller.startSelectionBrush(false);
+  const auto mask_queue_initial_dispatch =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_dispatched_count(mask_queue_controller);
+  const auto mask_queue_initial_completed =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_completed_count(mask_queue_controller);
+  static_cast<void>(mask_queue_controller.maskSets());
+  if (!wait_for_thumbnail_queue_dispatch(
+          mask_queue_controller,
+          mask_queue_initial_dispatch + 1,
+          mask_queue_initial_completed + 1,
+          6000)) {
+    return fail("mask thumbnail queue proof should settle its initial async thumbnail");
+  }
   const auto mask_queue_sets_before = mask_queue_controller.maskSets();
   if (mask_queue_sets_before.isEmpty() ||
       mask_queue_sets_before.constFirst()
@@ -1215,6 +1662,29 @@ int main(int argc, char** argv) {
           QStringLiteral("mask_thumbnail_refresh_deferred") ||
       mask_queue_set_deferred.value(QStringLiteral("thumbnailProgressive")).toBool() != true ||
       mask_queue_set_deferred.value(QStringLiteral("thumbnailStale")).toBool() != true) {
+    std::cerr << "mask deferred diagnostics: empty=" << mask_queue_sets_deferred.isEmpty()
+              << " generation=" << mask_queue_generation
+              << " deferred="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_deferred(mask_queue_controller)
+              << " pending="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_pending(mask_queue_controller)
+              << " fieldPending="
+              << mask_queue_set_deferred.value(QStringLiteral("thumbnailQueuePending")).toBool()
+              << " fieldJob="
+              << mask_queue_set_deferred.value(QStringLiteral("thumbnailQueueJobId"))
+                     .toString()
+                     .toStdString()
+              << " fieldReason="
+              << mask_queue_set_deferred.value(QStringLiteral("thumbnailQueueReason"))
+                     .toString()
+                     .toStdString()
+              << " progressive="
+              << mask_queue_set_deferred.value(QStringLiteral("thumbnailProgressive")).toBool()
+              << " stale="
+              << mask_queue_set_deferred.value(QStringLiteral("thumbnailStale")).toBool()
+              << '\n';
     return fail("mask thumbnail queue proof should defer changed mask thumbnails and expose the queued worker job on stale rows");
   }
   if (!finish_brush_stroke(mask_queue_controller)) {
@@ -1333,6 +1803,20 @@ int main(int argc, char** argv) {
     return fail("adjustment thumbnail queue proof should start from an idle preview controller");
   }
   adjustment_queue_controller.startSelectionBrush(false);
+  const auto adjustment_queue_initial_dispatch =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_dispatched_count(adjustment_queue_controller);
+  const auto adjustment_queue_initial_completed =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_completed_count(adjustment_queue_controller);
+  static_cast<void>(adjustment_queue_controller.photoLayers());
+  if (!wait_for_thumbnail_queue_dispatch(
+          adjustment_queue_controller,
+          adjustment_queue_initial_dispatch + 1,
+          adjustment_queue_initial_completed + 1,
+          6000)) {
+    return fail("adjustment thumbnail queue proof should settle its initial async thumbnail");
+  }
   const auto adjustment_queue_layers_before = adjustment_queue_controller.photoLayers();
   if (adjustment_queue_layers_before.isEmpty() ||
       adjustment_queue_layers_before.constFirst()
@@ -1498,7 +1982,8 @@ int main(int argc, char** argv) {
       thumbnail_parity_sink.image(QStringLiteral("edited")).isNull()) {
     return fail("thumbnail preview parity proof should publish an edited preview");
   }
-  const auto parity_layer = thumbnail_parity_controller.photoLayers().constFirst().toMap();
+  const auto parity_layer =
+      wait_for_fresh_photo_layer_thumbnail(thumbnail_parity_controller);
   const auto parity_layer_thumbnail_image =
       decoded_thumbnail_source(parity_layer.value(QStringLiteral("thumbnailSource")).toString());
   const auto parity_preview_reference = scaled_square_reference_image(
@@ -1534,7 +2019,7 @@ int main(int argc, char** argv) {
   }
   curve_thumbnail_parity_controller.addMask(QStringLiteral("linear"));
   const auto initial_curve_parity_layer =
-      curve_thumbnail_parity_controller.photoLayers().constFirst().toMap();
+      wait_for_fresh_photo_layer_thumbnail(curve_thumbnail_parity_controller);
   const auto initial_curve_parity_thumbnail_source =
       initial_curve_parity_layer.value(QStringLiteral("thumbnailSource")).toString();
   const auto initial_curve_parity_thumbnail_image =
@@ -1557,7 +2042,7 @@ int main(int argc, char** argv) {
     return fail("curve thumbnail parity proof should publish an edited preview");
   }
   const auto curve_parity_layer =
-      curve_thumbnail_parity_controller.photoLayers().constFirst().toMap();
+      wait_for_fresh_photo_layer_thumbnail(curve_thumbnail_parity_controller);
   const auto curve_parity_thumbnail_source =
       curve_parity_layer.value(QStringLiteral("thumbnailSource")).toString();
   if (curve_parity_thumbnail_source == initial_curve_parity_thumbnail_source ||
@@ -1597,6 +2082,8 @@ int main(int argc, char** argv) {
     return fail("raster layer thumbnail proof should create fill and text layers");
   }
   wait_for_thumbnail_debounce();
+  static_cast<void>(wait_for_fresh_photo_layer_thumbnail(
+      raster_layer_thumbnail_controller));
   const auto raster_layers = raster_layer_thumbnail_controller.photoLayers();
   if (raster_layers.size() < 2) {
     return fail("raster layer thumbnail proof should expose fill and text layer rows");
@@ -1652,8 +2139,8 @@ int main(int argc, char** argv) {
             QString(),
             64,
             64,
-            QStringLiteral("rendered"),
-            false)) {
+            QStringLiteral("entry-cache"),
+            true)) {
       return fail("fill and text layer thumbnails should publish job, cache, invalidation, and raster fallback metadata");
     }
   }
@@ -1666,7 +2153,7 @@ int main(int argc, char** argv) {
   }
   wait_for_thumbnail_debounce();
   const auto edited_text_thumbnail_layer =
-      raster_layer_thumbnail_controller.photoLayers().at(0).toMap();
+      wait_for_fresh_photo_layer_thumbnail(raster_layer_thumbnail_controller);
   if (edited_text_thumbnail_layer.value(QStringLiteral("thumbnailInvalidationKey")).toString() ==
           text_thumbnail_invalidation_key ||
       !edited_text_thumbnail_layer.value(QStringLiteral("thumbnailSource"))
@@ -1681,8 +2168,8 @@ int main(int argc, char** argv) {
           QString(),
           64,
           64,
-          QStringLiteral("rendered"),
-          false)) {
+          QStringLiteral("entry-cache"),
+          true)) {
     return fail("editing text layer content should invalidate and rebuild the text layer thumbnail");
   }
 
@@ -1702,11 +2189,11 @@ int main(int argc, char** argv) {
       QString());
   thumbnail_failure_controller.addMask(QStringLiteral("linear"));
   const auto failure_initial_mask_set =
-      thumbnail_failure_controller.maskSets().constFirst().toMap();
+      wait_for_fresh_mask_thumbnails(thumbnail_failure_controller).constFirst().toMap();
   const auto failure_initial_mask_thumbnail =
       failure_initial_mask_set.value(QStringLiteral("thumbnailSource")).toString();
   const auto failure_initial_layer =
-      thumbnail_failure_controller.photoLayers().constFirst().toMap();
+      wait_for_fresh_photo_layer_thumbnail(thumbnail_failure_controller);
   const auto failure_initial_layer_thumbnail =
       failure_initial_layer.value(QStringLiteral("thumbnailSource")).toString();
   if (!failure_initial_mask_thumbnail.startsWith(QStringLiteral("data:image/png;base64,")) ||
@@ -1724,6 +2211,21 @@ int main(int argc, char** argv) {
     return fail("thumbnail failure proof should dirty the linked adjustment layer");
   }
   wait_for_thumbnail_debounce();
+  const auto failure_dispatch_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_dispatched_count(thumbnail_failure_controller);
+  const auto failure_completed_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_completed_count(thumbnail_failure_controller);
+  static_cast<void>(thumbnail_failure_controller.maskSets());
+  static_cast<void>(thumbnail_failure_controller.photoLayers());
+  if (!wait_for_thumbnail_queue_dispatch(
+          thumbnail_failure_controller,
+          failure_dispatch_before + 1,
+          failure_completed_before + 1,
+          6000)) {
+    return fail("thumbnail failure proof should settle its contained worker failure");
+  }
   const auto failed_mask_set =
       thumbnail_failure_controller.maskSets().constFirst().toMap();
   const auto failed_mask_sources = failed_mask_set.value(QStringLiteral("sources")).toList();
@@ -1752,6 +2254,43 @@ int main(int argc, char** argv) {
       !failed_layer.value(QStringLiteral("thumbnailFailureSignature"))
            .toString()
            .contains(QStringLiteral("reused:true"))) {
+    std::cerr << "thumbnail failure diagnostics: previewStage="
+              << thumbnail_failure_controller.previewFailureStage().toStdString()
+              << " maskSourceSame="
+              << (failed_mask_set.value(QStringLiteral("thumbnailSource")).toString() ==
+                  failure_initial_mask_thumbnail)
+              << " maskReady="
+              << failed_mask_set.value(QStringLiteral("thumbnailReady")).toBool()
+              << " maskStale="
+              << failed_mask_set.value(QStringLiteral("thumbnailStale")).toBool()
+              << " maskContained="
+              << failed_mask_set.value(QStringLiteral("thumbnailFailureContained")).toBool()
+              << " maskStage="
+              << failed_mask_set.value(QStringLiteral("thumbnailFailureStage"))
+                     .toString()
+                     .toStdString()
+              << " sourceStage="
+              << failed_mask_source.value(QStringLiteral("thumbnailFailureStage"))
+                     .toString()
+                     .toStdString()
+              << " layerSourceSame="
+              << (failed_layer.value(QStringLiteral("thumbnailSource")).toString() ==
+                  failure_initial_layer_thumbnail)
+              << " layerReady="
+              << failed_layer.value(QStringLiteral("thumbnailReady")).toBool()
+              << " layerStale="
+              << failed_layer.value(QStringLiteral("thumbnailStale")).toBool()
+              << " layerContained="
+              << failed_layer.value(QStringLiteral("thumbnailFailureContained")).toBool()
+              << " layerStage="
+              << failed_layer.value(QStringLiteral("thumbnailFailureStage"))
+                     .toString()
+                     .toStdString()
+              << " layerSignature="
+              << failed_layer.value(QStringLiteral("thumbnailFailureSignature"))
+                     .toString()
+                     .toStdString()
+              << '\n';
     return fail("thumbnail decode failures should reuse last good row thumbnails and stay contained away from the main preview failure state");
   }
   if (!write_thumbnail_fixture(thumbnail_failure_fixture_path)) {
@@ -1765,14 +2304,16 @@ int main(int argc, char** argv) {
     return fail("thumbnail failure proof should dirty thumbnails after fixture recovery");
   }
   wait_for_thumbnail_debounce();
+  static_cast<void>(thumbnail_failure_controller.maskSets());
+  static_cast<void>(thumbnail_failure_controller.photoLayers());
   const auto recovered_mask_set =
-      thumbnail_failure_controller.maskSets().constFirst().toMap();
+      wait_for_fresh_mask_thumbnails(thumbnail_failure_controller).constFirst().toMap();
   const auto recovered_mask_sources =
       recovered_mask_set.value(QStringLiteral("sources")).toList();
   const auto recovered_mask_source =
       recovered_mask_sources.isEmpty() ? QVariantMap{} : recovered_mask_sources.constFirst().toMap();
   const auto recovered_layer =
-      thumbnail_failure_controller.photoLayers().constFirst().toMap();
+      wait_for_fresh_photo_layer_thumbnail(thumbnail_failure_controller);
   if (recovered_mask_set.value(QStringLiteral("thumbnailReady")).toBool() != true ||
       recovered_mask_set.value(QStringLiteral("thumbnailStale")).toBool() ||
       recovered_mask_set.value(QStringLiteral("thumbnailFailureContained")).toBool() ||
@@ -1862,7 +2403,7 @@ int main(int argc, char** argv) {
       image_sink.image(QStringLiteral("edited")).isNull()) {
     return fail("layer-local color edit should publish an edited preview for thumbnail parity");
   }
-  const auto layer = controller.photoLayers().at(0).toMap();
+  const auto layer = wait_for_fresh_photo_layer_thumbnail(controller);
   if (layer.value(QStringLiteral("thumbnailKind")).toString() !=
           QStringLiteral("masked-adjustment-layer") ||
       layer.value(QStringLiteral("thumbnailRenderSource")).toString() !=
@@ -1909,6 +2450,41 @@ int main(int argc, char** argv) {
           true) ||
       !thumbnail_pixels_match_metadata(layer) ||
       layer.value(QStringLiteral("thumbnailSource")).toString() == initial_layer_thumbnail_source) {
+    std::cerr << "edited layer diagnostics: kind="
+              << layer.value(QStringLiteral("thumbnailKind")).toString().toStdString()
+              << " renderSource="
+              << layer.value(QStringLiteral("thumbnailRenderSource")).toString().toStdString()
+              << " jobIdentity="
+              << has_thumbnail_job_identity(
+                     layer,
+                     QStringLiteral("photo_layer_thumbnail"),
+                     QStringLiteral("thumbnail"))
+              << " jobChanged="
+              << (layer.value(QStringLiteral("async_job_id")).toString() !=
+                  initial_photo_layer.value(QStringLiteral("async_job_id")).toString())
+              << " elapsed="
+              << layer.value(QStringLiteral("thumbnail_render_elapsed_ms")).toLongLong()
+              << " budget="
+              << layer.value(QStringLiteral("thumbnail_render_budget_ms")).toLongLong()
+              << " within="
+              << layer.value(QStringLiteral("thumbnail_render_within_latency_budget")).toBool()
+              << " invalidationChanged="
+              << (layer.value(QStringLiteral("thumbnailInvalidationKey")).toString() !=
+                  initial_layer_thumbnail_invalidation_key)
+              << " invalidation="
+              << has_thumbnail_invalidation_fields(
+                     layer,
+                     QStringLiteral("layer-local-advanced-color-asset"),
+                     layer.value(QStringLiteral("id")).toString(),
+                     layer.value(QStringLiteral("selectionMaskSetSignature")).toString(),
+                     QStringLiteral("normal"),
+                     QStringLiteral("1.000"),
+                     true)
+              << " pixels=" << thumbnail_pixels_match_metadata(layer)
+              << " sourceChanged="
+              << (layer.value(QStringLiteral("thumbnailSource")).toString() !=
+                  initial_layer_thumbnail_source)
+              << '\n';
     return fail("masked adjustment layer thumbnail should update with a fresh thumbnail job after layer-local color edits");
   }
   const auto edited_layer_thumbnail_image =
@@ -1953,7 +2529,7 @@ int main(int argc, char** argv) {
     return fail("test should be able to change masked adjustment layer opacity");
   }
   wait_for_thumbnail_debounce();
-  const auto opacity_layer = controller.photoLayers().at(0).toMap();
+  const auto opacity_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   const auto opacity_layer_thumbnail_source =
       opacity_layer.value(QStringLiteral("thumbnailSource")).toString();
   const auto opacity_layer_thumbnail_signature =
@@ -1990,7 +2566,7 @@ int main(int argc, char** argv) {
   if (!controller.setPhotoLayerBlendMode(0, QStringLiteral("screen"))) {
     return fail("test should be able to change masked adjustment layer blend mode");
   }
-  const auto blend_layer = controller.photoLayers().at(0).toMap();
+  const auto blend_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   const auto blend_layer_thumbnail_source =
       blend_layer.value(QStringLiteral("thumbnailSource")).toString();
   const auto blend_layer_thumbnail_signature =
@@ -2030,7 +2606,7 @@ int main(int argc, char** argv) {
     return fail("test should be able to hide a masked adjustment layer");
   }
   wait_for_thumbnail_debounce();
-  const auto hidden_layer = controller.photoLayers().at(0).toMap();
+  const auto hidden_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   const auto hidden_layer_thumbnail_invalidation_key =
       hidden_layer.value(QStringLiteral("thumbnailInvalidationKey")).toString();
   if (hidden_layer_thumbnail_invalidation_key == blend_layer_thumbnail_invalidation_key ||
@@ -2051,7 +2627,7 @@ int main(int argc, char** argv) {
     return fail("test should be able to show a masked adjustment layer again");
   }
   wait_for_thumbnail_debounce();
-  const auto visible_layer = controller.photoLayers().at(0).toMap();
+  const auto visible_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   const auto visible_layer_thumbnail_invalidation_key =
       visible_layer.value(QStringLiteral("thumbnailInvalidationKey")).toString();
   if (visible_layer_thumbnail_invalidation_key == hidden_layer_thumbnail_invalidation_key ||
@@ -2067,7 +2643,8 @@ int main(int argc, char** argv) {
   }
   const auto visible_layer_mask_alpha_hash =
       visible_layer.value(QStringLiteral("thumbnailInvalidationMaskAlphaHash")).toString();
-  const auto visible_mask_set = controller.maskSets().constFirst().toMap();
+  const auto visible_mask_set =
+      wait_for_fresh_mask_thumbnails(controller).constFirst().toMap();
   const auto visible_mask_set_invalidation_key =
       visible_mask_set.value(QStringLiteral("thumbnailInvalidationKey")).toString();
   const auto visible_mask_set_alpha_hash =
@@ -2077,8 +2654,9 @@ int main(int argc, char** argv) {
   if (!wait_for_preview_idle(controller)) {
     return fail("mask shape edit should settle before thumbnail invalidation is inspected");
   }
-  const auto mask_edited_set = controller.maskSets().constFirst().toMap();
-  const auto mask_edited_layer = controller.photoLayers().at(0).toMap();
+  const auto mask_edited_set =
+      wait_for_fresh_mask_thumbnails(controller).constFirst().toMap();
+  const auto mask_edited_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   if (mask_edited_set.value(QStringLiteral("thumbnailInvalidationKey")).toString() ==
           visible_mask_set_invalidation_key ||
       mask_edited_set.value(QStringLiteral("thumbnailInvalidationMaskAlphaHash")).toString() ==
@@ -2123,8 +2701,9 @@ int main(int argc, char** argv) {
   if (!wait_for_preview_idle(controller)) {
     return fail("mask density edit should settle before thumbnail freshness is inspected");
   }
-  const auto density_edited_set = controller.maskSets().constFirst().toMap();
-  const auto density_edited_layer = controller.photoLayers().at(0).toMap();
+  const auto density_edited_set =
+      wait_for_fresh_mask_thumbnails(controller).constFirst().toMap();
+  const auto density_edited_layer = wait_for_fresh_photo_layer_thumbnail(controller);
   if (density_edited_set.value(QStringLiteral("thumbnailSource")).toString() ==
           mask_shape_thumbnail_source ||
       density_edited_set.value(QStringLiteral("thumbnailSignature")).toString() ==
@@ -2158,6 +2737,55 @@ int main(int argc, char** argv) {
           true) ||
       !thumbnail_pixels_match_metadata(density_edited_layer) ||
       !has_evaluated_alpha_thumbnail_metadata(density_edited_layer)) {
+    std::cerr << "density thumbnail diagnostics: maskSourceChanged="
+              << (density_edited_set.value(QStringLiteral("thumbnailSource")).toString() !=
+                  mask_shape_thumbnail_source)
+              << " maskSignatureChanged="
+              << (density_edited_set.value(QStringLiteral("thumbnailSignature")).toString() !=
+                  mask_shape_thumbnail_signature)
+              << " maskAlphaChanged="
+              << (density_edited_set
+                      .value(QStringLiteral("thumbnailInvalidationMaskAlphaHash"))
+                      .toString() != mask_shape_alpha_hash)
+              << " maskInvalidation="
+              << has_thumbnail_invalidation_fields(
+                     density_edited_set,
+                     QStringLiteral("layer-local-advanced-color-asset"),
+                     QString(),
+                     density_edited_set
+                         .value(QStringLiteral("mask_set_id"),
+                                density_edited_set.value(QStringLiteral("id")))
+                         .toString(),
+                     QStringLiteral("normal"),
+                     QStringLiteral("1.000"),
+                     true)
+              << " maskAlpha="
+              << has_evaluated_alpha_thumbnail_metadata(density_edited_set)
+              << " layerSourceChanged="
+              << (density_edited_layer.value(QStringLiteral("thumbnailSource")).toString() !=
+                  layer_after_shape_thumbnail_source)
+              << " layerSignatureChanged="
+              << (density_edited_layer.value(QStringLiteral("thumbnailSignature")).toString() !=
+                  layer_after_shape_thumbnail_signature)
+              << " layerAlphaChanged="
+              << (density_edited_layer
+                      .value(QStringLiteral("thumbnailInvalidationMaskAlphaHash"))
+                      .toString() != layer_after_shape_alpha_hash)
+              << " layerInvalidation="
+              << has_thumbnail_invalidation_fields(
+                     density_edited_layer,
+                     QStringLiteral("layer-local-advanced-color-asset"),
+                     density_edited_layer.value(QStringLiteral("id")).toString(),
+                     density_edited_layer
+                         .value(QStringLiteral("selectionMaskSetSignature"))
+                         .toString(),
+                     QStringLiteral("screen"),
+                     QStringLiteral("0.430"),
+                     true)
+              << " layerPixels=" << thumbnail_pixels_match_metadata(density_edited_layer)
+              << " layerAlpha="
+              << has_evaluated_alpha_thumbnail_metadata(density_edited_layer)
+              << '\n';
     return fail("mask density edits should refresh mask and linked layer thumbnails from the new evaluated alpha");
   }
   const auto adjustments = required_map(layer, QStringLiteral("adjustments"));

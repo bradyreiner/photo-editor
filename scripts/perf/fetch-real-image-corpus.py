@@ -93,17 +93,39 @@ def materialize_asset(
     asset_id = seed_asset.get("asset_id")
     source_url = seed_asset.get("source_url")
     file_name = seed_asset.get("file_name")
+    expected_sha256 = seed_asset.get("sha256")
+    expected_size = seed_asset.get("size_bytes")
     if not isinstance(asset_id, str) or not asset_id:
         raise ValueError("seed asset is missing asset_id")
     if not isinstance(source_url, str) or not source_url:
         raise ValueError(f"{asset_id}: source_url is required")
     if not isinstance(file_name, str) or not file_name:
         raise ValueError(f"{asset_id}: file_name is required")
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in expected_sha256)
+    ):
+        raise ValueError(f"{asset_id}: pinned lowercase SHA-256 digest is required")
+    if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size <= 0:
+        raise ValueError(f"{asset_id}: pinned positive size_bytes is required")
 
     asset_path = assets_dir / file_name
     recipe_path = recipes_dir / f"{asset_id}.json"
     print(f"download {asset_id}: {source_url}")
     download_file(source_url, asset_path, timeout)
+    actual_size = asset_path.stat().st_size
+    actual_sha256 = sha256_file(asset_path)
+    if actual_size != expected_size:
+        raise ValueError(
+            f"{asset_id}: downloaded byte size mismatch; "
+            f"expected {expected_size}, received {actual_size}"
+        )
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"{asset_id}: downloaded SHA-256 mismatch; "
+            f"expected {expected_sha256}, received {actual_sha256}"
+        )
     write_json(recipe_path, normalize_recipe(seed_asset))
 
     asset = {
@@ -115,8 +137,8 @@ def materialize_asset(
         {
             "path": str(asset_path.resolve()),
             "recipe": str(recipe_path.resolve()),
-            "sha256": sha256_file(asset_path),
-            "size_bytes": asset_path.stat().st_size,
+            "sha256": actual_sha256,
+            "size_bytes": actual_size,
         }
     )
     return asset
@@ -162,6 +184,8 @@ def main() -> int:
         "asset_count": len(assets),
         "assets": assets,
     }
+    if "agent_evaluation_version" in seed:
+        manifest["agent_evaluation_version"] = seed["agent_evaluation_version"]
     manifest_path = output / "manifest.json"
     write_json(manifest_path, manifest)
     print(f"corpus={output}")

@@ -39,19 +39,36 @@ class JobStoreNotifier final : public QObject {
 };
 
 [[nodiscard]] JobStoreNotifier* jobStoreNotifier();
-[[nodiscard]] QVector<PersistentJobRecord> loadPersistedJobRecords();
+// Background observers pass false; recovery retains the existing migration behavior.
+[[nodiscard]] QVector<PersistentJobRecord> loadPersistedJobRecords(
+    QString* error_message = nullptr, bool migrate_legacy = true);
+[[nodiscard]] qint64 persistentRenderQueueOrderForNewJob(const QString& job_id = QString());
+// Startup uses require_catalog: local fallback is not proof that the selected
+// catalog committed recovery. Other callers retain legacy compatibility.
 [[nodiscard]] bool upsertPersistedJobRecord(
     const PersistentJobRecord& record,
-    QString* error_message = nullptr);
+    QString* error_message = nullptr, bool require_catalog = false);
 [[nodiscard]] bool removePersistedJobRecord(
     const QString& job_id,
     QString* error_message = nullptr);
 [[nodiscard]] int recoverInterruptedJobRecords(
-    QString* error_message = nullptr);
+    QString* error_message = nullptr, bool require_catalog = false);
 [[nodiscard]] bool retryPersistedJobRecord(
     const QString& job_id,
     QString* error_message = nullptr);
 [[nodiscard]] bool cancelPersistedJobRecord(
+    const QString& job_id,
+    QString* error_message = nullptr);
+[[nodiscard]] bool pausePersistedImportJobRecord(
+    const QString& job_id,
+    QString* error_message = nullptr);
+[[nodiscard]] bool resumePersistedImportJobRecord(
+    const QString& job_id,
+    QString* error_message = nullptr);
+[[nodiscard]] bool pausePersistedJobRecord(
+    const QString& job_id,
+    QString* error_message = nullptr);
+[[nodiscard]] bool resumePersistedJobRecord(
     const QString& job_id,
     QString* error_message = nullptr);
 

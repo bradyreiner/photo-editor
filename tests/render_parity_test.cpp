@@ -1,10 +1,16 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <QBuffer>
 #include <QColorSpace>
@@ -16,7 +22,19 @@
 #include <QtGui/qrgbafloat.h>
 
 #include "edit_recipe_state.h"
+#include "canonical_composite_mask_alpha.h"
+#include "decoded_image_cache.h"
+#include "desktop_pipeline_state_compiler.h"
+#include "dcp_test_fixture.h"
+#include "edit_recipe_pipeline_bridge.h"
+#include "edit_recipe_v13_adapter.h"
+#include "edit_render_policy.h"
+#include "native_output_surface_publication.h"
+#include "photo_editor/pipeline/dcp_profile_asset.h"
+#include "photo_layer_compiler.h"
 #include "photo_render_utils.h"
+#include "thumbnail_worker_renderer_factory.h"
+#include "canonical_native_preview_suffix.h"
 #include "working_image.h"
 
 namespace {
@@ -49,6 +67,44 @@ int fail(const char* message) {
   return EXIT_FAILURE;
 }
 
+class RetainedFixtureBacking final
+    : public photo_editor::pipeline::RenderSurfaceBacking {
+ public:
+  RetainedFixtureBacking(
+      photo_editor::pipeline::RenderSurfaceDescriptor descriptor,
+      std::vector<photo_editor::pipeline::ColorPixel> pixels,
+      std::atomic_int* copy_count)
+      : descriptor_(std::move(descriptor)),
+        pixels_(std::move(pixels)),
+        copy_count_(copy_count) {}
+
+  [[nodiscard]] std::string_view backend_identity() const noexcept override {
+    return "retained-fixture";
+  }
+  [[nodiscard]] std::uint64_t byte_size() const noexcept override {
+    return pixels_.size() * sizeof(photo_editor::pipeline::ColorPixel);
+  }
+  [[nodiscard]] bool valid_for(
+      const photo_editor::pipeline::RenderSurfaceDescriptor& descriptor) const noexcept override {
+    return descriptor == descriptor_;
+  }
+  [[nodiscard]] bool copy_pixels(
+      std::vector<photo_editor::pipeline::ColorPixel>* destination,
+      photo_editor::pipeline::CancellationToken cancellation) const override {
+    if (destination == nullptr || cancellation.cancelled()) {
+      return false;
+    }
+    ++*copy_count_;
+    *destination = pixels_;
+    return true;
+  }
+
+ private:
+  photo_editor::pipeline::RenderSurfaceDescriptor descriptor_;
+  std::vector<photo_editor::pipeline::ColorPixel> pixels_;
+  std::atomic_int* copy_count_ = nullptr;
+};
+
 QImage deterministic_source_image() {
   QImage image(64, 48, QImage::Format_ARGB32);
   image.setColorSpace(photo_editor::desktop::preview_color_space());
@@ -65,6 +121,47 @@ QImage deterministic_source_image() {
     }
   }
   return image;
+}
+
+QImage render_canonical_test_output(
+    const QImage& source,
+    const photo_editor::desktop::EditRecipeState& state,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format,
+    photo_editor::desktop::RenderOutputPolicy output_policy =
+        photo_editor::desktop::RenderOutputPolicy::DisplayReferred) {
+  const auto rendering_target =
+      target_color_space == QColorSpace(QColorSpace::DisplayP3)
+          ? photo_editor::pipeline::DisplayRenderingTarget::
+                DisplayP3Simulation
+          : photo_editor::pipeline::DisplayRenderingTarget::
+                SrgbSimulation;
+  const auto admission =
+      photo_editor::desktop::RenderPlanStore::shared().admit(
+          QStringLiteral("render-parity:synthetic:%1x%2")
+              .arg(source.width())
+              .arg(source.height()),
+          QStringLiteral("render-parity-synthetic.png"),
+          state,
+          source.size(),
+          photo_editor::pipeline::RenderPurpose::SettledPreview,
+          rendering_target);
+  if (!admission.admitted || !admission.plan.has_value()) {
+    std::cerr << "canonical parity admission failed: "
+              << admission.error.toStdString() << '\n';
+    return {};
+  }
+  return photo_editor::desktop::render_output_image(
+      source,
+      state,
+      target_color_space,
+      output_format,
+      nullptr,
+      nullptr,
+      {},
+      photo_editor::pipeline::RemovalQuality::Final,
+      output_policy,
+      &*admission.plan);
 }
 
 photo_editor::desktop::EditRecipeState deterministic_state() {
@@ -321,9 +418,348 @@ QByteArray refinement_matte_data() {
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
 
+  const auto retained_descriptor = photo_editor::pipeline::RenderSurfaceDescriptor{
+      .pixel_encoding = photo_editor::pipeline::RenderPixelEncoding::SceneLinearFloat,
+      .color_domain = photo_editor::pipeline::RenderColorDomain::WorkingScene,
+      .range = photo_editor::pipeline::RenderRangeModel::SceneExtended,
+      .alpha = photo_editor::pipeline::RenderAlphaModel::Straight,
+      .color_space_identity = "Linear ProPhoto RGB",
+      .transfer_identity = "linear",
+      .width = 2,
+      .height = 1,
+  };
+  const auto retained_pixels = std::vector<photo_editor::pipeline::ColorPixel>{
+      {.red = 0.25F, .green = 0.5F, .blue = 1.5F, .alpha = 1.0F},
+      {.red = -0.1F, .green = 0.75F, .blue = 2.0F, .alpha = 1.0F},
+  };
+  auto retained_copy_count = std::atomic_int{0};
+  auto retained_working = photo_editor::desktop::WorkingImage{};
+  retained_working.adoptRetainedSurface(photo_editor::pipeline::RenderSurface{
+      .descriptor = retained_descriptor,
+      .backing = std::make_shared<RetainedFixtureBacking>(
+          retained_descriptor, retained_pixels, &retained_copy_count),
+      .identity = "surface:retained-fixture",
+  });
+  const auto retained_backing = retained_working.retainedBacking();
+  const auto canonical_geometry =
+      photo_editor::desktop::canonical_geometry_surface(
+          retained_working,
+          retained_descriptor,
+          "surface:canonical-geometry-fixture");
+  auto mismatched_descriptor = retained_descriptor;
+  mismatched_descriptor.width = 1U;
+  if (!canonical_geometry.has_value() || !canonical_geometry->valid() ||
+      !canonical_geometry->pixels.empty() ||
+      canonical_geometry->backing != retained_backing ||
+      retained_copy_count.load() != 0 ||
+      photo_editor::desktop::canonical_geometry_surface(
+          retained_working,
+          mismatched_descriptor,
+          "surface:invalid-canonical-geometry-fixture")
+          .has_value()) {
+    return fail(
+        "canonical geometry must preserve a valid retained backing without readback");
+  }
+  if (!retained_working.isNull() || !retained_working.hasRetainedSurface() ||
+      retained_working.byteSize() !=
+          retained_pixels.size() * sizeof(photo_editor::pipeline::ColorPixel) ||
+      !retained_working.ensureCpuPixels() || retained_working.isNull() ||
+      retained_working.hasRetainedSurface() || retained_copy_count.load() != 1 ||
+      !std::ranges::equal(
+          retained_working.pixels,
+          retained_pixels,
+          [](const auto& lhs, const auto& rhs) {
+            return lhs.red == rhs.red && lhs.green == rhs.green &&
+                   lhs.blue == rhs.blue && lhs.alpha == rhs.alpha;
+          }) ||
+      retained_working.byteSize() !=
+          retained_pixels.size() * sizeof(photo_editor::pipeline::ColorPixel)) {
+    return fail("retained working surfaces must materialize exactly once and preserve cache accounting");
+  }
+  auto cancelled_copy_count = std::atomic_int{0};
+  auto cancelled_working = photo_editor::desktop::WorkingImage{};
+  cancelled_working.adoptRetainedSurface(photo_editor::pipeline::RenderSurface{
+      .descriptor = retained_descriptor,
+      .backing = std::make_shared<RetainedFixtureBacking>(
+          retained_descriptor, retained_pixels, &cancelled_copy_count),
+      .identity = "surface:cancelled-retained-fixture",
+  });
+  auto latest_generation = std::atomic_int{2};
+  if (cancelled_working.ensureCpuPixels(
+          photo_editor::pipeline::CancellationToken{&latest_generation, 1}) ||
+      !cancelled_working.hasRetainedSurface() || cancelled_copy_count.load() != 0) {
+    return fail("cancelled retained working surfaces must not read back or discard their backing");
+  }
+
+  const auto native_surface_state = photo_editor::desktop::EditRecipeState{};
+  auto wide_native_surface_state = native_surface_state;
+  wide_native_surface_state.preview_color_space = QStringLiteral("Display P3");
+  auto custom_native_surface_state = native_surface_state;
+  custom_native_surface_state.preview_icc_profile_asset.asset_id =
+      QStringLiteral("custom-preview-profile");
+  auto proof_native_surface_state = native_surface_state;
+  proof_native_surface_state.soft_proof_enabled = true;
+  auto manual_monitor_surface_state = native_surface_state;
+  manual_monitor_surface_state.monitor_color_profile = QStringLiteral("Display P3");
+  auto canonical_native_request = photo_editor::desktop::RenderRequest{};
+  canonical_native_request.use_in_memory_preview = true;
+  canonical_native_request.allow_native_srgb_surface = true;
+  canonical_native_request.canonical_render_plan =
+      photo_editor::pipeline::RenderPlan{};
+  auto scoped_working_request = canonical_native_request;
+  scoped_working_request.scopes_visible = true;
+  if (!photo_editor::desktop::canonical_working_surface_request_is_eligible(scoped_working_request) ||
+      photo_editor::desktop::canonical_native_surface_request_is_eligible(scoped_working_request)) {
+    return fail("visible scopes must allow working fusion but still require CPU display publication");
+  }
+  scoped_working_request.require_cpu_preview_image = true;
+  if (photo_editor::desktop::canonical_working_surface_request_is_eligible(scoped_working_request)) {
+    return fail("working fusion must retain explicit CPU-preview exclusions");
+  }
+  auto canonical_native_pipeline = photo_editor::pipeline::ColorPipelineConfig{};
+  canonical_native_pipeline.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  canonical_native_pipeline.preview_display_target =
+      photo_editor::pipeline::make_sdr_display_target(
+          canonical_native_pipeline.preview_output_profile);
+  if (photo_editor::desktop::canonical_native_suffix_is_eligible(
+          canonical_native_request,
+          canonical_native_pipeline,
+          false,
+          false,
+          false) ||
+      !photo_editor::desktop::canonical_native_suffix_is_eligible(
+          canonical_native_request,
+          canonical_native_pipeline,
+          false,
+          false,
+          true) ||
+      photo_editor::desktop::canonical_native_suffix_is_eligible(
+          canonical_native_request,
+          canonical_native_pipeline,
+          true,
+          false,
+          true) ||
+      photo_editor::desktop::canonical_native_suffix_is_eligible(
+          canonical_native_request,
+          canonical_native_pipeline,
+          false,
+          true,
+          true)) {
+    return fail(
+        "canonical native suffix admission must require an available backend and reject proof/device plans");
+  }
+  auto canonical_device_request = canonical_native_request;
+  canonical_device_request.allow_native_device_surface = true;
+  canonical_device_request.canonical_render_plan->device_icc_profile =
+      photo_editor::pipeline::AssetIdentifier{"device-profile-test"};
+  auto canonical_device_pipeline = canonical_native_pipeline;
+  canonical_device_pipeline.preview_icc_profile_asset = {
+      .reference = {
+          .asset_id = "device-profile-test",
+          .payload_sha256 = std::string(64U, 'a'),
+          .display_name = "Device profile test",
+          .byte_size = 1U,
+      },
+      .status = photo_editor::pipeline::IccProfileAssetStatus::Ready,
+      .payload = std::make_shared<const std::vector<std::byte>>(
+          std::vector<std::byte>{std::byte{0x01}}),
+  };
+  auto hybrid_device_lut =
+      std::make_shared<photo_editor::pipeline::IccTransformLut3D>();
+  hybrid_device_lut->transform_cache_key = "device-transform-test";
+  hybrid_device_lut->cache_key = "device-lut-test";
+  hybrid_device_lut->settings = {
+      .cube_size = 4,
+      .input_shaper_exponent = 1.0 / 3.0,
+      .p99_delta_e_00_limit = 0.25,
+      .maximum_delta_e_00_limit = 0.75,
+      .maximum_unsafe_cell_fraction = 0.05,
+  };
+  hybrid_device_lut->table.assign(
+      64U,
+      photo_editor::pipeline::IccRgbaFloat{
+          .red = 0.0F, .green = 0.0F, .blue = 0.0F, .alpha = 1.0F});
+  hybrid_device_lut->unsafe_cells.assign(27U, std::uint8_t{0U});
+  hybrid_device_lut->unsafe_cells.front() = 1U;
+  hybrid_device_lut->unsafe_cell_count = 1U;
+  hybrid_device_lut->validation_sample_count = 27U;
+  if (!hybrid_device_lut->valid() ||
+      !photo_editor::desktop::canonical_native_device_suffix_is_eligible(
+          canonical_device_request,
+          canonical_device_pipeline,
+          false,
+          true,
+          hybrid_device_lut,
+          true) ||
+      photo_editor::desktop::canonical_native_device_suffix_is_eligible(
+          canonical_device_request,
+          canonical_device_pipeline,
+          false,
+          true,
+          hybrid_device_lut,
+          false)) {
+    return fail(
+        "canonical device suffix admission must accept measured unsafe cells only with an available backend");
+  }
+  if (!photo_editor::desktop::state_supports_native_srgb_surface(
+          native_surface_state, QColorSpace{}) ||
+      !photo_editor::desktop::state_supports_native_srgb_surface(
+          native_surface_state, QColorSpace(QColorSpace::SRgb)) ||
+      photo_editor::desktop::state_supports_native_srgb_surface(
+          native_surface_state, QColorSpace(QColorSpace::DisplayP3)) ||
+      photo_editor::desktop::state_supports_native_srgb_surface(
+          wide_native_surface_state, QColorSpace{}) ||
+      photo_editor::desktop::state_supports_native_srgb_surface(
+          custom_native_surface_state, QColorSpace{}) ||
+      photo_editor::desktop::state_supports_native_srgb_surface(
+          proof_native_surface_state, QColorSpace{}) ||
+      photo_editor::desktop::state_supports_native_srgb_surface(
+          manual_monitor_surface_state, QColorSpace{})) {
+    return fail("native sRGB publication must reject every non-exact color target");
+  }
+
+  if (photo_editor::desktop::
+          qt_supports_exact_target_linear_profile(
+              photo_editor::pipeline::ColorPrimaries::
+                  AdobeRgb) ||
+      !photo_editor::desktop::
+          qt_supports_exact_target_linear_profile(
+              photo_editor::pipeline::ColorPrimaries::
+                  DisplayP3)) {
+    return fail(
+        "direct target-linear publication must reject unrepresentable Adobe RGB while admitting exact Display P3");
+  }
+
+  const auto identity_render_state = photo_editor::desktop::EditRecipeState{};
+  auto exact_tone_render_state = identity_render_state;
+  exact_tone_render_state.exposure = 0.1;
+  auto exact_color_render_state = identity_render_state;
+  exact_color_render_state.saturation = 1.0;
+  if (photo_editor::desktop::render_state_requires_exact_global_tone(
+          identity_render_state) ||
+      photo_editor::desktop::render_state_requires_exact_post_color(
+          identity_render_state) ||
+      !photo_editor::desktop::render_state_requires_exact_global_tone(
+          exact_tone_render_state) ||
+      !photo_editor::desktop::render_state_requires_exact_post_color(
+          exact_color_render_state)) {
+    return fail(
+        "preview and export should share the same exact-render policy for tone "
+        "and color edits");
+  }
+
+  const auto cache_base = QStringLiteral("render-parity-cache-contract");
+  const auto preview_cache_key =
+      cache_base + QStringLiteral("|publication=preview-encoded-v1");
+  const auto linear_cache_key =
+      cache_base +
+      QStringLiteral(
+          "|publication=source-linear-v2-camera-characterized-in-engine");
+  auto preview_cache_image = QImage(1, 1, QImage::Format_ARGB32);
+  preview_cache_image.fill(QColor(20, 40, 60));
+  auto linear_cache_image = QImage(1, 1, QImage::Format_RGBA32FPx4);
+  linear_cache_image.fill(Qt::transparent);
+  auto* linear_cache_pixel = reinterpret_cast<QRgbaFloat32*>(
+      linear_cache_image.scanLine(0));
+  linear_cache_pixel[0] = QRgbaFloat32{0.25F, 0.5F, 0.75F, 1.0F};
+  auto linear_cache_metadata =
+      photo_editor::pipeline::DecodedImageMetadata{};
+  linear_cache_metadata.valid = true;
+  linear_cache_metadata.decoder_backend = "fixture-linear-backend";
+  photo_editor::desktop::insert_decoded_image_cache_entry(
+      preview_cache_key, preview_cache_image);
+  photo_editor::desktop::insert_decoded_image_cache_entry_with_metadata(
+      linear_cache_key, linear_cache_image, linear_cache_metadata);
+  auto cached_preview = QImage{};
+  auto cached_linear = QImage{};
+  auto cached_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+  if (!photo_editor::desktop::find_decoded_image_cache_entry(
+          preview_cache_key, &cached_preview) ||
+      cached_preview != preview_cache_image ||
+      !photo_editor::desktop::find_decoded_image_cache_entry_with_metadata(
+          linear_cache_key, &cached_linear, &cached_metadata) ||
+      cached_linear != linear_cache_image ||
+      cached_metadata.decoder_backend !=
+          linear_cache_metadata.decoder_backend ||
+      photo_editor::desktop::find_decoded_image_cache_entry_with_metadata(
+          preview_cache_key, &cached_linear, &cached_metadata)) {
+    return fail(
+        "decoded cache must separate preview and scene-linear contracts and "
+        "retain exact RAW metadata");
+  }
+
   const auto source = deterministic_source_image();
   const auto state = deterministic_state();
   const auto target_space = photo_editor::desktop::preview_color_space();
+  const auto shared_mask_definition = QVariantMap{
+      {QStringLiteral("id"), QStringLiteral("shared-mask-compiler")},
+      {QStringLiteral("parentId"), QStringLiteral("shared-parent")},
+      {QStringLiteral("outputId"), QStringLiteral("shared-output")},
+      {QStringLiteral("kind"), QStringLiteral("brush")},
+      {QStringLiteral("operation"), QStringLiteral("add")},
+      {QStringLiteral("blendMode"), QStringLiteral("multiply")},
+      {QStringLiteral("reusableOutput"), true},
+      {QStringLiteral("selectionInvert"), true},
+      {QStringLiteral("brushPoints"),
+       QVariantList{QVariantMap{
+           {QStringLiteral("x"), 0.5},
+           {QStringLiteral("y"), 0.5},
+           {QStringLiteral("size"), 0.25},
+           {QStringLiteral("flow"), 1.0},
+           {QStringLiteral("opacity"), 1.0},
+           {QStringLiteral("pressure"), 0.75},
+       }}},
+      {QStringLiteral("segmentationData"), QByteArray(1, static_cast<char>(255))},
+      {QStringLiteral("segmentationWidth"), 1},
+      {QStringLiteral("segmentationHeight"), 1},
+  };
+  const auto shared_compiled_mask =
+      photo_editor::desktop::compile_pipeline_local_mask(
+          shared_mask_definition,
+          photo_editor::desktop::LocalMaskRasterPolicy::
+              RebuildEditableAtOutputResolution,
+          QSize(8, 6));
+  if (shared_compiled_mask.id != "shared-mask-compiler" ||
+      shared_compiled_mask.parent_id != "shared-parent" ||
+      shared_compiled_mask.output_id != "shared-output" ||
+      shared_compiled_mask.blend_mode != "multiply" ||
+      !shared_compiled_mask.reusable_output || !shared_compiled_mask.invert ||
+      !shared_compiled_mask.selection_invert ||
+      shared_compiled_mask.brush_points.size() != 1 ||
+      std::abs(shared_compiled_mask.brush_points.front().pressure - 0.75) > 1e-9 ||
+      shared_compiled_mask.segmentation_width != 8 ||
+      shared_compiled_mask.segmentation_height != 6 ||
+      shared_compiled_mask.segmentation_mask.size() != 48) {
+    return fail(
+        "one shared local-mask compiler must preserve identity, composition, brush, and output-raster intent");
+  }
+  auto missing_plan_telemetry =
+      photo_editor::desktop::RenderBackendTelemetry{};
+  const auto missing_plan_modern_output =
+      photo_editor::desktop::render_output_image(
+          source,
+          state,
+          target_space,
+          QImage::Format_ARGB32,
+          nullptr,
+          &missing_plan_telemetry);
+  auto explicit_legacy_state = state;
+  explicit_legacy_state.photographic_rendering_model =
+      QStringLiteral("legacy-oklch-v1");
+  const auto explicit_legacy_output =
+      photo_editor::desktop::render_output_image(
+          source,
+          explicit_legacy_state,
+          target_space,
+          QImage::Format_ARGB32);
+  if (!missing_plan_modern_output.isNull() ||
+      missing_plan_telemetry.canonical_plan_error !=
+          QStringLiteral("canonical_plan_required_for_aces2") ||
+      explicit_legacy_output.isNull()) {
+    return fail(
+        "shared output rendering must fail closed for plan-less ACES while retaining explicit legacy migration rendering");
+  }
 
   QImage exact_pixel_source(4, 4, QImage::Format_ARGB32);
   exact_pixel_source.setColorSpace(target_space);
@@ -633,7 +1069,9 @@ int main(int argc, char** argv) {
         local_mask_set_state);
     if (local_mask_set_support.supported ||
         !local_mask_set_support.metal_aware_cpu_engine ||
-        local_mask_set_support.fallback_reason != QStringLiteral("local_mask_sets")) {
+        local_mask_set_support.fallback_reason !=
+            QStringLiteral(
+                "unsupported_stage:Layers:local_mask_sets")) {
       return fail("GPU support query should report local mask sets as a Metal-aware CPU fallback");
     }
 
@@ -648,7 +1086,9 @@ int main(int argc, char** argv) {
     retouch_mask.insert(QStringLiteral("committed"), true);
     retouch_state.mask_stack.append(retouch_mask);
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, retouch_state)
-            .fallback_reason != QStringLiteral("retouch_masks")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:Layers:retouch_masks")) {
       return fail("GPU support query should report retouch masks as a CPU fallback");
     }
 
@@ -656,7 +1096,9 @@ int main(int argc, char** argv) {
     legacy_mask_state.linear_mask_enabled = true;
     legacy_mask_state.linear_mask_exposure = 0.25;
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, legacy_mask_state)
-            .fallback_reason != QStringLiteral("legacy_local_masks")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:Layers:legacy_local_masks")) {
       return fail("GPU support query should report legacy linear/radial masks as a CPU fallback");
     }
 
@@ -668,28 +1110,36 @@ int main(int argc, char** argv) {
     half_float_scanline[1] =
         QRgbaFloat16{qfloat16(0.20F), qfloat16(0.30F), qfloat16(0.40F), qfloat16(1.0F)};
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(half_float_source, gpu_compatible_state())
-            .fallback_reason != QStringLiteral("extended_range_pixels")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:SceneAdjustments:extended_range_pixels")) {
       return fail("GPU support query should report extended-range source pixels as a CPU fallback");
     }
 
     auto exact_tone_state = gpu_compatible_state();
     exact_tone_state.exposure = 0.10;
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, exact_tone_state)
-            .fallback_reason != QStringLiteral("exact_global_tone")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:Tone:exact_global_tone")) {
       return fail("GPU support query should report exact global tone as a CPU fallback");
     }
 
     auto exact_post_color_state = gpu_compatible_state();
     exact_post_color_state.saturation = 12.0;
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, exact_post_color_state)
-            .fallback_reason != QStringLiteral("exact_post_color")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:Look:exact_post_color")) {
       return fail("GPU support query should report exact post-color edits as a CPU fallback");
     }
 
     auto cpu_stage_state = gpu_compatible_state();
     cpu_stage_state.texture = 6.0;
     if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, cpu_stage_state)
-            .fallback_reason != QStringLiteral("cpu_required_stages")) {
+            .fallback_reason !=
+        QStringLiteral(
+            "unsupported_stage:Detail:texture")) {
       return fail("GPU support query should report CPU-required stages as a CPU fallback");
     }
 
@@ -712,7 +1162,7 @@ int main(int argc, char** argv) {
     return fail("CPU preview render should produce an image");
   }
 
-  const auto auto_preview = photo_editor::desktop::render_output_image(
+  const auto auto_preview = render_canonical_test_output(
       source,
       state,
       target_space,
@@ -726,6 +1176,109 @@ int main(int argc, char** argv) {
     return fail("auto preview render should match CPU preview render within tolerance");
   }
 
+  auto modern_exact_state = gpu_compatible_state();
+  modern_exact_state.photographic_rendering_model =
+      QStringLiteral("aces2-ocio-v1");
+  modern_exact_state.exposure = 1.0;
+  modern_exact_state.highlights = -45.0;
+  modern_exact_state.shadows = 18.0;
+  modern_exact_state.saturation = 9.0;
+  const auto modern_exact_preview =
+      photo_editor::desktop::render_output_image_with_backend(
+          source,
+          modern_exact_state,
+          target_space,
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto modern_exact_export =
+      photo_editor::desktop::render_output_image_with_backend(
+          source,
+          modern_exact_state,
+          target_space,
+          QImage::Format_RGBA64,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (modern_exact_preview.isNull() || modern_exact_export.isNull()) {
+    return fail(
+        "modern exact tone/color edits should render for both preview and "
+        "full-resolution output");
+  }
+  const auto modern_exact_delta = max_channel_delta(
+      modern_exact_preview,
+      modern_exact_export.convertToFormat(QImage::Format_ARGB32));
+  if (modern_exact_delta > kPreviewExportParityTolerance) {
+    std::cerr << "modern exact preview/export max channel delta: "
+              << modern_exact_delta << '\n';
+    return fail(
+        "modern exact tone/color preview should match full-resolution output");
+  }
+
+  auto builtin_aces_config = photo_editor::pipeline::default_color_pipeline_config();
+  builtin_aces_config.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::Aces2OcioV1;
+  photo_editor::desktop::WorkingImage builtin_aces_working{
+      .width = 2,
+      .height = 1,
+      .pixels = {
+          {.red = 0.08F, .green = 0.18F, .blue = 0.32F, .alpha = 1.0F},
+          {.red = 1.6F, .green = 0.7F, .blue = 0.2F, .alpha = 0.5F},
+      },
+  };
+  photo_editor::desktop::WorkingImageQImageTelemetry builtin_aces_telemetry;
+  const auto builtin_aces_preview = photo_editor::desktop::qimage_from_working_image(
+      builtin_aces_working,
+      target_space,
+      QImage::Format_ARGB32,
+      QStringLiteral("Linear ProPhoto RGB"),
+      {},
+      &builtin_aces_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &builtin_aces_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  const auto metal_output_lut =
+      builtin_aces_telemetry.output_lut.status == QStringLiteral("metal");
+  if (builtin_aces_preview.isNull() ||
+      (metal_output_lut &&
+       (builtin_aces_telemetry.output_lut.cpu_to_gpu_bytes <= 0 ||
+        builtin_aces_telemetry.output_lut.gpu_to_cpu_bytes <= 0 ||
+        builtin_aces_telemetry.output_lut.command_buffer_count != 1 ||
+        builtin_aces_telemetry.output_lut.kernel_dispatch_count != 1)) ||
+      (!metal_output_lut &&
+       (builtin_aces_telemetry.output_lut.status !=
+            QStringLiteral("exact-cpu-fallback") ||
+        builtin_aces_telemetry.output_lut.cpu_to_gpu_bytes != 0 ||
+        builtin_aces_telemetry.output_lut.gpu_to_cpu_bytes != 0 ||
+        builtin_aces_telemetry.output_lut.command_buffer_count != 0 ||
+        builtin_aces_telemetry.output_lut.kernel_dispatch_count != 0))) {
+    return fail(
+        "built-in ACES publication must report a real Metal dispatch or an exact zero-GPU CPU fallback");
+  }
+  photo_editor::desktop::WorkingImageQImageTelemetry forced_cpu_aces_telemetry;
+  const auto forced_cpu_aces_preview = photo_editor::desktop::qimage_from_working_image(
+      builtin_aces_working,
+      target_space,
+      QImage::Format_ARGB32,
+      QStringLiteral("Linear ProPhoto RGB"),
+      {},
+      &forced_cpu_aces_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &builtin_aces_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+          .allow_metal_output_lut = false,
+      });
+  if (forced_cpu_aces_preview.isNull() ||
+      forced_cpu_aces_telemetry.output_lut.status !=
+          QStringLiteral("exact-cpu-fallback") ||
+      forced_cpu_aces_telemetry.output_lut.cpu_to_gpu_bytes != 0 ||
+      forced_cpu_aces_telemetry.output_lut.gpu_to_cpu_bytes != 0 ||
+      forced_cpu_aces_telemetry.output_lut.command_buffer_count != 0 ||
+      forced_cpu_aces_telemetry.output_lut.kernel_dispatch_count != 0 ||
+      max_channel_delta(builtin_aces_preview, forced_cpu_aces_preview) >
+          kPreviewExportParityTolerance) {
+    return fail(
+        "the exact CPU output policy must suppress Metal dispatch while retaining ACES parity");
+  }
+
   auto hdr_local_tone_state = state;
   hdr_local_tone_state.hdr_local_tone_mapping = 35.0;
   const auto hdr_local_cpu_preview = photo_editor::desktop::render_output_image_with_backend(
@@ -734,7 +1287,7 @@ int main(int argc, char** argv) {
       target_space,
       QImage::Format_ARGB32,
       photo_editor::desktop::RenderBackendPreference::CpuOnly);
-  const auto hdr_local_auto_preview = photo_editor::desktop::render_output_image(
+  const auto hdr_local_auto_preview = render_canonical_test_output(
       source,
       hdr_local_tone_state,
       target_space,
@@ -817,6 +1370,11 @@ int main(int argc, char** argv) {
   if (!gpu_backend_available) {
     const auto reason = photo_editor::desktop::render_backend_unavailable_reason(
         photo_editor::desktop::RenderBackendPreference::GpuOnly);
+    if (reason != QStringLiteral("no_system_metal_device") &&
+        reason != QStringLiteral("metal_not_compiled")) {
+      std::cerr << "GPU backend initialization failed: " << reason.toStdString() << '\n';
+      return EXIT_FAILURE;
+    }
     std::cerr << "GPU render backend unavailable; skipping only CPU/Metal parity coverage on this host";
     if (!reason.isEmpty()) {
       std::cerr << ": " << reason.toStdString();
@@ -916,17 +1474,25 @@ int main(int argc, char** argv) {
             photo_editor::desktop::RenderBackendPreference::GpuOnly,
             nullptr,
             &local_mask_grading_telemetry);
-    if (local_mask_grading_gpu_preview.isNull()) {
-      return fail("GPU-only render should allow Metal-aware local mask set grading");
+    if (!local_mask_grading_gpu_preview.isNull() ||
+        local_mask_grading_telemetry.backend != QStringLiteral("none") ||
+        local_mask_grading_telemetry.fallback_reason !=
+            QStringLiteral("unsupported_stage:Layers:local_mask_sets")) {
+      return fail("GPU-only rendering must reject unsupported local masks instead of silently running on CPU");
     }
-    if (local_mask_grading_telemetry.backend != QStringLiteral("metal") ||
-        !local_mask_grading_telemetry.fallback_reason.isEmpty()) {
-      std::cerr << "local mask grading backend: "
-                << local_mask_grading_telemetry.backend.toStdString()
-                << " fallback: "
-                << local_mask_grading_telemetry.fallback_reason.toStdString()
-                << '\n';
-      return fail("local mask set grading should be reported as Metal when GPU stages run");
+    const auto local_mask_auto = photo_editor::desktop::render_output_image_with_backend(
+        source, local_mask_grading_state, target_space, QImage::Format_ARGB32,
+        photo_editor::desktop::RenderBackendPreference::Auto,
+        nullptr, &local_mask_grading_telemetry);
+    const auto local_mask_cpu = photo_editor::desktop::render_output_image_with_backend(
+        source, local_mask_grading_state, target_space, QImage::Format_ARGB32,
+        photo_editor::desktop::RenderBackendPreference::CpuOnly);
+    if (local_mask_auto.isNull() || local_mask_cpu.isNull() ||
+        max_channel_delta(local_mask_auto, local_mask_cpu) > kPreviewExportParityTolerance ||
+        local_mask_grading_telemetry.backend != QStringLiteral("cpu") ||
+        local_mask_grading_telemetry.fallback_reason !=
+            QStringLiteral("unsupported_stage:Layers:local_mask_sets")) {
+      return fail("automatic local-mask fallback must preserve CPU color parity and explain its backend");
     }
   }
 
@@ -1132,12 +1698,14 @@ int main(int argc, char** argv) {
   if (base_image_preview.isNull() || base_image_export_render.isNull()) {
     return fail("base image parity proof should produce preview and export renders");
   }
-  if (max_channel_delta(layer_mask_source, base_image_preview) > kEncodedExportTolerance ||
-      max_channel_delta(
+  if (max_channel_delta(
           base_image_preview,
           base_image_export_render.convertToFormat(QImage::Format_ARGB32)) >
           kEncodedExportTolerance) {
-    return fail("neutral Base Image preview and full-resolution export render should match source pixels");
+    return fail("neutral Base Image preview and full-resolution export should share the same photographic output render");
+  }
+  if (max_channel_delta(layer_mask_source, base_image_preview) <= 1) {
+    return fail("neutral Base Image publication should still execute the selected photographic renderer");
   }
 
   photo_editor::desktop::RenderEditState layer_mask_state;
@@ -1281,7 +1849,16 @@ int main(int argc, char** argv) {
       photo_editor::desktop::preview_color_space(),
       QImage::Format_RGBA64,
       photo_editor::desktop::RenderBackendPreference::CpuOnly);
-  if (full_color_layer_preview.isNull() || full_color_layer_export_render.isNull()) {
+  const auto full_color_layer_baseline =
+      photo_editor::desktop::render_output_image_with_backend(
+          full_color_layer_source,
+          base_image_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (full_color_layer_preview.isNull() ||
+      full_color_layer_export_render.isNull() ||
+      full_color_layer_baseline.isNull()) {
     return fail("masked full-color adjustment layer preview/export proof should produce rendered images");
   }
   if (max_channel_delta(
@@ -1291,12 +1868,12 @@ int main(int argc, char** argv) {
     return fail("masked full-color adjustment layer preview should match full-resolution export");
   }
   if (max_channel_delta(
-          full_color_layer_source.copy(0, 0, 2, 1),
+          full_color_layer_baseline.copy(0, 0, 2, 1),
           full_color_layer_preview.copy(0, 0, 2, 1)) > kPreviewExportParityTolerance) {
     return fail("masked full-color adjustment layer should not leak into unmasked pixels");
   }
   if (max_channel_delta(
-          full_color_layer_source.copy(2, 0, 2, 1),
+          full_color_layer_baseline.copy(2, 0, 2, 1),
           full_color_layer_preview.copy(2, 0, 2, 1)) < 18) {
     return fail("masked full-color adjustment layer should visibly affect masked pixels");
   }
@@ -1353,12 +1930,12 @@ int main(int argc, char** argv) {
     return fail("linked selection full-color layer preview should match full-resolution export");
   }
   if (max_channel_delta(
-          full_color_layer_source.copy(0, 0, 2, 1),
+          full_color_layer_baseline.copy(0, 0, 2, 1),
           linked_selection_preview.copy(0, 0, 2, 1)) > kPreviewExportParityTolerance) {
     return fail("linked selection full-color layer should not leak into unselected pixels");
   }
   if (max_channel_delta(
-          full_color_layer_source.copy(2, 0, 2, 1),
+          full_color_layer_baseline.copy(2, 0, 2, 1),
           linked_selection_preview.copy(2, 0, 2, 1)) < 18) {
     return fail("linked selection full-color layer should visibly affect selected pixels");
   }
@@ -1521,6 +2098,49 @@ int main(int argc, char** argv) {
             .toUtf8();
     return fail(detail.constData());
   }
+  auto preview_bypassed_mask = mixed_color_range;
+  preview_bypassed_mask.insert(QStringLiteral("maskSetPreviewBypassed"), true);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetSelectionInvert"), true);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetSelectionExpand"), 7.0);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetSelectionSmooth"), 3.0);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetSelectionFineEdge"), 2.0);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetSelectionEdgeContrast"), 11.0);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetOpacity"), 0.75);
+  preview_bypassed_mask.insert(QStringLiteral("maskSetDensity"), 0.6);
+  const auto preview_bypassed_sets =
+      photo_editor::desktop::compile_pipeline_local_mask_sets(
+          QVariantList{preview_bypassed_mask},
+          photo_editor::desktop::DesktopRenderPurpose::Preview);
+  const auto output_mask_sets =
+      photo_editor::desktop::compile_pipeline_local_mask_sets(
+          QVariantList{preview_bypassed_mask},
+          photo_editor::desktop::DesktopRenderPurpose::Output);
+  if (!preview_bypassed_sets.empty() || output_mask_sets.size() != 1 ||
+      !output_mask_sets.front().selection_invert ||
+      std::abs(output_mask_sets.front().selection_expand - 7.0) > 1e-9 ||
+      std::abs(output_mask_sets.front().selection_smooth - 3.0) > 1e-9 ||
+      std::abs(output_mask_sets.front().selection_fine_edge - 2.0) > 1e-9 ||
+      std::abs(output_mask_sets.front().selection_edge_contrast - 11.0) > 1e-9 ||
+      std::abs(output_mask_sets.front().opacity - 0.75) > 1e-9 ||
+      std::abs(output_mask_sets.front().density - 0.6) > 1e-9) {
+    return fail(
+        "shared mask-set compilation must keep preview-only bypass separate while preserving identical output selection controls");
+  }
+
+  const auto compiled_source_aware_layers =
+      photo_editor::desktop::compile_pipeline_photo_layers(
+          QVariantList{mixed_selection_layer},
+          QVariantList{mixed_color_range},
+          photo_editor::desktop::LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
+          mixed_selection_source.size(),
+          mixed_selection_working.pixels,
+          mixed_color_probe_config,
+          photo_editor::desktop::DesktopRenderPurpose::Output);
+  if (compiled_source_aware_layers.size() != 1 ||
+      compiled_source_aware_layers.front().mask_data != mixed_color_probe_alpha) {
+    return fail(
+        "preview and export photo-layer compilation must evaluate range masks from the actual working pixels through the canonical engine rasterizer");
+  }
 
   const auto mixed_selection_preview = photo_editor::desktop::render_output_image_with_backend(
       mixed_selection_source,
@@ -1542,7 +2162,19 @@ int main(int argc, char** argv) {
       nullptr,
       photo_editor::desktop::RenderMaskOptions{
           .rebuild_editable_masks_at_output_resolution = true});
-  if (mixed_selection_preview.isNull() || mixed_selection_export.isNull()) {
+  auto mixed_selection_baseline_state = mixed_selection_state;
+  mixed_selection_baseline_state.mask_stack.clear();
+  mixed_selection_baseline_state.layers.clear();
+  const auto mixed_selection_baseline =
+      photo_editor::desktop::render_output_image_with_backend(
+          mixed_selection_source,
+          mixed_selection_baseline_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (mixed_selection_preview.isNull() ||
+      mixed_selection_export.isNull() ||
+      mixed_selection_baseline.isNull()) {
     return fail("mixed selection preview/export parity proof should produce rendered images");
   }
   if (max_channel_delta(
@@ -1552,7 +2184,7 @@ int main(int argc, char** argv) {
     return fail("mixed brush/lasso/shape/generated/range selection preview should match full-resolution export");
   }
   const auto visible_delta_at = [&](const QPoint& point) {
-    const auto before = mixed_selection_source.pixelColor(point);
+    const auto before = mixed_selection_baseline.pixelColor(point);
     const auto after = mixed_selection_preview.pixelColor(point);
     return std::max({
         std::abs(after.red() - before.red()),
@@ -1660,7 +2292,18 @@ int main(int argc, char** argv) {
       photo_editor::desktop::preview_color_space(),
       QImage::Format_RGBA64,
       photo_editor::desktop::RenderBackendPreference::CpuOnly);
-  if (layer_local_scaled_preview.isNull() || layer_local_full_export.isNull()) {
+  auto layer_local_preview_baseline_state = layer_local_preview_state;
+  layer_local_preview_baseline_state.layers.clear();
+  const auto layer_local_preview_baseline =
+      photo_editor::desktop::render_output_image_with_backend(
+          layer_local_preview_source,
+          layer_local_preview_baseline_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (layer_local_scaled_preview.isNull() ||
+      layer_local_full_export.isNull() ||
+      layer_local_preview_baseline.isNull()) {
     return fail("scaled masked layer-local preview/export proof should produce rendered images");
   }
   const auto layer_local_downsampled_export = normalized_nearest_resample(
@@ -1674,7 +2317,7 @@ int main(int argc, char** argv) {
     return fail("scaled masked layer-local preview should match full-resolution export");
   }
   if (max_channel_delta(
-          layer_local_preview_source.copy(0, 0, 1, 1),
+          layer_local_preview_baseline.copy(0, 0, 1, 1),
           layer_local_scaled_preview.copy(0, 0, 1, 1)) > kPreviewExportParityTolerance) {
     return fail("scaled masked layer-local preview should not leak outside its mask");
   }
@@ -1737,7 +2380,18 @@ int main(int argc, char** argv) {
       photo_editor::desktop::preview_color_space(),
       QImage::Format_RGBA64,
       photo_editor::desktop::RenderBackendPreference::CpuOnly);
-  if (lut_layer_preview.isNull() || lut_layer_export_render.isNull()) {
+  auto lut_layer_baseline_state = lut_layer_state;
+  lut_layer_baseline_state.layers.clear();
+  const auto lut_layer_baseline =
+      photo_editor::desktop::render_output_image_with_backend(
+          lut_layer_source,
+          lut_layer_baseline_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (lut_layer_preview.isNull() ||
+      lut_layer_export_render.isNull() ||
+      lut_layer_baseline.isNull()) {
     return fail("masked layer-local LUT preview/export proof should produce rendered images");
   }
   if (max_channel_delta(
@@ -1748,10 +2402,13 @@ int main(int argc, char** argv) {
   }
   const auto lut_unmasked_sample = lut_layer_preview.pixelColor(0, 0);
   const auto lut_masked_sample = lut_layer_preview.pixelColor(1, 0);
-  if (lut_unmasked_sample.red() > lut_unmasked_sample.green() + 20 ||
-      lut_masked_sample.red() < 230 ||
-      lut_masked_sample.green() > 25 ||
-      lut_masked_sample.blue() > 25) {
+  if (max_channel_delta(
+          lut_layer_preview.copy(0, 0, 1, 1),
+          lut_layer_baseline.copy(0, 0, 1, 1)) >
+          kPreviewExportParityTolerance ||
+      lut_masked_sample.red() < lut_masked_sample.green() + 80 ||
+      lut_masked_sample.red() < lut_masked_sample.blue() + 80 ||
+      lut_masked_sample.red() <= lut_unmasked_sample.red() + 80) {
     return fail("layer-local LUT stacks should parse from layer adjustments and respect the layer mask");
   }
 
@@ -1829,6 +2486,42 @@ int main(int argc, char** argv) {
           retouch_source.pixelColor(1, 1).green() + 80 ||
       max_channel_delta(retouch_patch_preview, retouch_source) < 60) {
     return fail("retouch patch parity case should visibly apply the baked inpaint patch");
+  }
+  QByteArray scaled_retouch_matte_data(64, char(0));
+  for (int y = 2; y <= 5; ++y) {
+    for (int x = 2; x <= 5; ++x) {
+      scaled_retouch_matte_data[y * 8 + x] = char(0xff);
+    }
+  }
+  QImage scaled_retouch_patch(4, 4, QImage::Format_ARGB32);
+  scaled_retouch_patch.setColorSpace(photo_editor::desktop::preview_color_space());
+  scaled_retouch_patch.fill(QColor::fromRgb(32, 224, 64));
+  auto scaled_retouch_patch_mask = retouch_patch_mask;
+  scaled_retouch_patch_mask.insert(
+      QStringLiteral("segmentationData"), scaled_retouch_matte_data);
+  scaled_retouch_patch_mask.insert(QStringLiteral("segmentationWidth"), 8);
+  scaled_retouch_patch_mask.insert(QStringLiteral("segmentationHeight"), 8);
+  scaled_retouch_patch_mask.insert(
+      QStringLiteral("inpaintPatchData"), png_bytes(scaled_retouch_patch));
+  scaled_retouch_patch_mask.insert(QStringLiteral("inpaintPatchX"), 2);
+  scaled_retouch_patch_mask.insert(QStringLiteral("inpaintPatchY"), 2);
+  scaled_retouch_patch_mask.insert(QStringLiteral("inpaintPatchWidth"), 4);
+  scaled_retouch_patch_mask.insert(QStringLiteral("inpaintPatchHeight"), 4);
+  auto scaled_retouch_state = neutral_state;
+  scaled_retouch_state.mask_stack.append(scaled_retouch_patch_mask);
+  const auto scaled_retouch_preview =
+      photo_editor::desktop::render_output_image_with_backend(
+          retouch_source,
+          scaled_retouch_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (scaled_retouch_preview.isNull() ||
+      scaled_retouch_preview.pixelColor(1, 1).green() <=
+          retouch_source.pixelColor(1, 1).green() + 80 ||
+      scaled_retouch_preview.pixelColor(0, 0) !=
+          retouch_patch_preview.pixelColor(0, 0)) {
+    return fail("full-resolution retouch patch coordinates should scale into bounded proof renders without changing outside pixels");
   }
   auto legacy_retouch_patch_mask = retouch_patch_mask;
   legacy_retouch_patch_mask.insert(QStringLiteral("inpaintPatchData"), untagged_retouch_patch_data);
@@ -1955,22 +2648,297 @@ int main(int argc, char** argv) {
   }
 
   QImage decoded_display_p3;
-  if (!photo_editor::desktop::decode_source_image(display_p3_path, &decoded_display_p3, 0, state) ||
+  photo_editor::desktop::SourceDecodeTelemetry first_decode_telemetry;
+  if (!photo_editor::desktop::decode_source_image(
+          display_p3_path,
+          &decoded_display_p3,
+          0,
+          state,
+          nullptr,
+          {},
+          &first_decode_telemetry) ||
       decoded_display_p3.isNull()) {
     return fail("embedded Display P3 source should decode through the source image path");
+  }
+  if (!first_decode_telemetry.cache_lookup ||
+      first_decode_telemetry.backend.isEmpty() ||
+      first_decode_telemetry.cache_entries <= 0 ||
+      first_decode_telemetry.cache_bytes <= 0) {
+    return fail("shared source decoding should publish backend and decoded-cache telemetry");
+  }
+  QImage cached_display_p3;
+  photo_editor::desktop::SourceDecodeTelemetry cached_decode_telemetry;
+  if (!photo_editor::desktop::decode_source_image(
+          display_p3_path,
+          &cached_display_p3,
+          0,
+          state,
+          nullptr,
+          {},
+          &cached_decode_telemetry) ||
+      !cached_decode_telemetry.cache_hit ||
+      cached_display_p3 != decoded_display_p3) {
+    return fail("repeated source decoding should reuse the shared decoded-image cache exactly");
   }
   if (decoded_display_p3.colorSpace() != QColorSpace(QColorSpace::DisplayP3)) {
     return fail("decode should preserve an embedded Display P3 profile");
   }
+  auto thumbnail_state = state;
+  thumbnail_state.crop_rect_x = 0.25;
+  thumbnail_state.crop_rect_y = 0.0;
+  thumbnail_state.crop_rect_width = 0.5;
+  thumbnail_state.crop_rect_height = 1.0;
+  const auto thumbnail_renderers =
+      photo_editor::desktop::make_thumbnail_worker_renderers();
+  const auto thumbnail_request =
+      photo_editor::desktop::ThumbnailRefreshQueueRequest{
+          .job = photo_editor::desktop::AsyncMaskJob{
+              .file_path = display_p3_path,
+          },
+          .state = thumbnail_state,
+      };
+  const auto thumbnail_source =
+      thumbnail_renderers.adjustment_thumbnail_source_image(thumbnail_request);
+  const auto expected_thumbnail_source =
+      photo_editor::desktop::apply_crop(decoded_display_p3, thumbnail_state);
+  if (thumbnail_source.isNull() || thumbnail_source != expected_thumbnail_source ||
+      thumbnail_source.colorSpace() != QColorSpace(QColorSpace::DisplayP3)) {
+    return fail("thumbnail worker factory must use the shared source decoder and canonical crop");
+  }
+
+  QImage canonical_alpha_source(9, 7, QImage::Format_ARGB32);
+  canonical_alpha_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  for (int y = 0; y < canonical_alpha_source.height(); ++y) {
+    for (int x = 0; x < canonical_alpha_source.width(); ++x) {
+      canonical_alpha_source.setPixelColor(
+          x,
+          y,
+          QColor::fromRgbF(
+              static_cast<float>(x) /
+                  static_cast<float>(canonical_alpha_source.width() - 1),
+              static_cast<float>(y) /
+                  static_cast<float>(canonical_alpha_source.height() - 1),
+              0.25F,
+              1.0F));
+    }
+  }
+  const auto canonical_alpha_masks = QVariantList{
+      QVariantMap{
+          {QStringLiteral("id"), QStringLiteral("radial-add")},
+          {QStringLiteral("kind"), QStringLiteral("radial")},
+          {QStringLiteral("operation"), QStringLiteral("add")},
+          {QStringLiteral("centerX"), 0.5},
+          {QStringLiteral("centerY"), 0.5},
+          {QStringLiteral("radiusX"), 0.45},
+          {QStringLiteral("radiusY"), 0.40},
+          {QStringLiteral("feather"), 0.25},
+      },
+      QVariantMap{
+          {QStringLiteral("id"), QStringLiteral("rectangle-subtract")},
+          {QStringLiteral("kind"), QStringLiteral("rectangle")},
+          {QStringLiteral("operation"), QStringLiteral("subtract")},
+          {QStringLiteral("centerX"), 0.5},
+          {QStringLiteral("centerY"), 0.5},
+          {QStringLiteral("radiusX"), 0.12},
+          {QStringLiteral("radiusY"), 0.15},
+          {QStringLiteral("feather"), 0.05},
+      },
+  };
+  const auto canonical_alpha =
+      photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
+          canonical_alpha_source,
+          canonical_alpha_masks,
+          1.0,
+          {1.0, 1.0, 1.0});
+  auto canonical_alpha_working =
+      photo_editor::desktop::working_image_from_qimage(canonical_alpha_source);
+  photo_editor::pipeline::LocalMaskSet expected_alpha_set;
+  expected_alpha_set.sources = {
+      photo_editor::desktop::compile_pipeline_local_mask(
+          canonical_alpha_masks.at(0).toMap(),
+          photo_editor::desktop::LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
+          canonical_alpha_source.size()),
+      photo_editor::desktop::compile_pipeline_local_mask(
+          canonical_alpha_masks.at(1).toMap(),
+          photo_editor::desktop::LocalMaskRasterPolicy::RebuildEditableAtOutputResolution,
+          canonical_alpha_source.size()),
+  };
+  const auto expected_canonical_alpha =
+      photo_editor::pipeline::rasterize_local_mask_set_alpha(
+          expected_alpha_set,
+          canonical_alpha_source.width(),
+          canonical_alpha_source.height(),
+          canonical_alpha_working.pixels,
+          photo_editor::pipeline::default_color_pipeline_config());
+  const QByteArray expected_canonical_alpha_bytes(
+      reinterpret_cast<const char*>(expected_canonical_alpha.data()),
+      static_cast<qsizetype>(expected_canonical_alpha.size()));
+  if (!canonical_alpha.valid || canonical_alpha.cache_hit ||
+      canonical_alpha.alpha_mask != expected_canonical_alpha_bytes) {
+    return fail(
+        "thumbnail composite alpha must use the canonical engine mask-set evaluator exactly");
+  }
+  const auto cached_canonical_alpha =
+      photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
+          canonical_alpha_source,
+          canonical_alpha_masks,
+          1.0,
+          {1.0, 1.0, 1.0});
+  if (!cached_canonical_alpha.valid || !cached_canonical_alpha.cache_hit ||
+      cached_canonical_alpha.alpha_mask != canonical_alpha.alpha_mask) {
+    return fail(
+        "canonical thumbnail composite alpha must reuse its identity-complete shared cache");
+  }
+  const auto canonical_preview_alpha =
+      photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
+          QStringLiteral("render-parity-canonical-preview-alpha-v1"),
+          canonical_alpha_source,
+          expected_alpha_set.sources,
+          1.0,
+          {1.0, 1.0, 1.0});
+  if (!canonical_preview_alpha.valid || canonical_preview_alpha.cache_hit ||
+      canonical_preview_alpha.alpha_mask != expected_canonical_alpha_bytes) {
+    return fail(
+        "interactive composite-mask alpha must use the same canonical engine evaluator as thumbnails and rendering");
+  }
+  auto shared_thumbnail_render_calls = 0;
+  auto shared_thumbnail_policy_valid = true;
+  auto shared_thumbnail_should_succeed = false;
+  const auto adjustment_renderers =
+      photo_editor::desktop::make_thumbnail_worker_renderers(
+          photo_editor::desktop::ThumbnailAdjustmentRendererDependencies{
+              .shared_render =
+                  [&](const photo_editor::desktop::ThumbnailAdjustmentSharedRenderRequest& request) {
+                    ++shared_thumbnail_render_calls;
+                    shared_thumbnail_policy_valid =
+                        shared_thumbnail_policy_valid &&
+                        request.render_reason == QStringLiteral("photo_layer_thumbnail") &&
+                        request.interaction_mode == QStringLiteral("thumbnail") &&
+                        request.render_mode == QStringLiteral("layer_thumbnail") &&
+                        request.dirty_domain == QStringLiteral("layers_composite") &&
+                        request.max_edge == photo_editor::desktop::kLayerThumbnailEdge &&
+                        request.render_latency_budget_ms == 100 &&
+                        request.job.job_kind == QStringLiteral("photo_layer_thumbnail") &&
+                        request.job.stage == QStringLiteral("shared_preview_thumbnail") &&
+                        request.job.generation == 1 &&
+                        request.job.state_revision == 0 &&
+                        request.job.state_signature.startsWith(QStringLiteral("sha1:")) &&
+                        request.job.job_id.startsWith(QStringLiteral("photo_layer_thumbnail-1-"));
+                    return photo_editor::desktop::ThumbnailAdjustmentSharedRenderResult{
+                        .image = shared_thumbnail_should_succeed
+                                     ? decoded_display_p3
+                                     : QImage{},
+                        .render_mode = QStringLiteral("layer_thumbnail"),
+                        .backend = QStringLiteral("test-canonical-render"),
+                        .publish_path = QStringLiteral("test-memory"),
+                        .adjustment_pipeline_elapsed_ms = 1,
+                        .success = shared_thumbnail_should_succeed,
+                    };
+                  },
+          });
+  const auto adjustment_layer = QVariantMap{
+      {QStringLiteral("id"), QStringLiteral("test-adjustment")},
+      {QStringLiteral("kind"), QStringLiteral("adjustment")},
+      {QStringLiteral("selectionScoped"), false},
+  };
+  auto published_adjustment_request = thumbnail_request;
+  published_adjustment_request.job.asset_id = QStringLiteral("display-p3-test-asset");
+  published_adjustment_request.job.state_signature = QStringLiteral("display-p3-state");
+  published_adjustment_request.photo_layers = QVariantList{adjustment_layer};
+  published_adjustment_request.published_preview_state_signature =
+      published_adjustment_request.job.state_signature;
+  published_adjustment_request.published_preview_image = decoded_display_p3;
+  QVariantMap published_adjustment_metadata;
+  const auto published_adjustment_source =
+      adjustment_renderers.adjustment_layer_dependencies.thumbnail_source(
+          adjustment_layer,
+          thumbnail_source,
+          published_adjustment_request,
+          &published_adjustment_metadata);
+  if (published_adjustment_source.isEmpty() || shared_thumbnail_render_calls != 0 ||
+      !published_adjustment_metadata.value(QStringLiteral("thumbnailColorManaged")).toBool() ||
+      !published_adjustment_metadata
+           .value(QStringLiteral("thumbnailColorManagementContract"))
+           .toString()
+           .contains(QStringLiteral("fallback:fail-closed"))) {
+    return fail(
+        "adjustment thumbnail renderer must reuse an exact published preview without a legacy color fallback");
+  }
+  auto failed_adjustment_request = published_adjustment_request;
+  failed_adjustment_request.published_preview_image = {};
+  QVariantMap failed_adjustment_metadata;
+  const auto failed_adjustment_source =
+      adjustment_renderers.adjustment_layer_dependencies.thumbnail_source(
+          adjustment_layer,
+          thumbnail_source,
+          failed_adjustment_request,
+          &failed_adjustment_metadata);
+  if (!failed_adjustment_source.isEmpty() || shared_thumbnail_render_calls != 1 ||
+      !shared_thumbnail_policy_valid) {
+    return fail(
+        "adjustment thumbnail renderer must fail closed when the canonical shared render fails");
+  }
+  shared_thumbnail_should_succeed = true;
+  const auto shared_adjustment_source =
+      adjustment_renderers.adjustment_layer_dependencies.thumbnail_source(
+          adjustment_layer,
+          thumbnail_source,
+          failed_adjustment_request,
+          &failed_adjustment_metadata);
+  if (shared_adjustment_source.isEmpty() || shared_thumbnail_render_calls != 2 ||
+      !failed_adjustment_metadata.value(QStringLiteral("thumbnailColorManaged")).toBool()) {
+    return fail(
+        "adjustment thumbnail renderer must publish canonical shared-render output and metadata");
+  }
+  const auto mask_renderers =
+      photo_editor::desktop::make_thumbnail_worker_renderers();
+  auto mask_request = thumbnail_request;
+  mask_request.job.asset_id = QStringLiteral("display-p3-test-asset");
+  mask_request.job.job_id = QStringLiteral("display-p3-mask-thumbnail-job");
+  mask_request.job.state_signature = QStringLiteral("display-p3-state");
+  mask_request.mask_thumbnail_dirty = true;
+  mask_request.mask_sets = QVariantList{
+      QVariantMap{
+          {QStringLiteral("id"), QStringLiteral("test-set")},
+          {QStringLiteral("sources"),
+           QVariantList{QVariantMap{
+               {QStringLiteral("id"), QStringLiteral("test-source")},
+           }}},
+      },
+  };
+  const auto mask_entries =
+      mask_renderers.mask_thumbnail_entries(mask_request);
+  auto canonical_mask_payloads_valid = mask_entries.size() == 2;
+  for (auto iterator = mask_entries.constBegin();
+       iterator != mask_entries.constEnd();
+       ++iterator) {
+    const auto entry = iterator.value().toMap();
+    canonical_mask_payloads_valid = canonical_mask_payloads_valid &&
+        entry.value(QStringLiteral("thumbnailSource"))
+            .toString()
+            .startsWith(QStringLiteral("data:image/png;base64,")) &&
+        entry.value(QStringLiteral("thumbnailOverlaySource"))
+            .toString()
+            .startsWith(QStringLiteral("data:image/png;base64,")) &&
+        entry.value(QStringLiteral("thumbnailAlphaSource")).toString() ==
+            QStringLiteral("evaluated-mask-alpha") &&
+        entry.value(QStringLiteral("thumbnailOverlayContract")).toString() ==
+            QStringLiteral(
+                "mask-thumbnail-overlay:v1|source:final-alpha|color:solid|debug-rgb:false");
+  }
+  if (!canonical_mask_payloads_valid) {
+    return fail(
+        "thumbnail worker factory must own canonical mask source/set alpha images and payload metadata");
+  }
 
   auto same_samples_as_srgb = display_p3_source;
   same_samples_as_srgb.setColorSpace(QColorSpace(QColorSpace::SRgb));
-  const auto rendered_from_embedded_p3 = photo_editor::desktop::render_output_image(
+  const auto rendered_from_embedded_p3 = render_canonical_test_output(
       display_p3_source,
       state,
       photo_editor::desktop::preview_color_space(),
       QImage::Format_ARGB32);
-  const auto rendered_from_tagged_srgb = photo_editor::desktop::render_output_image(
+  const auto rendered_from_tagged_srgb = render_canonical_test_output(
       same_samples_as_srgb,
       state,
       photo_editor::desktop::preview_color_space(),
@@ -2039,6 +3007,831 @@ int main(int argc, char** argv) {
   if (rendered_sixteen_bit.isNull() || rendered_sixteen_bit.format() != QImage::Format_RGBA64 ||
       !rendered_sixteen_bit.colorSpace().isValid()) {
     return fail("float working buffers should render to 16-bit integer output images");
+  }
+
+  const auto custom_profile_payload =
+      photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+          photo_editor::pipeline::make_display_p3_color_space());
+  if (custom_profile_payload.empty()) {
+    return fail("custom-profile render coverage requires the configured ICC backend");
+  }
+  const auto custom_profile_hash =
+      photo_editor::pipeline::color_payload_sha256(custom_profile_payload);
+  const photo_editor::pipeline::IccProfileAssetReference custom_profile_reference{
+      .asset_id = "icc:render-parity-display-p3",
+      .payload_sha256 = custom_profile_hash,
+      .display_name = "Render Parity Display P3",
+      .source_uri = {},
+      .source_kind = "test-generated",
+      .byte_size = custom_profile_payload.size(),
+  };
+  const auto registered_custom_profile =
+      photo_editor::pipeline::default_icc_profile_asset_registry().register_payload(
+          custom_profile_reference,
+          custom_profile_payload,
+          "memory:render-parity-display-p3");
+  if (!registered_custom_profile.ready()) {
+    return fail("custom output profile should register before rendering");
+  }
+
+  QImage custom_profile_source(2, 1, QImage::Format_RGBA16FPx4);
+  custom_profile_source.setColorSpace(photo_editor::desktop::linear_srgb_color_space());
+  auto* custom_profile_source_pixels =
+      reinterpret_cast<QRgbaFloat16*>(custom_profile_source.scanLine(0));
+  custom_profile_source_pixels[0] =
+      QRgbaFloat16{qfloat16(0.18F), qfloat16(0.42F), qfloat16(0.73F), qfloat16(0.25F)};
+  custom_profile_source_pixels[1] =
+      QRgbaFloat16{qfloat16(0.81F), qfloat16(0.24F), qfloat16(0.09F), qfloat16(0.75F)};
+  photo_editor::desktop::RenderEditState custom_profile_state;
+  custom_profile_state.working_color_profile = QStringLiteral("Linear sRGB");
+  custom_profile_state.output_color_space = QStringLiteral("Display P3");
+  custom_profile_state.export_icc_profile_asset = photo_editor::desktop::IccProfileAssetState{
+      .asset_id = QString::fromStdString(custom_profile_reference.asset_id),
+      .payload_sha256 = QString::fromStdString(custom_profile_reference.payload_sha256),
+      .display_name = QString::fromStdString(custom_profile_reference.display_name),
+      .source_uri = {},
+      .source_kind = QStringLiteral("test-generated"),
+      .byte_size = static_cast<qint64>(custom_profile_reference.byte_size),
+  };
+  photo_editor::desktop::RenderBackendTelemetry custom_profile_telemetry;
+  const auto custom_profile_plan =
+      photo_editor::desktop::
+          compile_desktop_render_plan_with_derived_assets(
+              custom_profile_state,
+              photo_editor::desktop::
+                  DesktopRenderPlanRequest{
+                      .recipe_id =
+                          QStringLiteral(
+                              "custom-profile-parity"),
+                      .recipe_payload_digest =
+                          QStringLiteral(
+                              "custom-profile-parity-v1"),
+                      .source_id =
+                          QStringLiteral(
+                              "custom-profile-source"),
+                      .decoder_provenance =
+                          QStringLiteral("raster-test"),
+                      .raw_source = false,
+                      .source_width = 2,
+                      .source_height = 1,
+                      .rendering_target =
+                          photo_editor::pipeline::
+                              DisplayRenderingTarget::
+                                  DisplayP3Simulation,
+                      .device_icc_profile =
+                          photo_editor::pipeline::
+                              AssetIdentifier{
+                                  custom_profile_reference
+                                      .asset_id,
+                              },
+                      .backend_requirement =
+                          photo_editor::pipeline::
+                              RenderBackendRequirement::
+                                  ExactCpuReference,
+                      .purpose =
+                          photo_editor::pipeline::
+                              RenderPurpose::Export,
+                  });
+  if (!custom_profile_plan.ok()) {
+    return fail(
+        "custom ICC parity requires a canonical device-transform plan");
+  }
+  const auto custom_profile_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          custom_profile_state,
+          {},
+          QImage::Format_RGBA16FPx4,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          nullptr,
+          &custom_profile_telemetry,
+          {},
+          photo_editor::pipeline::RemovalQuality::Final,
+          photo_editor::desktop::RenderOutputPolicy::
+              DisplayReferred,
+          &*custom_profile_plan.plan);
+  if (custom_profile_render.isNull() || !custom_profile_render.colorSpace().isValid() ||
+      custom_profile_render.colorSpace().iccProfile().isEmpty() ||
+      !custom_profile_telemetry.completed_render_stages.contains(
+          QStringLiteral("device_transform")) ||
+      !custom_profile_telemetry.completed_render_stages.contains(
+          QStringLiteral("publish"))) {
+    return fail("custom ICC export should render pixels and tag the exact destination profile");
+  }
+  const auto custom_profile_working = photo_editor::desktop::working_image_from_qimage(
+      custom_profile_source,
+      QStringLiteral("Linear sRGB"));
+  const auto custom_profile_pipeline =
+      photo_editor::desktop::compile_color_pipeline_config(
+          custom_profile_state);
+  auto custom_profile_interchange_target =
+      custom_profile_pipeline.export_display_target;
+  custom_profile_interchange_target.target_name =
+      "ACES 2 linear Rec.2020 ICC interchange";
+  custom_profile_interchange_target.color_space =
+      photo_editor::pipeline::make_linear_rec2020_color_space();
+  const auto custom_profile_aces_processor =
+      photo_editor::pipeline::compile_aces2_output_processor(
+          custom_profile_pipeline.working_profile.color_space,
+          custom_profile_interchange_target);
+  auto expected_transform = photo_editor::pipeline::compile_builtin_to_icc_transform(
+      photo_editor::pipeline::make_linear_rec2020_color_space(),
+      custom_profile_payload,
+      photo_editor::pipeline::IccTransformOptions{
+          .rendering_intent = photo_editor::pipeline::IccRenderingIntent::Perceptual,
+          .black_point_compensation = true,
+          .pixel_format = photo_editor::pipeline::IccPixelFormat::RgbaFloat32,
+          .target = "export-output:aces2-rec2020-interchange",
+      });
+  std::array<photo_editor::pipeline::IccRgbaFloat, 2> expected_custom_pixels;
+  for (std::size_t index = 0; index < expected_custom_pixels.size(); ++index) {
+    const auto& pixel = custom_profile_working.pixels[index];
+    const auto rendered =
+        photo_editor::pipeline::aces2_render_to_linear_display_rgb(
+            {pixel.red, pixel.green, pixel.blue},
+            custom_profile_aces_processor->parameters);
+    expected_custom_pixels[index] = photo_editor::pipeline::IccRgbaFloat{
+        .red = static_cast<float>(rendered[0]),
+        .green = static_cast<float>(rendered[1]),
+        .blue = static_cast<float>(rendered[2]),
+        .alpha = pixel.alpha,
+    };
+  }
+  if (!expected_transform.ready() || !expected_transform.apply(expected_custom_pixels)) {
+    return fail("custom ICC direct reference transform should compile and run");
+  }
+  const auto* actual_custom_pixels =
+      reinterpret_cast<const QRgbaFloat16*>(custom_profile_render.constScanLine(0));
+  for (std::size_t index = 0; index < expected_custom_pixels.size(); ++index) {
+    const auto& expected = expected_custom_pixels[index];
+    const auto actual = actual_custom_pixels[index];
+    const auto maximum_error = std::max({
+        std::abs(static_cast<float>(actual.r) - expected.red),
+        std::abs(static_cast<float>(actual.g) - expected.green),
+        std::abs(static_cast<float>(actual.b) - expected.blue),
+        std::abs(static_cast<float>(actual.a) - expected.alpha),
+    });
+    if (maximum_error > 0.001F) {
+      std::cerr
+          << "custom ICC pixel "
+          << index
+          << " expected="
+          << expected.red << ','
+          << expected.green << ','
+          << expected.blue << ','
+          << expected.alpha
+          << " actual="
+          << static_cast<float>(actual.r)
+          << ','
+          << static_cast<float>(actual.g)
+          << ','
+          << static_cast<float>(actual.b)
+          << ','
+          << static_cast<float>(actual.a)
+          << " maximumError="
+          << maximum_error << '\n';
+      return fail("custom ICC export should match the direct ACES plus Little CMS processor chain");
+    }
+  }
+
+  auto canonical_proof_state =
+      photo_editor::desktop::RenderEditState{};
+  canonical_proof_state.working_color_profile =
+      QStringLiteral("Linear sRGB");
+  canonical_proof_state.output_color_space =
+      QStringLiteral("sRGB");
+  canonical_proof_state.soft_proof_enabled = true;
+  canonical_proof_state.proof_icc_profile_asset =
+      photo_editor::desktop::IccProfileAssetState{
+          .asset_id =
+              QString::fromStdString(
+                  custom_profile_reference.asset_id),
+          .payload_sha256 =
+              QString::fromStdString(
+                  custom_profile_reference.payload_sha256),
+          .display_name =
+              QString::fromStdString(
+                  custom_profile_reference.display_name),
+          .source_uri = {},
+          .source_kind =
+              QStringLiteral("test-generated"),
+          .byte_size =
+              static_cast<qint64>(
+                  custom_profile_reference.byte_size),
+      };
+  const auto canonical_proof_plan =
+      photo_editor::desktop::
+          compile_desktop_render_plan_with_derived_assets(
+              canonical_proof_state,
+              photo_editor::desktop::
+                  DesktopRenderPlanRequest{
+                      .recipe_id =
+                          QStringLiteral(
+                              "canonical-proof-parity"),
+                      .recipe_payload_digest =
+                          QStringLiteral(
+                              "canonical-proof-parity-v1"),
+                      .source_id =
+                          QStringLiteral(
+                              "canonical-proof-source"),
+                      .decoder_provenance =
+                          QStringLiteral("raster-test"),
+                      .raw_source = false,
+                      .source_width = 2,
+                      .source_height = 1,
+                      .rendering_target =
+                          photo_editor::pipeline::
+                              DisplayRenderingTarget::
+                                  SrgbSimulation,
+                      .backend_requirement =
+                          photo_editor::pipeline::
+                              RenderBackendRequirement::
+                                  ExactCpuReference,
+                      .purpose =
+                          photo_editor::pipeline::
+                              RenderPurpose::Export,
+                  });
+  if (!canonical_proof_plan.ok()) {
+    return fail(
+        "soft-proof parity requires a canonical Proof plan");
+  }
+  photo_editor::desktop::RenderBackendTelemetry
+      canonical_proof_telemetry;
+  const auto canonical_proof_render =
+      photo_editor::desktop::
+          render_output_image_with_backend(
+              custom_profile_source,
+              canonical_proof_state,
+              photo_editor::desktop::
+                  preview_color_space(),
+              QImage::Format_RGBA16FPx4,
+              photo_editor::desktop::
+                  RenderBackendPreference::CpuOnly,
+              nullptr,
+              &canonical_proof_telemetry,
+              {},
+              photo_editor::pipeline::
+                  RemovalQuality::Final,
+              photo_editor::desktop::
+                  RenderOutputPolicy::DisplayReferred,
+              &*canonical_proof_plan.plan);
+  if (canonical_proof_render.isNull() ||
+      !canonical_proof_telemetry.completed_render_stages
+           .contains(QStringLiteral("proof")) ||
+      !canonical_proof_telemetry.completed_render_stages
+           .contains(QStringLiteral("publish"))) {
+    return fail(
+        "canonical soft proof should execute real Proof and Publish nodes");
+  }
+
+  auto soft_proof_config = photo_editor::pipeline::default_color_pipeline_config();
+  soft_proof_config.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::
+          LegacyOklchV1;
+  soft_proof_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  soft_proof_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  soft_proof_config.preview_display_target =
+      photo_editor::pipeline::make_sdr_display_target(
+          soft_proof_config.preview_output_profile);
+  soft_proof_config.proof_icc_profile_asset = registered_custom_profile;
+  soft_proof_config.soft_proof_enabled = true;
+  soft_proof_config.proof_render_intent =
+      photo_editor::pipeline::RenderIntent::RelativeColorimetric;
+  photo_editor::desktop::WorkingImageQImageTelemetry soft_proof_telemetry;
+  const auto soft_proof_preview = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      QColorSpace(QColorSpace::SRgb),
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &soft_proof_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &soft_proof_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  const auto soft_proof_source_payload =
+      photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+          photo_editor::pipeline::make_linear_srgb_color_space());
+  const auto soft_proof_destination_payload =
+      photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+          photo_editor::pipeline::make_srgb_color_space());
+  auto direct_soft_proof_transform =
+      photo_editor::pipeline::compile_icc_proofing_transform(
+          soft_proof_source_payload,
+          custom_profile_payload,
+          soft_proof_destination_payload,
+          photo_editor::pipeline::IccProofTransformOptions{
+              .rendering_intent =
+                  photo_editor::pipeline::IccRenderingIntent::Perceptual,
+              .proofing_intent =
+                  photo_editor::pipeline::IccRenderingIntent::RelativeColorimetric,
+              .black_point_compensation = true,
+              .gamut_check = false,
+              .target = "soft-proof",
+          });
+  auto expected_soft_proof_pixels = expected_custom_pixels;
+  for (std::size_t index = 0; index < expected_soft_proof_pixels.size(); ++index) {
+    const auto& pixel = custom_profile_working.pixels[index];
+    expected_soft_proof_pixels[index] = {
+        .red = pixel.red,
+        .green = pixel.green,
+        .blue = pixel.blue,
+        .alpha = pixel.alpha,
+    };
+  }
+  if (soft_proof_preview.isNull() || !direct_soft_proof_transform.ready() ||
+      !direct_soft_proof_transform.apply(expected_soft_proof_pixels) ||
+      soft_proof_telemetry.color_processor !=
+          QStringLiteral("Little CMS Soft Proof") ||
+      !soft_proof_telemetry.transform_cache_key.contains(
+          QStringLiteral("proof:")) ||
+      soft_proof_telemetry.failure_reason.size() != 0) {
+    return fail("working-image soft proof should execute the exact cached three-profile processor");
+  }
+  const auto* actual_soft_proof_pixels =
+      reinterpret_cast<const QRgbaFloat16*>(soft_proof_preview.constScanLine(0));
+  for (std::size_t index = 0; index < expected_soft_proof_pixels.size(); ++index) {
+    const auto& expected = expected_soft_proof_pixels[index];
+    const auto actual = actual_soft_proof_pixels[index];
+    const auto maximum_error = std::max({
+        std::abs(static_cast<float>(actual.r) - expected.red),
+        std::abs(static_cast<float>(actual.g) - expected.green),
+        std::abs(static_cast<float>(actual.b) - expected.blue),
+        std::abs(static_cast<float>(actual.a) - expected.alpha),
+    });
+    if (maximum_error > 0.001F) {
+      return fail("working-image soft proof should match the direct Little CMS proof oracle");
+    }
+  }
+  photo_editor::desktop::WorkingImageQImageTelemetry proof_gamut_telemetry;
+  const auto proof_gamut_preview = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      QColorSpace(QColorSpace::SRgb),
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &proof_gamut_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &soft_proof_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+          .generate_proof_gamut_warning_mask = true,
+      });
+  if (proof_gamut_preview.isNull() ||
+      proof_gamut_telemetry.gamut_warning_mask.isNull() ||
+      proof_gamut_telemetry.gamut_warning_mask.size() != proof_gamut_preview.size() ||
+      proof_gamut_telemetry.gamut_warning_mask.format() != QImage::Format_Grayscale8) {
+    return fail("working-image proof publication should emit an aligned exact gamut mask on demand");
+  }
+  auto paper_ink_proof_config = soft_proof_config;
+  paper_ink_proof_config.proof_simulate_paper_white = true;
+  paper_ink_proof_config.proof_simulate_ink_black = true;
+  photo_editor::desktop::WorkingImageQImageTelemetry paper_ink_telemetry;
+  const auto paper_ink_preview = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      QColorSpace(QColorSpace::SRgb),
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &paper_ink_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &paper_ink_proof_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  if (paper_ink_preview.isNull() ||
+      paper_ink_telemetry.transform_cache_key.isEmpty() ||
+      paper_ink_telemetry.transform_cache_key ==
+          soft_proof_telemetry.transform_cache_key) {
+    return fail("paper and ink simulation should compile a distinct absolute/no-BPC proof processor");
+  }
+
+  auto aces_custom_config = photo_editor::pipeline::default_color_pipeline_config();
+  aces_custom_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  aces_custom_config.preview_icc_profile_asset = registered_custom_profile;
+  aces_custom_config.photographic_rendering_model =
+      photo_editor::pipeline::PhotographicRenderingModel::Aces2OcioV1;
+  photo_editor::desktop::WorkingImageQImageTelemetry aces_custom_telemetry;
+  const auto aces_custom_preview = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      {},
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &aces_custom_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &aces_custom_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  auto aces_interchange_target = aces_custom_config.preview_display_target;
+  aces_interchange_target.target_name =
+      "ACES 2 linear Rec.2020 ICC interchange";
+  aces_interchange_target.color_space =
+      photo_editor::pipeline::make_linear_rec2020_color_space();
+  const auto aces_processor =
+      photo_editor::pipeline::compile_aces2_output_processor(
+          aces_custom_config.working_profile.color_space,
+          aces_interchange_target);
+  auto aces_icc_transform =
+      photo_editor::pipeline::compile_builtin_to_icc_transform(
+          photo_editor::pipeline::make_linear_rec2020_color_space(),
+          custom_profile_payload,
+          photo_editor::pipeline::IccTransformOptions{
+              .rendering_intent =
+                  photo_editor::pipeline::IccRenderingIntent::Perceptual,
+              .black_point_compensation = true,
+              .pixel_format =
+                  photo_editor::pipeline::IccPixelFormat::RgbaFloat32,
+              .target = "preview-output:aces2-rec2020-interchange",
+          });
+  std::array<photo_editor::pipeline::IccRgbaFloat, 2>
+      expected_aces_custom_pixels;
+  for (std::size_t index = 0; index < expected_aces_custom_pixels.size();
+       ++index) {
+    const auto& source = custom_profile_working.pixels[index];
+    const auto rendered =
+        photo_editor::pipeline::aces2_render_to_linear_display_rgb(
+            {source.red, source.green, source.blue},
+            aces_processor->parameters);
+    expected_aces_custom_pixels[index] = {
+        .red = static_cast<float>(rendered[0]),
+        .green = static_cast<float>(rendered[1]),
+        .blue = static_cast<float>(rendered[2]),
+        .alpha = source.alpha,
+    };
+  }
+  if (aces_custom_preview.isNull() || !aces_icc_transform.ready() ||
+      !aces_icc_transform.apply(expected_aces_custom_pixels) ||
+      aces_custom_telemetry.color_processor !=
+          QStringLiteral("%1 + Little CMS")
+              .arg(QString::fromStdString(std::string(
+                  photo_editor::pipeline::aces2_output_renderer_backend_name()))) ||
+      !aces_custom_telemetry.transform_cache_key.contains(
+          QStringLiteral("->")) ||
+      !aces_custom_telemetry.transform_cache_key.contains(
+          QStringLiteral("aces2-rec2020-interchange"))) {
+    return fail("ACES 2 custom ICC preview should expose and execute the composed processor");
+  }
+  const auto* actual_aces_custom_pixels =
+      reinterpret_cast<const QRgbaFloat16*>(
+          aces_custom_preview.constScanLine(0));
+  for (std::size_t index = 0; index < expected_aces_custom_pixels.size();
+       ++index) {
+    const auto& expected = expected_aces_custom_pixels[index];
+    const auto actual = actual_aces_custom_pixels[index];
+    const auto maximum_error = std::max({
+        std::abs(static_cast<float>(actual.r) - expected.red),
+        std::abs(static_cast<float>(actual.g) - expected.green),
+        std::abs(static_cast<float>(actual.b) - expected.blue),
+        std::abs(static_cast<float>(actual.a) - expected.alpha),
+    });
+    if (maximum_error > 0.001F) {
+      return fail("ACES 2 custom ICC preview should match the explicit Rec.2020 interchange composition");
+    }
+  }
+
+  auto cross_consumer_config = photo_editor::pipeline::default_color_pipeline_config();
+  cross_consumer_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  cross_consumer_config.preview_icc_profile_asset = registered_custom_profile;
+  cross_consumer_config.export_icc_profile_asset = registered_custom_profile;
+  photo_editor::desktop::WorkingImageQImageTelemetry full_preview_telemetry;
+  photo_editor::desktop::WorkingImageQImageTelemetry left_tile_telemetry;
+  photo_editor::desktop::WorkingImageQImageTelemetry right_tile_telemetry;
+  photo_editor::desktop::WorkingImageQImageTelemetry final_output_telemetry;
+  const auto full_custom_preview = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      {},
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &full_preview_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &cross_consumer_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  const auto left_custom_tile = photo_editor::desktop::qimage_from_working_image_rect(
+      custom_profile_working,
+      QRect(0, 0, 1, 1),
+      {},
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &left_tile_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &cross_consumer_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  const auto right_custom_tile = photo_editor::desktop::qimage_from_working_image_rect(
+      custom_profile_working,
+      QRect(1, 0, 1, 1),
+      {},
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &right_tile_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &cross_consumer_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      });
+  const auto full_custom_final = photo_editor::desktop::qimage_from_working_image(
+      custom_profile_working,
+      {},
+      QImage::Format_RGBA16FPx4,
+      QStringLiteral("Linear sRGB"),
+      {},
+      &final_output_telemetry,
+      photo_editor::desktop::WorkingImageOutputTransform{
+          .color_pipeline = &cross_consumer_config,
+          .target = photo_editor::pipeline::GamutWarningTarget::ExportOutput,
+      });
+  if (full_custom_preview.isNull() || left_custom_tile.isNull() ||
+      right_custom_tile.isNull() || full_custom_final.isNull()) {
+    return fail("custom ICC cross-consumer proof should render full, tiled, and final images");
+  }
+  const auto* full_preview_pixels =
+      reinterpret_cast<const QRgbaFloat16*>(full_custom_preview.constScanLine(0));
+  const auto* left_tile_pixel =
+      reinterpret_cast<const QRgbaFloat16*>(left_custom_tile.constScanLine(0));
+  const auto* right_tile_pixel =
+      reinterpret_cast<const QRgbaFloat16*>(right_custom_tile.constScanLine(0));
+  const auto* final_output_pixels =
+      reinterpret_cast<const QRgbaFloat16*>(full_custom_final.constScanLine(0));
+  const auto pixel_error = [](const QRgbaFloat16& left, const QRgbaFloat16& right) {
+    return std::max({
+        std::abs(static_cast<float>(left.r) - static_cast<float>(right.r)),
+        std::abs(static_cast<float>(left.g) - static_cast<float>(right.g)),
+        std::abs(static_cast<float>(left.b) - static_cast<float>(right.b)),
+        std::abs(static_cast<float>(left.a) - static_cast<float>(right.a)),
+    });
+  };
+  if (pixel_error(full_preview_pixels[0], left_tile_pixel[0]) > 0.0001F ||
+      pixel_error(full_preview_pixels[1], right_tile_pixel[0]) > 0.0001F ||
+      pixel_error(full_preview_pixels[0], final_output_pixels[0]) > 0.0001F ||
+      pixel_error(full_preview_pixels[1], final_output_pixels[1]) > 0.0001F ||
+      full_preview_telemetry.profile_payload_sha256 !=
+          QString::fromStdString(custom_profile_hash) ||
+      left_tile_telemetry.transform_cache_key !=
+          full_preview_telemetry.transform_cache_key ||
+      right_tile_telemetry.transform_cache_key !=
+          full_preview_telemetry.transform_cache_key ||
+      final_output_telemetry.profile_payload_sha256 !=
+          full_preview_telemetry.profile_payload_sha256 ||
+      final_output_telemetry.transform_cache_key ==
+          full_preview_telemetry.transform_cache_key) {
+    return fail("custom ICC full preview, tiles, and final output must share payload identity and pixels while retaining target-keyed processors");
+  }
+
+  auto missing_profile_state = custom_profile_state;
+  missing_profile_state.export_icc_profile_asset.asset_id = QStringLiteral("icc:missing-profile");
+  missing_profile_state.export_icc_profile_asset.payload_sha256 = QString(64, QLatin1Char('0'));
+  missing_profile_state.export_icc_profile_asset.byte_size = 128;
+  photo_editor::desktop::RenderBackendTelemetry missing_profile_telemetry;
+  const auto missing_profile_render = photo_editor::desktop::render_output_image_with_backend(
+      custom_profile_source,
+      missing_profile_state,
+      {},
+      QImage::Format_RGBA16FPx4,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly,
+      nullptr,
+      &missing_profile_telemetry);
+  if (!missing_profile_render.isNull() ||
+      missing_profile_telemetry.fallback_reason !=
+          QStringLiteral("icc_profile_asset_location_missing")) {
+    return fail("a missing custom ICC export must fail explicitly without assuming sRGB");
+  }
+
+  const auto custom_input_payload =
+      photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+          photo_editor::pipeline::make_srgb_color_space());
+  const auto custom_input_hash =
+      photo_editor::pipeline::color_payload_sha256(custom_input_payload);
+  const photo_editor::pipeline::IccProfileAssetReference custom_input_reference{
+      .asset_id = "icc:render-parity-input-srgb",
+      .payload_sha256 = custom_input_hash,
+      .display_name = "Render Parity Input sRGB",
+      .source_uri = {},
+      .source_kind = "test-generated",
+      .byte_size = custom_input_payload.size(),
+  };
+  if (!photo_editor::pipeline::default_icc_profile_asset_registry()
+           .register_payload(
+               custom_input_reference,
+               custom_input_payload,
+               "memory:render-parity-input-srgb")
+           .ready()) {
+    return fail("custom input profile should register before rendering");
+  }
+  auto incorrectly_tagged_input = source;
+  incorrectly_tagged_input.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+  auto correctly_tagged_input = source;
+  correctly_tagged_input.setColorSpace(photo_editor::desktop::preview_color_space());
+  photo_editor::desktop::RenderEditState custom_input_state;
+  custom_input_state.working_color_profile = QStringLiteral("Linear ProPhoto RGB");
+  custom_input_state.output_color_space = QStringLiteral("sRGB");
+  custom_input_state.input_icc_profile_asset = photo_editor::desktop::IccProfileAssetState{
+      .asset_id = QString::fromStdString(custom_input_reference.asset_id),
+      .payload_sha256 = QString::fromStdString(custom_input_reference.payload_sha256),
+      .display_name = QString::fromStdString(custom_input_reference.display_name),
+      .source_uri = {},
+      .source_kind = QStringLiteral("test-generated"),
+      .byte_size = static_cast<qint64>(custom_input_reference.byte_size),
+  };
+  auto embedded_input_state = custom_input_state;
+  embedded_input_state.input_icc_profile_asset = {};
+  const auto custom_input_render = photo_editor::desktop::render_output_image_with_backend(
+      incorrectly_tagged_input,
+      custom_input_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto embedded_input_render = photo_editor::desktop::render_output_image_with_backend(
+      correctly_tagged_input,
+      embedded_input_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (custom_input_render.isNull() || embedded_input_render.isNull() ||
+      max_channel_delta(custom_input_render, embedded_input_render) > 2) {
+    return fail("a custom input ICC profile should override the image tag and match the same embedded profile");
+  }
+  auto missing_input_state = custom_input_state;
+  missing_input_state.input_icc_profile_asset.asset_id = QStringLiteral("icc:missing-input-profile");
+  missing_input_state.input_icc_profile_asset.payload_sha256 = QString(64, QLatin1Char('0'));
+  missing_input_state.input_icc_profile_asset.byte_size = 128;
+  photo_editor::desktop::RenderBackendTelemetry missing_input_telemetry;
+  const auto missing_input_render = photo_editor::desktop::render_output_image_with_backend(
+      incorrectly_tagged_input,
+      missing_input_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly,
+      nullptr,
+      &missing_input_telemetry);
+  if (!missing_input_render.isNull() ||
+      missing_input_telemetry.fallback_reason !=
+          QStringLiteral("icc_profile_asset_location_missing")) {
+    return fail("a missing custom input ICC profile must fail explicitly without using the embedded tag");
+  }
+
+  photo_editor::desktop::RenderEditState raw_boundary_state;
+  raw_boundary_state.working_color_profile = QStringLiteral("Linear sRGB");
+  raw_boundary_state.output_color_space = QStringLiteral("sRGB");
+  raw_boundary_state.input_color_profile =
+      QStringLiteral("Camera DCP: Boundary Fixture.dcp");
+  raw_boundary_state.raw_input_transform_enabled = true;
+  raw_boundary_state.raw_gamut_mapping = false;
+  const auto decoder_owned_metadata = photo_editor::pipeline::DecodedImageMetadata{
+      .valid = true,
+      .is_raw = true,
+      .pixel_encoding = photo_editor::pipeline::DecodedPixelEncoding::SceneLinearRgb,
+      .decoder_backend = "Core Image CIRAWFilter",
+      .decoded_color_space_name = "Linear sRGB",
+      .camera_profile_identity = "core-image-camera-characterization",
+      .demosaic_applied = true,
+      .white_balance_applied = true,
+      .camera_transform_applied = true,
+      .decoder_rendering_applied = true,
+      .input_profile_name = "Camera DCP: Boundary Fixture.dcp",
+      .camera_make = "Boundary",
+      .camera_model = "Fixture",
+  };
+  photo_editor::desktop::RenderBackendTelemetry blocked_raw_input_telemetry;
+  const auto blocked_raw_custom_input =
+      photo_editor::desktop::render_output_image_with_backend(
+          incorrectly_tagged_input,
+          custom_input_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &decoder_owned_metadata,
+          &blocked_raw_input_telemetry);
+  if (!blocked_raw_custom_input.isNull() ||
+      blocked_raw_input_telemetry.fallback_reason !=
+          QStringLiteral("icc_input_profile_requires_camera_linear_raw")) {
+    return fail("custom camera ICC must fail explicitly for decoder-characterized RAW pixels");
+  }
+  auto decoder_owned_native_state = raw_boundary_state;
+  decoder_owned_native_state.input_color_profile = QStringLiteral("Camera Native");
+  auto decoder_owned_native_disabled_state = decoder_owned_native_state;
+  decoder_owned_native_disabled_state.raw_input_transform_enabled = false;
+  photo_editor::desktop::RenderBackendTelemetry blocked_dcp_telemetry;
+  const auto decoder_owned_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          raw_boundary_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &decoder_owned_metadata,
+          &blocked_dcp_telemetry);
+  if (!decoder_owned_render.isNull() ||
+      blocked_dcp_telemetry.fallback_reason !=
+          QStringLiteral("dcp_profile_requires_camera_linear_raw")) {
+    return fail("decoder-characterized RAW must reject a DCP instead of silently bypassing it");
+  }
+  const auto decoder_owned_native_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          decoder_owned_native_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &decoder_owned_metadata);
+  const auto decoder_owned_reference =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          decoder_owned_native_disabled_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &decoder_owned_metadata);
+  if (decoder_owned_native_render.isNull() || decoder_owned_reference.isNull() ||
+      max_channel_delta(decoder_owned_native_render, decoder_owned_reference) != 0) {
+    return fail("decoder-characterized RAW pixels must bypass only the native engine camera transform exactly");
+  }
+
+  auto engine_owned_metadata = decoder_owned_metadata;
+  engine_owned_metadata.pixel_encoding =
+      photo_editor::pipeline::DecodedPixelEncoding::CameraLinearRgb;
+  engine_owned_metadata.decoder_backend = "reference-camera-linear-backend";
+  engine_owned_metadata.decoded_color_space_name = "Camera RGB";
+  engine_owned_metadata.camera_profile_identity = "dcp:boundary-fixture";
+  engine_owned_metadata.white_balance_applied = false;
+  engine_owned_metadata.camera_transform_applied = false;
+  engine_owned_metadata.decoder_rendering_applied = false;
+  photo_editor::desktop::RenderBackendTelemetry missing_dcp_telemetry;
+  const auto missing_dcp_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          raw_boundary_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &engine_owned_metadata,
+          &missing_dcp_telemetry);
+  if (!missing_dcp_render.isNull() ||
+      missing_dcp_telemetry.fallback_reason !=
+          QStringLiteral("dcp_profile_asset_required")) {
+    return fail("camera-linear RAW must not manufacture a DCP transform from its filename");
+  }
+  auto engine_owned_native_state = raw_boundary_state;
+  engine_owned_native_state.input_color_profile = QStringLiteral("Camera Native");
+  const auto engine_owned_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          engine_owned_native_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &engine_owned_metadata);
+  if (engine_owned_render.isNull() ||
+      max_channel_delta(engine_owned_render, decoder_owned_reference) < 2) {
+    return fail("camera-linear RAW pixels must still execute the engine-owned camera transform");
+  }
+
+  const auto dcp_payload = photo_editor::test::valid_dcp_asset_payload();
+  const auto dcp_hash = photo_editor::pipeline::color_payload_sha256(dcp_payload);
+  const photo_editor::pipeline::DcpProfileAssetReference dcp_reference{
+      .schema_version = 1U,
+      .asset_id = "dcp:render-parity-boundary-fixture",
+      .payload_sha256 = dcp_hash,
+      .display_name = "Asset Fixture",
+      .source_uri = {},
+      .source_kind = "test-generated",
+      .byte_size = dcp_payload.size(),
+  };
+  const auto registered_dcp =
+      photo_editor::pipeline::default_dcp_profile_asset_registry().register_payload(
+          dcp_reference,
+          dcp_payload,
+          "memory:render-parity-boundary-fixture");
+  if (!registered_dcp.ready()) {
+    return fail("a parsed DCP asset should register before the camera-linear render proof");
+  }
+  auto ready_dcp_state = raw_boundary_state;
+  ready_dcp_state.camera_dcp_profile_asset =
+      photo_editor::desktop::DcpProfileAssetState{
+          .schema_version = 1,
+          .asset_id = QString::fromStdString(dcp_reference.asset_id),
+          .payload_sha256 = QString::fromStdString(dcp_reference.payload_sha256),
+          .display_name = QString::fromStdString(dcp_reference.display_name),
+          .source_uri = {},
+          .source_kind = QStringLiteral("test-generated"),
+          .byte_size = static_cast<qint64>(dcp_reference.byte_size),
+      };
+  const auto ready_dcp_render =
+      photo_editor::desktop::render_output_image_with_backend(
+          custom_profile_source,
+          ready_dcp_state,
+          photo_editor::desktop::preview_color_space(),
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::CpuOnly,
+          &engine_owned_metadata);
+  if (ready_dcp_render.isNull() ||
+      max_channel_delta(ready_dcp_render, engine_owned_render) < 2) {
+    return fail("camera-linear RAW should execute the exact parsed DCP asset rather than the native fallback");
   }
 
   struct OutputPathParityCase final {
@@ -2152,22 +3945,23 @@ int main(int argc, char** argv) {
       QRgbaFloat16{qfloat16(3.5F), qfloat16(3.5F), qfloat16(3.5F), qfloat16(1.0F)};
   scene_linear_scanline[1] =
       QRgbaFloat16{qfloat16(0.25F), qfloat16(0.25F), qfloat16(0.25F), qfloat16(1.0F)};
-  const auto scene_linear_render = photo_editor::desktop::render_output_image(
+  const auto scene_linear_render = render_canonical_test_output(
       scene_linear_source,
       scene_linear_state,
       photo_editor::desktop::linear_srgb_color_space(),
-      QImage::Format_RGBA16FPx4);
+      QImage::Format_RGBA16FPx4,
+      photo_editor::desktop::RenderOutputPolicy::SceneLinearWorking);
   if (scene_linear_render.isNull() ||
       scene_linear_render.colorSpace() != photo_editor::desktop::linear_srgb_color_space()) {
     return fail("scene-referred renders should keep a linear output color space when requested");
   }
   const auto* scene_render_scanline =
       reinterpret_cast<const QRgbaFloat16*>(scene_linear_render.constScanLine(0));
-  if (static_cast<float>(scene_render_scanline[0].r) <= 1.0F ||
-      static_cast<float>(scene_render_scanline[0].r) > 2.01F ||
+  if (static_cast<float>(scene_render_scanline[0].r) < 3.45F ||
+      static_cast<float>(scene_render_scanline[0].r) > 3.55F ||
       static_cast<float>(scene_render_scanline[1].r) >=
           static_cast<float>(scene_render_scanline[0].r)) {
-    return fail("scene-referred HDR headroom should preserve over-range linear output without SDR clipping");
+    return fail("scene-linear output should preserve over-range working values without display clipping");
   }
 
   return EXIT_SUCCESS;

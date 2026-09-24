@@ -3,22 +3,54 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::SystemTime;
 
 use exif::{In, Reader, Tag, Value};
+use sha2::{Digest, Sha256};
 use time::{Month, OffsetDateTime};
 use walkdir::WalkDir;
 
 use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "3fr", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "gif", "heic", "heif", "iiq", "jpeg",
-    "jpg", "kdc", "m4v", "mef", "mos", "mov", "mp4", "mpeg", "mpg", "nef", "nrw", "orf", "pef",
-    "png", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "webm", "webp", "x3f",
+    "3fr", "aac", "aif", "aiff", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "flac", "gif",
+    "heic", "heif", "iiq", "jpeg", "jpg", "kdc", "m4a", "m4v", "mef", "mos", "mov", "mp3", "mp4",
+    "mpeg", "mpg", "nef", "nrw", "ogg", "opus", "orf", "pef", "png", "raf", "raw", "rw2", "sr2",
+    "srf", "tif", "tiff", "wav", "webm", "webp", "x3f",
 ];
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DuplicatePolicy {
+    #[default]
+    Skip,
+    ReuseIdentical,
+    Replace,
+}
+
+impl DuplicatePolicy {
+    pub fn parse(value: &str) -> std::io::Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "skip" => Ok(Self::Skip),
+            "reuse-identical" => Ok(Self::ReuseIdentical),
+            "replace" => Ok(Self::Replace),
+            other => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported duplicate policy: {other}"),
+            )),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Skip => "skip",
+            Self::ReuseIdentical => "reuse-identical",
+            Self::Replace => "replace",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRequest {
@@ -28,6 +60,10 @@ pub struct ImportRequest {
     pub import_mode: ImportMode,
     pub selected_paths: Vec<PathBuf>,
     pub managed_root: Option<PathBuf>,
+    pub backup_root: Option<PathBuf>,
+    pub organization_template: String,
+    pub raw_jpeg_policy: String,
+    pub duplicate_policy: DuplicatePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +71,11 @@ pub struct ImportSummary {
     pub drive: DriveRecord,
     pub assets: Vec<CatalogAssetRecord>,
     pub skipped_unsupported: usize,
+    pub reused_existing: usize,
+    pub backed_up: usize,
+    pub reused_backup: usize,
+    pub skipped_policy: usize,
+    pub skipped_duplicates: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -50,22 +91,207 @@ pub struct ExtractedMetadata {
     pub aperture: Option<f64>,
 }
 
-pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDestinationPlan {
+    pub source_path: PathBuf,
+    pub source_relative_path: String,
+    pub relative_path: String,
+    pub managed_destination: Option<PathBuf>,
+    pub backup_destination: Option<PathBuf>,
+    pub metadata: ExtractedMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportPlanningSummary {
+    pub destinations: Vec<ImportDestinationPlan>,
+    pub skipped_unsupported: usize,
+    pub skipped_policy: usize,
+}
+
+pub fn plan_import_destinations(request: &ImportRequest) -> std::io::Result<ImportPlanningSummary> {
     let mut skipped_unsupported = 0_usize;
+    let mut skipped_policy = 0_usize;
 
-    let mut candidates = Vec::new();
-
-    for path in candidate_file_paths(request)? {
+    let discovered_paths = candidate_file_paths(request)?;
+    let canonical_mount_path = std::fs::canonicalize(&request.mount_path)?;
+    let raw_pair_keys = discovered_paths
+        .iter()
+        .filter(|path| is_raw_path(path))
+        .map(|path| pair_key(path))
+        .collect::<HashSet<_>>();
+    let jpeg_pair_keys = discovered_paths
+        .iter()
+        .filter(|path| is_jpeg_path(path))
+        .map(|path| pair_key(path))
+        .collect::<HashSet<_>>();
+    let mut source_candidates = Vec::new();
+    for path in discovered_paths {
         if !is_supported_photo_path(&path) {
             skipped_unsupported += 1;
             continue;
         }
+        let raw_jpeg_policy = request.raw_jpeg_policy.trim().to_ascii_lowercase();
+        if (raw_jpeg_policy == "raw-only"
+            && is_jpeg_path(&path)
+            && raw_pair_keys.contains(&pair_key(&path)))
+            || (raw_jpeg_policy == "jpeg-only"
+                && is_raw_path(&path)
+                && jpeg_pair_keys.contains(&pair_key(&path)))
+        {
+            skipped_policy += 1;
+            continue;
+        }
 
-        let relative_path = match path.strip_prefix(&request.mount_path) {
-            Ok(relative) => path_to_utf8(relative)?.replace('\\', "/"),
-            Err(_) => path_to_utf8(&path)?,
+        let canonical_source_path = std::fs::canonicalize(&path)?;
+        let relative_path = canonical_source_path
+            .strip_prefix(&canonical_mount_path)
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "import source is outside the selected root: {}",
+                        path.display()
+                    ),
+                )
+            })?;
+        if relative_path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "import source has an unsafe relative path: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let relative_path = path_to_utf8(relative_path)?.replace('\\', "/");
+        source_candidates.push((canonical_source_path, relative_path));
+    }
+
+    let source_paths = source_candidates
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let extracted_metadata = extract_metadata_parallel(&source_paths);
+    let managed_drive_root = if request.import_mode == ImportMode::Managed {
+        Some(managed_drive_root(request)?)
+    } else {
+        None
+    };
+    let backup_drive_root = request
+        .backup_root
+        .as_ref()
+        .map(|root| root.join(sanitize_path_segment(&request.drive_id)));
+    if managed_drive_root.is_some() && managed_drive_root == backup_drive_root {
+        return Err(std::io::Error::other(
+            "the originals backup must be separate from the managed library",
+        ));
+    }
+
+    let mut used_relative_paths = HashSet::new();
+    let destinations = source_candidates
+        .into_iter()
+        .zip(extracted_metadata)
+        .map(|((path, source_relative_path), metadata)| {
+            let mut relative_path =
+                organized_relative_path(request, &source_relative_path, &metadata);
+            if !used_relative_paths.insert(destination_collision_key(&relative_path)) {
+                let source_hash = stable_asset_id("collision", &source_relative_path);
+                relative_path = disambiguated_relative_path(&relative_path, &source_hash);
+                used_relative_paths.insert(destination_collision_key(&relative_path));
+            }
+            ImportDestinationPlan {
+                managed_destination: managed_drive_root
+                    .as_ref()
+                    .map(|root| root.join(&relative_path)),
+                backup_destination: backup_drive_root
+                    .as_ref()
+                    .map(|root| root.join(&relative_path)),
+                source_path: path,
+                source_relative_path,
+                relative_path,
+                metadata,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(ImportPlanningSummary {
+        destinations,
+        skipped_unsupported,
+        skipped_policy,
+    })
+}
+
+pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
+    let planning = plan_import_destinations(request)?;
+    let mut reused_existing = 0_usize;
+    let mut backed_up = 0_usize;
+    let mut reused_backup = 0_usize;
+    let mut skipped_duplicates = 0_usize;
+    let mut destinations = Vec::with_capacity(planning.destinations.len());
+
+    for destination in planning.destinations {
+        let Some(managed_destination) = destination.managed_destination.as_ref() else {
+            destinations.push(destination);
+            continue;
         };
-        candidates.push((path, relative_path));
+        if !managed_destination.exists() {
+            destinations.push(destination);
+            continue;
+        }
+
+        let identical =
+            files_have_identical_contents(&destination.source_path, managed_destination)?;
+        match request.duplicate_policy {
+            DuplicatePolicy::Skip => skipped_duplicates += 1,
+            DuplicatePolicy::ReuseIdentical => {
+                if identical {
+                    reused_existing += 1;
+                    destinations.push(destination);
+                } else {
+                    skipped_duplicates += 1;
+                }
+            }
+            DuplicatePolicy::Replace => {
+                if identical {
+                    reused_existing += 1;
+                }
+                destinations.push(destination);
+            }
+        }
+    }
+
+    // Back up the original source paths before any managed destination can be
+    // replaced. An existing different backup is never overwritten.
+    for destination in &destinations {
+        let Some(backup_destination) = destination.backup_destination.as_ref() else {
+            continue;
+        };
+        if let Some(parent) = backup_destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if backup_destination.exists() {
+            if files_have_identical_contents(&destination.source_path, backup_destination)? {
+                reused_backup += 1;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to overwrite a different originals backup at {}",
+                        backup_destination.display()
+                    ),
+                ));
+            }
+        } else {
+            copy_file_verified_atomically(
+                &destination.source_path,
+                backup_destination,
+                PublishPolicy::CreateNew,
+            )?;
+        }
+        backed_up += 1;
     }
 
     let managed_drive_root = if request.import_mode == ImportMode::Managed {
@@ -75,42 +301,51 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
     };
     if let Some(root) = &managed_drive_root {
         std::fs::create_dir_all(root)?;
-        for (path, relative_path) in &mut candidates {
-            let destination = root.join(relative_path);
-            if let Some(parent) = destination.parent() {
+        for destination in &destinations {
+            let managed_destination = destination
+                .managed_destination
+                .as_ref()
+                .expect("managed plans must have a managed destination");
+            if let Some(parent) = managed_destination.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::copy(&path, &destination)?;
-            *path = destination;
+            if managed_destination.exists()
+                && files_have_identical_contents(&destination.source_path, managed_destination)?
+            {
+                continue;
+            }
+            copy_file_verified_atomically(
+                &destination.source_path,
+                managed_destination,
+                if managed_destination.exists() {
+                    PublishPolicy::Replace
+                } else {
+                    PublishPolicy::CreateNew
+                },
+            )?;
         }
     }
     let catalog_root_path = managed_drive_root.as_ref().unwrap_or(&request.mount_path);
     let mount_path_str = path_to_utf8(catalog_root_path)?;
 
-    let candidate_paths = candidates
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    let metadata = extract_metadata_parallel(&candidate_paths);
-
-    let mut assets = Vec::with_capacity(candidates.len());
-    for ((_, relative_path), metadata) in candidates.into_iter().zip(metadata.into_iter()) {
+    let mut assets = Vec::with_capacity(destinations.len());
+    for destination in destinations {
         assets.push(CatalogAssetRecord {
-            asset_id: stable_asset_id(&request.drive_id, &relative_path),
-            capture_year: metadata.capture_year,
-            capture_month: metadata.capture_month,
-            capture_day: metadata.capture_day,
-            camera_make: metadata.camera_make,
-            camera_model: metadata.camera_model,
-            lens_model: metadata.lens_model,
-            iso: metadata.iso,
-            shutter_speed: metadata.shutter_speed,
-            aperture: metadata.aperture,
+            asset_id: stable_asset_id(&request.drive_id, &destination.relative_path),
+            capture_year: destination.metadata.capture_year,
+            capture_month: destination.metadata.capture_month,
+            capture_day: destination.metadata.capture_day,
+            camera_make: destination.metadata.camera_make,
+            camera_model: destination.metadata.camera_model,
+            lens_model: destination.metadata.lens_model,
+            iso: destination.metadata.iso,
+            shutter_speed: destination.metadata.shutter_speed,
+            aperture: destination.metadata.aperture,
             import_mode: request.import_mode.clone(),
             location: AssetLocation {
                 drive_id: request.drive_id.clone(),
                 root_path: mount_path_str.clone(),
-                relative_path,
+                relative_path: destination.relative_path,
                 online: true,
             },
         });
@@ -126,8 +361,154 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
     Ok(ImportSummary {
         drive,
         assets,
-        skipped_unsupported,
+        skipped_unsupported: planning.skipped_unsupported,
+        reused_existing,
+        backed_up,
+        reused_backup,
+        skipped_policy: planning.skipped_policy,
+        skipped_duplicates,
     })
+}
+
+fn files_have_identical_contents(left: &Path, right: &Path) -> std::io::Result<bool> {
+    if std::fs::metadata(left)?.len() != std::fs::metadata(right)?.len() {
+        return Ok(false);
+    }
+
+    let mut left_reader = BufReader::new(File::open(left)?);
+    let mut right_reader = BufReader::new(File::open(right)?);
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_reader.read(&mut left_buffer)?;
+        let right_read = right_reader.read(&mut right_buffer)?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn sha256_file(path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(digest.finalize().into())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublishPolicy {
+    CreateNew,
+    Replace,
+}
+
+fn copy_file_verified_atomically(
+    source: &Path,
+    destination: &Path,
+    publish_policy: PublishPolicy,
+) -> std::io::Result<()> {
+    let mut partial_name = destination.as_os_str().to_os_string();
+    partial_name.push(".virel-partial");
+    let partial_path = PathBuf::from(partial_name);
+    if partial_path.exists() {
+        std::fs::remove_file(&partial_path)?;
+    }
+
+    let copy_result = std::fs::copy(source, &partial_path);
+    if let Err(error) = copy_result {
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(error);
+    }
+
+    if sha256_file(source)? != sha256_file(&partial_path)? {
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(std::io::Error::other(format!(
+            "SHA-256 verification failed while copying {}",
+            source.display()
+        )));
+    }
+
+    if publish_policy == PublishPolicy::CreateNew && destination.exists() {
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "refusing to overwrite existing file at {}",
+                destination.display()
+            ),
+        ));
+    }
+
+    if let Err(error) = publish_verified_partial(&partial_path, destination, publish_policy) {
+        let _ = std::fs::remove_file(&partial_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn publish_verified_partial(
+    partial_path: &Path,
+    destination: &Path,
+    _publish_policy: PublishPolicy,
+) -> std::io::Result<()> {
+    // POSIX rename publishes the verified file atomically and replaces an
+    // existing destination without first creating a missing-file window.
+    std::fs::rename(partial_path, destination)
+}
+
+#[cfg(windows)]
+fn publish_verified_partial(
+    partial_path: &Path,
+    destination: &Path,
+    publish_policy: PublishPolicy,
+) -> std::io::Result<()> {
+    if publish_policy == PublishPolicy::CreateNew || !destination.exists() {
+        return std::fs::rename(partial_path, destination);
+    }
+
+    let mut previous_name = destination.as_os_str().to_os_string();
+    previous_name.push(".virel-previous");
+    let previous_path = PathBuf::from(previous_name);
+    if previous_path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "replacement recovery is required before importing {}",
+                destination.display()
+            ),
+        ));
+    }
+
+    std::fs::rename(destination, &previous_path)?;
+    match std::fs::rename(partial_path, destination) {
+        Ok(()) => {
+            std::fs::remove_file(previous_path)?;
+            Ok(())
+        }
+        Err(error) => {
+            let restore_result = std::fs::rename(&previous_path, destination);
+            match restore_result {
+                Ok(()) => Err(error),
+                Err(restore_error) => Err(std::io::Error::other(format!(
+                    "replacement failed for {} and the previous file remains at {}: {}; restore failed: {}",
+                    destination.display(),
+                    previous_path.display(),
+                    error,
+                    restore_error
+                ))),
+            }
+        }
+    }
 }
 
 fn extract_metadata_parallel(paths: &[PathBuf]) -> Vec<ExtractedMetadata> {
@@ -142,7 +523,7 @@ fn extract_metadata_parallel(paths: &[PathBuf]) -> Vec<ExtractedMetadata> {
         .map(|value| value.get())
         .unwrap_or(1)
         .clamp(1, paths.len());
-    let chunk_size = (paths.len() + worker_count - 1) / worker_count;
+    let chunk_size = paths.len().div_ceil(worker_count);
     let mut indexed_metadata = thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
         for (chunk_index, chunk) in paths.chunks(chunk_size).enumerate() {
@@ -233,6 +614,141 @@ fn managed_drive_root(request: &ImportRequest) -> std::io::Result<PathBuf> {
         .clone()
         .ok_or_else(|| std::io::Error::other("managed import requested without a managed root"))?;
     Ok(managed_root.join(sanitize_path_segment(&request.drive_id)))
+}
+
+fn is_raw_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "3fr"
+            | "arw"
+            | "cr2"
+            | "cr3"
+            | "dng"
+            | "erf"
+            | "iiq"
+            | "kdc"
+            | "mef"
+            | "mos"
+            | "nef"
+            | "nrw"
+            | "orf"
+            | "pef"
+            | "raf"
+            | "raw"
+            | "rw2"
+            | "sr2"
+            | "srf"
+            | "x3f"
+    )
+}
+
+fn is_jpeg_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "jpg" | "jpeg"
+    )
+}
+
+fn pair_key(path: &Path) -> String {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    format!("{}/{}", parent.to_string_lossy().to_ascii_lowercase(), stem)
+}
+
+fn organized_relative_path(
+    request: &ImportRequest,
+    source_relative_path: &str,
+    metadata: &ExtractedMetadata,
+) -> String {
+    if request.import_mode != ImportMode::Managed
+        || !request
+            .organization_template
+            .trim()
+            .eq_ignore_ascii_case("date-camera")
+    {
+        return source_relative_path.to_string();
+    }
+    let date_path =
+        if metadata.capture_year > 0 && metadata.capture_month > 0 && metadata.capture_day > 0 {
+            format!(
+                "{:04}/{:02}/{:02}",
+                metadata.capture_year, metadata.capture_month, metadata.capture_day
+            )
+        } else {
+            "Unknown Date".to_string()
+        };
+    let camera = match (metadata.camera_make.trim(), metadata.camera_model.trim()) {
+        ("", "") => "Unknown Camera".to_string(),
+        (make, "") => make.to_string(),
+        ("", model) => model.to_string(),
+        (make, model)
+            if model
+                .to_ascii_lowercase()
+                .starts_with(&make.to_ascii_lowercase()) =>
+        {
+            model.to_string()
+        }
+        (make, model) => format!("{make} {model}"),
+    };
+    let file_name = Path::new(source_relative_path)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("imported-file");
+    format!(
+        "{}/{}/{}",
+        date_path,
+        sanitize_folder_name(&camera),
+        file_name
+    )
+}
+
+fn destination_collision_key(relative_path: &str) -> String {
+    relative_path.replace('\\', "/").to_lowercase()
+}
+
+fn sanitize_folder_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '\0' => '_',
+            _ => character,
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim();
+    if trimmed.is_empty() {
+        "Unknown Camera".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn disambiguated_relative_path(relative_path: &str, identity: &str) -> String {
+    let path = Path::new(relative_path);
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or("imported-file");
+    let extension = path.extension().and_then(OsStr::to_str).unwrap_or_default();
+    let suffix = identity.chars().take(8).collect::<String>();
+    let file_name = if extension.is_empty() {
+        format!("{stem}-{suffix}")
+    } else {
+        format!("{stem}-{suffix}.{extension}")
+    };
+    parent.join(file_name).to_string_lossy().replace('\\', "/")
 }
 
 fn sanitize_path_segment(value: &str) -> String {
@@ -430,6 +946,7 @@ mod tests {
     fn supported_extensions_include_raw_and_jpeg() {
         assert!(is_supported_photo_path(Path::new("frame.CR3")));
         assert!(is_supported_photo_path(Path::new("frame.jpg")));
+        assert!(is_supported_photo_path(Path::new("voice.wav")));
         assert!(!is_supported_photo_path(Path::new("notes.txt")));
     }
 
@@ -449,6 +966,10 @@ mod tests {
             import_mode: ImportMode::Referenced,
             selected_paths: Vec::new(),
             managed_root: None,
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
@@ -477,6 +998,10 @@ mod tests {
             import_mode: ImportMode::Referenced,
             selected_paths: vec![root.join("set-a").join("keep.NEF")],
             managed_root: None,
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
@@ -489,6 +1014,7 @@ mod tests {
         let directory = tempdir().expect("tempdir should succeed");
         let root = directory.path().join("card");
         let managed_root = directory.path().join("managed");
+        let backup_root = directory.path().join("backup");
         fs::create_dir_all(root.join("dcim")).expect("create dir should succeed");
         fs::write(root.join("dcim").join("frame.CR2"), b"raw-bytes").expect("write should succeed");
 
@@ -499,7 +1025,24 @@ mod tests {
             import_mode: ImportMode::Managed,
             selected_paths: Vec::new(),
             managed_root: Some(managed_root.clone()),
+            backup_root: Some(backup_root.clone()),
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::ReuseIdentical,
         };
+
+        let interrupted_partial_path = managed_root
+            .join("drive-card")
+            .join("dcim")
+            .join("frame.CR2.virel-partial");
+        fs::create_dir_all(
+            interrupted_partial_path
+                .parent()
+                .expect("partial path should have a parent"),
+        )
+        .expect("partial parent should be created");
+        fs::write(&interrupted_partial_path, b"interrupted-copy")
+            .expect("interrupted partial fixture should be created");
 
         let summary = discover_assets(&request).expect("discovery should succeed");
         let copied_path = managed_root
@@ -508,10 +1051,23 @@ mod tests {
             .join("frame.CR2");
         assert_eq!(summary.assets.len(), 1);
         assert!(copied_path.exists());
+        let backup_path = backup_root
+            .join("drive-card")
+            .join("dcim")
+            .join("frame.CR2");
+        assert!(backup_path.exists());
+        assert_eq!(summary.backed_up, 1);
+        assert_eq!(summary.reused_backup, 0);
+        assert_eq!(
+            fs::read(&backup_path).expect("backup should be readable"),
+            b"raw-bytes"
+        );
         assert_eq!(
             fs::read(&copied_path).expect("copy should be readable"),
             b"raw-bytes"
         );
+        assert!(!PathBuf::from(format!("{}.virel-partial", copied_path.display())).exists());
+        assert!(!interrupted_partial_path.exists());
         assert_eq!(
             summary.assets[0].location.root_path,
             managed_root
@@ -521,6 +1077,206 @@ mod tests {
         );
         assert_eq!(summary.assets[0].location.relative_path, "dcim/frame.CR2");
         assert_eq!(summary.assets[0].import_mode, ImportMode::Managed);
+
+        let resumed_summary = discover_assets(&request).expect("resumed discovery should succeed");
+        assert_eq!(resumed_summary.assets.len(), 1);
+        assert_eq!(resumed_summary.reused_existing, 1);
+        assert_eq!(resumed_summary.backed_up, 1);
+        assert_eq!(resumed_summary.reused_backup, 1);
+        assert!(!PathBuf::from(format!("{}.virel-partial", copied_path.display())).exists());
+    }
+
+    #[test]
+    fn managed_skip_preserves_a_different_organized_destination() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        let managed_root = directory.path().join("managed");
+        let backup_root = directory.path().join("backup");
+        let source_path = root.join("DCIM").join("frame.jpg");
+        fs::create_dir_all(source_path.parent().expect("source should have a parent"))
+            .expect("source parent should be created");
+        fs::write(&source_path, b"new-source-bytes").expect("source should be written");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root,
+            import_mode: ImportMode::Managed,
+            selected_paths: vec![source_path],
+            managed_root: Some(managed_root),
+            backup_root: Some(backup_root),
+            organization_template: "date-camera".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
+        };
+        let plan = plan_import_destinations(&request).expect("planning should succeed");
+        let destination = plan.destinations[0]
+            .managed_destination
+            .clone()
+            .expect("managed destination should exist in the plan");
+        let backup_destination = plan.destinations[0]
+            .backup_destination
+            .clone()
+            .expect("backup destination should exist in the plan");
+        fs::create_dir_all(
+            destination
+                .parent()
+                .expect("destination should have a parent"),
+        )
+        .expect("destination parent should be created");
+        fs::write(&destination, b"existing-original-bytes")
+            .expect("existing destination should be written");
+
+        let summary = discover_assets(&request).expect("skip import should succeed");
+        assert!(summary.assets.is_empty());
+        assert_eq!(summary.skipped_duplicates, 1);
+        assert_eq!(
+            fs::read(&destination).expect("existing destination should remain readable"),
+            b"existing-original-bytes"
+        );
+        assert!(!backup_destination.exists());
+    }
+
+    #[test]
+    fn managed_replace_backs_up_source_and_replaces_organized_destination() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        let source_path = root.join("DCIM").join("frame.jpg");
+        fs::create_dir_all(source_path.parent().expect("source should have a parent"))
+            .expect("source parent should be created");
+        fs::write(&source_path, b"new-source-bytes").expect("source should be written");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root,
+            import_mode: ImportMode::Managed,
+            selected_paths: vec![source_path],
+            managed_root: Some(directory.path().join("managed")),
+            backup_root: Some(directory.path().join("backup")),
+            organization_template: "date-camera".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Replace,
+        };
+        let plan = plan_import_destinations(&request).expect("planning should succeed");
+        let destination = plan.destinations[0]
+            .managed_destination
+            .clone()
+            .expect("managed destination should exist in the plan");
+        let backup_destination = plan.destinations[0]
+            .backup_destination
+            .clone()
+            .expect("backup destination should exist in the plan");
+        fs::create_dir_all(
+            destination
+                .parent()
+                .expect("destination should have a parent"),
+        )
+        .expect("destination parent should be created");
+        fs::write(&destination, b"existing-original-bytes")
+            .expect("existing destination should be written");
+
+        let summary = discover_assets(&request).expect("replace import should succeed");
+        assert_eq!(summary.assets.len(), 1);
+        assert_eq!(summary.skipped_duplicates, 0);
+        assert_eq!(
+            fs::read(&destination).expect("replacement should be readable"),
+            b"new-source-bytes"
+        );
+        assert_eq!(
+            fs::read(&backup_destination).expect("backup should be readable"),
+            b"new-source-bytes"
+        );
+    }
+
+    #[test]
+    fn managed_import_refuses_to_overwrite_a_different_backup() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        let source_path = root.join("DCIM").join("frame.jpg");
+        fs::create_dir_all(source_path.parent().expect("source should have a parent"))
+            .expect("source parent should be created");
+        fs::write(&source_path, b"new-source-bytes").expect("source should be written");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root,
+            import_mode: ImportMode::Managed,
+            selected_paths: vec![source_path],
+            managed_root: Some(directory.path().join("managed")),
+            backup_root: Some(directory.path().join("backup")),
+            organization_template: "date-camera".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Replace,
+        };
+        let plan = plan_import_destinations(&request).expect("planning should succeed");
+        let destination = plan.destinations[0]
+            .managed_destination
+            .clone()
+            .expect("managed destination should exist in the plan");
+        let backup_destination = plan.destinations[0]
+            .backup_destination
+            .clone()
+            .expect("backup destination should exist in the plan");
+        fs::create_dir_all(
+            backup_destination
+                .parent()
+                .expect("backup destination should have a parent"),
+        )
+        .expect("backup parent should be created");
+        fs::write(&backup_destination, b"existing-backup-bytes")
+            .expect("existing backup should be written");
+
+        let error = discover_assets(&request).expect_err("different backup should stop import");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&backup_destination).expect("existing backup should remain readable"),
+            b"existing-backup-bytes"
+        );
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn duplicate_policy_parsing_is_typed_and_fail_closed() {
+        assert_eq!(
+            DuplicatePolicy::parse("skip").unwrap(),
+            DuplicatePolicy::Skip
+        );
+        assert_eq!(
+            DuplicatePolicy::parse("reuse-identical").unwrap(),
+            DuplicatePolicy::ReuseIdentical
+        );
+        assert_eq!(
+            DuplicatePolicy::parse("replace").unwrap(),
+            DuplicatePolicy::Replace
+        );
+        assert!(DuplicatePolicy::parse("overwrite-anything").is_err());
+    }
+
+    #[test]
+    fn selected_source_outside_import_root_is_rejected() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        let outside_path = directory.path().join("outside.jpg");
+        fs::create_dir_all(&root).expect("root should be created");
+        fs::write(&outside_path, b"outside-source").expect("outside source should be written");
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root,
+            import_mode: ImportMode::Managed,
+            selected_paths: vec![outside_path],
+            managed_root: Some(directory.path().join("managed")),
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Replace,
+        };
+
+        let error = plan_import_destinations(&request)
+            .expect_err("sources outside the import root must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -544,6 +1300,10 @@ mod tests {
                 root.join("second.jpg"),
             ],
             managed_root: None,
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
@@ -556,6 +1316,73 @@ mod tests {
             relative_paths,
             vec!["third.jpg", "first.jpg", "fourth.jpg", "second.jpg"]
         );
+    }
+
+    #[test]
+    fn managed_date_camera_organization_is_stable_and_sanitized() {
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: PathBuf::from("/card"),
+            import_mode: ImportMode::Managed,
+            selected_paths: Vec::new(),
+            managed_root: Some(PathBuf::from("/library")),
+            backup_root: None,
+            organization_template: "date-camera".into(),
+            raw_jpeg_policy: "both".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
+        };
+        const METADATA: ExtractedMetadata = ExtractedMetadata {
+            capture_year: 2026,
+            capture_month: 8,
+            capture_day: 4,
+            camera_make: String::new(),
+            camera_model: String::new(),
+            lens_model: String::new(),
+            iso: None,
+            shutter_speed: String::new(),
+            aperture: None,
+        };
+        let mut metadata = METADATA;
+        metadata.camera_make = "Canon".into();
+        metadata.camera_model = "EOS R5:Studio/A".into();
+
+        assert_eq!(
+            organized_relative_path(&request, "DCIM/IMG_0001.CR3", &metadata),
+            "2026/08/04/Canon EOS R5_Studio_A/IMG_0001.CR3"
+        );
+    }
+
+    #[test]
+    fn raw_jpeg_pair_policy_keeps_unpaired_jpegs() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        fs::create_dir_all(&root).expect("create dir should succeed");
+        fs::write(root.join("paired.CR3"), b"raw").expect("write raw should succeed");
+        fs::write(root.join("paired.jpg"), b"jpeg").expect("write jpeg should succeed");
+        fs::write(root.join("only.jpg"), b"standalone").expect("write standalone should succeed");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root,
+            import_mode: ImportMode::Referenced,
+            selected_paths: Vec::new(),
+            managed_root: None,
+            backup_root: None,
+            organization_template: "source".into(),
+            raw_jpeg_policy: "raw-only".into(),
+            duplicate_policy: DuplicatePolicy::Skip,
+        };
+
+        let summary = discover_assets(&request).expect("discovery should succeed");
+        let paths = summary
+            .assets
+            .iter()
+            .map(|asset| asset.location.relative_path.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(summary.skipped_policy, 1);
+        assert_eq!(paths, HashSet::from(["paired.CR3", "only.jpg"]));
     }
 
     #[test]

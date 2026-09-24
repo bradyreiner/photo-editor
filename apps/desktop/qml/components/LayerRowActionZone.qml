@@ -1,7 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "." as Components
 
@@ -37,7 +37,7 @@ RowLayout {
         radius: 3
         color: root.hasMask || root.maskSelected
                ? theme.alpha(root.accent, 0.14)
-               : theme.alpha(theme.panelLift, 0.34)
+               : theme.alpha(theme.surfaceTop, 0.34)
         border.width: theme.chromeBorderWidth
         border.color: root.hasMask || root.maskSelected
                       ? theme.alpha(root.accent, 0.52)

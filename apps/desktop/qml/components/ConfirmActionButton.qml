@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -9,6 +9,9 @@ Item {
     property string confirmText: "Confirm"
     property string helperText: "Press again to confirm"
     property string iconName: ""
+    property bool showText: true
+    property string tooltipText: ""
+    property string disabledReason: ""
     property bool compact: false
     property bool enabled: true
     property bool fillButtonWidth: true
@@ -44,6 +47,11 @@ Item {
             Layout.fillWidth: root.fillButtonWidth
             text: root.armed ? root.confirmText : root.text
             iconName: root.iconName
+            showText: root.armed || root.showText
+            tooltipText: root.armed
+                         ? root.confirmText + ". " + root.helperText
+                         : (root.tooltipText.length > 0 ? root.tooltipText : root.text)
+            disabledReason: root.disabledReason
             compact: root.compact
             minimumReadableWidth: root.minimumReadableWidth
             enabled: root.enabled

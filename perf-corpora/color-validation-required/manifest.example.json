@@ -1,0 +1,430 @@
+{
+  "schema": "photo-editor-color-validation-corpus:v1",
+  "corpus_id": "licensed-color-validation-example",
+  "corpus_version": 1,
+  "description": "Schema example only. Replace every placeholder with independently licensed, byte-verified production evidence.",
+  "candidate_rendering_model": "aces2-ocio-v1",
+  "quality_gates": {
+    "camera-input": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    },
+    "icc": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    },
+    "sdr": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    },
+    "hdr": {
+      "linear_one_nits": 10000,
+      "p95_delta_e_00": 0.75,
+      "max_delta_e_00": 2.0,
+      "p95_delta_e_itp": 1.5,
+      "max_delta_e_itp": 4.0,
+      "max_alpha_error": 0.0001
+    },
+    "proof": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    },
+    "preview": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    },
+    "export": {
+      "linear_one_nits": 100,
+      "p95_delta_e_00": 0.5,
+      "max_delta_e_00": 1.5,
+      "p95_delta_e_itp": 1.0,
+      "max_delta_e_itp": 3.0,
+      "max_alpha_error": 0.0001
+    }
+  },
+  "asset_count": 9,
+  "assets": [
+    {
+      "asset_id": "capture-daylight-chart",
+      "kind": "capture",
+      "path": "assets/capture-daylight-chart.dng",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with asset license",
+        "distribution": "private-ci",
+        "source_url": "internal:asset-register/capture-daylight-chart",
+        "license_url": "internal:license-register/capture-daylight-chart",
+        "evidence": "Replace with photographer release or redistributable license record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "media_type": "raw-photo",
+      "container": "dng",
+      "camera": {
+        "make": "Example Camera Maker A",
+        "model": "Example Camera A1"
+      },
+      "illuminant": "daylight",
+      "iso": 100,
+      "scene_tags": [
+        "skin-deep",
+        "foliage",
+        "sky"
+      ],
+      "profile_ids": [
+        "profile-camera-dcp",
+        "profile-output-icc"
+      ],
+      "reference_ids": [
+        "reference-measured-chart"
+      ],
+      "recipe_id": "recipe-candidate-default",
+      "execution_paths": [
+        "camera-input",
+        "icc",
+        "sdr",
+        "hdr",
+        "proof",
+        "preview",
+        "export"
+      ],
+      "review_regions": [
+        {
+          "label": "measured chart",
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.4,
+          "height": 0.4,
+          "expected_content": "Measured chart patches and neutral scale"
+        }
+      ]
+    },
+    {
+      "asset_id": "capture-tungsten-skin",
+      "kind": "capture",
+      "path": "assets/capture-tungsten-skin.nef",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with asset license",
+        "distribution": "private-ci",
+        "source_url": "internal:asset-register/capture-tungsten-skin",
+        "license_url": "internal:license-register/capture-tungsten-skin",
+        "evidence": "Replace with photographer release or redistributable license record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "media_type": "raw-photo",
+      "container": "nef",
+      "camera": {
+        "make": "Example Camera Maker B",
+        "model": "Example Camera B1"
+      },
+      "illuminant": "tungsten",
+      "iso": 6400,
+      "scene_tags": [
+        "skin-deep",
+        "high-iso-shadows",
+        "clipped-highlights"
+      ],
+      "profile_ids": [
+        "profile-camera-dcp",
+        "profile-output-icc"
+      ],
+      "reference_ids": [
+        "reference-independent-render"
+      ],
+      "recipe_id": "recipe-candidate-default",
+      "execution_paths": [
+        "camera-input",
+        "icc",
+        "sdr",
+        "hdr",
+        "proof",
+        "preview",
+        "export"
+      ],
+      "review_regions": [
+        {
+          "label": "deep skin and shadow",
+          "x": 0.2,
+          "y": 0.15,
+          "width": 0.35,
+          "height": 0.7,
+          "expected_content": "Skin hue, shadow chroma, highlight rolloff, and high-ISO noise"
+        }
+      ]
+    },
+    {
+      "asset_id": "capture-led-neon",
+      "kind": "capture",
+      "path": "assets/capture-led-neon.arw",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with asset license",
+        "distribution": "private-ci",
+        "source_url": "internal:asset-register/capture-led-neon",
+        "license_url": "internal:license-register/capture-led-neon",
+        "evidence": "Replace with photographer release or redistributable license record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "media_type": "raw-photo",
+      "container": "arw",
+      "camera": {
+        "make": "Example Camera Maker C",
+        "model": "Example Camera C1"
+      },
+      "illuminant": "fluorescent-led",
+      "iso": 1600,
+      "scene_tags": [
+        "neon-led",
+        "saturated-textiles"
+      ],
+      "profile_ids": [
+        "profile-camera-dcp",
+        "profile-output-icc"
+      ],
+      "reference_ids": [
+        "reference-independent-render"
+      ],
+      "recipe_id": "recipe-candidate-default",
+      "execution_paths": [
+        "camera-input",
+        "icc",
+        "sdr",
+        "hdr",
+        "proof",
+        "preview",
+        "export"
+      ],
+      "review_regions": [
+        {
+          "label": "saturated emitters",
+          "x": 0.05,
+          "y": 0.1,
+          "width": 0.9,
+          "height": 0.5,
+          "expected_content": "Highly saturated LED and textile hues without hard gamut clipping"
+        }
+      ]
+    },
+    {
+      "asset_id": "capture-mixed-highlight",
+      "kind": "capture",
+      "path": "assets/capture-mixed-highlight.cr3",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with asset license",
+        "distribution": "private-ci",
+        "source_url": "internal:asset-register/capture-mixed-highlight",
+        "license_url": "internal:license-register/capture-mixed-highlight",
+        "evidence": "Replace with photographer release or redistributable license record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "media_type": "raw-photo",
+      "container": "cr3",
+      "camera": {
+        "make": "Example Camera Maker D",
+        "model": "Example Camera D1"
+      },
+      "illuminant": "mixed",
+      "iso": 800,
+      "scene_tags": [
+        "clipped-highlights",
+        "high-iso-shadows",
+        "foliage",
+        "sky"
+      ],
+      "profile_ids": [
+        "profile-camera-dcp",
+        "profile-output-icc"
+      ],
+      "reference_ids": [
+        "reference-measured-chart",
+        "reference-independent-render"
+      ],
+      "recipe_id": "recipe-candidate-default",
+      "execution_paths": [
+        "camera-input",
+        "icc",
+        "sdr",
+        "hdr",
+        "proof",
+        "preview",
+        "export"
+      ],
+      "review_regions": [
+        {
+          "label": "mixed-light transition",
+          "x": 0.15,
+          "y": 0.2,
+          "width": 0.7,
+          "height": 0.6,
+          "expected_content": "Mixed-source neutral transition, clipped highlight, and shadow color"
+        }
+      ]
+    },
+    {
+      "asset_id": "profile-camera-dcp",
+      "kind": "profile",
+      "path": "profiles/camera-profile.dcp",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with profile license",
+        "distribution": "private-ci",
+        "source_url": "internal:profile-register/camera-profile",
+        "license_url": "internal:license-register/camera-profile",
+        "evidence": "Replace with profile creation and redistribution record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "profile_type": "dcp",
+      "profile_role": "camera",
+      "provenance": "Project-owned or explicitly redistributable camera-profile bytes"
+    },
+    {
+      "asset_id": "profile-output-icc",
+      "kind": "profile",
+      "path": "profiles/output-profile.icc",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with profile license",
+        "distribution": "private-ci",
+        "source_url": "internal:profile-register/output-profile",
+        "license_url": "internal:license-register/output-profile",
+        "evidence": "Replace with profile creation and redistribution record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "profile_type": "icc",
+      "profile_role": "output",
+      "provenance": "Project-owned or explicitly redistributable ICC output profile bytes"
+    },
+    {
+      "asset_id": "reference-measured-chart",
+      "kind": "reference",
+      "path": "references/measured-chart.json",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with measurement-data license",
+        "distribution": "private-ci",
+        "source_url": "internal:measurement-register/measured-chart",
+        "license_url": "internal:license-register/measured-chart",
+        "evidence": "Replace with instrument export and measurement-data rights record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "reference_type": "measured-chart",
+      "producer": {
+        "organization": "Independent color laboratory",
+        "tool": "Replace with spectrophotometer and software",
+        "version": "Replace with instrument and software versions",
+        "independent_of_photo_editor": true
+      },
+      "color_encoding": "CIE Lab D50",
+      "observer": "CIE 1931 2 degree",
+      "white_point": "D50"
+    },
+    {
+      "asset_id": "reference-independent-render",
+      "kind": "reference",
+      "path": "references/independent-render.tif",
+      "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+      "byte_size": 1,
+      "license": {
+        "name": "Replace with reference-render license",
+        "distribution": "private-ci",
+        "source_url": "internal:reference-register/independent-render",
+        "license_url": "internal:license-register/independent-render",
+        "evidence": "Replace with independent renderer output and redistribution record ID",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "reference_type": "independent-render",
+      "producer": {
+        "organization": "Independent color laboratory",
+        "tool": "Replace with independent RAW/CMM renderer",
+        "version": "Replace with pinned renderer version",
+        "independent_of_photo_editor": true
+      },
+      "color_encoding": "16-bit TIFF with embedded reference ICC",
+      "observer": "CIE 1931 2 degree",
+      "white_point": "Encoded by embedded reference ICC"
+    },
+    {
+      "asset_id": "recipe-candidate-default",
+      "kind": "recipe",
+      "path": "recipes/candidate-default.json",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "byte_size": 1,
+      "license": {
+        "name": "Project-authored test recipe",
+        "distribution": "repository",
+        "source_url": "internal:photo-editor/color-validation-recipe",
+        "license_url": "internal:photo-editor-project-license",
+        "evidence": "Project-authored recipe tracked in source control",
+        "review": {
+          "reviewer_id": "license-reviewer-example",
+          "reviewed_on": "2026-07-14",
+          "status": "approved"
+        }
+      },
+      "rendering_model": "aces2-ocio-v1",
+      "recipe_schema": "photo-editor-recipe:v11"
+    }
+  ],
+  "comparison_sets": [],
+  "review_records": []
+}

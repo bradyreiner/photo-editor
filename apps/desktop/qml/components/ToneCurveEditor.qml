@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -19,13 +19,15 @@ Item {
     property var previewPointsModel: []
     property bool histogramLogScale: true
     property bool compactMode: false
+    property bool expanded: false
+    readonly property bool compactLayout: compactMode && !expanded
     readonly property real histogramPrimaryFillOpacity: 0.10
     readonly property real histogramPrimaryStrokeOpacity: 0.28
     readonly property real histogramLuminanceFillOpacity: 0.11
     readonly property real histogramLuminanceStrokeOpacity: 0.30
     readonly property real histogramRgbFillOpacity: 0.035
     readonly property real histogramRgbStrokeOpacity: 0.12
-    readonly property real graphInset: compactMode ? 10 : 16
+    readonly property real graphInset: compactLayout ? 10 : 16
     readonly property real handleHitRadius: 28
     readonly property real endpointHandleHitRadius: 36
     readonly property int pointCount: currentPoints().length
@@ -39,7 +41,39 @@ Item {
 
     Theme { id: theme }
 
-    implicitHeight: compactMode ? 178 : 328
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Grouping
+    Accessible.name: qsTr("Point curve editor")
+    Accessible.description: qsTr("Add points by clicking the graph. Use arrows to adjust the selected point, Shift for fine adjustment, and Delete to remove it.")
+    implicitHeight: compactLayout ? 208 : 430
+
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape && interaction.gestureActive) {
+            interaction.finishGesture(true);
+            event.accepted = true;
+            return;
+        }
+        if (interaction.gestureActive)
+            return;
+        if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+            root.editStarted();
+            root.deleteSelectedPoint();
+            root.editFinished();
+            event.accepted = true;
+            return;
+        }
+        const dx = event.key === Qt.Key_Right ? 1 : event.key === Qt.Key_Left ? -1 : 0;
+        const dy = event.key === Qt.Key_Up ? 1 : event.key === Qt.Key_Down ? -1 : 0;
+        if (dx === 0 && dy === 0)
+            return;
+        const step = (event.modifiers & Qt.ShiftModifier) !== 0 ? 0.1 : 1;
+        const point = currentPoints()[effectiveSelectedIndex()];
+        root.editStarted();
+        updateSelectedNumeric(dx !== 0 ? "x" : "y",
+                              String((dx !== 0 ? point.x : point.y) * 255 + (dx + dy) * step));
+        root.editFinished();
+        event.accepted = true;
+    }
 
     function clampUnit(value) {
         return Math.max(0, Math.min(1, value));
@@ -149,6 +183,22 @@ Item {
                 break;
             }
         }
+        // Start a new handle on the existing curve. Clicking above or below
+        // the graph must not replace the tonal response before the drag begins.
+        normalized.x = Math.max(points[insertIndex - 1].x + 0.01,
+                                Math.min(points[insertIndex].x - 0.01, normalized.x));
+        if (points[insertIndex].x - points[insertIndex - 1].x < 0.02)
+            return -1;
+        const samples = sampledCurvePoints();
+        for (let index = 1; index < samples.length; ++index) {
+            if (samples[index].x < normalized.x)
+                continue;
+            const left = samples[index - 1];
+            const right = samples[index];
+            const t = (normalized.x - left.x) / Math.max(0.000001, right.x - left.x);
+            normalized.y = left.y + t * (right.y - left.y);
+            break;
+        }
         points.splice(insertIndex, 0, normalized);
         pointsEdited(points);
         return insertIndex;
@@ -206,7 +256,7 @@ Item {
         const index = effectiveSelectedIndex();
         if (index < 0 || index >= points.length)
             return "0";
-        return Math.round(points[index].x * 255).toString();
+        return Number((points[index].x * 255).toFixed(3)).toString();
     }
 
     function selectedOutputText() {
@@ -214,7 +264,7 @@ Item {
         const index = effectiveSelectedIndex();
         if (index < 0 || index >= points.length)
             return "0";
-        return Math.round(points[index].y * 255).toString();
+        return Number((points[index].y * 255).toFixed(3)).toString();
     }
 
     function updateSelectedNumeric(axis, text) {
@@ -235,6 +285,8 @@ Item {
             updated.y = value;
         }
 
+        if (updated.x === points[index].x && updated.y === points[index].y)
+            return;
         points[index] = updated;
         pointsEdited(points);
     }
@@ -347,14 +399,14 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-            visible: !root.compactMode
+            visible: !root.compactLayout
 
             Label {
                 objectName: root.objectName.length > 0 ? root.objectName + "TitleLabel" : ""
                 text: "Point Curve"
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: theme.typeTitle
                 font.weight: Font.DemiBold
             }
 
@@ -367,7 +419,7 @@ Item {
                 text: "In / Out"
                 color: theme.textFaint
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 font.letterSpacing: 0
             }
         }
@@ -383,7 +435,7 @@ Item {
                     required property var modelData
 
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 24
+                    Layout.preferredHeight: 34
                     channelName: String(modelData)
                     selected: root.selectedChannel === modelData
                     accent: root.accent
@@ -395,7 +447,7 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
-            visible: !root.compactMode
+            visible: !root.compactLayout
 
             Rectangle {
                 objectName: root.objectName.length > 0 ? root.objectName + "ChannelModeBadge" : ""
@@ -411,7 +463,7 @@ Item {
                     text: root.channelModeLabel
                     color: theme.textStrong
                     font.family: theme.fontUi
-                    font.pixelSize: 9
+                    font.pixelSize: theme.typeCaption
                     font.weight: Font.DemiBold
                     font.letterSpacing: 0
                 }
@@ -419,7 +471,7 @@ Item {
 
             Rectangle {
                 objectName: root.objectName.length > 0 ? root.objectName + "PointCountBadge" : ""
-                Layout.preferredHeight: 22
+                Layout.preferredHeight: 26
                 Layout.preferredWidth: 72
                 radius: 3
                 color: theme.alpha(theme.ink950, 0.30)
@@ -431,7 +483,7 @@ Item {
                     text: root.pointCount + " pts"
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 9
+                    font.pixelSize: theme.typeCaption
                     font.weight: Font.DemiBold
                     font.letterSpacing: 0
                 }
@@ -443,11 +495,11 @@ Item {
 
             ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "DeletePointButton" : ""
-                Layout.preferredHeight: 22
-                Layout.preferredWidth: 62
+                Layout.preferredHeight: 28
+                Layout.preferredWidth: 70
                 enabled: root.selectedPointDeletable
                 text: "Delete"
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 compact: true
                 tone: "danger"
                 tooltipText: "Delete the selected curve point."
@@ -456,10 +508,10 @@ Item {
 
             ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "ResetCurveButton" : ""
-                Layout.preferredHeight: 22
-                Layout.preferredWidth: 52
+                Layout.preferredHeight: 28
+                Layout.preferredWidth: 58
                 text: "Reset"
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 compact: true
                 tooltipText: "Reset the active curve."
                 onClicked: root.resetActiveCurve()
@@ -469,9 +521,9 @@ Item {
         GridLayout {
             Layout.fillWidth: true
             columns: 4
-            columnSpacing: 4
-            rowSpacing: 4
-            visible: !root.compactMode && root.presetNames && root.presetNames.length > 0
+            columnSpacing: 6
+            rowSpacing: 6
+            visible: !root.compactLayout && root.presetNames && root.presetNames.length > 0
 
             Repeater {
                 model: root.presetNames
@@ -480,7 +532,7 @@ Item {
                     required property var modelData
 
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 24
+                    Layout.preferredHeight: 30
                     presetName: String(modelData)
                     onPreviewRequested: function(presetName) { root.previewPreset(presetName) }
                     onPreviewCleared: root.clearPresetPreview()
@@ -495,11 +547,12 @@ Item {
 
             Rectangle {
                 id: curveArea
+                objectName: "toneCurveGraph"
                 anchors.fill: parent
-                radius: 3
-                color: theme.alpha(theme.ink950, 0.54)
+                radius: theme.radius8
+                color: theme.surfaceInset
                 border.width: 1
-                border.color: theme.alpha(theme.polar, 0.10)
+                border.color: theme.lineSoft
                 antialiasing: true
 
                 Canvas {
@@ -724,27 +777,68 @@ Item {
 
                     property int draggingIndex: -1
                     property int selectedIndex: -1
+                    property point pressPosition: Qt.point(0, 0)
+                    property point handleOrigin: Qt.point(0, 0)
+                    property var startingPoints: []
+                    property bool gestureActive: false
+                    property bool fineMode: false
+                    property int axisLock: 0
+
+                    function finishGesture(cancel) {
+                        if (!gestureActive)
+                            return;
+                        gestureActive = false;
+                        draggingIndex = -1;
+                        if (cancel)
+                            root.pointsEdited(startingPoints);
+                        root.editFinished();
+                    }
 
                     onPressed: function (mouse) {
+                        root.forceActiveFocus();
+                        startingPoints = root.currentPoints();
+                        gestureActive = true;
+                        fineMode = (mouse.modifiers & Qt.ShiftModifier) !== 0;
+                        axisLock = 0;
                         root.editStarted();
                         root.clearPresetPreview();
                         const handleIndex = root.closestHandle(mouse.x, mouse.y);
                         if (handleIndex >= 0) {
                             draggingIndex = handleIndex;
                             selectedIndex = handleIndex;
-                            root.updatePoint(handleIndex, mouse.x, mouse.y);
                         } else {
                             const insertedIndex = root.insertPoint(mouse.x, mouse.y);
                             draggingIndex = insertedIndex;
                             selectedIndex = insertedIndex;
                         }
+                        pressPosition = Qt.point(mouse.x, mouse.y);
+                        if (draggingIndex >= 0)
+                            handleOrigin = root.graphPoint(draggingIndex);
                         curveCanvas.requestPaint();
                     }
 
                     onPositionChanged: function (mouse) {
-                        if (draggingIndex < 0 || draggingIndex >= root.currentPoints().length)
+                        if (!gestureActive || draggingIndex < 0 || draggingIndex >= root.currentPoints().length)
                             return;
-                        root.updatePoint(draggingIndex, mouse.x, mouse.y);
+                        const dx = mouse.x - pressPosition.x;
+                        const dy = mouse.y - pressPosition.y;
+                        pressPosition = Qt.point(mouse.x, mouse.y);
+                        const fine = (mouse.modifiers & Qt.ShiftModifier) !== 0;
+                        if (fine !== fineMode) {
+                            fineMode = fine;
+                            return;
+                        }
+                        if ((mouse.modifiers & Qt.ControlModifier) !== 0) {
+                            if (axisLock === 0 && (dx !== 0 || dy !== 0))
+                                axisLock = Math.abs(dx) >= Math.abs(dy) ? 1 : 2;
+                        } else {
+                            axisLock = 0;
+                        }
+                        const scale = fineMode ? 0.1 : 1;
+                        root.updatePoint(draggingIndex,
+                                         handleOrigin.x + (axisLock === 2 ? 0 : dx * scale),
+                                         handleOrigin.y + (axisLock === 1 ? 0 : dy * scale));
+                        handleOrigin = root.graphPoint(draggingIndex);
                         curveCanvas.requestPaint();
                     }
 
@@ -758,14 +852,8 @@ Item {
                         }
                     }
 
-                    onReleased: {
-                        draggingIndex = -1;
-                        root.editFinished();
-                    }
-                    onCanceled: {
-                        draggingIndex = -1;
-                        root.editFinished();
-                    }
+                    onReleased: finishGesture(false)
+                    onCanceled: finishGesture(true)
                 }
             }
         }
@@ -773,13 +861,12 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-            visible: !root.compactMode
 
             Label {
                 text: "Point " + (root.effectiveSelectedIndex() + 1)
                 color: theme.textFaint
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
                 font.weight: Font.DemiBold
             }
 
@@ -787,15 +874,16 @@ Item {
                 text: "In"
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
             }
 
             ToneTextField {
+                objectName: "toneCurveInputField"
                 Layout.preferredWidth: theme.valueColumnWidth
                 text: root.selectedInputText()
                 enabled: root.effectiveSelectedIndex() > 0 && root.effectiveSelectedIndex() < root.currentPoints().length - 1
                 horizontalAlignment: TextInput.AlignHCenter
-                validator: IntValidator { bottom: 0; top: 255 }
+                validator: DoubleValidator { bottom: 0; top: 255; decimals: 3; notation: DoubleValidator.StandardNotation }
                 onAccepted: root.updateSelectedNumeric("x", text)
                 onEditingFinished: root.updateSelectedNumeric("x", text)
             }
@@ -804,14 +892,15 @@ Item {
                 text: "Out"
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 9
+                font.pixelSize: theme.typeCaption
             }
 
             ToneTextField {
+                objectName: "toneCurveOutputField"
                 Layout.preferredWidth: theme.valueColumnWidth
                 text: root.selectedOutputText()
                 horizontalAlignment: TextInput.AlignHCenter
-                validator: IntValidator { bottom: 0; top: 255 }
+                validator: DoubleValidator { bottom: 0; top: 255; decimals: 3; notation: DoubleValidator.StandardNotation }
                 onAccepted: root.updateSelectedNumeric("y", text)
                 onEditingFinished: root.updateSelectedNumeric("y", text)
             }
@@ -821,6 +910,23 @@ Item {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true
+                text: "Shift: fine · Ctrl: lock axis · Arrows: nudge · Esc: cancel"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+            MiniButton {
+                objectName: "toneCurveExpandButton"
+                visible: root.compactMode
+                text: root.expanded ? "Collapse" : "Expand"
+                onClicked: root.expanded = !root.expanded
+            }
+        }
     }
 
     onPointsModelChanged: curveCanvas.requestPaint()

@@ -1,5 +1,6 @@
 {
   "description": "Reproducible public-source seed corpus for real-image QA. The fetch script downloads these assets into a local corpus directory; image binaries are not checked in.",
+  "agent_evaluation_version": 1,
   "manifest_version": 1,
   "name": "real-image-public-seed-v1",
   "assets": [
@@ -8,6 +9,7 @@
       "file_name": "public-canon-a570-raw.dng",
       "format": "dng",
       "license": "CC0 / Public Domain Dedication",
+      "license_evidence": "raw.pixls.us upload policy requires contributors to own the file and release selected samples under CC0; source page identifies the exact camera sample",
       "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
       "license_verified": true,
       "media_type": "photo",
@@ -30,8 +32,24 @@
           "y": 0.5
         }
       ],
+      "agent_cases": [
+        {
+          "case_id": "dark-raw-brighter-natural",
+          "instructions": "Make this image brighter overall while preserving natural color.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "brighter"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        }
+      ],
       "source_page": "https://raw.pixls.us/data/Canon/Canon%20PowerShot%20A570%20IS/",
       "source_url": "https://raw.pixls.us/data/Canon/Canon%20PowerShot%20A570%20IS/CRW_1918.DNG",
+      "sha256": "68034ca58c285659708b32cf4e208cce599788f36a8516a3d25326589d2e90a6",
+      "size_bytes": 9258000,
       "tags": [
         "dark_raw",
         "textured_detail"
@@ -42,6 +60,7 @@
       "file_name": "public-iphone-se-raw.dng",
       "format": "dng",
       "license": "CC0 / Public Domain Dedication",
+      "license_evidence": "raw.pixls.us upload policy requires contributors to own the file and release selected samples under CC0; source page identifies the exact camera sample",
       "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
       "license_verified": true,
       "media_type": "photo",
@@ -63,8 +82,24 @@
           "y": 0.42
         }
       ],
+      "agent_cases": [
+        {
+          "case_id": "mobile-raw-darker-highlight-control",
+          "instructions": "Make this image darker overall with controlled highlights.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "darker"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        }
+      ],
       "source_page": "https://raw.pixls.us/data/Apple/iPhone%20SE/",
       "source_url": "https://raw.pixls.us/data/Apple/iPhone%20SE/A4973FFB-9CBD-4ED8-805D-E30F4AE08A95.dng",
+      "sha256": "7a2a9747a0cb1537007233ce7e8b7233c5ee641d683b7b3da29e22387994a0d7",
+      "size_bytes": 11115746,
       "tags": [
         "dark_raw",
         "clipped_highlights"
@@ -75,6 +110,7 @@
       "file_name": "public-obama-portrait.jpg",
       "format": "jpg",
       "license": "Public domain",
+      "license_evidence": "Wikimedia Commons source page records the White House work and public-domain status",
       "license_verified": true,
       "media_type": "photo",
       "recipe": {
@@ -97,8 +133,82 @@
           "y": 0.18
         }
       ],
+      "agent_cases": [
+        {
+          "case_id": "portrait-warmer-overall",
+          "instructions": "Make this portrait warmer overall while keeping the tone unchanged.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "warmer",
+            "preserveTone"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        },
+        {
+          "case_id": "portrait-monochrome",
+          "instructions": "Make this portrait black and white with stronger contrast.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "monochrome",
+            "strongerContrast"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        },
+        {
+          "case_id": "portrait-remove-lapel-pin",
+          "kind": "retouch",
+          "instructions": "Remove only the small flag pin from the jacket lapel and reconstruct the navy fabric naturally without changing the portrait.",
+          "scope": "current-photo",
+          "retouch": {
+            "operation": "remove",
+            "target_label": "small flag lapel pin",
+            "region": {
+              "center_x": 0.569,
+              "center_y": 0.458,
+              "radius_x": 0.021,
+              "radius_y": 0.011
+            }
+          },
+          "expected_pixel_checks": [
+            "artifactMaterialized",
+            "fullResolutionArtifact",
+            "targetChanged",
+            "outsidePreserved",
+            "backgroundContinuity"
+          ],
+          "protected_regions": [
+            {
+              "label": "face and skin tone",
+              "x": 0.32,
+              "y": 0.06,
+              "width": 0.36,
+              "height": 0.31,
+              "max_mean_rgb_delta": 0.001
+            },
+            {
+              "label": "crossed hands",
+              "x": 0.19,
+              "y": 0.61,
+              "width": 0.54,
+              "height": 0.22,
+              "max_mean_rgb_delta": 0.001
+            }
+          ],
+          "human_review": {
+            "status": "pending"
+          }
+        }
+      ],
       "source_page": "https://commons.wikimedia.org/wiki/File:President_Barack_Obama.jpg",
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8d/President_Barack_Obama.jpg",
+      "sha256": "744dd848fbb0584229169e01c4944664957c62495fb9e8af514a088ebca43e19",
+      "size_bytes": 1276121,
       "tags": [
         "skin"
       ]
@@ -108,6 +218,7 @@
       "file_name": "public-queen-valley-sky.jpg",
       "format": "jpg",
       "license": "Public domain",
+      "license_evidence": "Wikimedia Commons source page records the public-domain dedication and original source",
       "license_verified": true,
       "media_type": "photo",
       "recipe": {
@@ -128,8 +239,51 @@
           "y": 0.08
         }
       ],
+      "agent_cases": [
+        {
+          "case_id": "sunset-quieter-sky",
+          "instructions": "Make this image quieter overall with softer contrast.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "softerContrast"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        },
+        {
+          "case_id": "sunset-remove-upper-right-cloud",
+          "kind": "retouch",
+          "instructions": "Remove only the small isolated cloud near the upper-right sky and preserve the surrounding gradient.",
+          "scope": "current-photo",
+          "retouch": {
+            "operation": "remove",
+            "target_label": "small isolated upper-right cloud",
+            "region": {
+              "center_x": 0.81,
+              "center_y": 0.113,
+              "radius_x": 0.022,
+              "radius_y": 0.012
+            }
+          },
+          "expected_pixel_checks": [
+            "artifactMaterialized",
+            "fullResolutionArtifact",
+            "targetChanged",
+            "outsidePreserved",
+            "backgroundContinuity"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        }
+      ],
       "source_page": "https://commons.wikimedia.org/wiki/File:Clouds_in_Queen_Valley_at_sunset_(50066228367).jpg",
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/95/Clouds_in_Queen_Valley_at_sunset_%2850066228367%29.jpg",
+      "sha256": "7a7bf50b8f13b6ef8ecdfd0adbee9f8136fd4e0424d4d1ece931378f8dff9dfa",
+      "size_bytes": 18678426,
       "tags": [
         "smooth_sky",
         "clipped_highlights"
@@ -140,6 +294,7 @@
       "file_name": "public-olympic-foliage.jpg",
       "format": "jpg",
       "license": "Public domain",
+      "license_evidence": "Wikimedia Commons source page records the National Park Service work and public-domain status",
       "license_verified": true,
       "media_type": "photo",
       "recipe": {
@@ -161,8 +316,51 @@
           "y": 0.35
         }
       ],
+      "agent_cases": [
+        {
+          "case_id": "foliage-richer-color",
+          "instructions": "Make the foliage more vibrant with richer color.",
+          "scope": "current-photo",
+          "expected_pixel_checks": [
+            "moreSaturated"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        },
+        {
+          "case_id": "foliage-remove-leaf-cluster",
+          "kind": "retouch",
+          "instructions": "Remove only the isolated four-leaf cluster on the upper central trunk and reconstruct the bark texture naturally.",
+          "scope": "current-photo",
+          "retouch": {
+            "operation": "remove",
+            "target_label": "isolated four-leaf cluster over bark",
+            "region": {
+              "center_x": 0.51,
+              "center_y": 0.33,
+              "radius_x": 0.012,
+              "radius_y": 0.01
+            }
+          },
+          "expected_pixel_checks": [
+            "artifactMaterialized",
+            "fullResolutionArtifact",
+            "targetChanged",
+            "outsidePreserved",
+            "backgroundContinuity"
+          ],
+          "protected_regions": [],
+          "human_review": {
+            "status": "pending"
+          }
+        }
+      ],
       "source_page": "https://commons.wikimedia.org/wiki/File:Fall_rainforest_moss_foliage_forest_BBaccus_NPS_photo_(23060485072).jpg",
       "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/12/Fall_rainforest_moss_foliage_forest_BBaccus_NPS_photo_%2823060485072%29.jpg",
+      "sha256": "26f0ac08580a453bdb5dce695728d696421a368750336b7385ae5f5523911126",
+      "size_bytes": 3263583,
       "tags": [
         "foliage",
         "textured_detail"

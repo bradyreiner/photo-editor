@@ -4,7 +4,16 @@ members = [
   "crates/ffi",
   "crates/jobs",
   "crates/metadata",
-  "crates/mcp",
   "crates/telemetry",
 ]
+exclude = ["crates/mcp"]
 resolver = "2"
+
+# Release helpers are shipped as separate executables and otherwise repeat a
+# large amount of monomorphized catalog/runtime code. Thin LTO removes unused
+# and duplicated code within each helper while retaining normal debug-build
+# iteration speed. Keep symbols until the release pipeline publishes matching
+# protected symbol artifacts and proves crash-stack symbolication.
+[profile.release]
+lto = "thin"
+codegen-units = 1

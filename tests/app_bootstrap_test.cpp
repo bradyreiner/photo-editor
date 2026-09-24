@@ -2,14 +2,20 @@
 #include <iostream>
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
 
 #include "app_bootstrap.h"
 #include "observability.h"
+#include "photo_editor/pipeline/color_profile_asset.h"
+#include "photo_editor/pipeline/dcp_profile_asset.h"
 #include "qml_performance_monitor.h"
 #include "worker_queue_registry.h"
 
@@ -27,10 +33,40 @@ int main(int argc, char** argv) {
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("AppBootstrapTest"));
 
+  if (QString::fromUtf8(photo_editor::desktop::AppBootstrap::application_name) !=
+          QStringLiteral("PhotoEditor") ||
+      QString::fromUtf8(photo_editor::desktop::AppBootstrap::organization_name) !=
+          QStringLiteral("PhotoEditor")) {
+    return fail("Looksy must retain the private-alpha application identity so existing data and preferences stay in place");
+  }
+
   QTemporaryDir runtime_root;
   QTemporaryDir cache_root;
   if (!runtime_root.isValid() || !cache_root.isValid()) {
     return fail("temporary directories should be created");
+  }
+
+  const QHash<QString, QByteArray> legacy_runtime_files{
+      {QStringLiteral("postgres/state.json"),
+       QByteArrayLiteral("{\"version\":4,\"database_name\":\"photo_editor\"}")},
+      {QStringLiteral("postgres/data/PG_VERSION"), QByteArrayLiteral("16\n")},
+      {QStringLiteral("presets/legacy-look.json"),
+       QByteArrayLiteral("{\"name\":\"Legacy Look\",\"exposure\":0.25}")},
+      {QStringLiteral("jobs/legacy-queued.json"),
+       QByteArrayLiteral("{\"id\":\"legacy-export\",\"state\":\"queued\"}")},
+      {QStringLiteral("backups/legacy-catalog.dump"), QByteArrayLiteral("legacy-catalog-backup")},
+      {QStringLiteral("agent/models.json"),
+       QByteArrayLiteral("{\"selectedModel\":\"legacy-local-model\"}")},
+  };
+  for (auto iterator = legacy_runtime_files.constBegin(); iterator != legacy_runtime_files.constEnd(); ++iterator) {
+    const auto path = QDir(runtime_root.path()).filePath(iterator.key());
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+      return fail("legacy runtime fixture directories should be created");
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(iterator.value()) != iterator.value().size()) {
+      return fail("legacy runtime fixture files should be written");
+    }
   }
 
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
@@ -50,9 +86,32 @@ int main(int argc, char** argv) {
     return fail("runtime directories should be created successfully");
   }
 
+  for (auto iterator = legacy_runtime_files.constBegin(); iterator != legacy_runtime_files.constEnd(); ++iterator) {
+    QFile file(QDir(runtime_root.path()).filePath(iterator.key()));
+    if (!file.open(QIODevice::ReadOnly) || file.readAll() != iterator.value()) {
+      return fail("Looksy bootstrap should preserve existing catalog, preset, job, backup, and agent data in place");
+    }
+  }
+
   if (!QFileInfo(photo_editor::desktop::AppBootstrap::logLocation()).isDir() ||
-      !QFileInfo(photo_editor::desktop::AppBootstrap::backupLocation()).isDir()) {
-    return fail("log and backup directories should exist after bootstrap");
+      !QFileInfo(photo_editor::desktop::AppBootstrap::backupLocation()).isDir() ||
+      !QFileInfo(photo_editor::desktop::AppBootstrap::iccProfileAssetLocation()).isDir() ||
+      !QFileInfo(photo_editor::desktop::AppBootstrap::dcpProfileAssetLocation()).isDir()) {
+    return fail("log, backup, and durable ICC/DCP profile directories should exist after bootstrap");
+  }
+  if (QFileInfo(QString::fromStdString(
+                    photo_editor::pipeline::default_icc_profile_asset_registry().storage_root()))
+          .absoluteFilePath() !=
+      QFileInfo(photo_editor::desktop::AppBootstrap::iccProfileAssetLocation())
+          .absoluteFilePath()) {
+    return fail("bootstrap should configure the default ICC registry with durable app storage");
+  }
+  if (QFileInfo(QString::fromStdString(
+                    photo_editor::pipeline::default_dcp_profile_asset_registry().storage_root()))
+          .absoluteFilePath() !=
+      QFileInfo(photo_editor::desktop::AppBootstrap::dcpProfileAssetLocation())
+          .absoluteFilePath()) {
+    return fail("bootstrap should configure the default DCP registry with durable app storage");
   }
 
   QProcessEnvironment environment;
@@ -63,8 +122,9 @@ int main(int argc, char** argv) {
   if (environment.value(QStringLiteral("PHOTO_EDITOR_APP_DATA_DIR")) != app_data_location ||
       environment.value(QStringLiteral("PHOTO_EDITOR_LOG_DIR")) != photo_editor::desktop::AppBootstrap::logLocation() ||
       environment.value(QStringLiteral("PHOTO_EDITOR_BACKUP_DIR")) != photo_editor::desktop::AppBootstrap::backupLocation() ||
-      environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")) != QStringLiteral("postgres://example/test")) {
-    return fail("prepared process environment should include runtime and database settings");
+      environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")) !=
+          QStringLiteral("postgres://example/test")) {
+    return fail("prepared process environment should preserve the explicit PostgreSQL authority");
   }
 
   const auto observability_message = photo_editor::desktop::observability::structuredMessage(
@@ -310,6 +370,83 @@ int main(int argc, char** argv) {
     return fail("worker queue summaries should expose elapsed time and completion counts");
   }
 
+  photo_editor::desktop::WorkerQueueRegistry::publishUserIntent(
+      QStringLiteral("timeline"),
+      true,
+      true,
+      true,
+      {QStringLiteral("clip-visible"), QStringLiteral("clip-focus")},
+      QStringLiteral("clip-focus"));
+  const auto playback_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("playback"), QStringLiteral("timeline"),
+          QStringLiteral("clip-focus"));
+  const auto focused_proxy_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"),
+          QStringLiteral("clip-focus"), QStringLiteral("high"));
+  const auto visible_thumbnail_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("thumbnail"), QStringLiteral("timeline"),
+          QStringLiteral("clip-visible"));
+  const auto final_export_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("asset_export"), QStringLiteral("export"),
+          QStringLiteral("clip-focus"));
+  if (playback_decision.value(QStringLiteral("effectivePriority")).toString() !=
+          QStringLiteral("critical") ||
+      playback_decision.value(QStringLiteral("deferred")).toBool() ||
+      !focused_proxy_decision.value(QStringLiteral("deferred")).toBool() ||
+      focused_proxy_decision.value(QStringLiteral("effectivePriority")).toString() !=
+          QStringLiteral("deferred") ||
+      !focused_proxy_decision.value(QStringLiteral("reason")).toString().contains(
+          QStringLiteral("playback"), Qt::CaseInsensitive) ||
+      !visible_thumbnail_decision.value(QStringLiteral("deferred")).toBool() ||
+      final_export_decision.value(QStringLiteral("deferred")).toBool()) {
+    return fail("latency-sensitive playback should outrank even manually high proxy, thumbnail, analysis, and preview work without silently deferring final delivery");
+  }
+
+  photo_editor::desktop::WorkerQueueRegistry::publishUserIntent(
+      QStringLiteral("timeline"),
+      true,
+      false,
+      false,
+      {QStringLiteral("clip-visible"), QStringLiteral("clip-focus")},
+      QStringLiteral("clip-focus"));
+  const auto focused_idle_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"),
+          QStringLiteral("clip-focus"));
+  const auto visible_idle_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"),
+          QStringLiteral("clip-visible"));
+  const auto background_idle_decision =
+      photo_editor::desktop::WorkerQueueRegistry::priorityDecision(
+          QStringLiteral("proxy"), QStringLiteral("timeline"),
+          QStringLiteral("clip-offscreen"));
+  if (focused_idle_decision.value(QStringLiteral("deferred")).toBool() ||
+      focused_idle_decision.value(QStringLiteral("effectiveRank")).toInt() <=
+          visible_idle_decision.value(QStringLiteral("effectiveRank")).toInt() ||
+      visible_idle_decision.value(QStringLiteral("effectiveRank")).toInt() <=
+          background_idle_decision.value(QStringLiteral("effectiveRank")).toInt()) {
+    return fail("idle background work should order focused, visible, then offscreen items deterministically");
+  }
+  photo_editor::desktop::WorkerQueueRegistry::clearUserIntent(
+      QStringLiteral("timeline"));
+  if (photo_editor::desktop::WorkerQueueRegistry::userIntentSnapshot()
+          .value(QStringLiteral("workspaceVisible")).toBool()) {
+    return fail("closing an editing surface should clear its latency-sensitive scheduling intent");
+  }
+  QProcess bounded_background_process;
+  photo_editor::desktop::WorkerQueueRegistry::configureBackgroundProcess(
+      &bounded_background_process, QStringLiteral("proxy"));
+  if (!bounded_background_process.property("backgroundPriorityBounded").toBool() ||
+      bounded_background_process.property("backgroundWorkflow").toString() !=
+          QStringLiteral("proxy")) {
+    return fail("background subprocesses should carry the shared OS-priority contract before they start");
+  }
+
   auto failed_compact_fields = compact_fields;
   failed_compact_fields.insert(QStringLiteral("failure_stage"), QStringLiteral("mask_alpha"));
   const auto failed_compact_line =
@@ -362,11 +499,30 @@ int main(int argc, char** argv) {
   if (photo_editor::desktop::AppBootstrap::helperProgram(missing_helper_name) != QStringLiteral("cargo") ||
       missing_helper_arguments.size() < 10 ||
       missing_helper_arguments.at(0) != QStringLiteral("run") ||
+      !QFileInfo(missing_helper_arguments.at(3)).isAbsolute() ||
+      !missing_helper_arguments.at(3).endsWith(QStringLiteral("rust/Cargo.toml")) ||
       missing_helper_arguments.at(7) != missing_helper_name ||
       missing_helper_arguments.last() != QStringLiteral("arg")) {
     return fail("missing helpers should fall back to cargo with the requested binary and arguments");
   }
 
+  QProcessEnvironment postgres_environment;
+  if (!photo_editor::desktop::AppBootstrap::prepareProcessEnvironment(
+          &postgres_environment, nullptr) ||
+      postgres_environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")) !=
+          QStringLiteral("postgres://example/test") ||
+      postgres_environment.value(QStringLiteral("PHOTO_EDITOR_APP_DATA_DIR")) !=
+          app_data_location) {
+    return fail("desktop helpers should retain the configured PostgreSQL connection contract");
+  }
+  QString postgres_bootstrap_error;
+  if (!photo_editor::desktop::AppBootstrap::ensureCatalogService(
+          &postgres_bootstrap_error) ||
+      QFileInfo(QDir(runtime_root.path()).filePath(QStringLiteral("catalog.sqlite3")))
+          .exists()) {
+    std::cerr << postgres_bootstrap_error.toStdString() << '\n';
+    return fail("application bootstrap should honor PostgreSQL without creating a SQLite authority");
+  }
   qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   qunsetenv("PHOTO_EDITOR_CACHE_DIR");
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");

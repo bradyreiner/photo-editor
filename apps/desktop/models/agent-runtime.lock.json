@@ -1,0 +1,15 @@
+{
+  "schema": "framehouse-agent-runtime-lock-v1",
+  "version": "0.33.3",
+  "platform": "Darwin",
+  "fileInventorySha256": "7b1d9fbd96fb8735c0034692e06cd6aec38b4a1d7f3f20773c4fa09e72a7790c",
+  "archive": {
+    "url": "https://github.com/ollama/ollama/releases/download/v0.33.3/ollama-darwin.tgz",
+    "bytes": 159236337,
+    "sha256": "342db03df80bb9db84ff64246031bd5f70c09b59ff52fa5cc9aaae3476cc4a9d"
+  },
+  "license": "MIT",
+  "licenseSha256": "5934ed2ce0d15154bcdb9c85203210abac0da4314af34081e36df4599f90b226",
+  "licenseUrl": "https://raw.githubusercontent.com/ollama/ollama/v0.33.3/LICENSE",
+  "source": "https://github.com/ollama/ollama/releases/tag/v0.33.3"
+}

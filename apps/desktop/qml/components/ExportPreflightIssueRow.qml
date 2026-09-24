@@ -1,11 +1,18 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
     id: root
 
     property var issue: ({})
+    property bool showTextResolutionActions: false
+    property bool showIgnoreAction: severity !== "error"
+    property bool currentIssue: false
+    signal inspectRequested()
+    signal resizeFrameRequested()
+    signal fitTextRequested()
+    signal ignoreRequested()
     readonly property string severity: String(issue.severity || "warning")
     readonly property string message: String(issue.message || "")
     readonly property string tone: severity === "error" ? "error" : "warning"
@@ -15,6 +22,7 @@ Rectangle {
                                                               "|message-wrap:true|readable-text:true|no-elide:true|shared-tone:true|compact-failure:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|message-wrap:true|tooltip-full:true|accessibility-full:true"
     readonly property string statusSurfaceContract: "status-surface:v1|preflight:blocking-warning|compact-row:true|status-chip:true|message-after-status:true"
+    readonly property string textResolutionContract: "text-preflight-actions:v1|inspect:true|resize-frame:true|fit-text:true|ignore:true|keyboard:true|no-elide:true"
 
     Theme { id: theme }
 
@@ -24,8 +32,8 @@ Rectangle {
     color: tone === "error"
            ? theme.alpha(theme.error, 0.10)
            : theme.alpha(theme.warning, 0.10)
-    border.width: theme.chromeBorderWidth
-    border.color: tone === "error"
+    border.width: root.currentIssue ? 2 : theme.chromeBorderWidth
+    border.color: root.currentIssue ? theme.focusRing : tone === "error"
                   ? theme.alpha(theme.error, 0.42)
                   : theme.alpha(theme.warning, 0.36)
     clip: true
@@ -39,34 +47,75 @@ Rectangle {
 
     HoverHandler { id: issueHover }
 
-    RowLayout {
+    ColumnLayout {
         id: issueRow
         anchors.fill: parent
         anchors.margins: theme.space6
-        spacing: theme.space8
+        spacing: theme.space6
 
-        StatusChip {
-            text: root.label
-            tone: root.tone
-            compact: true
-            detailText: root.message
-            tooltipText: root.label + " preflight issue."
-            Layout.preferredWidth: implicitWidth
-            Layout.preferredHeight: implicitHeight
-            Layout.alignment: Qt.AlignTop
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: theme.space8
+
+            StatusChip {
+                text: root.label
+                tone: root.tone
+                compact: true
+                detailText: root.message
+                tooltipText: root.label + " preflight issue."
+                Layout.preferredWidth: implicitWidth
+                Layout.preferredHeight: implicitHeight
+                Layout.alignment: Qt.AlignTop
+            }
+
+            Label {
+                id: issueText
+                Layout.fillWidth: true
+                text: root.message
+                color: root.tone === "error" ? theme.textStrong : theme.textMain
+                font.family: theme.fontUi
+                font.pixelSize: 10
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                maximumLineCount: 3
+                elide: Text.ElideNone
+                verticalAlignment: Text.AlignVCenter
+            }
         }
 
-        Label {
-            id: issueText
+        RowLayout {
             Layout.fillWidth: true
-            text: root.message
-            color: root.tone === "error" ? theme.textStrong : theme.textMain
-            font.family: theme.fontUi
-            font.pixelSize: 10
-            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-            maximumLineCount: 3
-            elide: Text.ElideNone
-            verticalAlignment: Text.AlignVCenter
+            visible: root.showTextResolutionActions || root.showIgnoreAction
+            spacing: theme.space6
+
+            Item { Layout.fillWidth: true }
+
+            ActionButton {
+                text: "Inspect"
+                compact: true
+                visible: root.showTextResolutionActions
+                onClicked: root.inspectRequested()
+            }
+
+            ActionButton {
+                text: "Resize Frame"
+                compact: true
+                visible: root.showTextResolutionActions
+                onClicked: root.resizeFrameRequested()
+            }
+
+            ActionButton {
+                text: "Fit Text"
+                compact: true
+                visible: root.showTextResolutionActions
+                onClicked: root.fitTextRequested()
+            }
+
+            ActionButton {
+                text: "Ignore"
+                compact: true
+                visible: root.showIgnoreAction
+                onClicked: root.ignoreRequested()
+            }
         }
     }
 }

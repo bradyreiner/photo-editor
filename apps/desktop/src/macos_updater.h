@@ -20,6 +20,7 @@ class MacosUpdater final : public QObject {
 
  private:
   void* controller_ = nullptr;
+  void* delegate_ = nullptr;
 };
 
 }  // namespace photo_editor::desktop

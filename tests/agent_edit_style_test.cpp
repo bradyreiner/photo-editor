@@ -40,6 +40,7 @@ QVariantMap valid_style() {
           {QStringLiteral("masks"), true},
           {QStringLiteral("retouch"), QStringLiteral("minor_cleanup_only")},
           {QStringLiteral("layers_luts"), false},
+          {QStringLiteral("graphics"), true},
           {QStringLiteral("export"), false},
       });
   style.insert(
@@ -121,6 +122,8 @@ int main() {
         built_in.value(QStringLiteral("name")).toString().isEmpty() ||
         built_in.value(QStringLiteral("goal")).toString().isEmpty() ||
         built_in.value(QStringLiteral("allowedTools")).toMap().isEmpty() ||
+        !built_in.value(QStringLiteral("allowedTools")).toMap()
+             .value(QStringLiteral("graphics")).toBool() ||
         built_in.value(QStringLiteral("constraints")).toMap().isEmpty() ||
         built_in.value(QStringLiteral("constraints"))
             .toMap()
@@ -195,7 +198,7 @@ int main() {
       QStringLiteral("reference_policy"),
       QVariantMap{
           {QStringLiteral("mode"), QStringLiteral("learned_style_profile")},
-          {QStringLiteral("reference_image_matching"), QStringLiteral("metadata_only")},
+          {QStringLiteral("reference_image_matching"), QStringLiteral("rendered_proof_and_recipe")},
           {QStringLiteral("examples_supported"), true},
       });
   learned_reference_style.insert(

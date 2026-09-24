@@ -1,0 +1,29 @@
+{
+  "schema": "framehouse-timed-capture-v1",
+  "timeUnit": "seconds",
+  "worldUnit": "metres",
+  "cameraConvention": "opencv-world-to-camera",
+  "pixelConvention": "top-left-corner",
+  "cameras": [
+    {
+      "id": "left", "model": "PINHOLE", "undistorted": true,
+      "width": 1920, "height": 1080, "fx": 1200, "fy": 1200, "cx": 960, "cy": 540,
+      "worldToCamera": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    },
+    {
+      "id": "right", "model": "PINHOLE", "undistorted": true,
+      "width": 1920, "height": 1080, "fx": 1200, "fy": 1200, "cx": 960, "cy": 540,
+      "worldToCamera": [1, 0, 0, -0.2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    }
+  ],
+  "frames": [
+    {"timeSeconds": 0, "images": [
+      {"cameraId": "left", "file": "left/frame000.jpg"},
+      {"cameraId": "right", "file": "right/frame000.jpg"}
+    ]},
+    {"timeSeconds": 0.041666666666666664, "images": [
+      {"cameraId": "left", "file": "left/frame001.jpg"},
+      {"cameraId": "right", "file": "right/frame001.jpg"}
+    ]}
+  ]
+}

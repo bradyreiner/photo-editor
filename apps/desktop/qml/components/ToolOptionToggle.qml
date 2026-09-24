@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -26,13 +26,7 @@ Rectangle {
     implicitWidth: Math.max(92, optionContent.implicitWidth + theme.space16)
     implicitHeight: theme.controlHeightDense
     radius: theme.radiusControl
-    color: !toggleEnabled
-           ? theme.alpha(theme.glassBase, 0.22)
-           : checked
-             ? theme.alpha(root.accent, optionHover.hovered ? 0.18 : 0.12)
-             : optionHover.hovered
-               ? theme.alpha(theme.glassLift, 0.38)
-               : theme.alpha(theme.glassBase, 0.34)
+    color: toggleEnabled && optionHover.hovered ? theme.ink850 : "transparent"
     border.width: activeFocus ? 2 : 0
     border.color: !toggleEnabled
                   ? theme.alpha(theme.lineSoft, 0.1)
@@ -73,10 +67,10 @@ Rectangle {
             Layout.preferredWidth: 12
             Layout.preferredHeight: 12
             Layout.alignment: Qt.AlignVCenter
-            radius: 3
-            color: root.checked ? theme.alpha(root.accent, 0.24) : theme.alpha(theme.ink950, 0.2)
+            radius: 2
+            color: root.checked ? theme.textStrong : "transparent"
             border.width: 1
-            border.color: root.checked ? "transparent" : theme.alpha(theme.glassEdge, 0.3)
+            border.color: root.checked ? "transparent" : theme.textFaint
 
             AppIcon {
                 anchors.centerIn: parent
@@ -84,7 +78,7 @@ Rectangle {
                 height: 9
                 visible: root.checked
                 name: "check"
-                color: theme.textStrong
+                color: theme.ink950
             }
         }
 

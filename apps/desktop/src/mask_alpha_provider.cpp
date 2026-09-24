@@ -1,5 +1,7 @@
 #include "mask_alpha_provider.h"
 
+#include "mask_presentation_schema.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -133,6 +135,34 @@ QString mask_alpha_source_revision_hash(const QString& source_revision) {
   }
   return QString::fromLatin1(
       QCryptographicHash::hash(source_revision.toUtf8(), QCryptographicHash::Sha1).toHex());
+}
+
+QVariantMap byte_payload_fingerprint(
+    const QVariantMap& source,
+    const QString& data_key,
+    const QString& width_key,
+    const QString& height_key) {
+  const auto data = source.value(data_key).toByteArray();
+  if (data.isEmpty()) {
+    return {};
+  }
+  QVariantMap payload;
+  payload.insert(QStringLiteral("bytes"), data.size());
+  payload.insert(width_key, source.value(width_key).toInt());
+  payload.insert(height_key, source.value(height_key).toInt());
+  payload.insert(
+      QStringLiteral("sha1"),
+      QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha1).toHex()));
+  return payload;
+}
+
+qsizetype mask_alpha_cache_bytes() {
+  QMutexLocker locker(&alpha_result_cache_mutex());
+  return alpha_result_cache_bytes();
+}
+
+qsizetype mask_alpha_cache_ceiling_bytes() {
+  return kMaxAlphaResultCacheBytes;
 }
 
 MaskAlphaEvaluationResult evaluate_mask_alpha(
@@ -552,5 +582,264 @@ QVariantMap compose_outline_composite_mask_alpha_trace_fields(
   }
   return fields;
 }
+
+namespace {
+
+QVariantMap mask_source_payload_for_trace(QVariantMap mask) {
+  for (const auto& key : {
+           QStringLiteral("mask_source_id"),
+           QStringLiteral("mask_set_id"),
+           QStringLiteral("mask_set_name"),
+           QStringLiteral("mask_source_kind"),
+           QStringLiteral("mask_source_operation"),
+           QStringLiteral("mask_source_schema_version"),
+           QStringLiteral("mask_source_count"),
+           QStringLiteral("mask_source_ids"),
+           QStringLiteral("mask_source_hash"),
+           QStringLiteral("mask_alpha_trace_hash"),
+           QStringLiteral("mask_alpha_trace_signature"),
+           QStringLiteral("mask_alpha_provider_contract"),
+           QStringLiteral("mask_alpha_provider"),
+           QStringLiteral("mask_alpha_full_resolution_available"),
+           QStringLiteral("mask_alpha_deterministic"),
+           QStringLiteral("mask_alpha_target_width"),
+           QStringLiteral("mask_alpha_target_height"),
+           QStringLiteral("mask_alpha_provider_signature"),
+           QStringLiteral("mask_alpha_component_providers"),
+           QStringLiteral("brushAlphaSourceContract"),
+           QStringLiteral("brushAlphaSourceOfTruth"),
+           QStringLiteral("brushAlphaStrokeCount"),
+           QStringLiteral("brushAlphaPointCount"),
+           QStringLiteral("brushAlphaRasterWidth"),
+           QStringLiteral("brushAlphaRasterHeight"),
+           QStringLiteral("brushAlphaTileCacheKind"),
+            QStringLiteral("brushAlphaTileCacheEnabled"),
+            QStringLiteral("brushAlphaTileCacheTileSize"),
+            QStringLiteral("brushAlphaTileCacheDirtyTileCount"),
+            QStringLiteral("brushAlphaSourceSignature"),
+            QStringLiteral("shapeAlphaSourceContract"),
+            QStringLiteral("shapeAlphaSourceOfTruth"),
+            QStringLiteral("shapeAlphaPointCount"),
+            QStringLiteral("shapeAlphaRawPointCount"),
+            QStringLiteral("shapeAlphaClosed"),
+            QStringLiteral("shapeAlphaEditable"),
+            QStringLiteral("shapeAlphaTileCacheKind"),
+            QStringLiteral("shapeAlphaTileCacheEnabled"),
+            QStringLiteral("shapeAlphaTileCacheTileSize"),
+            QStringLiteral("shapeAlphaSourceSignature"),
+            QStringLiteral("generatedAlphaSourceContract"),
+            QStringLiteral("generatedAlphaModelName"),
+            QStringLiteral("generatedAlphaModelVersion"),
+            QStringLiteral("generatedAlphaTargetType"),
+            QStringLiteral("generatedAlphaPromptType"),
+            QStringLiteral("generatedAlphaSourceImageVersion"),
+            QStringLiteral("generatedAlphaWidth"),
+            QStringLiteral("generatedAlphaHeight"),
+            QStringLiteral("generatedAlphaCoordinateSpaceContract"),
+            QStringLiteral("generatedAlphaSourceCoordinateSpace"),
+            QStringLiteral("generatedAlphaPromptCoordinateSpace"),
+            QStringLiteral("generatedAlphaRasterCoordinateSpace"),
+            QStringLiteral("generatedAlphaDownscaleFactor"),
+            QStringLiteral("generatedAlphaConfidenceAvailable"),
+            QStringLiteral("generatedAlphaConfidenceWidth"),
+            QStringLiteral("generatedAlphaConfidenceHeight"),
+            QStringLiteral("generatedAlphaRefinementStateSignature"),
+            QStringLiteral("generatedAlphaSourceSignature"),
+            QStringLiteral("mask_source_revision_hash"),
+            QStringLiteral("mask_alpha_raster_width"),
+            QStringLiteral("mask_alpha_raster_height"),
+           QStringLiteral("mask_source_point_count"),
+           QStringLiteral("mask_source_stroke_count"),
+           QStringLiteral("mask_work_state_revision"),
+       }) {
+    mask.remove(key);
+  }
+  return mask;
+}
+
+
+}  // namespace
+
+QVariantMap mask_alpha_trace_fields(
+    const QVariantMap& mask,
+    const QString& source_revision,
+    const QSize& raster_size) {
+  const auto normalized = normalized_mask_definition(mask_source_payload_for_trace(mask), 1);
+  const auto source_id = normalized.value(QStringLiteral("id")).toString().simplified();
+  if (source_id.isEmpty()) {
+    return {};
+  }
+
+  auto source_payload = normalized;
+  const auto segmentation_fingerprint = byte_payload_fingerprint(
+      normalized,
+      QStringLiteral("segmentationData"),
+      QStringLiteral("segmentationWidth"),
+      QStringLiteral("segmentationHeight"));
+  if (!segmentation_fingerprint.isEmpty()) {
+    source_payload.insert(QStringLiteral("segmentationData"), segmentation_fingerprint);
+  }
+  const auto depth_fingerprint = byte_payload_fingerprint(
+      normalized,
+      QStringLiteral("depthData"),
+      QStringLiteral("depthWidth"),
+      QStringLiteral("depthHeight"));
+  if (!depth_fingerprint.isEmpty()) {
+    source_payload.insert(QStringLiteral("depthData"), depth_fingerprint);
+  }
+  const auto cleanup_source_fingerprint = byte_payload_fingerprint(
+      normalized,
+      QStringLiteral("generatedMaskCleanupSourceData"),
+      QStringLiteral("generatedMaskCleanupSourceWidth"),
+      QStringLiteral("generatedMaskCleanupSourceHeight"));
+  if (!cleanup_source_fingerprint.isEmpty()) {
+    source_payload.insert(
+        QStringLiteral("generatedMaskCleanupSourceData"),
+        cleanup_source_fingerprint);
+  }
+
+  const auto source_hash = variant_sha1(source_payload);
+  const auto source_revision_hash = mask_alpha_source_revision_hash(source_revision);
+
+  QVariantMap trace_payload;
+  trace_payload.insert(QStringLiteral("maskSourceHash"), source_hash);
+  if (!source_revision_hash.isEmpty()) {
+    trace_payload.insert(QStringLiteral("sourceRevisionHash"), source_revision_hash);
+  }
+  const auto trace_size = raster_size.isValid() ? raster_size : raster_size_for_mask_trace(normalized);
+  if (trace_size.isValid()) {
+    trace_payload.insert(QStringLiteral("rasterWidth"), trace_size.width());
+    trace_payload.insert(QStringLiteral("rasterHeight"), trace_size.height());
+  }
+  const auto availability_fields = mask_alpha_availability_fields(normalized, trace_size);
+  trace_payload.insert(
+      QStringLiteral("alphaProvider"),
+      availability_fields.value(QStringLiteral("mask_alpha_provider")).toString());
+  trace_payload.insert(
+      QStringLiteral("alphaFullResolutionAvailable"),
+      availability_fields.value(QStringLiteral("mask_alpha_full_resolution_available")).toBool());
+  trace_payload.insert(
+      QStringLiteral("alphaDeterministic"),
+      availability_fields.value(QStringLiteral("mask_alpha_deterministic")).toBool());
+
+  const auto trace_hash = variant_sha1(trace_payload);
+  QVariantMap fields;
+  fields.insert(QStringLiteral("mask_source_id"), source_id);
+  fields.insert(QStringLiteral("mask_set_id"), normalized.value(QStringLiteral("maskSetId")).toString());
+  fields.insert(
+      QStringLiteral("mask_set_name"),
+      normalized.value(QStringLiteral("maskSetName")).toString());
+  fields.insert(QStringLiteral("mask_source_kind"), normalized.value(QStringLiteral("kind")).toString());
+  fields.insert(
+      QStringLiteral("mask_source_operation"),
+      normalized.value(QStringLiteral("operation")).toString());
+  fields.insert(
+      QStringLiteral("mask_source_schema_version"),
+      normalized.value(QStringLiteral("sourceSchemaVersion")).toInt());
+  fields.insert(QStringLiteral("mask_source_hash"), QStringLiteral("sha1:%1").arg(source_hash));
+  fields.insert(QStringLiteral("mask_alpha_trace_hash"), QStringLiteral("sha1:%1").arg(trace_hash));
+  for (auto it = availability_fields.cbegin(); it != availability_fields.cend(); ++it) {
+    fields.insert(it.key(), it.value());
+  }
+  fields.insert(
+      QStringLiteral("mask_alpha_trace_signature"),
+      QStringLiteral("mask:%1|set:%2|source:sha1:%3|revision:%4|raster:%5x%6|provider:%7|full:%8")
+          .arg(source_id)
+          .arg(normalized.value(QStringLiteral("maskSetId")).toString())
+          .arg(source_hash)
+          .arg(source_revision_hash.isEmpty()
+                   ? QStringLiteral("none")
+                   : QStringLiteral("sha1:%1").arg(source_revision_hash))
+          .arg(trace_size.isValid() ? trace_size.width() : 0)
+          .arg(trace_size.isValid() ? trace_size.height() : 0)
+          .arg(availability_fields.value(QStringLiteral("mask_alpha_provider")).toString(),
+               availability_fields.value(QStringLiteral("mask_alpha_full_resolution_available"))
+                       .toBool()
+                   ? QStringLiteral("true")
+                   : QStringLiteral("false")));
+  if (!source_revision_hash.isEmpty()) {
+    fields.insert(
+        QStringLiteral("mask_source_revision_hash"),
+        QStringLiteral("sha1:%1").arg(source_revision_hash));
+  }
+  if (trace_size.isValid()) {
+    fields.insert(QStringLiteral("mask_alpha_raster_width"), trace_size.width());
+    fields.insert(QStringLiteral("mask_alpha_raster_height"), trace_size.height());
+  }
+  fields.insert(
+      QStringLiteral("mask_source_point_count"),
+      normalized.value(QStringLiteral("brushPoints")).toList().size());
+  fields.insert(
+      QStringLiteral("mask_source_stroke_count"),
+      normalized.value(QStringLiteral("brushStrokes")).toList().size());
+  return fields;
+}
+
+void insert_mask_alpha_trace_fields(
+    QVariantMap* target,
+    const QVariantMap& mask,
+    const QString& source_revision,
+    const QSize& raster_size) {
+  if (target == nullptr) {
+    return;
+  }
+  const auto fields = mask_alpha_trace_fields(mask, source_revision, raster_size);
+  for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+    target->insert(it.key(), it.value());
+  }
+}
+
+QVariantMap composite_mask_alpha_trace_fields(
+    const QString& trace_context,
+    const QVariantList& traced_masks,
+    const QString& mask_set_id,
+    const QString& source_revision,
+    const QSize& raster_size,
+    int mask_work_state_revision) {
+  if (traced_masks.isEmpty()) {
+    return {};
+  }
+
+  const auto source_revision_hash = mask_alpha_source_revision_hash(source_revision);
+
+  QVariantList component_signatures;
+  QVariantList component_ids;
+  QVariantList component_hashes;
+  QVariantList component_providers;
+  auto ordinal = 1;
+  for (const auto& traced_value : traced_masks) {
+    const auto traced_mask = normalized_mask_definition(traced_value.toMap(), ordinal);
+    ++ordinal;
+    const auto fields = mask_alpha_trace_fields(traced_mask, source_revision, raster_size);
+    const auto component_id = fields.value(QStringLiteral("mask_source_id")).toString();
+    if (!component_id.isEmpty()) {
+      component_ids.append(component_id);
+    }
+    const auto component_signature =
+        fields.value(QStringLiteral("mask_alpha_trace_signature")).toString();
+    if (!component_signature.isEmpty()) {
+      component_signatures.append(component_signature);
+    }
+    const auto component_hash = fields.value(QStringLiteral("mask_alpha_trace_hash")).toString();
+    if (!component_hash.isEmpty()) {
+      component_hashes.append(component_hash);
+    }
+    const auto component_provider = fields.value(QStringLiteral("mask_alpha_provider")).toString();
+    if (!component_provider.isEmpty()) {
+      component_providers.append(component_provider);
+    }
+  }
+  return compose_composite_mask_alpha_trace_fields(
+      trace_context,
+      mask_set_id,
+      component_signatures,
+      component_ids,
+      component_hashes,
+      component_providers,
+      source_revision_hash,
+      raster_size,
+      mask_work_state_revision);
+}
+
 
 }  // namespace photo_editor::desktop

@@ -1,0 +1,99 @@
+{
+  "automaticThresholdMutationAllowed": false,
+  "blindReview": true,
+  "caseCount": 2,
+  "cases": [
+    {
+      "caseId": "warm-1",
+      "caseKind": "global_edit",
+      "dimensions": {
+        "artifactFreedom": 5,
+        "intentMatch": 5,
+        "naturalness": 4,
+        "protectedFidelity": 5
+      },
+      "humanRating": 5,
+      "humanStatus": "pass",
+      "issueTags": [],
+      "machinePass": true,
+      "outcome": "agreement-pass",
+      "pixelIntentAlignment": {},
+      "retouchQuality": null
+    },
+    {
+      "caseId": "warm-2",
+      "caseKind": "global_edit",
+      "dimensions": {
+        "artifactFreedom": 4,
+        "intentMatch": 4,
+        "naturalness": 2,
+        "protectedFidelity": 5
+      },
+      "humanRating": 2,
+      "humanStatus": "fail",
+      "issueTags": [
+        "too-warm"
+      ],
+      "machinePass": true,
+      "outcome": "false-confidence",
+      "pixelIntentAlignment": {},
+      "retouchQuality": null
+    }
+  ],
+  "contract": "agent-photographer-calibration-profile-v1",
+  "freshCorpusRunRequiredAfterThresholdChange": true,
+  "localOnly": true,
+  "machineReportSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "outcomes": {
+    "agreementFail": 0,
+    "agreementPass": 1,
+    "falseConfidence": 1,
+    "overConservative": 0
+  },
+  "packetDigestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "professionalReadinessClaimed": false,
+  "profileDigestSha256": "07c24e66ff911994f6b0b1bbf41d8a22ffe37c52add22542c7cf2a80cae62585",
+  "reviewedAt": "2026-08-25T18:00:00Z",
+  "reviewedManifestSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "reviewer": "Fixture Photographer",
+  "sourceManifestSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "status": "observed",
+  "tasteSummary": {
+    "dimensionMeans": {
+      "artifactFreedom": 4.5,
+      "intentMatch": 4.5,
+      "naturalness": 3.0,
+      "protectedFidelity": 5.0
+    },
+    "issueTagCounts": {
+      "too-warm": 1
+    },
+    "weakestDimensions": [
+      "naturalness",
+      "artifactFreedom",
+      "intentMatch",
+      "protectedFidelity"
+    ]
+  },
+  "thresholdSignals": {
+    "warmth": {
+      "automaticThresholdChangeAllowed": false,
+      "falseConfidenceCount": 1,
+      "observations": [
+        {
+          "caseId": "warm-2",
+          "check": "warmer",
+          "delta": 0.03,
+          "humanRating": 2,
+          "humanStatus": "fail",
+          "machineCheckPassed": true,
+          "threshold": 0.01
+        }
+      ],
+      "overConservativeCount": 0,
+      "status": "human-rejected-machine-pass",
+      "suggestedAction": "tighten-and-rerun"
+    }
+  },
+  "version": 1
+}

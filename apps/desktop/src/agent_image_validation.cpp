@@ -1,12 +1,17 @@
 #include "agent_image_validation.h"
 
 #include <QColor>
+#include <QPoint>
+#include <QRect>
 #include <QStringList>
+#include <QVector>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <initializer_list>
 #include <numbers>
+#include <utility>
 
 #include "edit_recipe_state.h"
 
@@ -43,6 +48,23 @@ bool warnings_contain(const QStringList& warnings, const QString& needle) {
     }
   }
   return false;
+}
+
+double image_stat_value(
+    const QVariantMap& stats,
+    const QString& section,
+    const QString& key) {
+  const auto section_map = stats.value(section).toMap();
+  return section_map.value(key, stats.value(key)).toDouble();
+}
+
+bool text_contains_any(
+    const QString& text,
+    std::initializer_list<QString> needles) {
+  return std::any_of(
+      needles.begin(),
+      needles.end(),
+      [&text](const QString& needle) { return text.contains(needle); });
 }
 
 template <std::size_t Size>
@@ -676,6 +698,779 @@ QVariantMap validate_agent_edit_image(
       recipe_report.value(QStringLiteral("missingRetouchProvenanceCount")));
   attach_quality_score(&report);
   return report;
+}
+
+QVariantMap evaluate_agent_retouch_proof_quality(
+    const QImage& retouch_baseline,
+    const QImage& after,
+    const QVariantMap& materialized_patch) {
+  constexpr auto kMaximumSurroundingChangedFraction = 0.75;
+  constexpr auto kMaximumSurroundingMeanRgbDelta = 0.004;
+  constexpr auto kMaximumTexturedSurroundingMeanRgbDelta = 8.0 / 255.0;
+  constexpr auto kMinimumSurroundingGradientRatio = 0.65;
+  constexpr auto kMaximumSurroundingGradientRatio = 1.35;
+  constexpr auto kMinimumReconstructionGradientRatio = 0.5;
+  constexpr auto kMaximumReconstructionGradientRatio = 1.6;
+  constexpr auto kMinimumTargetMeanRgbDelta = 0.002;
+
+  QVariantMap report{
+      {QStringLiteral("contract"),
+       QStringLiteral("agent-real-photo-retouch-quality-v2")},
+      {QStringLiteral("required"), false},
+      {QStringLiteral("available"), false},
+      {QStringLiteral("ok"), true},
+      {QStringLiteral("maximumSurroundingChangedFraction"),
+       kMaximumSurroundingChangedFraction},
+      {QStringLiteral("maximumSurroundingMeanRgbDelta"),
+       kMaximumSurroundingMeanRgbDelta},
+      {QStringLiteral("maximumTexturedSurroundingMeanRgbDelta"),
+       kMaximumTexturedSurroundingMeanRgbDelta},
+      {QStringLiteral("minimumSurroundingGradientEnergyRatio"),
+       kMinimumSurroundingGradientRatio},
+      {QStringLiteral("maximumSurroundingGradientEnergyRatio"),
+       kMaximumSurroundingGradientRatio},
+      {QStringLiteral("minimumReconstructionGradientEnergyRatio"),
+       kMinimumReconstructionGradientRatio},
+      {QStringLiteral("maximumReconstructionGradientEnergyRatio"),
+       kMaximumReconstructionGradientRatio},
+      {QStringLiteral("minimumTargetMeanRgbDelta"),
+       kMinimumTargetMeanRgbDelta},
+  };
+  const auto retouch_stack =
+      materialized_patch.value(QStringLiteral("retouch"))
+          .toMap()
+          .value(QStringLiteral("appendRetouchStack"))
+          .toList();
+  if (retouch_stack.isEmpty()) {
+    report.insert(QStringLiteral("reason"),
+                  QStringLiteral("No retouch operation requires proof."));
+    return report;
+  }
+  report.insert(QStringLiteral("required"), true);
+  if (retouch_baseline.isNull() || after.isNull() ||
+      retouch_baseline.size() != after.size()) {
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(
+        QStringLiteral("failureReason"),
+        QStringLiteral("Retouch proof images are missing or have different sizes."));
+    return report;
+  }
+
+  struct RetouchDescriptor final {
+    QString id;
+    QRect proof_bounds;
+    double center_x = 0.0;
+    double center_y = 0.0;
+    double radius_x = 0.0;
+    double radius_y = 0.0;
+    bool texture_exemplar = false;
+  };
+  QVector<RetouchDescriptor> descriptors;
+  QStringList descriptor_errors;
+  for (const auto& retouch_value : retouch_stack) {
+    const auto retouch = retouch_value.toMap();
+    const auto region = retouch.value(QStringLiteral("agentRegion")).toMap();
+    const auto source_width = retouch
+                                  .value(
+                                      QStringLiteral("segmentationWidth"),
+                                      retouch.value(QStringLiteral("inpaintSourceMaskWidth")))
+                                  .toInt();
+    const auto source_height = retouch
+                                   .value(
+                                       QStringLiteral("segmentationHeight"),
+                                       retouch.value(QStringLiteral("inpaintSourceMaskHeight")))
+                                   .toInt();
+    const auto source_bounds_x =
+        retouch.value(QStringLiteral("inpaintSourceBoundsX"), -1).toInt();
+    const auto source_bounds_y =
+        retouch.value(QStringLiteral("inpaintSourceBoundsY"), -1).toInt();
+    const auto source_bounds_width =
+        retouch.value(QStringLiteral("inpaintSourceBoundsWidth")).toInt();
+    const auto source_bounds_height =
+        retouch.value(QStringLiteral("inpaintSourceBoundsHeight")).toInt();
+    const auto center_x =
+        region.value(
+                  QStringLiteral("centerX"),
+                  region.value(QStringLiteral("center_x"), -1.0))
+            .toDouble();
+    const auto center_y =
+        region.value(
+                  QStringLiteral("centerY"),
+                  region.value(QStringLiteral("center_y"), -1.0))
+            .toDouble();
+    const auto radius_x =
+        region.value(
+                  QStringLiteral("radiusX"),
+                  region.value(QStringLiteral("radius_x"), 0.0))
+            .toDouble();
+    const auto radius_y =
+        region.value(
+                  QStringLiteral("radiusY"),
+                  region.value(QStringLiteral("radius_y"), 0.0))
+            .toDouble();
+    const auto id = retouch.value(QStringLiteral("id")).toString();
+    if (source_width <= 0 || source_height <= 0 || source_bounds_x < 0 ||
+        source_bounds_y < 0 || source_bounds_width <= 0 ||
+        source_bounds_height <= 0 || center_x < 0.0 || center_x > 1.0 ||
+        center_y < 0.0 || center_y > 1.0 || radius_x <= 0.0 ||
+        radius_y <= 0.0) {
+      descriptor_errors.append(
+          QStringLiteral("Retouch %1 lacks complete reviewed geometry or source bounds.")
+              .arg(id.isEmpty() ? QStringLiteral("unknown") : id));
+      continue;
+    }
+    const auto proof_bounds = QRect(
+        static_cast<int>(std::floor(
+            static_cast<double>(source_bounds_x) * retouch_baseline.width() /
+            source_width)),
+        static_cast<int>(std::floor(
+            static_cast<double>(source_bounds_y) * retouch_baseline.height() /
+            source_height)),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(
+                static_cast<double>(source_bounds_width) *
+                retouch_baseline.width() / source_width))),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(
+                static_cast<double>(source_bounds_height) *
+                retouch_baseline.height() / source_height))));
+    descriptors.append(RetouchDescriptor{
+        .id = id,
+        .proof_bounds = proof_bounds,
+        .center_x = center_x * retouch_baseline.width(),
+        .center_y = center_y * retouch_baseline.height(),
+        .radius_x = radius_x * retouch_baseline.width(),
+        .radius_y = radius_y * retouch_baseline.height(),
+        .texture_exemplar =
+            retouch.value(QStringLiteral("inpaintTextureExemplar")).toBool(),
+    });
+  }
+  if (!descriptor_errors.isEmpty() || descriptors.size() != retouch_stack.size()) {
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("errors"), descriptor_errors);
+    report.insert(
+        QStringLiteral("failureReason"),
+        descriptor_errors.join(QStringLiteral("; ")));
+    return report;
+  }
+
+  const auto rgb_delta = [](const QColor& lhs, const QColor& rhs) {
+    return std::abs(lhs.red() - rhs.red()) +
+           std::abs(lhs.green() - rhs.green()) +
+           std::abs(lhs.blue() - rhs.blue());
+  };
+  const auto image_bounds =
+      QRect(0, 0, retouch_baseline.width(), retouch_baseline.height());
+  auto changed_inside = 0;
+  auto changed_outside = 0;
+  for (auto y = 0; y < retouch_baseline.height(); ++y) {
+    for (auto x = 0; x < retouch_baseline.width(); ++x) {
+      const auto delta = rgb_delta(
+          retouch_baseline.pixelColor(x, y),
+          after.pixelColor(x, y));
+      if (delta <= 3) {
+        continue;
+      }
+      const auto inside_any = std::any_of(
+          descriptors.cbegin(),
+          descriptors.cend(),
+          [x, y](const RetouchDescriptor& descriptor) {
+            return descriptor.proof_bounds.contains(x, y);
+          });
+      if (inside_any) {
+        ++changed_inside;
+      } else {
+        ++changed_outside;
+      }
+    }
+  }
+
+  QVariantList retouch_reports;
+  auto every_target_changed = true;
+  auto every_background_continuous = true;
+  for (const auto& descriptor : descriptors) {
+    const auto ellipse_distance_squared = [&](const int x, const int y) {
+      const auto normalized_x =
+          (static_cast<double>(x) + 0.5 - descriptor.center_x) /
+          descriptor.radius_x;
+      const auto normalized_y =
+          (static_cast<double>(y) + 0.5 - descriptor.center_y) /
+          descriptor.radius_y;
+      return normalized_x * normalized_x + normalized_y * normalized_y;
+    };
+    const auto measured_bounds = descriptor.proof_bounds.intersected(image_bounds);
+    auto changed_inside_bounds = 0;
+    auto surrounding_pixels = 0;
+    auto surrounding_changed_pixels = 0;
+    auto surrounding_rgb_delta_sum = 0.0;
+    auto surrounding_before_gradient = 0.0;
+    auto surrounding_after_gradient = 0.0;
+    auto surrounding_gradient_edges = 0;
+    for (auto y = measured_bounds.top(); y <= measured_bounds.bottom(); ++y) {
+      for (auto x = measured_bounds.left(); x <= measured_bounds.right(); ++x) {
+        const auto delta = rgb_delta(
+            retouch_baseline.pixelColor(x, y),
+            after.pixelColor(x, y));
+        if (delta > 3) {
+          ++changed_inside_bounds;
+        }
+        const auto distance_squared = ellipse_distance_squared(x, y);
+        if (distance_squared <= 1.0 || distance_squared > 2.25) {
+          continue;
+        }
+        ++surrounding_pixels;
+        surrounding_rgb_delta_sum += delta;
+        if (delta > 3) {
+          ++surrounding_changed_pixels;
+        }
+        const std::array<QPoint, 2> neighbors{
+            QPoint(x + 1, y),
+            QPoint(x, y + 1),
+        };
+        for (const auto& neighbor : neighbors) {
+          if (!image_bounds.contains(neighbor) ||
+              !measured_bounds.contains(neighbor)) {
+            continue;
+          }
+          const auto neighbor_distance_squared =
+              ellipse_distance_squared(neighbor.x(), neighbor.y());
+          if (neighbor_distance_squared <= 1.0 ||
+              neighbor_distance_squared > 2.25) {
+            continue;
+          }
+          surrounding_before_gradient += rgb_delta(
+              retouch_baseline.pixelColor(x, y),
+              retouch_baseline.pixelColor(neighbor));
+          surrounding_after_gradient += rgb_delta(
+              after.pixelColor(x, y),
+              after.pixelColor(neighbor));
+          ++surrounding_gradient_edges;
+        }
+      }
+    }
+    const auto surrounding_changed_fraction =
+        surrounding_pixels > 0
+            ? static_cast<double>(surrounding_changed_pixels) /
+                  surrounding_pixels
+            : 1.0;
+    const auto surrounding_mean_rgb_delta =
+        surrounding_pixels > 0
+            ? surrounding_rgb_delta_sum /
+                  (static_cast<double>(surrounding_pixels) * 3.0 * 255.0)
+            : 1.0;
+    const auto surrounding_gradient_ratio =
+        surrounding_gradient_edges <= 0
+            ? 0.0
+            : surrounding_before_gradient <= 0.0
+                  ? (surrounding_after_gradient <= 0.0
+                         ? 1.0
+                         : surrounding_after_gradient)
+                  : surrounding_after_gradient /
+                        surrounding_before_gradient;
+
+    const auto reconstruction_bounds = QRect(
+        static_cast<int>(
+            std::floor(descriptor.center_x - descriptor.radius_x * 2.0)),
+        static_cast<int>(
+            std::floor(descriptor.center_y - descriptor.radius_y * 2.0)),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(descriptor.radius_x * 4.0))),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(descriptor.radius_y * 4.0))))
+                                           .intersected(image_bounds);
+    const auto region_gradient = [&](const double minimum_distance_squared,
+                                     const double maximum_distance_squared) {
+      auto gradient_sum = 0.0;
+      auto gradient_edges = 0;
+      for (auto y = reconstruction_bounds.top();
+           y <= reconstruction_bounds.bottom();
+           ++y) {
+        for (auto x = reconstruction_bounds.left();
+             x <= reconstruction_bounds.right();
+             ++x) {
+          const auto distance_squared = ellipse_distance_squared(x, y);
+          if (distance_squared <= minimum_distance_squared ||
+              distance_squared > maximum_distance_squared) {
+            continue;
+          }
+          const std::array<QPoint, 2> neighbors{
+              QPoint(x + 1, y),
+              QPoint(x, y + 1),
+          };
+          for (const auto& neighbor : neighbors) {
+            if (!reconstruction_bounds.contains(neighbor)) {
+              continue;
+            }
+            const auto neighbor_distance_squared =
+                ellipse_distance_squared(neighbor.x(), neighbor.y());
+            if (neighbor_distance_squared <= minimum_distance_squared ||
+                neighbor_distance_squared > maximum_distance_squared) {
+              continue;
+            }
+            gradient_sum += rgb_delta(
+                after.pixelColor(x, y),
+                after.pixelColor(neighbor));
+            ++gradient_edges;
+          }
+        }
+      }
+      return std::pair{gradient_sum, gradient_edges};
+    };
+    const auto [target_gradient_sum, target_gradient_edges] =
+        region_gradient(-1.0, 1.0);
+    const auto [reference_gradient_sum, reference_gradient_edges] =
+        region_gradient(2.25, 4.0);
+    const auto target_gradient_mean =
+        target_gradient_edges > 0
+            ? target_gradient_sum / target_gradient_edges
+            : 0.0;
+    const auto reference_gradient_mean =
+        reference_gradient_edges > 0
+            ? reference_gradient_sum / reference_gradient_edges
+            : 0.0;
+    const auto reconstruction_gradient_ratio =
+        target_gradient_edges <= 0 || reference_gradient_edges <= 0
+            ? 0.0
+            : reference_gradient_mean <= 0.0
+                  ? (target_gradient_mean <= 0.0 ? 1.0
+                                                 : target_gradient_mean)
+                  : target_gradient_mean / reference_gradient_mean;
+
+    const auto target_bounds = QRect(
+        static_cast<int>(
+            std::floor(descriptor.center_x - descriptor.radius_x)),
+        static_cast<int>(
+            std::floor(descriptor.center_y - descriptor.radius_y)),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(descriptor.radius_x * 2.0))),
+        std::max(
+            1,
+            static_cast<int>(std::ceil(descriptor.radius_y * 2.0))))
+                                   .intersected(image_bounds);
+    auto target_delta_sum = 0.0;
+    auto target_pixels = 0;
+    for (auto y = target_bounds.top(); y <= target_bounds.bottom(); ++y) {
+      for (auto x = target_bounds.left(); x <= target_bounds.right(); ++x) {
+        target_delta_sum += rgb_delta(
+            retouch_baseline.pixelColor(x, y),
+            after.pixelColor(x, y));
+        ++target_pixels;
+      }
+    }
+    const auto target_mean_rgb_delta =
+        target_pixels > 0
+            ? target_delta_sum /
+                  (static_cast<double>(target_pixels) * 3.0 * 255.0)
+            : 0.0;
+    const auto target_changed =
+        changed_inside_bounds > 0 &&
+        target_mean_rgb_delta >= kMinimumTargetMeanRgbDelta;
+    const auto maximum_surrounding_mean_rgb_delta =
+        descriptor.texture_exemplar
+            ? kMaximumTexturedSurroundingMeanRgbDelta
+            : kMaximumSurroundingMeanRgbDelta;
+    const auto background_continuity =
+        surrounding_pixels > 0 && surrounding_gradient_edges > 0 &&
+        target_gradient_edges > 0 && reference_gradient_edges > 0 &&
+        surrounding_changed_fraction <=
+            kMaximumSurroundingChangedFraction &&
+        surrounding_mean_rgb_delta <= maximum_surrounding_mean_rgb_delta &&
+        surrounding_gradient_ratio >= kMinimumSurroundingGradientRatio &&
+        surrounding_gradient_ratio <= kMaximumSurroundingGradientRatio &&
+        reconstruction_gradient_ratio >=
+            kMinimumReconstructionGradientRatio &&
+        reconstruction_gradient_ratio <=
+            kMaximumReconstructionGradientRatio;
+    every_target_changed = every_target_changed && target_changed;
+    every_background_continuous =
+        every_background_continuous && background_continuity;
+    retouch_reports.append(QVariantMap{
+        {QStringLiteral("retouchId"), descriptor.id},
+        {QStringLiteral("ok"), target_changed && background_continuity},
+        {QStringLiteral("targetChanged"), target_changed},
+        {QStringLiteral("backgroundContinuity"), background_continuity},
+        {QStringLiteral("changedInsideBounds"), changed_inside_bounds},
+        {QStringLiteral("targetMeanRgbDelta"), target_mean_rgb_delta},
+        {QStringLiteral("surroundingPixelCount"), surrounding_pixels},
+        {QStringLiteral("surroundingChangedPixels"),
+         surrounding_changed_pixels},
+        {QStringLiteral("surroundingChangedFraction"),
+         surrounding_changed_fraction},
+        {QStringLiteral("surroundingMeanRgbDelta"),
+         surrounding_mean_rgb_delta},
+        {QStringLiteral("maximumSurroundingMeanRgbDelta"),
+         maximum_surrounding_mean_rgb_delta},
+        {QStringLiteral("textureExemplar"), descriptor.texture_exemplar},
+        {QStringLiteral("surroundingGradientEnergyRatio"),
+         surrounding_gradient_ratio},
+        {QStringLiteral("reconstructionGradientEnergyRatio"),
+         reconstruction_gradient_ratio},
+        {QStringLiteral("proofBoundsX"), descriptor.proof_bounds.x()},
+        {QStringLiteral("proofBoundsY"), descriptor.proof_bounds.y()},
+        {QStringLiteral("proofBoundsWidth"), descriptor.proof_bounds.width()},
+        {QStringLiteral("proofBoundsHeight"), descriptor.proof_bounds.height()},
+    });
+  }
+
+  const auto outside_preserved = changed_outside == 0;
+  const auto ok = every_target_changed && outside_preserved &&
+                  every_background_continuous;
+  report.insert(QStringLiteral("available"), true);
+  report.insert(QStringLiteral("ok"), ok);
+  report.insert(QStringLiteral("retouchCount"), descriptors.size());
+  report.insert(QStringLiteral("retouches"), retouch_reports);
+  report.insert(QStringLiteral("changedInsideBounds"), changed_inside);
+  report.insert(QStringLiteral("changedOutsideBounds"), changed_outside);
+  report.insert(
+      QStringLiteral("checks"),
+      QVariantList{
+          QVariantMap{
+              {QStringLiteral("name"), QStringLiteral("targetChanged")},
+              {QStringLiteral("passed"), every_target_changed},
+          },
+          QVariantMap{
+              {QStringLiteral("name"), QStringLiteral("outsidePreserved")},
+              {QStringLiteral("passed"), outside_preserved},
+          },
+          QVariantMap{
+              {QStringLiteral("name"),
+               QStringLiteral("backgroundContinuity")},
+              {QStringLiteral("passed"), every_background_continuous},
+          },
+      });
+  if (retouch_reports.size() == 1) {
+    const auto single = retouch_reports.first().toMap();
+    for (auto iterator = single.cbegin(); iterator != single.cend(); ++iterator) {
+      if (!report.contains(iterator.key())) {
+        report.insert(iterator.key(), iterator.value());
+      }
+    }
+  }
+  if (!ok) {
+    QStringList issues;
+    if (!every_target_changed) {
+      issues.append(QStringLiteral("the reviewed target did not change enough"));
+    }
+    if (!outside_preserved) {
+      issues.append(QStringLiteral("pixels outside every bounded retouch changed"));
+    }
+    if (!every_background_continuous) {
+      issues.append(QStringLiteral("the fill does not match surrounding color or texture"));
+    }
+    report.insert(QStringLiteral("issues"), issues);
+    report.insert(
+        QStringLiteral("failureReason"),
+        QStringLiteral("Retouch proof rejected: %1.")
+            .arg(issues.join(QStringLiteral("; "))));
+  }
+  return report;
+}
+
+QVariantMap evaluate_agent_edit_intent_alignment(
+    const QVariantMap& before_image_stats,
+    const QVariantMap& after_image_stats,
+    const QString& instructions,
+    const QVariantMap& edit_intent) {
+  constexpr auto kLumaThreshold = 1.5;
+  constexpr auto kContrastThreshold = 0.25;
+  constexpr auto kSaturationThreshold = 0.01;
+  constexpr auto kWarmthThreshold = 0.01;
+  constexpr auto kMonochromeSaturationLimit = 0.04;
+  constexpr auto kPreserveLumaTolerance = 3.0;
+  constexpr auto kPreserveContrastTolerance = 3.0;
+  constexpr auto kPreserveSaturationTolerance = 0.025;
+  constexpr auto kPreserveWarmthTolerance = 0.025;
+
+  const auto normalized = instructions.trimmed().toLower();
+  const auto color_mode = edit_intent.value(QStringLiteral("colorMode")).toString().toLower();
+  const auto contrast_intent = edit_intent.value(QStringLiteral("contrast")).toString().toLower();
+  const auto brightness_intent = edit_intent.value(QStringLiteral("brightness")).toString().toLower();
+  const auto palette_intent = edit_intent.value(QStringLiteral("palette")).toString().toLower();
+  const auto localized_only =
+      edit_intent.value(QStringLiteral("globalChangePolicy")).toString().toLower() ==
+          QStringLiteral("preserve") &&
+      !edit_intent.value(QStringLiteral("localizedActions")).toList().isEmpty();
+
+  const auto brighter = (!localized_only && brightness_intent == QStringLiteral("brighter")) ||
+                        text_contains_any(
+                            normalized,
+                            {QStringLiteral("make it brighter"),
+                             QStringLiteral("make this brighter"),
+                             QStringLiteral("brighten the image"),
+                             QStringLiteral("brighten this"),
+                             QStringLiteral("brighter overall")});
+  const auto darker = (!localized_only && brightness_intent == QStringLiteral("darker")) ||
+                      text_contains_any(
+                          normalized,
+                          {QStringLiteral("make it darker"),
+                           QStringLiteral("make this darker"),
+                           QStringLiteral("darken the image"),
+                           QStringLiteral("darken this"),
+                           QStringLiteral("darker overall")});
+  const auto stronger_contrast = (!localized_only && contrast_intent == QStringLiteral("strong")) ||
+                                 text_contains_any(
+                                     normalized,
+                                     {QStringLiteral("stronger contrast"),
+                                      QStringLiteral("strong contrast"),
+                                      QStringLiteral("high contrast"),
+                                      QStringLiteral("more contrast")});
+  const auto softer_contrast = (!localized_only && contrast_intent == QStringLiteral("soft")) ||
+                               text_contains_any(
+                                   normalized,
+                                   {QStringLiteral("softer contrast"),
+                                    QStringLiteral("soft contrast"),
+                                    QStringLiteral("less contrast"),
+                                    QStringLiteral("reduce contrast")});
+  const auto more_saturated = text_contains_any(
+      normalized,
+      {QStringLiteral("more saturated"),
+       QStringLiteral("increase saturation"),
+       QStringLiteral("richer color"),
+       QStringLiteral("more vibrant")});
+  const auto less_saturated = text_contains_any(
+      normalized,
+      {QStringLiteral("less saturated"),
+       QStringLiteral("reduce saturation"),
+       QStringLiteral("desaturate"),
+       QStringLiteral("more muted"),
+       QStringLiteral("muted color")});
+  const auto global_warm_wording = text_contains_any(
+      normalized,
+      {QStringLiteral("warmer overall"),
+       QStringLiteral("warm the image"),
+       QStringLiteral("warm this image"),
+       QStringLiteral("make it warmer"),
+       QStringLiteral("make this warmer")});
+  const auto global_cool_wording = text_contains_any(
+      normalized,
+      {QStringLiteral("cooler overall"),
+       QStringLiteral("cool the image"),
+       QStringLiteral("cool this image"),
+       QStringLiteral("make it cooler"),
+       QStringLiteral("make this cooler")});
+  const auto warmer = (!localized_only && palette_intent == QStringLiteral("warm")) ||
+                      global_warm_wording;
+  const auto cooler = (!localized_only && palette_intent == QStringLiteral("cool")) ||
+                      global_cool_wording;
+  const auto monochrome = (!localized_only && color_mode == QStringLiteral("monochrome")) ||
+                          text_contains_any(
+                              normalized,
+                              {QStringLiteral("black and white"),
+                               QStringLiteral("black & white"),
+                               QStringLiteral("monochrome")});
+  const auto quieter = text_contains_any(
+      normalized,
+      {QStringLiteral("make it quieter"),
+       QStringLiteral("make this quieter"),
+       QStringLiteral("quieter overall"),
+       QStringLiteral("quieter")});
+  const auto preserve_tone = text_contains_any(
+      normalized,
+      {QStringLiteral("preserve the tone"),
+       QStringLiteral("keeping the tone unchanged"),
+       QStringLiteral("keep the tone unchanged"),
+       QStringLiteral("leave the tone unchanged")});
+  const auto preserve_color = text_contains_any(
+      normalized,
+      {QStringLiteral("preserve the color"),
+       QStringLiteral("keep the color unchanged"),
+       QStringLiteral("leave the color unchanged"),
+       QStringLiteral("preserve white balance"),
+       QStringLiteral("keep the white balance")});
+
+  const auto before_luma = image_stat_value(
+      before_image_stats, QStringLiteral("histogram"), QStringLiteral("averageLuma"));
+  const auto after_luma = image_stat_value(
+      after_image_stats, QStringLiteral("histogram"), QStringLiteral("averageLuma"));
+  const auto before_contrast = image_stat_value(
+      before_image_stats, QStringLiteral("histogram"), QStringLiteral("lumaStddev"));
+  const auto after_contrast = image_stat_value(
+      after_image_stats, QStringLiteral("histogram"), QStringLiteral("lumaStddev"));
+  const auto before_saturation = image_stat_value(
+      before_image_stats, QStringLiteral("vectorscope"), QStringLiteral("averageSaturation"));
+  const auto after_saturation = image_stat_value(
+      after_image_stats, QStringLiteral("vectorscope"), QStringLiteral("averageSaturation"));
+  const auto before_red = image_stat_value(
+      before_image_stats, QStringLiteral("rgb"), QStringLiteral("averageRed"));
+  const auto before_blue = image_stat_value(
+      before_image_stats, QStringLiteral("rgb"), QStringLiteral("averageBlue"));
+  const auto after_red = image_stat_value(
+      after_image_stats, QStringLiteral("rgb"), QStringLiteral("averageRed"));
+  const auto after_blue = image_stat_value(
+      after_image_stats, QStringLiteral("rgb"), QStringLiteral("averageBlue"));
+  const auto luma_delta = after_luma - before_luma;
+  const auto contrast_delta = after_contrast - before_contrast;
+  const auto saturation_delta = after_saturation - before_saturation;
+  const auto before_warmth = (before_red - before_blue) / 255.0;
+  const auto after_warmth = (after_red - after_blue) / 255.0;
+  const auto warmth_delta = after_warmth - before_warmth;
+
+  QVariantList checks;
+  QStringList issues;
+  auto passed_count = 0;
+  const auto append_check = [&checks, &issues, &passed_count](
+                                const QString& name,
+                                bool passed,
+                                double before,
+                                double after,
+                                double delta,
+                                double threshold,
+                                const QString& expectation,
+                                const QString& failure) {
+    checks.append(QVariantMap{
+        {QStringLiteral("name"), name},
+        {QStringLiteral("passed"), passed},
+        {QStringLiteral("before"), before},
+        {QStringLiteral("after"), after},
+        {QStringLiteral("delta"), delta},
+        {QStringLiteral("threshold"), threshold},
+        {QStringLiteral("expectation"), expectation},
+        {QStringLiteral("detail"), passed ? expectation : failure},
+    });
+    if (passed) {
+      ++passed_count;
+    } else {
+      issues.append(failure);
+    }
+  };
+
+  if (brighter && !darker) {
+    append_check(
+        QStringLiteral("brighter"), luma_delta >= kLumaThreshold,
+        before_luma, after_luma, luma_delta, kLumaThreshold,
+        QStringLiteral("Average rendered luminance increased."),
+        QStringLiteral("Intent mismatch: requested a brighter image, but average rendered luminance did not increase enough."));
+  } else if (darker && !brighter) {
+    append_check(
+        QStringLiteral("darker"), luma_delta <= -kLumaThreshold,
+        before_luma, after_luma, luma_delta, -kLumaThreshold,
+        QStringLiteral("Average rendered luminance decreased."),
+        QStringLiteral("Intent mismatch: requested a darker image, but average rendered luminance did not decrease enough."));
+  }
+  if (stronger_contrast && !softer_contrast) {
+    append_check(
+        QStringLiteral("strongerContrast"), contrast_delta >= kContrastThreshold,
+        before_contrast, after_contrast, contrast_delta, kContrastThreshold,
+        QStringLiteral("Rendered luminance contrast increased."),
+        QStringLiteral("Intent mismatch: requested stronger contrast, but rendered luminance contrast did not increase enough."));
+  } else if (softer_contrast && !stronger_contrast) {
+    append_check(
+        QStringLiteral("softerContrast"), contrast_delta <= -kContrastThreshold,
+        before_contrast, after_contrast, contrast_delta, -kContrastThreshold,
+        QStringLiteral("Rendered luminance contrast decreased."),
+        QStringLiteral("Intent mismatch: requested softer contrast, but rendered luminance contrast did not decrease enough."));
+  }
+  if (more_saturated && !less_saturated) {
+    append_check(
+        QStringLiteral("moreSaturated"), saturation_delta >= kSaturationThreshold,
+        before_saturation, after_saturation, saturation_delta, kSaturationThreshold,
+        QStringLiteral("Average rendered saturation increased."),
+        QStringLiteral("Intent mismatch: requested richer color, but average rendered saturation did not increase enough."));
+  } else if (less_saturated && !more_saturated) {
+    append_check(
+        QStringLiteral("lessSaturated"), saturation_delta <= -kSaturationThreshold,
+        before_saturation, after_saturation, saturation_delta, -kSaturationThreshold,
+        QStringLiteral("Average rendered saturation decreased."),
+        QStringLiteral("Intent mismatch: requested muted color, but average rendered saturation did not decrease enough."));
+  }
+  if (warmer && !cooler) {
+    append_check(
+        QStringLiteral("warmer"), warmth_delta >= kWarmthThreshold,
+        before_warmth, after_warmth, warmth_delta, kWarmthThreshold,
+        QStringLiteral("Rendered red-blue balance moved warmer."),
+        QStringLiteral("Intent mismatch: requested a warmer image, but rendered red-blue balance did not move warmer enough."));
+  } else if (cooler && !warmer) {
+    append_check(
+        QStringLiteral("cooler"), warmth_delta <= -kWarmthThreshold,
+        before_warmth, after_warmth, warmth_delta, -kWarmthThreshold,
+        QStringLiteral("Rendered red-blue balance moved cooler."),
+        QStringLiteral("Intent mismatch: requested a cooler image, but rendered red-blue balance did not move cooler enough."));
+  }
+  if (monochrome) {
+    append_check(
+        QStringLiteral("monochrome"), after_saturation <= kMonochromeSaturationLimit,
+        before_saturation, after_saturation, saturation_delta,
+        kMonochromeSaturationLimit,
+        QStringLiteral("Rendered average saturation is within the monochrome limit."),
+        QStringLiteral("Intent mismatch: requested monochrome, but the rendered image remains visibly colored."));
+  }
+  if (quieter && !softer_contrast && !less_saturated) {
+    const auto passed = contrast_delta <= -kContrastThreshold ||
+                        saturation_delta <= -kSaturationThreshold;
+    append_check(
+        QStringLiteral("quieter"), passed,
+        0.0, 0.0, std::min(contrast_delta, saturation_delta), 0.0,
+        QStringLiteral("Rendered contrast or saturation moved in a quieter direction."),
+        QStringLiteral("Intent mismatch: requested a quieter image, but neither rendered contrast nor saturation decreased."));
+  }
+  if (preserve_tone) {
+    const auto tone_change = std::max(std::abs(luma_delta), std::abs(contrast_delta));
+    const auto passed = std::abs(luma_delta) <= kPreserveLumaTolerance &&
+                        std::abs(contrast_delta) <= kPreserveContrastTolerance;
+    append_check(
+        QStringLiteral("preserveTone"), passed,
+        0.0, 0.0, tone_change, kPreserveContrastTolerance,
+        QStringLiteral("Rendered tone stayed within the preservation tolerances."),
+        QStringLiteral("Intent mismatch: requested unchanged tone, but rendered luminance or contrast moved beyond tolerance."));
+  }
+  if (preserve_color) {
+    const auto color_change = std::max(std::abs(saturation_delta), std::abs(warmth_delta));
+    const auto passed = std::abs(saturation_delta) <= kPreserveSaturationTolerance &&
+                        std::abs(warmth_delta) <= kPreserveWarmthTolerance;
+    append_check(
+        QStringLiteral("preserveColor"), passed,
+        0.0, 0.0, color_change, kPreserveWarmthTolerance,
+        QStringLiteral("Rendered color stayed within the preservation tolerances."),
+        QStringLiteral("Intent mismatch: requested unchanged color, but rendered saturation or white balance moved beyond tolerance."));
+  }
+
+  if (checks.isEmpty()) {
+    return QVariantMap{
+        {QStringLiteral("version"), QStringLiteral("agent-pixel-intent-alignment-v1")},
+        {QStringLiteral("available"), false},
+        {QStringLiteral("reason"), QStringLiteral("No explicit pixel-measurable direction was requested.")},
+        {QStringLiteral("deterministic"), true},
+    };
+  }
+  const auto score = static_cast<double>(passed_count) /
+                     static_cast<double>(checks.size());
+  return QVariantMap{
+      {QStringLiteral("version"), QStringLiteral("agent-pixel-intent-alignment-v1")},
+      {QStringLiteral("available"), true},
+      {QStringLiteral("ok"), passed_count == checks.size()},
+      {QStringLiteral("score"), score},
+      {QStringLiteral("scorePercent"), static_cast<int>(std::round(score * 100.0))},
+      {QStringLiteral("requiredCount"), checks.size()},
+      {QStringLiteral("passedCount"), passed_count},
+      {QStringLiteral("checks"), checks},
+      {QStringLiteral("issues"), issues},
+      {QStringLiteral("deterministic"), true},
+      {QStringLiteral("method"), QStringLiteral("before-after-rendered-image-stat-deltas")},
+      {QStringLiteral("deltas"),
+       QVariantMap{
+           {QStringLiteral("averageLuma"), luma_delta},
+           {QStringLiteral("lumaStddev"), contrast_delta},
+           {QStringLiteral("averageSaturation"), saturation_delta},
+           {QStringLiteral("redBlueBalance"), warmth_delta},
+       }},
+      {QStringLiteral("tolerances"),
+       QVariantMap{
+           {QStringLiteral("brightness"), kLumaThreshold},
+           {QStringLiteral("contrast"), kContrastThreshold},
+           {QStringLiteral("saturation"), kSaturationThreshold},
+           {QStringLiteral("warmth"), kWarmthThreshold},
+           {QStringLiteral("monochromeSaturationLimit"), kMonochromeSaturationLimit},
+           {QStringLiteral("preserveLuma"), kPreserveLumaTolerance},
+           {QStringLiteral("preserveContrast"), kPreserveContrastTolerance},
+           {QStringLiteral("preserveSaturation"), kPreserveSaturationTolerance},
+           {QStringLiteral("preserveWarmth"), kPreserveWarmthTolerance},
+       }},
+  };
 }
 
 }  // namespace photo_editor::desktop

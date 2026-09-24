@@ -1,54 +1,28 @@
-# Local Postgres Service
+# Local PostgreSQL Service
 
-The app now supports a managed local catalog database for the default desktop path.
+PostgreSQL is Framehouse's catalog authority. If `PHOTO_EDITOR_DATABASE_URL` is present, the app
+uses that PostgreSQL database and applies the checked SQLx migrations. Otherwise it starts a
+private managed PostgreSQL cluster under the application-data directory.
 
-## How it works
+The managed cluster binds only to `127.0.0.1`, selects an available private port, generates a local
+credential stored in an owner-only state file, and creates a pre-migration `pg_dump` backup before
+schema changes. Packaged builds include `postgres`, `initdb`, `pg_ctl`, `pg_dump`, `pg_restore`, and
+`psql`; other PostgreSQL command-line and development tools are excluded from the release runtime.
 
-- If `PHOTO_EDITOR_DATABASE_URL` is set, the app uses that database and only runs schema migrations.
-- If `PHOTO_EDITOR_DATABASE_URL` is not set, the app starts a private local Postgres cluster under the app data directory.
-- The local service generates a per-install password and binds only to `127.0.0.1`.
+Use `catalog_local_db ensure-running`, `status`, `connection-url --ensure-running`, and `stop` for
+local administration. `scripts/run-native.sh` preserves an explicit external database URL and
+otherwise ensures the managed service is ready before launching Framehouse.
 
-## Runtime layout
+The packaged-runtime proof scripts exercise pre-migration rollback, ordinary backup/restore,
+corrupt-archive refusal, interrupted backup cleanup, failed-restore safety rollback, missing-media
+relink and deduplication, managed-library relocation, and managed versus external authority. A
+failed restore is never reported as harmless: the manager first takes a live safety backup, and
+the proof injects a failure after the candidate archive has already modified the database before
+requiring that safety archive to restore the exact newer live catalog.
 
-Under `PHOTO_EDITOR_APP_DATA_DIR`:
-
-- `postgres/data`: initialized Postgres cluster
-- `postgres/logs/postgres.log`: local server log
-- `postgres/state.json`: generated connection state for the local cluster
-
-## Tooling requirement
-
-During development, the helper expects `initdb` and `pg_ctl` to be available:
-
-- on `PATH`, or
-- under `PHOTO_EDITOR_POSTGRES_BIN_DIR`
-
-For real production packaging, these binaries need to be bundled inside the app installer or companion runtime package.
-
-Current expected packaged layout:
-
-- macOS app bundle:
-  - `VirelStudio.app/Contents/MacOS/VirelStudio`
-  - `VirelStudio.app/Contents/MacOS/catalog_local_db` and the other Rust helpers
-  - `VirelStudio.app/Contents/Resources/postgres/` for a bundled Postgres runtime root
-- Windows install root:
-  - `PhotoEditor.exe`
-  - helper binaries next to the app executable
-  - `postgres/` under the install `bin` directory for a bundled runtime root
-
-The GitHub Actions release workflow now supports two Windows runtime supply modes:
-
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE`: path to a checked-out/runtime archive on disk
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`: URL to a zip or tar archive
-
-The archive is normalized during CI so CMake always receives a runtime root containing `bin/initdb` and `bin/pg_ctl`.
-
-## Helper commands
-
-```sh
-cd rust
-cargo run -p photo-catalog --bin catalog_local_db -- status
-cargo run -p photo-catalog --bin catalog_local_db -- ensure-running
-cargo run -p photo-catalog --bin catalog_local_db -- connection-url --ensure-running
-cargo run -p photo-catalog --bin catalog_local_db -- stop
-```
+Both Bash and PowerShell proofs also create a disposable second database, inject representative
+legacy row corruption only after dropping the relevant `NOT VALID` constraints, and require asset,
+review, relink, migration, export-job, timeline, and carousel readers to return a structured record
+identity without panicking. `catalog_integrity` must enumerate every corrupt identity and
+`--require-clean` must fail. The fixtures never modify the live catalog or the managed proof
+database used for backup/restore assertions.

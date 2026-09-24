@@ -19,7 +19,13 @@ DEFAULT_OUTPUT_ROOT = REPO_ROOT / "perf-artifacts"
 REQUIRED_TESTS = (
     "editor_preview_controller_test",
 )
-DESKTOP_SMOKE_TEST = "desktop_shell_smoke_test"
+DESKTOP_SMOKE_TESTS = (
+    "desktop_shell_brush_workflow_test",
+    "desktop_shell_retouch_hud_test",
+    "desktop_shell_selection_geometry_test",
+    "desktop_shell_tool_exit_test",
+    "desktop_shell_layer_hover_test",
+)
 REQUIRED_SOURCE_MARKERS = {
     "canvas_raster_preview_disabled": {
         "path": "apps/desktop/qml/workspaces/MaskCanvasOverlay.qml",
@@ -569,7 +575,7 @@ def main() -> int:
             raise SystemExit(f"build directory does not exist: {build_dir}")
         required_tests = list(REQUIRED_TESTS)
         if args.include_desktop_smoke:
-            required_tests.append(DESKTOP_SMOKE_TEST)
+            required_tests.extend(DESKTOP_SMOKE_TESTS)
         for test_name in required_tests:
             tests[test_name] = run_ctest(build_dir, test_name, args.ctest_timeout)
 

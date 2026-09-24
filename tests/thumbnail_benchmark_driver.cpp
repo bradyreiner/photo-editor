@@ -11,6 +11,7 @@
 #include <QThread>
 
 #include "catalog_asset_model.h"
+#include "edit_adjustment_patch.h"
 #include "edit_recipe_state.h"
 #include "observability.h"
 
@@ -70,7 +71,12 @@ QVector<photo_editor::desktop::CatalogAssetItem> load_assets(
     item.imported_at = QStringLiteral("May 24, 2026  12:00 PM");
     item.online = true;
     const auto recipe_path = asset.value(QStringLiteral("recipe")).toString().trimmed();
-    item.recipe_json = recipe_path.isEmpty() ? QString() : read_text_file(recipe_path);
+    item.adjustment_patch_json =
+        recipe_path.isEmpty()
+            ? QString()
+            : photo_editor::desktop::
+                  canonical_asset_bound_adjustment_patch_json(
+                      read_text_file(recipe_path));
     items.push_back(std::move(item));
   }
 

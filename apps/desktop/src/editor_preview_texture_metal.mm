@@ -1,10 +1,15 @@
 #include "editor_preview_texture.h"
 
+#include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
+
 #if defined(Q_OS_MACOS)
 
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <atomic>
+#include <QCoreApplication>
+#include <QMetaObject>
 
 namespace photo_editor::desktop {
 
@@ -21,6 +26,11 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
       command_queue_ = [device_ newCommandQueue];
       available_ = command_queue_ != nil;
     }
+  }
+
+  ~MetalEditorPreviewTexture() override {
+    alive_->store(false, std::memory_order_release);
+    ++publication_serial_;
   }
 
   [[nodiscard]] bool available() const override { return available_; }
@@ -65,6 +75,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
                    mipmapLevel:0
                      withBytes:upload_image.constBits()
                    bytesPerRow:static_cast<NSUInteger>(upload_image.bytesPerLine())];
+      ++publication_serial_;
       return true;
     }
   }
@@ -108,6 +119,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
                    mipmapLevel:0
                      withBytes:source
                    bytesPerRow:static_cast<NSUInteger>(upload_image.bytesPerLine())];
+      ++publication_serial_;
       return true;
     }
   }
@@ -139,11 +151,170 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
                    mipmapLevel:0
                      withBytes:upload_image.constBits()
                    bytesPerRow:static_cast<NSUInteger>(upload_image.bytesPerLine())];
+      ++publication_serial_;
+      return true;
+    }
+  }
+
+  [[nodiscard]] bool supportsNativeOutputSurface() const override {
+    return available_ && texture_ != nil &&
+           pixel_format_ == MTLPixelFormatBGRA8Unorm;
+  }
+
+  bool uploadNativePatchAsync(
+      const photo_editor::pipeline::metal::MetalOutputSurface& surface,
+      const QRect& destination_region,
+      NativePatchCommitGuard commit_guard,
+      NativePatchUploadCompletion completion) override {
+    if (!supportsNativeOutputSurface() || !destination_region.isValid() ||
+        destination_region.size() != QSize(surface.width(), surface.height()) ||
+        surface.format() != photo_editor::pipeline::metal::
+                                MetalOutputSurfaceFormat::Bgra8UnormSrgbEncoded ||
+        surface.native_texture_handle() == 0U || destination_region.x() < 0 ||
+        destination_region.y() < 0 ||
+        destination_region.right() >= static_cast<int>(texture_.width) ||
+        destination_region.bottom() >= static_cast<int>(texture_.height)) {
+      return false;
+    }
+    @autoreleasepool {
+      auto source = (__bridge id<MTLTexture>)(
+          reinterpret_cast<void*>(surface.native_texture_handle()));
+      if (source == nil || source.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+          surface.device_registry_id() != static_cast<std::uint64_t>(device_.registryID) ||
+          source.device.registryID != device_.registryID ||
+          static_cast<int>(source.width) != surface.width() ||
+          static_cast<int>(source.height) != surface.height()) {
+        return false;
+      }
+      const auto destination_size = nativeTextureSize();
+      auto* descriptor = [MTLTextureDescriptor
+          texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                       width:static_cast<NSUInteger>(destination_size.width())
+                                      height:static_cast<NSUInteger>(destination_size.height())
+                                   mipmapped:NO];
+      descriptor.usage = MTLTextureUsageShaderRead;
+      descriptor.storageMode = MTLStorageModeShared;
+      id<MTLTexture> replacement = [device_ newTextureWithDescriptor:descriptor];
+      id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+      if (replacement == nil || command_buffer == nil) {
+        return false;
+      }
+      if (surface.native_ready_event_handle() != 0U) {
+        auto ready_event = (__bridge id<MTLSharedEvent>)(
+            reinterpret_cast<void*>(surface.native_ready_event_handle()));
+        // Shared events are device-independent (their device property is nil).
+        // The texture and surface device identities were checked above.
+        if (ready_event == nil || surface.ready_event_value() == 0U) {
+          return false;
+        }
+        [command_buffer encodeWaitForEvent:ready_event value:surface.ready_event_value()];
+      }
+      id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
+      if (encoder == nil) return false;
+      [encoder copyFromTexture:texture_
+                   sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                     sourceSize:MTLSizeMake(texture_.width, texture_.height, 1)
+                      toTexture:replacement destinationSlice:0 destinationLevel:0
+             destinationOrigin:MTLOriginMake(0, 0, 0)];
+      [encoder copyFromTexture:source
+                   sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                     sourceSize:MTLSizeMake(source.width, source.height, 1)
+                      toTexture:replacement destinationSlice:0 destinationLevel:0
+             destinationOrigin:MTLOriginMake(
+                                   static_cast<NSUInteger>(destination_region.x()),
+                                   static_cast<NSUInteger>(destination_region.y()), 0)];
+      [encoder endEncoding];
+      const auto serial = ++publication_serial_;
+      const auto alive = alive_;
+      [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        const auto gpu_completed = completed.status == MTLCommandBufferStatusCompleted;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [=, this] {
+          if (!alive->load(std::memory_order_acquire)) return;
+          const auto publish = gpu_completed && publication_serial_ == serial &&
+                               (!commit_guard || commit_guard());
+          if (publish) texture_ = replacement;
+          if (completion) completion(publish);
+        }, Qt::QueuedConnection);
+      }];
+      [command_buffer commit];
+      return true;
+    }
+  }
+
+  bool adoptNativeSurface(
+      const photo_editor::pipeline::metal::MetalOutputSurface& surface) override {
+    if (!available_ ||
+        surface.format() != photo_editor::pipeline::metal::
+                                MetalOutputSurfaceFormat::Bgra8UnormSrgbEncoded ||
+        surface.native_texture_handle() == 0U ||
+        !surface.producer_completed_successfully() ||
+        surface.device_registry_id() != static_cast<std::uint64_t>(device_.registryID)) {
+      return false;
+    }
+    @autoreleasepool {
+      auto source = (__bridge id<MTLTexture>)(
+          reinterpret_cast<void*>(surface.native_texture_handle()));
+      if (source == nil || source.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+          source.device.registryID != device_.registryID ||
+          static_cast<int>(source.width) != surface.width() ||
+          static_cast<int>(source.height) != surface.height()) {
+        return false;
+      }
+      texture_ = source;
+      pixel_format_ = MTLPixelFormatBGRA8Unorm;
+      ++publication_serial_;
+      return true;
+    }
+  }
+
+  bool adoptNativeSurfaceAsync(
+      const photo_editor::pipeline::metal::MetalOutputSurface& surface,
+      NativePatchCommitGuard commit_guard,
+      NativePatchUploadCompletion completion) override {
+    if (!available_ ||
+        surface.format() != photo_editor::pipeline::metal::
+                                MetalOutputSurfaceFormat::Bgra8UnormSrgbEncoded ||
+        surface.native_texture_handle() == 0U ||
+        surface.device_registry_id() != static_cast<std::uint64_t>(device_.registryID)) {
+      return false;
+    }
+    @autoreleasepool {
+      auto source = (__bridge id<MTLTexture>)(
+          reinterpret_cast<void*>(surface.native_texture_handle()));
+      auto ready_event = (__bridge id<MTLSharedEvent>)(
+          reinterpret_cast<void*>(surface.native_ready_event_handle()));
+      if (source == nil || source.pixelFormat != MTLPixelFormatBGRA8Unorm ||
+          source.device.registryID != device_.registryID ||
+          static_cast<int>(source.width) != surface.width() ||
+          static_cast<int>(source.height) != surface.height() || ready_event == nil ||
+          surface.ready_event_value() == 0U) {
+        return false;
+      }
+      id<MTLCommandBuffer> command_buffer = [command_queue_ commandBuffer];
+      if (command_buffer == nil) return false;
+      [command_buffer encodeWaitForEvent:ready_event value:surface.ready_event_value()];
+      const auto serial = ++publication_serial_;
+      const auto alive = alive_;
+      [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        const auto gpu_completed = completed.status == MTLCommandBufferStatusCompleted;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [=, this] {
+          if (!alive->load(std::memory_order_acquire)) return;
+          const auto publish = gpu_completed && publication_serial_ == serial &&
+                               (!commit_guard || commit_guard());
+          if (publish) {
+            texture_ = source;
+            pixel_format_ = MTLPixelFormatBGRA8Unorm;
+          }
+          if (completion) completion(publish);
+        }, Qt::QueuedConnection);
+      }];
+      [command_buffer commit];
       return true;
     }
   }
 
   void clear() override {
+    ++publication_serial_;
     texture_ = nil;
     pixel_format_ = MTLPixelFormatInvalid;
   }
@@ -154,6 +325,16 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
 
   [[nodiscard]] quint64 nativeTextureHandle() const override {
     return hasNativeTexture() ? static_cast<quint64>(reinterpret_cast<quintptr>(texture_)) : 0;
+  }
+
+  [[nodiscard]] std::shared_ptr<void> nativeTextureLease() const override {
+    if (texture_ == nil) return {};
+    // This source is compiled both with and without ARC. A bridge-retained
+    // cast alone does not retain anything in a non-ARC target.
+    void* retained = const_cast<void*>(CFRetain((__bridge CFTypeRef)texture_));
+    return std::shared_ptr<void>(retained, [](void* texture) {
+      CFRelease(static_cast<CFTypeRef>(texture));
+    });
   }
 
   [[nodiscard]] QSize nativeTextureSize() const override {
@@ -230,6 +411,7 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
     texture_ = [device_ newTextureWithDescriptor:descriptor];
     if (texture_ != nil) {
       pixel_format_ = pixel_format;
+      ++publication_serial_;
     }
     return texture_ != nil;
   }
@@ -239,6 +421,8 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
   id<MTLTexture> texture_ = nil;
   MTLPixelFormat pixel_format_ = MTLPixelFormatInvalid;
   bool available_ = false;
+  std::shared_ptr<std::atomic_bool> alive_ = std::make_shared<std::atomic_bool>(true);
+  std::uint64_t publication_serial_ = 0U;
 };
 
 }  // namespace

@@ -4,11 +4,14 @@
 #include "agent_mcp_client.h"
 #include "app_bootstrap.h"
 #include "catalog_asset_model.h"
+#include "edit_adjustment_patch.h"
 #include "edit_recipe_state.h"
 #include "export_job_controller.h"
 #include "photo_mcp_server.h"
+#include "automation_capability_policy.h"
 
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 
 #include <QColor>
@@ -17,6 +20,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -26,6 +30,7 @@
 #include <QLocalSocket>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTime>
 #include <QUrl>
 
@@ -34,6 +39,33 @@ namespace {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
+}
+
+bool wait_for_condition(
+    const std::function<bool()>& condition,
+    int timeout_ms) {
+  QElapsedTimer timer;
+  timer.start();
+  while (!condition() && timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    QThread::msleep(1);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+  return condition();
+}
+
+photo_editor::desktop::EditRecipeState
+selected_adjustment_state(
+    const photo_editor::desktop::
+        CatalogAssetModel& catalog) {
+  const auto decoded =
+      photo_editor::desktop::
+          parse_adjustment_patch_json(
+              catalog
+                  .selectedAdjustmentPatchJson());
+  return decoded.state.value_or(
+      photo_editor::desktop::
+          EditRecipeState{});
 }
 
 photo_editor::desktop::CatalogAssetItem make_asset(
@@ -53,7 +85,10 @@ photo_editor::desktop::CatalogAssetItem make_asset(
   item.imported_at = QStringLiteral("Jun 29, 2026  1:00 PM");
   item.imported_at_value = QDateTime(QDate(2026, 6, 29), QTime(13, 0));
   item.media_type = QStringLiteral("photo");
-  item.recipe_json = recipe_json;
+  item.adjustment_patch_json =
+      photo_editor::desktop::
+          canonical_asset_bound_adjustment_patch_json(
+              recipe_json);
   item.online = true;
   return item;
 }
@@ -144,7 +179,13 @@ QJsonObject send_tcp_request(const QString& endpoint, const QJsonObject& request
   return QJsonDocument::fromJson(response).object();
 }
 
-QJsonObject send_mcp_http_request(const QString& endpoint, const QJsonObject& request, int* status_code) {
+QJsonObject send_mcp_http_request(
+    const QString& endpoint,
+    const QJsonObject& request,
+    const QString& bearer_token,
+    int* status_code,
+    const QString& origin = QStringLiteral("http://127.0.0.1"),
+    const QString& host_override = {}) {
   QUrl url(endpoint);
   if (!url.isValid() || url.host().isEmpty() || url.port() <= 0) {
     return QJsonObject{{QStringLiteral("error"), QStringLiteral("invalid mcp endpoint")}};
@@ -161,10 +202,22 @@ QJsonObject send_mcp_http_request(const QString& endpoint, const QJsonObject& re
   http_request.append("POST ");
   http_request.append(url.path().isEmpty() ? QByteArrayLiteral("/mcp") : url.path().toUtf8());
   http_request.append(" HTTP/1.1\r\nHost: ");
-  http_request.append(url.host().toUtf8());
-  http_request.append(':');
-  http_request.append(QByteArray::number(url.port()));
-  http_request.append("\r\nOrigin: http://127.0.0.1\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nContent-Length: ");
+  if (host_override.isEmpty()) {
+    http_request.append(url.host().toUtf8());
+    http_request.append(':');
+    http_request.append(QByteArray::number(url.port()));
+  } else {
+    http_request.append(host_override.toUtf8());
+  }
+  if (!bearer_token.isEmpty()) {
+    http_request.append("\r\nAuthorization: Bearer ");
+    http_request.append(bearer_token.toUtf8());
+  }
+  if (!origin.isEmpty()) {
+    http_request.append("\r\nOrigin: ");
+    http_request.append(origin.toUtf8());
+  }
+  http_request.append("\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nContent-Length: ");
   http_request.append(QByteArray::number(body.size()));
   http_request.append("\r\n\r\n");
   http_request.append(body);
@@ -217,7 +270,9 @@ struct McpSseResponse final {
   QByteArray body;
 };
 
-McpSseResponse send_mcp_http_get(const QString& endpoint) {
+McpSseResponse send_mcp_http_get(
+    const QString& endpoint,
+    const QString& bearer_token = {}) {
   McpSseResponse result;
   QUrl url(endpoint);
   if (!url.isValid() || url.host().isEmpty() || url.port() <= 0) {
@@ -239,6 +294,10 @@ McpSseResponse send_mcp_http_get(const QString& endpoint) {
   http_request.append(url.host().toUtf8());
   http_request.append(':');
   http_request.append(QByteArray::number(url.port()));
+  if (!bearer_token.isEmpty()) {
+    http_request.append("\r\nAuthorization: Bearer ");
+    http_request.append(bearer_token.toUtf8());
+  }
   http_request.append("\r\nOrigin: http://127.0.0.1\r\nAccept: text/event-stream\r\n\r\n");
   socket.write(http_request);
   socket.flush();
@@ -376,19 +435,96 @@ int main(int argc, char** argv) {
   agent_edit.setExportJobController(&export_jobs);
   agent_edit.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
+  photo_editor::desktop::PhotoAutomationBridge disabled_bridge(&agent_edit, &catalog_model);
+  if (disabled_bridge.start()) {
+    if (!disabled_bridge.mcpEndpoint().isEmpty()) {
+      return fail("MCP HTTP must remain disabled without explicit automation policy");
+    }
+    const auto disabled_session = read_json_file(disabled_bridge.sessionFilePath());
+    if (disabled_session.value(QStringLiteral("mcpTransport")).toString() !=
+        QStringLiteral("disabled")) {
+      std::cerr << QJsonDocument(disabled_session).toJson(QJsonDocument::Compact).toStdString() << '\n';
+      return fail("disabled automation session should advertise no MCP HTTP transport");
+    }
+  } else if (!disabled_bridge.errorMessage().contains(
+                 QStringLiteral("listen"), Qt::CaseInsensitive)) {
+    std::cerr << disabled_bridge.errorMessage().toStdString() << '\n';
+    return fail("disabled automation bridge should fail only under listener restrictions");
+  }
+  disabled_bridge.stop();
+
   photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
   photo_editor::desktop::PhotoMcpServer mcp_server(&bridge);
+  if (app.arguments().contains(QStringLiteral("--customer-access"))) {
+    const QStringList capabilities{"read", "draft", "export", "commit"};
+    if (!bridge.start(false, capabilities)) return fail("customer automation proof needs its local listener");
+    agent_edit.setAccessPolicy([] { return false; });
+    bridge.setEditAccessPolicy([] { return false; });
+    const auto start = agent_edit.startDraftForScope("selected-assets", "Increase exposure");
+    const auto run = agent_edit.runDraftForScope("selected-assets", "Increase exposure");
+    const auto patch = agent_edit.applyDraftRecipePatchForScope("selected-assets", {});
+    for (const auto& report : {start, run, patch}) {
+      if (report.value("errorCode").toString() != "access_required") return fail("native AI edit entry points must enforce access");
+    }
+    const auto request = [&](const QString& command) {
+      return bridge.handleJsonRequest({{"token", bridge.token()}, {"command", command}, {"args", QJsonObject{}}});
+    };
+    if (!request("photo_live_status").value("ok").toBool()) return fail("expired automation can read existing work");
+    const auto denied = request("photo_apply_recipe_patch_draft");
+    if (!denied.value("error").toString().contains("active trial")) return fail("automation cannot bypass expired editing access");
+    for (const auto& command : {QStringLiteral("photo_export_preflight"), QStringLiteral("photo_commit_agent_draft")}) {
+      if (request(command).value("error").toString().contains("active trial")) return fail("export and saving existing drafts remain available");
+    }
+    const auto mcp = mcp_server.callTool("photo.apply_recipe_patch_draft", {}, capabilities);
+    if (!mcp.value("isError").toBool() || !mcp.value("structuredContent").toObject().value("error").toString().contains("active trial"))
+      return fail("MCP must enforce the same customer access boundary");
+    bridge.stop();
+    std::cout << "Native AI and automation reject new edits while read/export/save remain admitted.\n";
+    return EXIT_SUCCESS;
+  }
+  if (app.arguments().contains(QStringLiteral("--search-tools-contract"))) {
+    const auto read = mcp_server.toolsListResult({QStringLiteral("read")}).value("tools").toArray();
+    const auto draft = mcp_server.toolsListResult({QStringLiteral("read"), QStringLiteral("draft")}).value("tools").toArray();
+    auto names = [](const QJsonArray& values) {
+      QStringList result;
+      for (const auto& value : values) result.append(value.toObject().value("name").toString());
+      return result;
+    };
+    const auto read_names = names(read);
+    const auto draft_names = names(draft);
+    if (!read_names.contains("photo.search_edit_status") || read_names.contains("photo.search_edit_start") ||
+        read_names.contains("photo.search_edit_cancel") || !draft_names.contains("photo.search_edit_start") ||
+        !draft_names.contains("photo.search_edit_cancel")) return fail("search tools must respect capability-scoped discovery");
+    for (const auto& name : draft_names) {
+      if (name.contains("search") && name.contains("confirm")) return fail("search confirmation must not be agent callable");
+    }
+    std::cout << "search_edit_tool_contract=passed\n";
+    return EXIT_SUCCESS;
+  }
   QJsonObject session;
-  if (bridge.start()) {
+  if (bridge.start(
+          true,
+          {QStringLiteral("read"), QStringLiteral("draft"),
+           QStringLiteral("export"), QStringLiteral("commit")})) {
     session = read_json_file(bridge.sessionFilePath());
+    auto session_permissions_valid = true;
+#ifndef Q_OS_WIN
+    const auto permissions = QFileInfo(bridge.sessionFilePath()).permissions();
+    session_permissions_valid = permissions.testFlag(QFileDevice::ReadOwner) && permissions.testFlag(QFileDevice::WriteOwner) &&
+        !(permissions & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup |
+                         QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther | QFileDevice::ExeOwner));
+#endif
     if (session.value(QStringLiteral("endpoint")).toString() != bridge.endpointName() ||
         session.value(QStringLiteral("endpointKind")).toString() != bridge.endpointKind() ||
         session.value(QStringLiteral("mcpEndpoint")).toString() != bridge.mcpEndpoint() ||
         session.value(QStringLiteral("mcpEndpointKind")).toString() != bridge.mcpEndpointKind() ||
         session.value(QStringLiteral("mcpTransport")).toString() != QStringLiteral("streamable-http") ||
+        session.value(QStringLiteral("mcpCapabilities")).toArray().size() != 4 ||
         session.value(QStringLiteral("mcpConnectedClientCount")).toInt() != 0 ||
         session.value(QStringLiteral("mcpTotalClientCount")).toInt() != 0 ||
-        session.value(QStringLiteral("token")).toString() != bridge.token()) {
+        session.value(QStringLiteral("token")).toString() != bridge.token() ||
+        bridge.token().size() != 64 ||
+        !session_permissions_valid) {
       return fail("session file should expose endpoint and token");
     }
     session.insert(QStringLiteral("endpointKind"), QStringLiteral("in-memory"));
@@ -418,7 +554,25 @@ int main(int argc, char** argv) {
   }
 
   if (!bridge.mcpEndpoint().isEmpty()) {
-    const auto mcp_sse = send_mcp_http_get(bridge.mcpEndpoint());
+    const auto unauthorized_mcp_sse = send_mcp_http_get(bridge.mcpEndpoint());
+    if (unauthorized_mcp_sse.status_code != 401) {
+      return fail("MCP GET discovery must reject a missing bearer capability");
+    }
+    auto unauthorized_post_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(),
+        QJsonObject{
+            {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+            {QStringLiteral("id"), 100},
+            {QStringLiteral("method"), QStringLiteral("tools/list")},
+        },
+        QStringLiteral("wrong"),
+        &unauthorized_post_status);
+    if (unauthorized_post_status != 401) {
+      return fail("MCP POST must reject an invalid bearer capability");
+    }
+
+    const auto mcp_sse = send_mcp_http_get(bridge.mcpEndpoint(), bridge.token());
     const auto mcp_sse_body = QString::fromUtf8(mcp_sse.body);
     if (mcp_sse.status_code != 200 ||
         mcp_sse.content_type != QStringLiteral("text/event-stream") ||
@@ -437,11 +591,44 @@ int main(int argc, char** argv) {
             {QStringLiteral("id"), 101},
             {QStringLiteral("method"), QStringLiteral("tools/list")},
         },
+        bridge.token(),
         &mcp_http_status_code);
     if (mcp_http_status_code != 200 ||
         mcp_http_tools.value(QStringLiteral("id")).toInt() != 101 ||
         mcp_http_tools.value(QStringLiteral("result")).toObject().value(QStringLiteral("tools")).toArray().isEmpty()) {
       return fail("MCP HTTP endpoint should serve tools/list over localhost streamable HTTP");
+    }
+
+    const auto origin_request = QJsonObject{
+        {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+        {QStringLiteral("id"), 104},
+        {QStringLiteral("method"), QStringLiteral("tools/list")},
+    };
+    auto omitted_origin_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(), origin_request, bridge.token(),
+        &omitted_origin_status, QString{});
+    auto opaque_origin_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(), origin_request, bridge.token(),
+        &opaque_origin_status, QStringLiteral("null"));
+    auto hostile_origin_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(), origin_request, bridge.token(),
+        &hostile_origin_status, QStringLiteral("https://attacker.example"));
+    auto forged_local_origin_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(), origin_request, bridge.token(),
+        &forged_local_origin_status, QStringLiteral("http://localhost.attacker.example"));
+    auto hostile_host_status = 0;
+    send_mcp_http_request(
+        bridge.mcpEndpoint(), origin_request, bridge.token(),
+        &hostile_host_status, QStringLiteral("http://127.0.0.1"),
+        QStringLiteral("attacker.example"));
+    if (omitted_origin_status != 200 || opaque_origin_status != 403 ||
+        hostile_origin_status != 403 || forged_local_origin_status != 403 ||
+        hostile_host_status != 400) {
+      return fail("MCP HTTP should enforce strict Origin and Host policy variants");
     }
 
     auto mcp_http_call_status_code = 0;
@@ -457,6 +644,7 @@ int main(int argc, char** argv) {
                  {QStringLiteral("arguments"), QJsonObject{}},
              }},
         },
+        bridge.token(),
         &mcp_http_call_status_code);
     if (mcp_http_call_status_code != 200 ||
         mcp_http_status.value(QStringLiteral("result"))
@@ -477,6 +665,7 @@ int main(int argc, char** argv) {
 
     photo_editor::desktop::AgentMcpClient mcp_client;
     mcp_client.setEndpoint(bridge.mcpEndpoint());
+    mcp_client.setBearerToken(bridge.token());
     mcp_client.setTimeoutMs(3000);
     const auto client_tools = mcp_client.refreshToolCache(QStringLiteral("bridge-test-run"));
     if (!client_tools.value(QStringLiteral("ok")).toBool() ||
@@ -513,6 +702,7 @@ int main(int argc, char** argv) {
     }
     photo_editor::desktop::AgentMcpClient canceling_mcp_client;
     canceling_mcp_client.setEndpoint(bridge.mcpEndpoint());
+    canceling_mcp_client.setBearerToken(bridge.token());
     canceling_mcp_client.setTimeoutMs(3000);
     auto cancellation_poll_count = 0;
     canceling_mcp_client.setCancellationPredicate([&cancellation_poll_count]() {
@@ -528,7 +718,8 @@ int main(int argc, char** argv) {
       return fail("AgentMcpClient should cancel active MCP HTTP requests through the run cancellation predicate");
     }
 
-    agent_edit.setMcpEndpoint(bridge.mcpEndpoint(), bridge.mcpEndpointKind());
+    agent_edit.setMcpEndpoint(
+        bridge.mcpEndpoint(), bridge.mcpEndpointKind(), bridge.token());
     const auto controller_mcp_status = agent_edit.refreshMcpTools();
     if (!controller_mcp_status.value(QStringLiteral("ok")).toBool() ||
         !agent_edit.mcpAvailable() ||
@@ -591,7 +782,7 @@ int main(int argc, char** argv) {
         sample_tool_policy.value(QStringLiteral("phase")).toString() != QStringLiteral("sample") ||
         !sample_tool_policy.value(QStringLiteral("leastPrivilege")).toBool() ||
         !sample_tool_budget.value(QStringLiteral("hardLimit")).toBool() ||
-        sample_tool_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 3 ||
+        sample_tool_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 8 ||
         sample_tool_budget.value(QStringLiteral("phase")).toString() != QStringLiteral("sample") ||
         sample_policy_schema_cache.value(QStringLiteral("revision")).toInt() !=
             first_schema_revision ||
@@ -674,15 +865,34 @@ int main(int argc, char** argv) {
     qputenv(
         "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON",
         QJsonDocument(fake_ollama_sequence).toJson(QJsonDocument::Compact));
+    qputenv("PHOTO_EDITOR_FAKE_OLLAMA_DELAY_MS", QByteArrayLiteral("40"));
     agent_edit.setSelectedModelId(QStringLiteral("ollama-qwen-tool-plan-test"));
-    const auto mcp_draft_report =
-        agent_edit.runDraftOnSelected(QStringLiteral("Use the active style and keep the proof natural."));
+    QVariantMap mcp_draft_report;
+    auto mcp_draft_completion_count = 0;
+    const auto mcp_draft_connection = QObject::connect(
+        &agent_edit,
+        &photo_editor::desktop::AgentEditController::draftRunFinished,
+        &agent_edit,
+        [&](const QString&, const QVariantMap& report) {
+          mcp_draft_report = report;
+          ++mcp_draft_completion_count;
+        });
+    QElapsedTimer mcp_draft_start_timer;
+    mcp_draft_start_timer.start();
+    const auto mcp_draft_start = agent_edit.startDraftOnSelected(
+        QStringLiteral("Use the active style and keep the proof natural."));
+    const auto mcp_draft_start_duration_ms =
+        mcp_draft_start_timer.elapsed();
+    const auto mcp_draft_completed = wait_for_condition(
+        [&]() { return mcp_draft_completion_count == 1; }, 10000);
+    QObject::disconnect(mcp_draft_connection);
     qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON");
+    qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_DELAY_MS");
     auto saw_mcp_discovery_tool_call = false;
     auto saw_mcp_live_status_call = false;
     auto saw_mcp_style_rulebook_call = false;
     auto saw_mcp_recipe_schema_call = false;
-    auto saw_model_live_status_call = false;
+    auto model_live_status_call_count = 0;
     for (const auto& tool_call_value : mcp_draft_report.value(QStringLiteral("toolCalls")).toList()) {
       const auto tool_call_name = tool_call_value.toMap().value(QStringLiteral("name")).toString();
       if (tool_call_name == QStringLiteral("mcp.tools/list")) {
@@ -694,7 +904,7 @@ int main(int argc, char** argv) {
       } else if (tool_call_name == QStringLiteral("mcp.tools/call photo.get_recipe_patch_schema")) {
         saw_mcp_recipe_schema_call = true;
       } else if (tool_call_name == QStringLiteral("mcp.model_tool_call photo.live_status")) {
-        saw_model_live_status_call = true;
+        ++model_live_status_call_count;
       }
     }
     const auto mcp_observation = mcp_draft_report.value(QStringLiteral("mcpObservation")).toMap();
@@ -704,7 +914,28 @@ int main(int argc, char** argv) {
         mcp_draft_report.value(QStringLiteral("mcpToolBudget")).toMap();
     const auto model_tool_plan_budget =
         model_tool_plan.value(QStringLiteral("toolBudget")).toMap();
-    if (!mcp_draft_report.value(QStringLiteral("ok")).toBool() ||
+    const auto planning_continuation =
+        mcp_draft_report.value(QStringLiteral("planningContinuation")).toMap();
+    const auto completed_planning_stages =
+        planning_continuation.value(QStringLiteral("completedStages"))
+            .toStringList();
+    if (!mcp_draft_start.value(QStringLiteral("accepted")).toBool() ||
+        mcp_draft_start_duration_ms > 50 || !mcp_draft_completed ||
+        mcp_draft_completion_count != 1 ||
+        !mcp_draft_report.value(QStringLiteral("ok")).toBool() ||
+        planning_continuation.value(QStringLiteral("contract")).toString() !=
+            QStringLiteral("agent-request-owned-planning-continuation-v2") ||
+        planning_continuation
+            .value(QStringLiteral("explicitEventPumpLoop"))
+            .toBool() ||
+        completed_planning_stages !=
+            QStringList{QStringLiteral("primary-plan"),
+                        QStringLiteral("model-tool-follow-up")} ||
+        planning_continuation.value(QStringLiteral("stageDispatchCount"))
+                .toInt() != 2 ||
+        mcp_draft_report
+                .value(QStringLiteral("planningUiEventPumpCount"))
+                .toInt() != 0 ||
         !mcp_draft_report.value(QStringLiteral("mcpAttached")).toBool() ||
         mcp_discovery.value(QStringLiteral("mode")).toString() != QStringLiteral("mcp-readiness") ||
         !mcp_discovery.value(QStringLiteral("ready")).toBool() ||
@@ -713,9 +944,9 @@ int main(int argc, char** argv) {
             QStringLiteral("retry-discovery-before-agent-planning") ||
         !mcp_observation.value(QStringLiteral("ok")).toBool() ||
         !model_tool_plan.value(QStringLiteral("ok")).toBool() ||
-        draft_mcp_tool_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 3 ||
+        draft_mcp_tool_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 8 ||
         !draft_mcp_tool_budget.value(QStringLiteral("hardLimit")).toBool() ||
-        model_tool_plan_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 3 ||
+        model_tool_plan_budget.value(QStringLiteral("maxModelToolCallsPerTurn")).toInt() != 8 ||
         model_tool_plan_budget.value(QStringLiteral("requestedToolCallCount")).toInt() != 1 ||
         model_tool_plan.value(QStringLiteral("successCount")).toInt() != 1 ||
         model_tool_plan.value(QStringLiteral("allowedTools")).toStringList().contains(QStringLiteral("photo.commit_agent_draft")) ||
@@ -734,8 +965,10 @@ int main(int argc, char** argv) {
         !saw_mcp_live_status_call ||
         !saw_mcp_style_rulebook_call ||
         !saw_mcp_recipe_schema_call ||
-        !saw_model_live_status_call) {
-      return fail("Agent draft runs should execute read-only model-selected MCP tool plans before final local model planning");
+        model_live_status_call_count != 1 || agent_edit.running() ||
+        agent_edit.draftRequestPending() ||
+        !agent_edit.activeDraftRequestId().isEmpty()) {
+      return fail("Model-planned drafts should execute one bounded MCP tool-call round, resume the follow-up as a request-owned stage, and never replay the tool call");
     }
     const auto user_visible_tool_events =
         mcp_draft_report.value(QStringLiteral("userVisibleToolEvents")).toList();
@@ -789,11 +1022,18 @@ int main(int argc, char** argv) {
   const auto mcp_tool_values =
       mcp_tools.value(QStringLiteral("result")).toObject().value(QStringLiteral("tools")).toArray();
   auto saw_live_status_tool = false;
+  bool saw_search_start = false;
+  bool saw_search_status = false;
   auto saw_recipe_schema_tool = false;
   auto saw_commit_confirmation = false;
+  auto saw_review_resolution_confirmation = false;
   for (const auto& tool_value : mcp_tool_values) {
     const auto tool = tool_value.toObject();
     const auto name = tool.value(QStringLiteral("name")).toString();
+    if (name == QStringLiteral("photo.search_edit_start")) saw_search_start = true;
+    if (name == QStringLiteral("photo.search_edit_status")) saw_search_status = true;
+    if (name.contains(QStringLiteral("search")) && name.contains(QStringLiteral("confirm")))
+      return fail("MCP must not expose search target confirmation");
     if (name == QStringLiteral("photo.live_status") &&
         tool.value(QStringLiteral("inputSchema")).toObject().value(QStringLiteral("type")).toString() ==
             QStringLiteral("object") &&
@@ -809,14 +1049,48 @@ int main(int argc, char** argv) {
         tool.value(QStringLiteral("annotations")).toObject().value(QStringLiteral("destructiveHint")).toBool()) {
       saw_commit_confirmation = true;
     }
+    if (name == QStringLiteral("photo.resolve_agent_review_issue") &&
+        tool.value(QStringLiteral("annotations"))
+            .toObject()
+            .value(QStringLiteral("requiresConfirmation"))
+            .toBool() &&
+        tool.value(QStringLiteral("annotations"))
+            .toObject()
+            .value(QStringLiteral("destructiveHint"))
+            .toBool()) {
+      saw_review_resolution_confirmation = true;
+    }
   }
   if (mcp_tools.value(QStringLiteral("jsonrpc")).toString() != QStringLiteral("2.0") ||
       mcp_tools.value(QStringLiteral("id")).toInt() != 1 ||
       mcp_tool_values.size() < 12 ||
       !saw_live_status_tool ||
       !saw_recipe_schema_tool ||
-      !saw_commit_confirmation) {
+      !saw_commit_confirmation ||
+      !saw_review_resolution_confirmation) {
     return fail("MCP tools/list should expose photo tools with safety annotations");
+  }
+  if (!saw_search_start || !saw_search_status ||
+      photo_editor::desktop::automation_capability_for_command(QStringLiteral("photo_search_edit_start")) != QStringLiteral("draft") ||
+      photo_editor::desktop::automation_capability_for_command(QStringLiteral("photo_search_edit_status")) != QStringLiteral("read"))
+    return fail("search tools must separate authorized starts from read-only polling");
+
+  const auto read_only_tools = mcp_server.toolsListResult({QStringLiteral("read")});
+  const auto read_only_tool_json = QJsonDocument(read_only_tools).toJson(QJsonDocument::Compact);
+  const auto denied_read_only_mutation = mcp_server.callTool(
+      QStringLiteral("photo.rollback_agent_draft"),
+      QJsonObject{},
+      {QStringLiteral("read")});
+  if (read_only_tool_json.contains("photo.rollback_agent_draft") ||
+      read_only_tool_json.contains("photo.export_batch") ||
+      read_only_tool_json.contains("photo.commit_agent_draft") ||
+      !denied_read_only_mutation.value(QStringLiteral("isError")).toBool() ||
+      denied_read_only_mutation
+              .value(QStringLiteral("structuredContent"))
+              .toObject()
+              .value(QStringLiteral("requiredCapability"))
+              .toString() != QStringLiteral("draft")) {
+    return fail("read-only MCP sessions should neither discover nor invoke mutation tools");
   }
 
   const auto mcp_status = mcp_server.handleJsonRpc(QJsonObject{
@@ -919,6 +1193,35 @@ int main(int argc, char** argv) {
       selected_asset_result.value(QStringLiteral("asset")).toObject().value(QStringLiteral("filePath")).toString() !=
           source_path) {
     return fail("photo_read_asset should return selected asset metadata");
+  }
+
+  const auto selected_adjustments = send_request(
+      bridge,
+      session,
+      QJsonObject{
+          {QStringLiteral("token"), bridge.token()},
+          {QStringLiteral("command"), QStringLiteral("photo_read_adjustments")},
+      });
+  const auto selected_adjustment_result =
+      selected_adjustments
+          .value(QStringLiteral("result"))
+          .toObject();
+  const auto selected_adjustment_patch =
+      photo_editor::desktop::
+          parse_adjustment_patch_json(
+              selected_adjustment_result
+                  .value(
+                      QStringLiteral(
+                          "adjustmentPatchJson"))
+                  .toString());
+  if (!selected_adjustments.value(QStringLiteral("ok")).toBool() ||
+      selected_adjustment_result.value(QStringLiteral("assetId")).toString() !=
+          QStringLiteral("asset-1") ||
+      !selected_adjustment_patch.ok() ||
+      selected_adjustment_patch.scope !=
+          photo_editor::desktop::
+              AdjustmentPatchScope::AssetBound) {
+    return fail("photo_read_adjustments should return a valid asset-bound patch");
   }
 
   const auto proof = send_request(
@@ -1072,7 +1375,9 @@ int main(int argc, char** argv) {
   const auto linear_mask_result = linear_mask.value(QStringLiteral("result")).toObject();
   const auto linear_mask_patch = linear_mask_result.value(QStringLiteral("maskPatch")).toObject();
   const auto linear_mask_values = linear_mask_patch.value(QStringLiteral("masks")).toObject();
-  const auto linear_state = photo_editor::desktop::parse_edit_recipe_json(catalog_model.selectedRecipeJson());
+  const auto linear_state =
+      selected_adjustment_state(
+          catalog_model);
   if (!linear_mask.value(QStringLiteral("ok")).toBool() ||
       !linear_mask_result.value(QStringLiteral("ok")).toBool() ||
       linear_mask_result.value(QStringLiteral("mode")).toString() != QStringLiteral("photo_create_mask") ||
@@ -1113,7 +1418,9 @@ int main(int argc, char** argv) {
   const auto radial_mask_result = radial_mask.value(QStringLiteral("result")).toObject();
   const auto radial_mask_patch = radial_mask_result.value(QStringLiteral("maskPatch")).toObject();
   const auto radial_mask_values = radial_mask_patch.value(QStringLiteral("masks")).toObject();
-  const auto radial_state = photo_editor::desktop::parse_edit_recipe_json(catalog_model.selectedRecipeJson());
+  const auto radial_state =
+      selected_adjustment_state(
+          catalog_model);
   if (!radial_mask.value(QStringLiteral("ok")).toBool() ||
       !radial_mask_result.value(QStringLiteral("ok")).toBool() ||
       radial_mask_result.value(QStringLiteral("mode")).toString() != QStringLiteral("photo_apply_mask_adjustment") ||
@@ -1186,7 +1493,9 @@ int main(int argc, char** argv) {
     return fail("photo_plan_bulk_edit should plan a selected-set draft without mutating recipes");
   }
 
-  const auto recipe_before_batch_validation = catalog_model.selectedRecipeJson();
+  const auto recipe_before_batch_validation =
+      catalog_model
+          .selectedAdjustmentPatchJson();
   const auto batch_validation = send_request(
       bridge,
       session,
@@ -1203,7 +1512,9 @@ int main(int argc, char** argv) {
       batch_validation_result.value(QStringLiteral("assetReports")).toArray().size() != 2 ||
       !QFileInfo::exists(batch_validation_result.value(QStringLiteral("batchValidationReportPath")).toString()) ||
       agent_edit.draftActive() ||
-      catalog_model.selectedRecipeJson() != recipe_before_batch_validation) {
+      catalog_model
+              .selectedAdjustmentPatchJson() !=
+          recipe_before_batch_validation) {
     return fail("photo_validate_batch should validate selected assets without mutating recipes");
   }
 
@@ -1352,6 +1663,60 @@ int main(int argc, char** argv) {
       });
   if (!commit_draft.value(QStringLiteral("ok")).toBool() || !agent_edit.draftActive()) {
     return fail("bridge should create a draft for confirmed commit testing");
+  }
+  const auto commit_review_issues =
+      commit_draft.value(QStringLiteral("result"))
+          .toObject()
+          .value(QStringLiteral("batchSummary"))
+          .toObject()
+          .value(QStringLiteral("reviewIssues"))
+          .toArray();
+  if (!commit_review_issues.isEmpty()) {
+    const auto unconfirmed_review_resolution = send_request(
+        bridge,
+        session,
+        QJsonObject{
+            {QStringLiteral("token"), bridge.token()},
+            {QStringLiteral("command"),
+             QStringLiteral("photo_resolve_agent_review_issue")},
+            {QStringLiteral("args"),
+             QJsonObject{
+                 {QStringLiteral("assetId"),
+                  commit_review_issues.first()
+                      .toObject()
+                      .value(QStringLiteral("assetId"))},
+                 {QStringLiteral("action"), QStringLiteral("accept_anyway")},
+                 {QStringLiteral("confirmed"), false},
+             }},
+        });
+    if (unconfirmed_review_resolution.value(QStringLiteral("ok")).toBool()) {
+      return fail("bridge should reject unconfirmed review resolution");
+    }
+  }
+  for (const auto& issue_value : commit_review_issues) {
+    const auto accepted_review_issue = send_request(
+        bridge,
+        session,
+        QJsonObject{
+            {QStringLiteral("token"), bridge.token()},
+            {QStringLiteral("command"),
+             QStringLiteral("photo_resolve_agent_review_issue")},
+            {QStringLiteral("args"),
+             QJsonObject{
+                 {QStringLiteral("assetId"),
+                  issue_value.toObject().value(QStringLiteral("assetId"))},
+                 {QStringLiteral("action"), QStringLiteral("accept_anyway")},
+                 {QStringLiteral("confirmed"), true},
+             }},
+        });
+    if (!accepted_review_issue.value(QStringLiteral("ok")).toBool() ||
+        !accepted_review_issue
+             .value(QStringLiteral("result"))
+             .toObject()
+             .value(QStringLiteral("ok"))
+             .toBool()) {
+      return fail("bridge should resolve flagged draft photos before commit");
+    }
   }
   const auto confirmed_commit = send_request(
       bridge,

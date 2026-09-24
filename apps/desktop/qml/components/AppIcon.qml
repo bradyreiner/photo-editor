@@ -6,9 +6,10 @@ Canvas {
     required property string name
     property color color: "#efede8"
     property real strokeScale: Math.max(1.2, Math.min(width, height) / 10)
+    readonly property string iconSystemContract: "app-icon:v1|canvas:16-grid|stroke:optically-scaled|caps:round|joins:round|baseline:center|state-color:caller-semantic"
 
-    implicitWidth: 14
-    implicitHeight: 14
+    implicitWidth: 16
+    implicitHeight: 16
     contextType: "2d"
     antialiasing: true
     smooth: true
@@ -76,6 +77,11 @@ Canvas {
         stroke(ctx, 1)
 
         switch (root.name) {
+        case "text":
+            line(ctx, w * 0.2, h * 0.2, w * 0.8, h * 0.2)
+            line(ctx, midX, h * 0.2, midX, h * 0.8)
+            line(ctx, w * 0.32, h * 0.8, w * 0.68, h * 0.8)
+            break
         case "plus":
             line(ctx, midX, h * 0.18, midX, h * 0.82)
             line(ctx, w * 0.18, midY, w * 0.82, midY)
@@ -93,6 +99,28 @@ Canvas {
             break
         case "swatch":
             circle(ctx, midX, midY, w * 0.30, true)
+            break
+        case "keyframe":
+            poly(ctx, [[midX, h * 0.14], [w * 0.86, midY], [midX, h * 0.86], [w * 0.14, midY]], false)
+            break
+        case "keyframe-filled":
+            poly(ctx, [[midX, h * 0.14], [w * 0.86, midY], [midX, h * 0.86], [w * 0.14, midY]], true)
+            break
+        case "mark-in":
+            line(ctx, w * 0.28, h * 0.18, w * 0.28, h * 0.82)
+            line(ctx, w * 0.28, h * 0.24, w * 0.74, h * 0.24)
+            break
+        case "mark-out":
+            line(ctx, w * 0.72, h * 0.18, w * 0.72, h * 0.82)
+            line(ctx, w * 0.26, h * 0.24, w * 0.72, h * 0.24)
+            break
+        case "curve":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.14, h * 0.78)
+            ctx.bezierCurveTo(w * 0.34, h * 0.78, w * 0.36, h * 0.22, w * 0.86, h * 0.22)
+            ctx.stroke()
+            circle(ctx, w * 0.14, h * 0.78, w * 0.055, true)
+            circle(ctx, w * 0.86, h * 0.22, w * 0.055, true)
             break
         case "star":
             poly(ctx, [
@@ -120,6 +148,22 @@ Canvas {
         case "chevron-right":
             line(ctx, w * 0.38, h * 0.2, w * 0.64, midY)
             line(ctx, w * 0.64, midY, w * 0.38, h * 0.8)
+            break
+        case "chevron-up":
+            line(ctx, w * 0.2, h * 0.62, midX, h * 0.36)
+            line(ctx, midX, h * 0.36, w * 0.8, h * 0.62)
+            break
+        case "chevron-down":
+            line(ctx, w * 0.2, h * 0.38, midX, h * 0.64)
+            line(ctx, midX, h * 0.64, w * 0.8, h * 0.38)
+            break
+        case "settings":
+            circle(ctx, midX, midY, w * 0.15, false)
+            circle(ctx, midX, midY, w * 0.34, false)
+            line(ctx, midX, h * 0.08, midX, h * 0.22)
+            line(ctx, midX, h * 0.78, midX, h * 0.92)
+            line(ctx, w * 0.08, midY, w * 0.22, midY)
+            line(ctx, w * 0.78, midY, w * 0.92, midY)
             break
         case "source":
             rect(ctx, w * 0.16, h * 0.24, w * 0.68, h * 0.52, false)
@@ -236,6 +280,18 @@ Canvas {
             line(ctx, w * 0.42, h * 0.4, w * 0.42, h * 0.68)
             line(ctx, w * 0.58, h * 0.4, w * 0.58, h * 0.68)
             break
+        case "distribute-horizontal":
+            line(ctx, w * 0.16, h * 0.18, w * 0.16, h * 0.82)
+            line(ctx, w * 0.84, h * 0.18, w * 0.84, h * 0.82)
+            rect(ctx, w * 0.26, h * 0.34, w * 0.18, h * 0.32, false)
+            rect(ctx, w * 0.56, h * 0.34, w * 0.18, h * 0.32, false)
+            break
+        case "distribute-vertical":
+            line(ctx, w * 0.18, h * 0.16, w * 0.82, h * 0.16)
+            line(ctx, w * 0.18, h * 0.84, w * 0.82, h * 0.84)
+            rect(ctx, w * 0.34, h * 0.26, w * 0.32, h * 0.18, false)
+            rect(ctx, w * 0.34, h * 0.56, w * 0.32, h * 0.18, false)
+            break
         case "effects":
             line(ctx, midX, h * 0.14, midX, h * 0.86)
             line(ctx, w * 0.14, midY, w * 0.86, midY)
@@ -264,8 +320,52 @@ Canvas {
             line(ctx, w * 0.62, h * 0.3, w * 0.74, midY)
             line(ctx, w * 0.74, midY, w * 0.82, midY)
             break
+        case "audio-muted":
+            line(ctx, w * 0.16, midY, w * 0.28, midY)
+            line(ctx, w * 0.28, midY, w * 0.38, h * 0.34)
+            line(ctx, w * 0.38, h * 0.34, w * 0.50, h * 0.66)
+            line(ctx, w * 0.60, h * 0.28, w * 0.84, h * 0.72)
+            line(ctx, w * 0.84, h * 0.28, w * 0.60, h * 0.72)
+            break
         case "select":
             poly(ctx, [[w * 0.24, h * 0.18], [w * 0.24, h * 0.82], [w * 0.46, h * 0.62], [w * 0.62, h * 0.84], [w * 0.74, h * 0.76], [w * 0.58, h * 0.54], [w * 0.82, h * 0.54]], true)
+            break
+        case "hand":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.30, h * 0.48)
+            ctx.lineTo(w * 0.30, h * 0.28)
+            ctx.quadraticCurveTo(w * 0.30, h * 0.20, w * 0.38, h * 0.20)
+            ctx.quadraticCurveTo(w * 0.46, h * 0.20, w * 0.46, h * 0.28)
+            ctx.lineTo(w * 0.46, h * 0.18)
+            ctx.quadraticCurveTo(w * 0.46, h * 0.10, w * 0.54, h * 0.10)
+            ctx.quadraticCurveTo(w * 0.62, h * 0.10, w * 0.62, h * 0.18)
+            ctx.lineTo(w * 0.62, h * 0.30)
+            ctx.quadraticCurveTo(w * 0.76, h * 0.24, w * 0.76, h * 0.38)
+            ctx.lineTo(w * 0.76, h * 0.58)
+            ctx.quadraticCurveTo(w * 0.76, h * 0.84, w * 0.52, h * 0.86)
+            ctx.quadraticCurveTo(w * 0.36, h * 0.86, w * 0.26, h * 0.70)
+            ctx.lineTo(w * 0.16, h * 0.54)
+            ctx.quadraticCurveTo(w * 0.12, h * 0.46, w * 0.20, h * 0.42)
+            ctx.quadraticCurveTo(w * 0.26, h * 0.40, w * 0.30, h * 0.48)
+            ctx.stroke()
+            break
+        case "text-tool":
+            line(ctx, w * 0.20, h * 0.20, w * 0.80, h * 0.20)
+            line(ctx, midX, h * 0.20, midX, h * 0.80)
+            line(ctx, w * 0.34, h * 0.80, w * 0.66, h * 0.80)
+            break
+        case "shape-tool":
+            rect(ctx, w * 0.16, h * 0.18, w * 0.48, h * 0.48, false)
+            circle(ctx, w * 0.64, h * 0.64, w * 0.22, false)
+            break
+        case "brush-tool":
+            line(ctx, w * 0.66, h * 0.16, w * 0.34, h * 0.58)
+            line(ctx, w * 0.78, h * 0.28, w * 0.44, h * 0.66)
+            ctx.beginPath()
+            ctx.moveTo(w * 0.44, h * 0.66)
+            ctx.quadraticCurveTo(w * 0.30, h * 0.88, w * 0.14, h * 0.82)
+            ctx.quadraticCurveTo(w * 0.30, h * 0.76, w * 0.34, h * 0.58)
+            ctx.stroke()
             break
         case "smart-select":
             poly(ctx, [[w * 0.22, h * 0.16], [w * 0.22, h * 0.82], [w * 0.44, h * 0.60], [w * 0.60, h * 0.84], [w * 0.72, h * 0.76], [w * 0.56, h * 0.52], [w * 0.80, h * 0.52]], true)
@@ -328,10 +428,24 @@ Canvas {
             line(ctx, w * 0.66, midY, w * 0.54, h * 0.38)
             line(ctx, w * 0.66, midY, w * 0.54, h * 0.62)
             break
+        case "slide":
+            rect(ctx, w * 0.32, h * 0.3, w * 0.36, h * 0.4, false)
+            line(ctx, w * 0.12, midY, w * 0.3, midY)
+            line(ctx, w * 0.12, midY, w * 0.23, h * 0.39)
+            line(ctx, w * 0.12, midY, w * 0.23, h * 0.61)
+            line(ctx, w * 0.7, midY, w * 0.88, midY)
+            line(ctx, w * 0.88, midY, w * 0.77, h * 0.39)
+            line(ctx, w * 0.88, midY, w * 0.77, h * 0.61)
+            break
         case "link":
             circle(ctx, w * 0.38, midY, w * 0.18, false)
             circle(ctx, w * 0.62, midY, w * 0.18, false)
             line(ctx, w * 0.46, midY, w * 0.54, midY)
+            break
+        case "copy":
+            rect(ctx, w * 0.30, h * 0.22, w * 0.50, h * 0.54, false)
+            line(ctx, w * 0.20, h * 0.34, w * 0.20, h * 0.84)
+            line(ctx, w * 0.20, h * 0.84, w * 0.68, h * 0.84)
             break
         case "snap":
             circle(ctx, midX, midY, w * 0.24, false)
@@ -579,6 +693,14 @@ Canvas {
             line(ctx, w * 0.42, h * 0.82, w * 0.8, h * 0.44)
             circle(ctx, w * 0.28, h * 0.74, w * 0.06, false)
             rect(ctx, w * 0.68, h * 0.2, w * 0.12, h * 0.12, false)
+            break
+        case "agent-terminal":
+            rect(ctx, w * 0.16, h * 0.16, w * 0.68, h * 0.58, false)
+            line(ctx, w * 0.25, h * 0.31, w * 0.75, h * 0.31)
+            line(ctx, w * 0.27, h * 0.46, w * 0.39, h * 0.46)
+            line(ctx, w * 0.46, h * 0.46, w * 0.70, h * 0.46)
+            line(ctx, midX, h * 0.74, midX, h * 0.84)
+            line(ctx, w * 0.34, h * 0.84, w * 0.66, h * 0.84)
             break
         default:
             line(ctx, w * 0.2, midY, w * 0.8, midY)

@@ -1,17 +1,18 @@
-window.VirelDownloads = {
-  "productName": "Virel Studio",
+window.LooksyDownloads = {
+  "productName": "Looksy",
+  "legalPublisher": "",
   "channel": "Public alpha",
   "fallbackVersion": "0.1.0",
   "updatedAt": "",
-  "accessLabel": "Public alpha",
-  "accessMode": "free-support",
+  "accessLabel": "Subscription or one-time purchase",
+  "accessMode": "paid-both",
   "githubOwner": "",
   "githubRepo": "",
   "assetPatterns": {
-    "macArm": "VirelStudio.*Darwin-arm64.*\\.(dmg|zip)$",
-    "macIntel": "VirelStudio.*Darwin-x86_64.*\\.(dmg|zip)$",
-    "windows": "VirelStudio.*x64\\.msix$",
-    "windowsInstaller": "VirelStudio\\.appinstaller$"
+    "macArm": "Looksy.*Darwin-arm64.*\\.(dmg|zip)$",
+    "macIntel": "Looksy.*Darwin-x86_64.*\\.(dmg|zip)$",
+    "windows": "Looksy.*x64\\.msix$",
+    "windowsInstaller": "Looksy\\.appinstaller$"
   },
   "directDownloads": {
     "macArm": "",
@@ -31,5 +32,15 @@ window.VirelDownloads = {
     "terms": "./terms.html",
     "refunds": "./refunds.html",
     "support": "./support.html"
-  }
+  },
+  "supportedPlatforms": [
+    "mac-arm"
+  ],
+  "paymentProvider": "lemonsqueezy",
+  "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",
+  "priceLabel": "",
+  "licenseSummary": "Choose a subscription or a one-time license for one user, including personal and client work. One-time licenses include maintenance updates for the purchased major version. Plan prices, activation requirements and renewal terms are shown before checkout.",
+  "commercialTermsApproved": false,
+  "subscriptionPurchaseUrl": "",
+  "subscriptionPriceLabel": ""
 };

@@ -75,14 +75,14 @@ void configure_metal_compatible_color_pipeline(ColorAdjustmentState* state) {
 ColorAdjustmentState benchmark_state() {
   ColorAdjustmentState state;
   configure_metal_compatible_color_pipeline(&state);
-  state.exposure = 0.35;
+  state.input_transform.exposure = 0.35;
   state.contrast = 18.0;
   state.highlights = -22.0;
   state.shadows = 16.0;
   state.whites = 6.0;
   state.blacks = -8.0;
-  state.temperature = 12.0;
-  state.tint = -6.0;
+  state.input_transform.temperature = 12.0;
+  state.input_transform.tint = -6.0;
   state.vibrance = 18.0;
   state.saturation = 5.0;
   state.texture = 12.0;
@@ -103,7 +103,7 @@ ColorAdjustmentState benchmark_state() {
 ColorAdjustmentState simple_global_benchmark_state() {
   ColorAdjustmentState state;
   configure_metal_compatible_color_pipeline(&state);
-  state.exposure = 0.35;
+  state.input_transform.exposure = 0.35;
   state.contrast = 18.0;
   state.highlights = -22.0;
   state.shadows = 16.0;
@@ -115,6 +115,13 @@ ColorAdjustmentState simple_global_benchmark_state() {
       {.x = 0.55, .y = 0.60},
       {.x = 1.0, .y = 1.0},
   };
+  return state;
+}
+
+ColorAdjustmentState exposure_only_benchmark_state() {
+  ColorAdjustmentState state;
+  configure_metal_compatible_color_pipeline(&state);
+  state.input_transform.exposure = 0.35;
   return state;
 }
 
@@ -323,6 +330,13 @@ ScenarioResult run_scenario(
             {QStringLiteral("iteration"), iteration + 1},
             {QStringLiteral("iterations"), iterations},
             {QStringLiteral("elapsed_ms"), elapsed_ms},
+            {QStringLiteral("adjustment_normalize_raw_ms"), telemetry.normalize_raw_ms},
+            {QStringLiteral("adjustment_camera_characterization_ms"),
+             telemetry.camera_characterization_ms},
+            {QStringLiteral("adjustment_scene_adjustments_ms"), telemetry.scene_adjustments_ms},
+            {QStringLiteral("adjustment_tone_ms"), telemetry.tone_ms},
+            {QStringLiteral("adjustment_curves_ms"), telemetry.curves_ms},
+            {QStringLiteral("adjustment_look_ms"), telemetry.look_ms},
             {QStringLiteral("adjustment_spatial_ms"), telemetry.spatial_ms},
             {QStringLiteral("adjustment_spatial_luminance_ms"), telemetry.spatial_luminance_ms},
             {QStringLiteral("adjustment_spatial_texture_blur_ms"), telemetry.spatial_texture_blur_ms},
@@ -350,6 +364,8 @@ ScenarioResult run_scenario(
              telemetry.gpu_spatial_clarity_blur_dispatch_count},
             {QStringLiteral("adjustment_gpu_spatial_haze_blur_dispatch_count"),
              telemetry.gpu_spatial_haze_blur_dispatch_count},
+            {QStringLiteral("adjustment_gpu_fallback_reason"),
+             QString::fromStdString(telemetry.gpu_fallback_reason)},
         });
   }
   auto result = summarize_samples(std::move(samples));
@@ -416,6 +432,9 @@ int main(int argc, char** argv) {
   if (iterations <= 0) {
     return fail(QStringLiteral("--iterations must be positive"));
   }
+  const auto metal_available = photo_editor::pipeline::metal_color_backend_available();
+  const auto metal_unavailable_reason = QString::fromStdString(
+      photo_editor::pipeline::metal_color_backend_unavailable_reason());
 
   photo_editor::desktop::observability::initialize();
   photo_editor::desktop::observability::logInfo(
@@ -424,29 +443,52 @@ int main(int argc, char** argv) {
       {
           {QStringLiteral("elapsed_ms"), 0},
           {QStringLiteral("benchmark_driver"), QStringLiteral("color_adjustment")},
+          {QStringLiteral("metal_available"), metal_available},
+          {QStringLiteral("metal_unavailable_reason"), metal_unavailable_reason},
       });
 
   const auto simple_global = has_option(arguments, QStringLiteral("--simple-global"));
+  const auto exposure_only = has_option(arguments, QStringLiteral("--exposure-only"));
   const auto spatial_texture_only =
       has_option(arguments, QStringLiteral("--spatial-texture-only"));
   const auto state =
-      spatial_texture_only
+      exposure_only
+          ? exposure_only_benchmark_state()
+          : spatial_texture_only
           ? spatial_texture_only_benchmark_state()
           : (simple_global ? simple_global_benchmark_state() : benchmark_state());
   const auto state_name =
-      spatial_texture_only
+      exposure_only
+          ? QStringLiteral("exposure-only")
+          : spatial_texture_only
           ? QStringLiteral("spatial-texture-only")
           : (simple_global ? QStringLiteral("simple-global") : QStringLiteral("spatial-detail"));
+  const auto metal_compatible = photo_editor::pipeline::metal_color_pipeline_compatible(state);
+  const auto metal_incompatibility_reason = QString::fromStdString(
+      photo_editor::pipeline::metal_color_pipeline_incompatibility_reason(state));
+  if (has_option(arguments, QStringLiteral("--require-metal")) &&
+      (!metal_available || !metal_compatible)) {
+    return fail(
+        QStringLiteral("Metal color execution is required but unavailable: backend=%1 pipeline=%2")
+            .arg(metal_unavailable_reason, metal_incompatibility_reason));
+  }
   const std::vector<Scenario> scenarios = {
       {.name = QStringLiteral("tiny-grid"), .width = 64, .height = 64},
       {.name = QStringLiteral("preview-960"), .width = 960, .height = 640},
       {.name = QStringLiteral("full-1920"), .width = 1920, .height = 1280},
+      {.name = QStringLiteral("settled-2560"), .width = 2560, .height = 1707},
   };
 
   QElapsedTimer suite_timer;
   suite_timer.start();
+  const auto require_metal = has_option(arguments, QStringLiteral("--require-metal"));
   for (const auto& scenario : scenarios) {
     const auto result = run_scenario(scenario, iterations, state, state_name);
+    if (require_metal && result.adjustment_gpu_command_buffer_count_avg < 1.0) {
+      return fail(
+          QStringLiteral("Metal was available and compatible but scenario %1 executed no GPU command buffers")
+              .arg(scenario.name));
+    }
     const auto pixel_count = scenario.width * scenario.height;
     photo_editor::desktop::observability::logInfo(
         photoEditorPerfLog(),

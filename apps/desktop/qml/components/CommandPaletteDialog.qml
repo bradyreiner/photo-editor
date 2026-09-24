@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Popup {
@@ -126,7 +126,7 @@ Popup {
 
         Rectangle {
             Layout.fillWidth: true
-            height: 44
+            Layout.preferredHeight: 44
             color: "transparent"
 
             RowLayout {
@@ -224,7 +224,7 @@ Popup {
 
         Rectangle {
             Layout.fillWidth: true
-            height: 28
+            Layout.preferredHeight: 28
             color: "transparent"
 
             Rectangle {

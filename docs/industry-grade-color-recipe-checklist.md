@@ -1,5 +1,9 @@
 # Industry-Grade Color Recipe Checklist
 
+> Supporting recipe-contract record. Use
+> `docs/color-engine-and-app-foundations-completion-strategy.md` as the sole authority for current
+> ordering, migration, legacy deletion, evidence, and release completion.
+
 This checklist defines the implementation path for making the color recipe pipeline predictable,
 professional, and provable. Each item has a goal and a completion gate so progress can be audited
 without relying on subjective inspection alone.

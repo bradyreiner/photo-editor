@@ -251,8 +251,8 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static bool render_idle(const EditorPreviewController& controller) {
-    return !controller.interactive_render_timer_.isActive() &&
-           !controller.full_render_timer_.isActive() &&
+    return !controller.render_scheduler_.interactiveActive() &&
+           !controller.render_scheduler_.fullActive() &&
            !controller.interactive_render_watcher_.isRunning() &&
            !controller.full_render_watcher_.isRunning() &&
            !controller.interactive_request_pending_ &&
@@ -260,7 +260,7 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static int render_generation(const EditorPreviewController& controller) {
-    return controller.render_generation_;
+    return controller.preview_session_.generation();
   }
 
   static int interactive_render_cancelled_count(const EditorPreviewController& controller) {
@@ -277,6 +277,10 @@ struct EditorPreviewControllerTestAccess {
 
   static qint64 last_full_render_ms(const EditorPreviewController& controller) {
     return controller.last_full_render_ms_;
+  }
+
+  static QSize last_full_render_output_size(const EditorPreviewController& controller) {
+    return controller.last_full_render_output_size_;
   }
 
   static int visible_tile_prepass_schedule_count(const EditorPreviewController& controller) {
@@ -296,7 +300,7 @@ struct EditorPreviewControllerTestAccess {
   }
 
   static void start_full_render_now(EditorPreviewController& controller) {
-    controller.full_render_timer_.stop();
+    controller.render_scheduler_.stopFull();
     controller.renderPreviewStage(true);
   }
 };
@@ -436,14 +440,19 @@ int main(int argc, char** argv) {
   const auto limit_value = option_value(arguments, QStringLiteral("--limit"));
   const auto timeout_value = option_value(arguments, QStringLiteral("--timeout-ms"));
   const auto iteration_value = option_value(arguments, QStringLiteral("--iterations"));
+  const auto preview_edge_value = option_value(arguments, QStringLiteral("--preview-edge"));
   const auto brush_tile_span_value = option_value(arguments, QStringLiteral("--brush-tile-span"));
   const auto limit = limit_value.isEmpty() ? 0 : limit_value.toInt();
   const auto timeout_ms = timeout_value.isEmpty() ? 15000 : timeout_value.toInt();
   const auto iterations = iteration_value.isEmpty() ? 1 : iteration_value.toInt();
+  const auto preview_edge = preview_edge_value.isEmpty() ? 960 : preview_edge_value.toInt();
   const auto brush_tile_span =
       brush_tile_span_value.isEmpty() ? 1 : brush_tile_span_value.toInt();
   if (iterations <= 0) {
     return fail(QStringLiteral("--iterations must be positive"));
+  }
+  if (preview_edge < 512 || preview_edge > 6144) {
+    return fail(QStringLiteral("--preview-edge must be between 512 and 6144"));
   }
   if (brush_tile_span <= 0 || brush_tile_span > 4) {
     return fail(QStringLiteral("--brush-tile-span must be between 1 and 4"));
@@ -481,7 +490,7 @@ int main(int argc, char** argv) {
   }
   if (corpus_path.isEmpty()) {
     return fail(QStringLiteral(
-        "Usage: preview_benchmark_driver --corpus <manifest.json> [--limit N] [--iterations N] [--brush-tile-span N] [--edit-sweep] [--global-burst] [--repeat-full-cache] [--output-profile-toggle] [--rapid-supersede] [--viewport-max-tile] [--viewport-pan-heavy-edit] [--brush-tile-cache] [--brush-sequence] [--brush-overbroad-dirty] [--brush-texture-patch-only] [--brush-patch-chain]"));
+        "Usage: preview_benchmark_driver --corpus <manifest.json> [--limit N] [--iterations N] [--preview-edge N] [--brush-tile-span N] [--edit-sweep] [--global-burst] [--repeat-full-cache] [--output-profile-toggle] [--rapid-supersede] [--viewport-max-tile] [--viewport-pan-heavy-edit] [--brush-tile-cache] [--brush-sequence] [--brush-overbroad-dirty] [--brush-texture-patch-only] [--brush-patch-chain]"));
   }
   const auto workload_count =
       (apply_edit_sweep ? 1 : 0) + (apply_global_burst ? 1 : 0) + (repeat_full_cache ? 1 : 0) +
@@ -519,7 +528,7 @@ int main(int argc, char** argv) {
   BenchmarkImageSink image_sink;
   photo_editor::desktop::EditorPreviewController controller;
   controller.setImageProvider(&image_sink);
-  controller.setPreviewTargetEdge(960);
+  controller.setPreviewTargetEdge(preview_edge);
   BenchmarkPreviewTexture* viewport_texture = nullptr;
   if (viewport_max_tile || viewport_pan_heavy_edit) {
     auto texture = std::make_unique<BenchmarkPreviewTexture>();
@@ -575,6 +584,40 @@ int main(int argc, char** argv) {
     }
     if (plain_corpus_smoke && !wait_for_histogram_settled(controller, timeout_ms)) {
       return fail(QStringLiteral("Preview histogram timed out for %1").arg(asset_id));
+    }
+    const auto source_suffix = QFileInfo(file_path).suffix().toLower();
+    const auto raw_source = QStringList{
+                                QStringLiteral("3fr"), QStringLiteral("arw"),
+                                QStringLiteral("cr2"), QStringLiteral("cr3"),
+                                QStringLiteral("dng"), QStringLiteral("erf"),
+                                QStringLiteral("kdc"), QStringLiteral("mef"),
+                                QStringLiteral("mos"), QStringLiteral("mrw"),
+                                QStringLiteral("nef"), QStringLiteral("nrw"),
+                                QStringLiteral("orf"), QStringLiteral("pef"),
+                                QStringLiteral("raf"), QStringLiteral("raw"),
+                                QStringLiteral("rw2"), QStringLiteral("sr2"),
+                                QStringLiteral("srf"), QStringLiteral("srw")}
+                                .contains(source_suffix);
+    const auto recipe_object = QJsonDocument::fromJson(recipe_json.toUtf8()).object();
+    const auto recipe_crops = recipe_object.contains(QStringLiteral("crop_rect_width")) ||
+                              recipe_object.contains(QStringLiteral("cropRectWidth")) ||
+                              recipe_object.contains(QStringLiteral("crop_preset")) ||
+                              recipe_object.contains(QStringLiteral("cropPreset")) ||
+                              recipe_object.contains(QStringLiteral("crop_zoom")) ||
+                              recipe_object.contains(QStringLiteral("cropZoom"));
+    const auto full_output_size =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::last_full_render_output_size(
+            controller);
+    const auto source_size = QSize(controller.sourceImageWidth(), controller.sourceImageHeight());
+    if (raw_source && !recipe_crops &&
+        (!source_size.isValid() || full_output_size != source_size)) {
+      return fail(
+          QStringLiteral("RAW max preview was not sensor resolution for %1: source=%2x%3 output=%4x%5")
+              .arg(asset_id)
+              .arg(source_size.width())
+              .arg(source_size.height())
+              .arg(full_output_size.width())
+              .arg(full_output_size.height()));
     }
     if (apply_edit_sweep) {
       QElapsedTimer edit_timer;
@@ -1620,6 +1663,12 @@ int main(int argc, char** argv) {
             {QStringLiteral("elapsed_ms"), asset_timer.elapsed()},
             {QStringLiteral("image_width"), image_size.width()},
             {QStringLiteral("image_height"), image_size.height()},
+            {QStringLiteral("source_width"), controller.sourceImageWidth()},
+            {QStringLiteral("source_height"), controller.sourceImageHeight()},
+            {QStringLiteral("full_output_width"), full_output_size.width()},
+            {QStringLiteral("full_output_height"), full_output_size.height()},
+            {QStringLiteral("full_resolution_verified"),
+             !raw_source || recipe_crops || full_output_size == source_size},
         });
   }
 

@@ -9,11 +9,13 @@
 
 namespace photo_editor::desktop {
 
+bool agent_instructions_require_grounded_edit(const QString& instructions);
+
 struct AgentLocalModelPlanRequest final {
   QString model_id;
   QVariantMap style;
   QVariantMap asset;
-  QString current_recipe_json;
+  QString current_adjustment_patch_json;
   QString user_instructions;
   QVariantList available_tool_schemas;
   QVariantList prior_tool_results;
@@ -21,6 +23,8 @@ struct AgentLocalModelPlanRequest final {
   QVariantMap memory_packet;
   QVariantList few_shot_examples;
   bool allow_tool_call_plan = false;
+  bool force_model_planning = false;
+  bool allow_deterministic_fallback = true;
   std::function<bool()> cancellation_requested;
 };
 
@@ -33,6 +37,7 @@ struct AgentLocalModelPlanResult final {
   QString safe_stop_reason;
   QVariantMap prompt_audit;
   QVariantList style_constraint_citations;
+  QVariantMap edit_intent;
   QVariantMap recipe_patch;
   QVariantList tool_call_plan;
   QVariantList user_questions;
@@ -44,8 +49,11 @@ struct AgentLocalModelProofCritiqueRequest final {
   QVariantMap style;
   QVariantMap asset;
   QString user_instructions;
+  QVariantList graphic_layers;
   QVariantMap validation_report;
   QVariantList previous_attempts;
+  QVariantMap photographer_calibration;
+  QVariantMap project_north_star;
   std::function<bool()> cancellation_requested;
 };
 
@@ -54,7 +62,8 @@ struct AgentLocalModelProofCritiqueResult final {
   QString error_message;
   QString model_id;
   bool pass = false;
-  bool needs_user_review = false;
+  // A transport, image, or response-validation failure is never verification.
+  bool needs_user_review = true;
   QString summary;
   QString taste_confidence;
   QVariantList issues;

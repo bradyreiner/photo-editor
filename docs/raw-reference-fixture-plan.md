@@ -1,5 +1,9 @@
 # RAW Reference Fixture Plan
 
+> Supporting fixture specification. Synthetic fixtures described here cannot satisfy the licensed
+> real-RAW, independent-reference, hardware, or editorial gates in
+> `docs/color-engine-and-app-foundations-completion-strategy.md`.
+
 The current CI gate uses synthetic RAW-style fixtures in `color_chart_validation_test`.
 Those fixtures cover neutral, skin, sky, and saturated patches with deterministic
 camera metadata, input-stage white balance, camera profile resolution, RAW level

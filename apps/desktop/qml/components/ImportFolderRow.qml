@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -16,7 +16,7 @@ Rectangle {
     Theme { id: theme }
 
     width: ListView.view ? ListView.view.width : implicitWidth
-    implicitHeight: 40
+    implicitHeight: 36
     radius: theme.radius8
     color: selected
            ? theme.alpha(theme.accentCool500, 0.1)

@@ -1,11 +1,15 @@
 use std::time::Instant;
 
 use photo_catalog::{
-    observability::Logger, AppRuntimePaths, CatalogService, PostgresCatalogConfig,
+    observability::Logger, run_catalog_helper, AppRuntimePaths, CatalogService,
+    PostgresCatalogConfig,
 };
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn main() -> std::process::ExitCode {
+    run_catalog_helper(run)
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let logger = Logger::from_env("catalog_migrate")?;
     let started_at = Instant::now();
     let runtime_paths = AppRuntimePaths::from_env();

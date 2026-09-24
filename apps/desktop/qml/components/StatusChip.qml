@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -57,7 +57,7 @@ Rectangle {
     implicitWidth: Math.min(root.maximumReadableWidth,
                             Math.max(root.minimumReadableWidth,
                                      chipRow.implicitWidth + (compact ? 18 : 22)))
-    implicitHeight: compact ? 30 : 34
+    implicitHeight: compact ? theme.controlHeight : theme.controlHeightTall
     radius: theme.radiusChip
     color: toneFill
     border.width: theme.chromeBorderWidth
@@ -92,9 +92,9 @@ Rectangle {
         Rectangle {
             id: statusDot
             visible: root.dotVisible
-            Layout.preferredWidth: 6
-            Layout.preferredHeight: 6
-            radius: 3
+            Layout.preferredWidth: theme.scaled(6)
+            Layout.preferredHeight: theme.scaled(6)
+            radius: width / 2
             color: root.toneColor
             opacity: root.enabled ? (root.attentionTone || root.busy ? 0.94 : 0.62) : 0.46
 
@@ -108,8 +108,8 @@ Rectangle {
 
         AppIcon {
             visible: root.iconName.length > 0
-            Layout.preferredWidth: compact ? 12 : 14
-            Layout.preferredHeight: compact ? 12 : 14
+            Layout.preferredWidth: compact ? theme.scaled(12) : theme.scaled(14)
+            Layout.preferredHeight: compact ? theme.scaled(12) : theme.scaled(14)
             name: root.iconName
             color: root.toneColor
             opacity: root.attentionTone || root.busy || root.tone !== "neutral" ? 1.0 : 0.72
@@ -121,13 +121,13 @@ Rectangle {
             text: root.text
             color: root.tone === "neutral" ? theme.textMain : theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: compact ? 10 : 11
+            font.pixelSize: compact ? theme.typeLabel : theme.typeBody
             font.weight: root.tone === "neutral" ? Font.Medium : Font.DemiBold
             font.letterSpacing: 0
             maximumLineCount: 1
             elide: Text.ElideNone
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
+            minimumPixelSize: 10
             verticalAlignment: Text.AlignVCenter
             clip: true
         }

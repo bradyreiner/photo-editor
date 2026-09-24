@@ -31,12 +31,13 @@ Rectangle {
                                        : changed ? accent
                                        : mutedAccent
     readonly property color rowFill: !enabled ? theme.alpha(theme.glassBase, 0.26)
-                                 : hidden ? theme.alpha(theme.panelColor, 0.46)
-                                 : selected || activeMask ? theme.alpha(rowAccent, 0.11)
+                                 : hidden ? theme.alpha(theme.surfaceBottom, 0.46)
+                                 : selected ? theme.alpha(theme.glassLift, 0.52)
+                                 : activeMask ? theme.alpha(rowAccent, 0.11)
                                  : solo ? theme.alpha(rowAccent, 0.09)
                                  : changed ? theme.alpha(rowAccent, 0.075)
                                  : hovered ? theme.alpha(theme.glassLift, 0.30)
-                                 : theme.alpha(theme.panelLift, 0.44)
+                                 : theme.alpha(theme.surfaceTop, 0.44)
     readonly property string rowStateSummary: {
         let parts = []
         if (locked)
@@ -81,10 +82,12 @@ Rectangle {
 
     Layout.fillWidth: true
     Layout.preferredHeight: chromeRowHeight
-    radius: theme.radius6
+    radius: theme.radius8
     color: rowFill
-    border.width: selected || activeMask || solo || hovered || locked ? theme.chromeBorderWidth : 0
-    border.color: solo ? theme.alpha(rowAccent, 0.78)
+    border.width: activeFocus || selected ? 1
+                  : activeMask || solo || hovered || locked ? 1 : 0
+    border.color: activeFocus || selected ? theme.controlEdge
+                   : solo ? theme.alpha(rowAccent, 0.78)
                        : selected || activeMask || hovered ? theme.alpha(rowAccent, 0.56)
                        : locked ? theme.alpha(theme.textMuted, 0.42)
                        : theme.alpha(theme.textMuted, 0.24)
@@ -128,8 +131,8 @@ Rectangle {
         anchors.bottom: parent.bottom
         width: 3
         radius: 2
-        visible: root.accentVisible
-        color: root.rowAccent
+        visible: root.activeMask || root.solo || (root.changed && !root.selected)
+        color: root.activeMask ? root.activeMaskAccent : (root.solo ? theme.warning : root.rowAccent)
         z: 1
     }
 

@@ -76,8 +76,12 @@ required_tests=(
   "render_parity_test"
   "render_golden_test"
   "editor_preview_math_test"
-  "desktop_shell_smoke_test"
-  "raw_corpus_test"
+  "desktop_shell_brush_workflow_test"
+  "desktop_shell_retouch_hud_test"
+  "desktop_shell_selection_geometry_test"
+  "desktop_shell_tool_exit_test"
+  "desktop_shell_layer_hover_test"
+  "synthetic_raw_pipeline_invariant_test"
 )
 
 for test_name in "${required_tests[@]}"; do
@@ -86,7 +90,7 @@ for test_name in "${required_tests[@]}"; do
   fi
 done
 
-log "Running mask UX, matte math, render parity, golden, and RAW corpus tests"
+log "Running mask UX, matte math, render parity, golden, and synthetic RAW pipeline invariant tests"
 for test_name in "${required_tests[@]}"; do
   log "Running ${test_name}"
   output="$(ctest --test-dir "${build_dir}" -R "^${test_name}$" --output-on-failure 2>&1)" || {

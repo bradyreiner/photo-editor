@@ -1,6 +1,6 @@
 # Shipping Guide
 
-This document explains how to ship the current `Virel Studio` codebase as a downloadable desktop app.
+This document explains how to ship the current `Looksy` codebase as a downloadable desktop app.
 
 The authoritative public-launch contract is now
 [production-launch-checklist.md](production-launch-checklist.md). This guide
@@ -10,7 +10,7 @@ It is written for the repository in its current state:
 
 - native desktop app built with Qt/QML and CMake
 - Rust helper binaries for catalog/database operations
-- managed local PostgreSQL support for end-user installs
+- bundled managed PostgreSQL catalog for end-user installs
 - macOS packaging via app bundle + DMG path
 - Windows packaging via staged install root + MSIX path
 
@@ -23,10 +23,9 @@ A real release currently has these parts:
 1. Build the desktop app.
 2. Build the Rust helper binaries.
 3. Bundle the helper binaries beside the app.
-4. Bundle a PostgreSQL runtime for the managed local catalog flow.
-5. Package the app per platform.
-6. Sign the release artifacts.
-7. Publish the artifacts and optional update metadata.
+4. Package the app per platform.
+5. Sign the release artifacts.
+6. Publish the artifacts and optional update metadata.
 
 ## Current release outputs
 
@@ -34,14 +33,13 @@ A real release currently has these parts:
 
 The repo is set up to produce:
 
-- `VirelStudio.app`
+- `Looksy.app`
 - packaged artifacts through `cpack`
-- optional bundled PostgreSQL runtime under:
-  - `VirelStudio.app/Contents/Resources/postgres`
+- bundled PostgreSQL runtime under `Contents/Resources/postgres`
 
 Rust helper binaries are installed beside the app binary under:
 
-- `VirelStudio.app/Contents/MacOS`
+- `Looksy.app/Contents/MacOS`
 
 ### Windows
 
@@ -50,32 +48,32 @@ The repo is set up to produce:
 - a staged install root from `cmake --install`
 - an `.msix` package from that staged install root
 - an optional `.appinstaller` file for update distribution
-- optional bundled PostgreSQL runtime under:
-  - `bin/postgres`
+- bundled PostgreSQL runtime in the install root
 
 Rust helper binaries are installed beside the app executable in the install root.
 
 ## Required local/runtime behavior
 
-The app supports two database modes:
+The app supports two PostgreSQL modes:
 
-### External database mode
+### External PostgreSQL authority
 
 If `PHOTO_EDITOR_DATABASE_URL` is set:
 
-- the app uses that PostgreSQL instance
-- the app only applies schema migrations
-- no local bundled database bootstrap is required
+- all ordinary desktop helpers use that PostgreSQL instance
+- SQLx migrations run before the catalog repository is exposed
+- the managed local service is not started
 
-### Managed local database mode
+### Managed local PostgreSQL mode
 
 If `PHOTO_EDITOR_DATABASE_URL` is not set:
 
-- the app creates and manages a private local PostgreSQL cluster
-- generated cluster state lives under `PHOTO_EDITOR_APP_DATA_DIR`
-- the helper binaries start the local database and apply migrations automatically
+- the app initializes a private PostgreSQL cluster under `PHOTO_EDITOR_APP_DATA_DIR/postgres`
+- it binds only to loopback using generated local credentials and a private port
+- the package supplies `postgres`, `initdb`, `pg_ctl`, `pg_dump`, `pg_restore`, and `psql`
+- SQLx migrations and health checks run before use
 
-This managed mode is what downloadable releases are currently built around.
+This managed mode is what downloadable releases are built around.
 
 ## Repo configuration you need before shipping
 
@@ -99,12 +97,6 @@ Set these in the repository before making signed releases:
 
 ### GitHub variables
 
-Set these for the Windows packaging path:
-
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE`
-  or
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`
-
 Required public release, website, and package metadata are listed in
 [production-launch-checklist.md](production-launch-checklist.md). In particular,
 the Windows publisher must exactly match the production certificate subject.
@@ -115,6 +107,7 @@ Windows package metadata:
 - `PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME`
 - `PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER`
 - `PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME`
+  - Set this to the approved `LOOKSY_LEGAL_PUBLISHER`, not the Looksy product name unless they are legally identical.
 - `PHOTO_EDITOR_WINDOWS_DESCRIPTION`
 - `PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL`
 - `PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI`
@@ -190,7 +183,6 @@ Prerequisites:
 - Qt installed
 - CMake and Ninja installed
 - Rust toolchain installed
-- PostgreSQL runtime available if you want to test the managed local DB path
 
 Build:
 
@@ -206,20 +198,11 @@ Package:
 cpack --config build/release-macos/CPackConfig.cmake -B build/release-macos/package
 ```
 
-If you want to bundle a local PostgreSQL runtime in the package:
-
-```sh
-cmake --preset release-macos \
-  -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD/rust/target/release" \
-  -DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR="$(brew --prefix postgresql@16)"
-```
-
 If you want to enable the Sparkle updater in the macOS app bundle:
 
 ```sh
 cmake --preset release-macos \
   -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD/rust/target/release" \
-  -DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR="$(brew --prefix postgresql@16)" \
   -DPHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER=ON \
   -DPHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR="/path/to/Sparkle-distribution" \
   -DPHOTO_EDITOR_MACOS_APPCAST_URL="https://example.com/appcast.xml" \
@@ -234,7 +217,6 @@ Prerequisites:
 - Qt installed
 - Windows SDK installed
 - Rust toolchain installed
-- a PostgreSQL runtime archive or URL configured
 
 Build:
 
@@ -243,13 +225,6 @@ cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
 cmake --preset release-windows -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD\rust\target\release"
 cmake --build --preset build-release-windows
 cmake --install build/release-windows --prefix "$env:TEMP\photo-editor-windows-install"
-```
-
-Prepare a PostgreSQL runtime root if needed:
-
-```powershell
-$env:PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE = "C:\path\to\postgres-runtime.zip"
-bash ./scripts/prepare-postgres-runtime.sh
 ```
 
 Create the MSIX package:
@@ -273,20 +248,16 @@ It does this:
 2. Installs the Rust toolchain.
 3. Installs Qt.
 4. Builds all Rust helper binaries in release mode.
-5. Prepares the PostgreSQL runtime:
-   - macOS from `brew --prefix postgresql@16`
-   - Windows from an archive path or URL
-6. Optionally prepares a Sparkle distribution for macOS update support.
-7. Configures CMake with:
+5. Optionally prepares a Sparkle distribution for macOS update support.
+6. Configures CMake with:
    - `PHOTO_EDITOR_RUST_BINARY_DIR`
-   - optionally `PHOTO_EDITOR_POSTGRES_RUNTIME_DIR`
    - optionally Sparkle updater settings for macOS
-8. Builds the desktop app.
-9. Packages:
+7. Builds the desktop app.
+8. Packages:
    - macOS via `cpack`
    - Windows via `package-windows-msix.ps1`
-10. Optionally generates a Sparkle appcast from the packaged macOS artifacts.
-11. Uploads the packaged artifacts.
+9. Optionally generates a Sparkle appcast from the packaged macOS artifacts.
+10. Uploads the packaged artifacts.
 
 ## How to ship the first release
 
@@ -296,24 +267,7 @@ It does this:
 - create/export your Windows signing certificate
 - configure the GitHub secrets and variables listed above
 
-### Step 2: prepare the Windows PostgreSQL runtime source
-
-Pick one:
-
-- set `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE` to a runner-visible archive path
-- set `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL` to a downloadable archive URL
-
-The archive must contain a runtime root with:
-
-- `bin/initdb`
-- `bin/pg_ctl`
-
-or Windows equivalents:
-
-- `bin/initdb.exe`
-- `bin/pg_ctl.exe`
-
-### Step 3: create a release tag
+### Step 2: create a release tag
 
 ```sh
 git tag v0.1.0
@@ -324,7 +278,7 @@ git push origin v0.1.0
 
 Check that:
 
-- macOS artifact contains `VirelStudio.app`
+- macOS artifact contains `Looksy.app`
 - Rust helpers are bundled beside the app binary
 - Windows artifact contains an `.msix`
 - Windows artifact contains an `.appinstaller` if update URIs were configured
@@ -391,10 +345,8 @@ The Windows path is set up for App Installer style updates. To use that:
 
 ### Implemented
 
-- Git-tracked database migrations
-- managed local PostgreSQL bootstrap
+- PostgreSQL SQLx migrations, managed startup/health, and pre-migration `pg_dump` backup
 - helper binary installation beside the packaged app
-- optional PostgreSQL runtime bundling
 - macOS package path through CPack
 - optional Sparkle updater integration for macOS bundles
 - macOS appcast generation hook for release packaging
@@ -406,7 +358,6 @@ The Windows path is set up for App Installer style updates. To use that:
 - Apple signing/notarization automation inside the protected release workflow
 - Windows signing validation using the production certificate
 - production-quality macOS and Windows package art
-- Keychain/Credential Manager storage for generated database credentials
 - signed Sparkle appcast generation and App Installer publishing
 - public binary-repository promotion and Cloudflare Pages deployment
 
@@ -419,11 +370,10 @@ publisher, updater, website, support, payment, and hosting values are configured
 - Rust helpers build in release mode
 - release workflow variables are configured
 - release workflow secrets are configured
-- Windows PostgreSQL runtime source is configured
 - artifacts build on GitHub Actions
 - macOS install tested on a clean machine
 - Windows install tested on a clean machine
-- managed local database bootstraps successfully
+- managed PostgreSQL catalog opens, persists, backs up, and restores successfully
 - import/edit/relaunch flow works
 
 ## Troubleshooting
@@ -435,16 +385,18 @@ Check:
 - Windows SDK is installed
 - `makeappx.exe` is available
 - `signtool.exe` is available if signing is enabled
-- the install root actually contains `bin\VirelStudio.exe`
+- the install root actually contains `bin\Looksy.exe`
 
-### Local database does not start in a packaged build
+### Local catalog does not open in a packaged build
 
 Check:
 
 - Rust helper binaries are bundled beside the app
-- PostgreSQL runtime exists in the packaged location
-- the runtime contains `initdb` and `pg_ctl`
 - the app has permission to create files under its app data directory
+- `catalog_local_db status` reports `mode: "local-managed"`, `healthy: true`, and
+  `initialized: true`
+- `catalog_snapshot` succeeds against the same managed connection after all checked SQLx
+  migrations have applied
 
 ### Release artifact builds but is not installable
 
@@ -457,5 +409,5 @@ Check:
 ## Related docs
 
 - [release-process.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/release-process.md)
-- [local-postgres-service.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/local-postgres-service.md)
+- [local-catalog-storage.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/local-catalog-storage.md)
 - [database-migrations.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/database-migrations.md)

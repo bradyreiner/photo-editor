@@ -8,6 +8,18 @@
 
 namespace photo_editor::desktop {
 
+namespace {
+class LeasedTextureNode final : public QSGSimpleTextureNode {
+ public:
+  ~LeasedTextureNode() override {
+    // Destroy Qt's native wrapper before releasing the resource it wraps.
+    setOwnsTexture(false);
+    delete texture();
+  }
+  std::shared_ptr<void> native_lease;
+};
+}  // namespace
+
 EditorPreviewTextureItem::EditorPreviewTextureItem(QQuickItem* parent)
     : QQuickItem(parent) {
   setFlag(ItemHasContents, true);
@@ -67,9 +79,9 @@ QSGNode* EditorPreviewTextureItem::updatePaintNode(
     return nullptr;
   }
 
-  auto* node = static_cast<QSGSimpleTextureNode*>(old_node);
+  auto* node = static_cast<LeasedTextureNode*>(old_node);
   if (node == nullptr) {
-    node = new QSGSimpleTextureNode;
+    node = new LeasedTextureNode;
     node->setOwnsTexture(true);
   }
   node->setFiltering(crisp_pixels_ ? QSGTexture::Nearest : QSGTexture::Linear);
@@ -82,7 +94,14 @@ QSGNode* EditorPreviewTextureItem::updatePaintNode(
         window(),
         native_texture_size_,
         QQuickWindow::TextureHasAlphaChannel);
+    if (texture == nullptr) {
+      delete node;
+      scene_graph_texture_handle_ = 0;
+      scene_graph_texture_size_ = {};
+      return nullptr;
+    }
     node->setTexture(texture);
+    node->native_lease = native_texture_lease_;
     scene_graph_texture_handle_ = native_texture_handle_;
     scene_graph_texture_size_ = native_texture_size_;
   }
@@ -111,6 +130,7 @@ void EditorPreviewTextureItem::syncFromController() {
   }
 
   native_texture_available_ = next_available;
+  native_texture_lease_ = next_available ? controller_->displayPreviewNativeTextureLease() : nullptr;
   native_texture_handle_ = next_handle;
   native_texture_size_ = next_size;
   native_texture_revision_ = next_revision;

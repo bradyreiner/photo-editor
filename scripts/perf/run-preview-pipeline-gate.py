@@ -137,7 +137,7 @@ PIPELINE_CASES = (
         render_filters=("render_mode=max_preview", "render_reason=preview_retry"),
         render_elapsed_max_ms=50,
         render_metric_max=("decode_ms=0", "edit_ms=0", "encode_ms=0"),
-        render_metric_eq=("disk_cache_hit=true", "publish_path=disk_jpeg_cache"),
+        render_metric_eq=("disk_cache_hit=true", "publish_path=disk_png_cache", "png_encode_requested=false"),
         iterations=30,
         sample_event="benchmark.preview_full_cache_repeat.sample_completed",
         sample_elapsed_p95_max_ms=150,

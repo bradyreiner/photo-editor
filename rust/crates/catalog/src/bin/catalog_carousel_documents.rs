@@ -1,18 +1,19 @@
 use std::env;
 
 use photo_catalog::{
-    AppRuntimePaths, CatalogService, PersistedCarouselDocument, PostgresCatalogConfig,
+    run_catalog_helper, AppRuntimePaths, CatalogRepository, CatalogRuntime,
+    PersistedCarouselDocument,
 };
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn main() -> std::process::ExitCode {
+    run_catalog_helper(run)
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = env::args().collect();
     let command = arguments.get(1).map(String::as_str).unwrap_or("list");
 
-    AppRuntimePaths::from_env().ensure_directories()?;
-    let config = PostgresCatalogConfig::from_env();
-    let catalog = CatalogService::connect(&config).await?;
-    catalog.initialize_schema().await?;
+    let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     match command {
         "list" => {

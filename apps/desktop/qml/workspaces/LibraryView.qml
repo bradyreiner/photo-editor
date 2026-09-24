@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Window
 import Qt.labs.folderlistmodel
@@ -125,6 +126,9 @@ Rectangle {
     readonly property bool filtersActive: catalogAssets.searchFilter !== ""
                                          || catalogAssets.importDateFilter !== "all"
                                          || catalogAssets.captureYearFilter !== "all"
+                                         || catalogAssets.cameraFilter !== "all"
+                                         || catalogAssets.captureDateFromFilter !== ""
+                                         || catalogAssets.captureDateToFilter !== ""
                                          || catalogAssets.projectFilter !== "all"
                                          || catalogAssets.mediaTypeFilter !== "all"
                                          || catalogAssets.reviewFilter !== "all"
@@ -154,6 +158,18 @@ Rectangle {
         const labels = ["All Capture Dates", "Unknown"];
         for (let i = 0; i < catalogAssets.captureYears.length; ++i)
             labels.push(catalogAssets.captureYears[i]);
+        return labels;
+    }
+    readonly property var cameraFilterValues: {
+        const values = ["all", "unknown"];
+        for (let i = 0; i < catalogAssets.cameraLabels.length; ++i)
+            values.push(catalogAssets.cameraLabels[i]);
+        return values;
+    }
+    readonly property var cameraFilterLabels: {
+        const labels = ["All Cameras", "Unknown Camera"];
+        for (let i = 0; i < catalogAssets.cameraLabels.length; ++i)
+            labels.push(catalogAssets.cameraLabels[i]);
         return labels;
     }
     readonly property var projectFilterValues: {
@@ -193,6 +209,11 @@ Rectangle {
             parts.push(importFilterLabels[indexForValue(importFilterValues, catalogAssets.importDateFilter)]);
         if (catalogAssets.captureYearFilter !== "all")
             parts.push(captureFilterLabels[indexForValue(captureFilterValues, catalogAssets.captureYearFilter)]);
+        if (catalogAssets.cameraFilter !== "all")
+            parts.push(cameraFilterLabels[indexForValue(cameraFilterValues, catalogAssets.cameraFilter)]);
+        if (catalogAssets.captureDateFromFilter !== "" || catalogAssets.captureDateToFilter !== "")
+            parts.push("Captured " + (catalogAssets.captureDateFromFilter || "any time") +
+                       " to " + (catalogAssets.captureDateToFilter || "today"));
         if (catalogAssets.projectFilter !== "all")
             parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)]);
         if (catalogAssets.mediaTypeFilter !== "all")
@@ -260,7 +281,7 @@ Rectangle {
         return ""
     }
 
-    function selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType, modifiers) {
+    function selectCatalogAsset(index) {
         if (root.selectionModeActive) {
             catalogAssets.selectIndex(index)
             catalogAssets.toggleSelectionIndex(index)
@@ -443,6 +464,9 @@ Rectangle {
         catalogAssets.searchFilter = "";
         catalogAssets.importDateFilter = "all";
         catalogAssets.captureYearFilter = "all";
+        catalogAssets.cameraFilter = "all";
+        catalogAssets.captureDateFromFilter = "";
+        catalogAssets.captureDateToFilter = "";
         catalogAssets.projectFilter = "all";
         catalogAssets.mediaTypeFilter = "all";
         catalogAssets.reviewFilter = "all";
@@ -594,7 +618,7 @@ Rectangle {
                 assetId: assetId,
                 mediaType: String(asset.mediaType || "photo"),
                 filePath: sourcePath,
-                recipeJson: String(asset.recipeJson || ""),
+                adjustmentPatchJson: String(asset.adjustmentPatchJson || ""),
                 displayLabel: root.baseNameForPath(sourcePath)
             })
         }
@@ -748,7 +772,7 @@ Rectangle {
                     catalogAssets.selectedCameraLabel,
                     catalogAssets.selectedCaptureDate,
                     catalogAssets.selectedLensModel,
-                    catalogAssets.selectedRecipeJson)
+                    catalogAssets.selectedAdjustmentPatchJson)
     }
 
     function selectedAssetMap() {
@@ -863,6 +887,12 @@ Rectangle {
 
     function applyRatingReview(rating, forceAdvance) {
         catalogAssets.setSelectedRating(rating)
+        if (forceAdvance || appShell.cullingAutoAdvance)
+            advanceAfterReview()
+    }
+
+    function applyColorLabelReview(colorLabel, forceAdvance) {
+        catalogAssets.setSelectedColorLabel(colorLabel)
         if (forceAdvance || appShell.cullingAutoAdvance)
             advanceAfterReview()
     }
@@ -1154,7 +1184,7 @@ Rectangle {
                 ToneComboBox {
                     id: exportDialogPresetCombo
                     Layout.fillWidth: true
-                    model: ["Full Resolution", "Archive TIFF", "Web Proof", "Client Preview", "Quick Web", "Original Copy"]
+                    model: ["Full Resolution", "Archive TIFF", "OpenEXR Half", "ACES2065-1 OpenEXR", "ACEScg OpenEXR", "HDR PQ AVIF", "HDR HLG AVIF", "Web Proof", "Client Preview", "Quick Web", "Original Copy"]
                 }
             }
 
@@ -1323,6 +1353,41 @@ Rectangle {
     }
 
     Shortcut {
+        sequence: "6"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyColorLabelReview("red", false)
+    }
+
+    Shortcut {
+        sequence: "7"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyColorLabelReview("yellow", false)
+    }
+
+    Shortcut {
+        sequence: "8"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyColorLabelReview("green", false)
+    }
+
+    Shortcut {
+        sequence: "9"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyColorLabelReview("blue", false)
+    }
+
+    Shortcut {
+        sequence: "Alt+9"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyColorLabelReview("purple", false)
+    }
+
+    Shortcut {
         sequence: "Shift+P"
         context: Qt.WindowShortcut
         enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
@@ -1428,16 +1493,7 @@ Rectangle {
                         rejected: modelData.rejected
                         burstText: root.burstTextForAsset(modelData)
                         showDoubleClickHint: true
-                        onActivated: root.selectCatalogAsset(
-                                         modelData.visibleIndex,
-                                         modelData.assetId,
-                                         modelData.filePath,
-                                         modelData.thumbnailSource,
-                                         modelData.cameraLabel,
-                                         modelData.captureDate,
-                                         modelData.lensModel,
-                                         modelData.recipeJson,
-                                         modelData.mediaType)
+                        onActivated: root.selectCatalogAsset(modelData.visibleIndex)
                         onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
                     }
                 }
@@ -1476,16 +1532,7 @@ Rectangle {
                         picked: modelData.picked
                         rejected: modelData.rejected
                         burstText: root.burstTextForAsset(modelData)
-                        onActivated: root.selectCatalogAsset(
-                                         modelData.visibleIndex,
-                                         modelData.assetId,
-                                         modelData.filePath,
-                                         modelData.thumbnailSource,
-                                         modelData.cameraLabel,
-                                         modelData.captureDate,
-                                         modelData.lensModel,
-                                         modelData.recipeJson,
-                                         modelData.mediaType)
+                        onActivated: root.selectCatalogAsset(modelData.visibleIndex)
                         onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
                     }
                 }
@@ -1793,6 +1840,74 @@ Rectangle {
                             }
                         }
 
+                        RowLayout {
+                            objectName: "libraryCaptureFacetRow"
+                            Layout.fillWidth: true
+                            spacing: theme.space6
+
+                            Label {
+                                text: "Captured"
+                                color: theme.textFaint
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.Medium
+                            }
+
+                            ToneComboBox {
+                                objectName: "libraryCaptureYearFilter"
+                                Layout.preferredWidth: 150
+                                model: root.captureFilterLabels
+                                currentIndex: root.indexForValue(root.captureFilterValues, catalogAssets.captureYearFilter)
+                                Accessible.name: "Filter by capture year"
+                                onActivated: catalogAssets.captureYearFilter = root.captureFilterValues[currentIndex]
+                            }
+
+                            ToneComboBox {
+                                objectName: "libraryCameraFilter"
+                                Layout.preferredWidth: 210
+                                model: root.cameraFilterLabels
+                                currentIndex: root.indexForValue(root.cameraFilterValues, catalogAssets.cameraFilter)
+                                Accessible.name: "Filter by camera"
+                                onActivated: catalogAssets.cameraFilter = root.cameraFilterValues[currentIndex]
+                            }
+
+                            ToneTextField {
+                                id: captureDateFromField
+                                objectName: "libraryCaptureDateFromField"
+                                Layout.preferredWidth: 124
+                                placeholderText: "From YYYY-MM-DD"
+                                text: catalogAssets.captureDateFromFilter
+                                Accessible.name: "Capture date from"
+                                onAccepted: catalogAssets.captureDateFromFilter = text.trim()
+                            }
+
+                            ToneTextField {
+                                id: captureDateToField
+                                objectName: "libraryCaptureDateToField"
+                                Layout.preferredWidth: 124
+                                placeholderText: "To YYYY-MM-DD"
+                                text: catalogAssets.captureDateToFilter
+                                Accessible.name: "Capture date to"
+                                onAccepted: catalogAssets.captureDateToFilter = text.trim()
+                            }
+
+                            ActionButton {
+                                objectName: "libraryApplyCaptureDateRangeButton"
+                                text: "Apply"
+                                compact: true
+                                enabled: (captureDateFromField.text.trim().length === 0 ||
+                                          /^\d{4}-\d{2}-\d{2}$/.test(captureDateFromField.text.trim())) &&
+                                         (captureDateToField.text.trim().length === 0 ||
+                                          /^\d{4}-\d{2}-\d{2}$/.test(captureDateToField.text.trim()))
+                                onClicked: {
+                                    catalogAssets.captureDateFromFilter = captureDateFromField.text.trim()
+                                    catalogAssets.captureDateToFilter = captureDateToField.text.trim()
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+                        }
+
                         Label {
                             objectName: "libraryActiveFilterSummary"
                             Layout.fillWidth: true
@@ -1949,10 +2064,11 @@ Rectangle {
                                     required property string locationPath
                                     required property string filePath
                                     required property string thumbnailSource
-                                    required property string recipeJson
+                                    required property string adjustmentPatchJson
                                     required property int rating
                                     required property bool picked
                                     required property bool rejected
+                                    required property string colorLabel
                                     required property string cullStatus
                                     required property int burstSize
                                     required property int burstPosition
@@ -1966,9 +2082,9 @@ Rectangle {
                                     height: previewFrame.height
                                     activeFocusOnTab: true
 
-                                    Keys.onReturnPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
-                                    Keys.onEnterPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
-                                    Keys.onSpacePressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType, Qt.ControlModifier)
+                                    Keys.onReturnPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
+                                    Keys.onEnterPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
+                                    Keys.onSpacePressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, Qt.ControlModifier)
 
                                     Rectangle {
                                         id: previewFrame
@@ -1988,6 +2104,20 @@ Rectangle {
                                                       : selected
                                                         ? theme.alpha(theme.accentCool400, 0.76)
                                                       : (thumbnailMouseArea.containsMouse ? theme.alpha(theme.lineStrong, 0.4) : theme.alpha(theme.lineSoft, 0.28))
+
+                                        Rectangle {
+                                            anchors.top: parent.top
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            height: 4
+                                            visible: galleryTile.colorLabel.length > 0
+                                            color: galleryTile.colorLabel === "red" ? "#ef6666"
+                                                 : galleryTile.colorLabel === "yellow" ? "#e8bd55"
+                                                 : galleryTile.colorLabel === "green" ? "#62c88a"
+                                                 : galleryTile.colorLabel === "blue" ? "#67a8ed"
+                                                 : "#ae7de0"
+                                            z: 4
+                                        }
 
                                         Rectangle {
                                             anchors.fill: parent
@@ -2125,13 +2255,13 @@ Rectangle {
                                             hoverEnabled: true
                                             onClicked: function(mouse) {
                                                 galleryTile.forceActiveFocus()
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType, mouse.modifiers)
+                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, mouse.modifiers)
                                             }
                                             onDoubleClicked: {
                                                 if (root.selectionModeActive)
                                                     return
                                                 galleryTile.forceActiveFocus()
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType);
+                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType);
                                                 root.assetActivated(mediaType === "photo" ? "edit" : "timeline");
                                             }
                                         }
@@ -2150,11 +2280,75 @@ Rectangle {
                         sourceComponent: root.catalogViewMode === "compare" ? compareView : surveyView
                     }
 
+                    Item {
+                        id: libraryLoadingSkeleton
+                        objectName: "libraryLoadingSkeleton"
+                        anchors.fill: parent
+                        visible: catalogAssets.loading && catalogAssets.assetCount === 0 && !root.importBrowserOpen
+                        z: 1
+
+                        Flow {
+                            anchors.fill: parent
+                            anchors.margins: theme.space12
+                            spacing: theme.space12
+
+                            Repeater {
+                                model: 8
+
+                                delegate: Item {
+                                    required property int index
+                                    width: galleryFlow.tileWidth
+                                    height: Math.max(168, width * 0.72)
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: theme.radius8
+                                        color: theme.alpha(theme.surfaceBottom, 0.5)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.28)
+
+                                        SkeletonBlock {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.margins: theme.space8
+                                            height: parent.height - 62
+                                            phaseDelay: index * 115
+                                            animate: visible && !theme.reducedMotion
+                                        }
+
+                                        SkeletonBlock {
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: theme.space8
+                                            anchors.bottom: parent.bottom
+                                            anchors.bottomMargin: theme.space24
+                                            width: parent.width * 0.54
+                                            height: 8
+                                            phaseDelay: index * 115 + 80
+                                            animate: false
+                                        }
+
+                                        SkeletonBlock {
+                                            anchors.left: parent.left
+                                            anchors.leftMargin: theme.space8
+                                            anchors.bottom: parent.bottom
+                                            anchors.bottomMargin: theme.space10
+                                            width: parent.width * 0.34
+                                            height: 6
+                                            phaseDelay: index * 115 + 160
+                                            animate: false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     Rectangle {
                         objectName: "libraryEmptyState"
                         readonly property string visibilityRole: "contextual|empty-filter-reset-import-handoff"
                         anchors.fill: parent
-                        visible: catalogAssets.assetCount === 0 && !root.importBrowserOpen
+                        visible: catalogAssets.assetCount === 0 && !catalogAssets.loading && !root.importBrowserOpen
                         radius: theme.radiusSurface
                         color: theme.alpha(theme.ink900, 0.9)
                         border.width: 1
@@ -2672,6 +2866,35 @@ Rectangle {
                                             enabled: catalogAssets.selectedIndex >= 0
                                             tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
                                             onClicked: root.applyRatingReview(index + 1, false)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+
+                                    Repeater {
+                                        model: [
+                                            { key: "red", label: "Red", shortcut: "6", color: "#ef6666" },
+                                            { key: "yellow", label: "Yellow", shortcut: "7", color: "#e8bd55" },
+                                            { key: "green", label: "Green", shortcut: "8", color: "#62c88a" },
+                                            { key: "blue", label: "Blue", shortcut: "9", color: "#67a8ed" },
+                                            { key: "purple", label: "Purple", shortcut: "Alt+9", color: "#ae7de0" }
+                                        ]
+
+                                        delegate: ActionButton {
+                                            required property var modelData
+
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: modelData.shortcut
+                                            accent: modelData.color
+                                            active: catalogAssets.selectedColorLabel === modelData.key
+                                            enabled: catalogAssets.selectedIndex >= 0
+                                            tooltipText: modelData.label + " label (" + modelData.shortcut + ")"
+                                            Accessible.name: modelData.label + " color label"
+                                            onClicked: root.applyColorLabelReview(modelData.key, false)
                                         }
                                     }
                                 }

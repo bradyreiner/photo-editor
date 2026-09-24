@@ -18,6 +18,7 @@ class AgentMcpClient final : public QObject {
 
   [[nodiscard]] QString endpoint() const;
   void setEndpoint(const QString& endpoint);
+  void setBearerToken(const QString& token);
 
   [[nodiscard]] int timeoutMs() const;
   void setTimeoutMs(int timeout_ms);
@@ -42,6 +43,7 @@ class AgentMcpClient final : public QObject {
   [[nodiscard]] bool cancellationRequested() const;
 
   QString endpoint_;
+  QString bearer_token_;
   int timeout_ms_ = 30000;
   QStringList allowed_tools_;
   QVariantList cached_tools_;

@@ -1,0 +1,23 @@
+{
+  "name": "looksy-customer-platform",
+  "private": true,
+  "overrides": { "workerd": "1.20260921.1", "sharp": "0.35.4" },
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev --local",
+    "types": "wrangler types",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "5.20260923.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.137.0"
+  }
+}
