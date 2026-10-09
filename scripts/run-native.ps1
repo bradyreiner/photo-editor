@@ -1,4 +1,3 @@
-[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Release,
     [switch]$Debug,
@@ -7,7 +6,6 @@ param(
     [switch]$Configure,
     [ValidateRange(1, 256)]
     [int]$Jobs,
-    [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$AppArguments
 )
 
