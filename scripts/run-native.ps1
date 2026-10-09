@@ -112,7 +112,7 @@ function Resolve-QtRoot {
     $candidates = New-Object System.Collections.Generic.List[string]
     foreach ($value in @($env:QT_ROOT, $env:QTDIR)) {
         if ($value) {
-            $candidates.Add($value)
+            [void]$candidates.Add($value)
         }
     }
 
@@ -125,7 +125,7 @@ function Resolve-QtRoot {
                 Where-Object { $_.Name -like "msvc*_64" } |
                 Sort-Object -Property Name -Descending
             foreach ($kit in $kits) {
-                $candidates.Add($kit.FullName)
+                [void]$candidates.Add($kit.FullName)
             }
         }
     }
@@ -145,17 +145,17 @@ function Resolve-VcpkgRoot {
     $candidates = New-Object System.Collections.Generic.List[string]
     foreach ($value in @($env:VCPKG_ROOT, $env:VCPKG_INSTALLATION_ROOT)) {
         if ($value) {
-            $candidates.Add($value)
+            [void]$candidates.Add($value)
         }
     }
     if ($script:vsInstallPath) {
-        $candidates.Add((Join-Path $script:vsInstallPath "VC\vcpkg"))
+        [void]$candidates.Add((Join-Path $script:vsInstallPath "VC\vcpkg"))
     }
-    $candidates.Add("C:\vcpkg")
+    [void]$candidates.Add("C:\vcpkg")
 
     $vcpkgCommand = Find-CommandPath "vcpkg.exe"
     if ($vcpkgCommand) {
-        $candidates.Insert(0, (Split-Path -Parent $vcpkgCommand))
+        [void]$candidates.Insert(0, (Split-Path -Parent $vcpkgCommand))
     }
 
     foreach ($candidate in $candidates) {
