@@ -6811,15 +6811,17 @@ endif()
   endif()
 endif()
 
-add_executable(timeline_surface_runtime_test timeline_surface_runtime_test.cpp ../apps/desktop/src/timeline_surface_runtime.cpp)
-target_include_directories(timeline_surface_runtime_test PRIVATE ../apps/desktop/src)
-target_link_libraries(timeline_surface_runtime_test PRIVATE Qt6::Core Qt6::Gui)
-target_compile_definitions(timeline_surface_runtime_test PRIVATE
-  PHOTO_EDITOR_TEST_PYTHON="${PROJECT_SOURCE_DIR}/.photo-editor/tracking/surface-runtime/venv/bin/python"
-  PHOTO_EDITOR_SURFACE_WORKER="${PROJECT_SOURCE_DIR}/scripts/timeline_surface_worker.py")
-photo_editor_apply_warnings(timeline_surface_runtime_test)
-add_test(NAME timeline_surface_runtime_test COMMAND timeline_surface_runtime_test)
-set_tests_properties(timeline_surface_runtime_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 150 LABELS "desktop;timeline;surface")
+if(TARGET Qt6::Core AND TARGET Qt6::Gui)
+  add_executable(timeline_surface_runtime_test timeline_surface_runtime_test.cpp ../apps/desktop/src/timeline_surface_runtime.cpp)
+  target_include_directories(timeline_surface_runtime_test PRIVATE ../apps/desktop/src)
+  target_link_libraries(timeline_surface_runtime_test PRIVATE Qt6::Core Qt6::Gui)
+  target_compile_definitions(timeline_surface_runtime_test PRIVATE
+    PHOTO_EDITOR_TEST_PYTHON="${PROJECT_SOURCE_DIR}/.photo-editor/tracking/surface-runtime/venv/bin/python"
+    PHOTO_EDITOR_SURFACE_WORKER="${PROJECT_SOURCE_DIR}/scripts/timeline_surface_worker.py")
+  photo_editor_apply_warnings(timeline_surface_runtime_test)
+  add_test(NAME timeline_surface_runtime_test COMMAND timeline_surface_runtime_test)
+  set_tests_properties(timeline_surface_runtime_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 150 LABELS "desktop;timeline;surface")
+endif()
 
 # Timeline controller tests compile the controller directly and therefore need
 # the same platform-selected tracking runtime as the desktop application.
