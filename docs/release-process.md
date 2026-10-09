@@ -59,6 +59,40 @@ binary repository.
 - Catalog schema changes are forward migrations. A versioned database dump is created before migration.
 - Alpha is the current product channel, but GitHub marks the release as `latest` so stable `/latest/download/` updater URLs work.
 
+## Qt account and distribution licensing
+
+A Qt Account prompt depends on how Qt is acquired; it does not determine how
+Looksy may be distributed. A macOS development install obtained through
+Homebrew may not request a Qt Account because Homebrew is the package source.
+The official Qt Online Installer on Windows requests a Qt Account before it
+downloads prebuilt Qt packages. Qt describes that login as part of its
+[binary-download policy](https://www.qt.io/blog/qt-offering-changes-2020); it is
+not a purchase of, or substitute for, a commercial Qt license.
+
+The same release-license decision applies on macOS and Windows, regardless of
+whether installation required an account. Before shipping either platform, the
+release owner must record and verify one of these distribution models:
+
+- a commercial Qt license that covers the developers, Qt version, modules,
+  build process, and distribution channels used by the release; or
+- an LGPL-compliant release for every shipped Qt module and its applicable
+  third-party dependencies.
+
+For an LGPL release, retain evidence that the package provides all required
+license texts and notices, corresponding source or a valid publisher-controlled
+source offer, and practical instructions and means for recipients to replace or
+relink the dynamically linked Qt libraries. The product terms and packaging
+must not prohibit the reverse engineering needed to exercise those LGPL rights.
+Publish source for any LGPL-covered Qt modifications and separately audit Qt
+Multimedia codecs and other bundled third-party components. Review MSIX, store,
+signing, and update restrictions specifically; do not ship an LGPL build through
+a channel that prevents the recipient from exercising the required rights.
+
+Use Qt's current [open-source obligations](https://www.qt.io/development/open-source-lgpl-obligations)
+and [open-source licensing FAQ](https://www.qt.io/faq/qt-open-source-licensing)
+as the baseline, and obtain legal review for the final package and terms. An
+installer account—or the absence of one—is not evidence that this gate passed.
+
 ## Public release gate
 
 Run locally for structural validation:
