@@ -1,0 +1,20 @@
+{
+  "description": "Small fixtures retained from local evidence so tracked-only checkouts can run the creative workflow checks. Historical source notes are a snapshot; their relative artifact links refer to the original local evidence directory.",
+  "files": [
+    {
+      "path": "live-workflow-source-notes.md",
+      "originalPath": "docs/evidence/creative-tools/agent-live-workflow/README.md",
+      "sha256": "7257eb132ada8b3b79bf49c815e1e48c296bf50e02cd2e58028e51c0910fbda9"
+    },
+    {
+      "path": "sam2-obama-mask.png",
+      "originalPath": "docs/evidence/creative-tools/real-segmentation/sam2-obama-mask.png",
+      "sha256": "1ca62a020705ff06b6716a52a1e016a6a9b18328c39e2f08ea0c6ee6ea0f8585"
+    },
+    {
+      "path": "landscape-mountain-source.jpg",
+      "originalPath": "docs/evidence/creative-tools/optical-diffusion/full-resolution-review-release/contact-sheet-previews/landscape-mountain-source.jpg",
+      "sha256": "025db83bb6d4dbb82454ed794e737ad3f853ce816104a2ea448c6a101e2d1a56"
+    }
+  ]
+}

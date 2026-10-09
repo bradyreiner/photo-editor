@@ -1,5 +1,5 @@
     const auto source_path = QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(
-        QStringLiteral("docs/evidence/creative-tools/optical-diffusion/full-resolution-review-release/contact-sheet-previews/landscape-mountain-source.jpg"));
+        QStringLiteral("tests/fixtures/creative-tools/landscape-mountain-source.jpg"));
     if (QImage(QStringLiteral(":/photo-editor/presets/mountain-preview.jpg")).isNull())
       return fail("Preset library should include its photographic thumbnail reference");
     QImage photograph(source_path);

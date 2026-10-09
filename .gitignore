@@ -1,8 +1,19 @@
 # Build products
 build/
+/build-*/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+/build.ninja
+/.ninja_deps
+/.ninja_log
 Testing/
 compile_commands.json
 CMakeUserPresets.json
+*.app/
+*.dSYM/
 
 # OS/editor noise
 .DS_Store
@@ -16,6 +27,8 @@ CMakeUserPresets.json
 *.log
 **/__pycache__/
 *.pyc
+.venv/
+.pytest_cache/
 
 # Local agent/tool state
 .agents/
@@ -48,8 +61,21 @@ postgres-data/
 perf-artifacts/
 perf-corpora/preview-synthetic-v1/
 
+# Generated evidence, reports, and creative exports (keep local)
+# Existing tracked files must also be removed from the index/history separately.
+/docs/evidence/
+/--report
+/--report-artifacts/
+/marketing/evidence/
+/marketing/outputs/
+/marketing/renders/
+
+# Temporary migration fixtures created by local checks
+/photo-editor-migration-*/
+
 # Rust
 rust/target/
+/target/
 
 # macOS / Windows packaging outputs
 *.dmg

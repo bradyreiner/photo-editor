@@ -329,6 +329,90 @@
       "area": "capability-acceptance",
       "state": "parked",
       "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
+      "id": "DOC-ADDITIONAL-LOW-HANGING-PERFORMANCE-AUDIT-2026-10-06",
+      "path": "docs/additional-low-hanging-performance-audit-2026-10-06.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-DEEPER-INTERACTION-PERFORMANCE-AUDIT-2026-10-06",
+      "path": "docs/deeper-interaction-performance-audit-2026-10-06.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-FURTHER-INTERACTION-PERFORMANCE-AUDIT-2026-10-06",
+      "path": "docs/further-interaction-performance-audit-2026-10-06.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-PERFORMANCE-IMPACT-AUDIT-2026-09-28",
+      "path": "docs/performance-impact-audit-2026-09-28.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-REMAINING-INTERACTION-PERFORMANCE-AUDIT-2026-10-06",
+      "path": "docs/remaining-interaction-performance-audit-2026-10-06.md",
+      "area": "performance-operability",
+      "state": "supporting",
+      "canonicalOwner": "docs/performance-measurement-expansion-checklist.md"
+    },
+    {
+      "id": "DOC-AGENT-FULL-APP-EXECUTION-PLAN",
+      "path": "docs/agent-full-app-execution-plan.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-AGENT-SIMPLE-TERMINAL-EXPERIENCE-PLAN",
+      "path": "docs/agent-simple-terminal-experience-plan.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-AGENT-WORKMANSHIP-AUDIT-2026-10-07",
+      "path": "docs/agent-workmanship-audit-2026-10-07.md",
+      "area": "local-agent",
+      "state": "supporting",
+      "canonicalOwner": "docs/local-model-agent-ux-checklist.md"
+    },
+    {
+      "id": "DOC-COLOR-ENGINE-AUDIT-REMEDIATION-2026-09-05",
+      "path": "docs/color-engine-audit-remediation-2026-09-05.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-OPTICAL-UI-CURRENT-AUDIT",
+      "path": "docs/optical-ui-current-audit.md",
+      "area": "color-render-foundations",
+      "state": "supporting",
+      "canonicalOwner": "docs/color-engine-and-app-foundations-completion-strategy.md"
+    },
+    {
+      "id": "DOC-PHOTOSHOP-STYLE-EDITING-IMPLEMENTATION-PLAN",
+      "path": "docs/photoshop-style-editing-implementation-plan.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
+    },
+    {
+      "id": "DOC-UI-PRIMITIVES-PLAN",
+      "path": "docs/ui-primitives-plan.md",
+      "area": "photographer-workflow-ui",
+      "state": "supporting",
+      "canonicalOwner": "docs/user-experience-improvement-checklist.md"
     }
   ]
 }

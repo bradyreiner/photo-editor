@@ -299,7 +299,7 @@ QVariantMap currentCreativeRunSourceEvidence() {
       QStringLiteral("tests/CMakeLists.txt"),
       QStringLiteral("tests/photo_composition_workflow_test.cpp"),
       QStringLiteral("docs/creative-tools-plan.md"),
-      QStringLiteral("docs/evidence/creative-tools/agent-live-workflow/README.md")};
+      QStringLiteral("tests/fixtures/creative-tools/live-workflow-source-notes.md")};
   QVariantList files;
   for (const auto& relative_path : relative_paths) {
     QFile file(QDir(source_root).filePath(relative_path));
@@ -354,7 +354,7 @@ int run_production_bridge_live_composition() {
   const auto is_a6 = brief_id == QStringLiteral("A6");
   const auto mask_path = qEnvironmentVariable(
       "PHOTO_COMPOSITION_REVIEW_MASK",
-      QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/docs/evidence/creative-tools/real-segmentation/sam2-obama-mask.png"))
+      QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/fixtures/creative-tools/sam2-obama-mask.png"))
       .trimmed();
   bool attempt_ok = false;
   const auto attempt = qEnvironmentVariable(

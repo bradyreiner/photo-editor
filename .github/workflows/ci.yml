@@ -23,23 +23,7 @@ jobs:
       - name: Reject local-only or generated files
         shell: bash
         run: |
-          disallowed="$(git ls-files \
-            '.DS_Store' \
-            '**/.DS_Store' \
-            '**/__pycache__/**' \
-            '*.pyc' \
-            'Testing/**' \
-            'perf-artifacts/**' \
-            'perf-corpora/preview-synthetic-v1/**' \
-            '.agents/**' \
-            '.claude/**' \
-            '.mcp.json' \
-            'AGENTS.md' \
-            'CLAUDE.md' \
-            'docs/ai-agent-operations.md' \
-            'plugins/photo-editor-codex/**' \
-            'scripts/ai/**' \
-            'rust/crates/mcp/**' || true)"
+          disallowed="$(git ls-files --cached --ignored --exclude-standard)"
           if [ -n "${disallowed}" ]; then
             printf 'These local-only/generated files must not be tracked:\n%s\n' "${disallowed}" >&2
             exit 1

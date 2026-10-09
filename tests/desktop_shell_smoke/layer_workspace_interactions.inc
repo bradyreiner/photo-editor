@@ -1,6 +1,6 @@
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_LAYER_WORKSPACE")) {
     const auto source_path = QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(
-        QStringLiteral("docs/evidence/creative-tools/optical-diffusion/full-resolution-review-release/contact-sheet-previews/landscape-mountain-source.jpg"));
+        QStringLiteral("tests/fixtures/creative-tools/landscape-mountain-source.jpg"));
     QImage photograph(source_path);
     if (photograph.isNull())
       return fail("Layer workspace proof requires the photographic mountain fixture");
