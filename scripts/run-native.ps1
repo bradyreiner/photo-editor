@@ -338,6 +338,7 @@ if (-not $NoBuild) {
     $vcpkgRoot = Resolve-VcpkgRoot
     $toolchain = Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"
     $windeployqt = Join-Path $qtRoot "bin\windeployqt.exe"
+    $pythonForCMake = $python -replace '\\', '/'
 
     $qtBin = Join-Path $qtRoot "bin"
     if (($env:Path -split ';') -notcontains $qtBin) {
@@ -382,6 +383,7 @@ if (-not $NoBuild) {
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
             "-DCMAKE_MAKE_PROGRAM=$ninja",
             "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_INSTALL_OPTIONS=--cmake-args=-DPYTHON3=$pythonForCMake",
             "-DCMAKE_PREFIX_PATH=$qtRoot",
             "-DPHOTO_EDITOR_RUST_BINARY_DIR=$rustBinDir"
         )
