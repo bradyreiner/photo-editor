@@ -98,6 +98,56 @@ function Resolve-CMake([string]$PreVisualStudioPath) {
     Fail "CMake 3.28 or newer was not found.$details Install it with 'winget install --exact --id Kitware.CMake', reopen PowerShell, and rerun this script. Visual Studio 2019's bundled CMake is too old for this project's presets."
 }
 
+function Resolve-Python {
+    $minimumVersion = [version]"3.7.0"
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($env:PHOTO_EDITOR_PYTHON_EXE) {
+        [void]$candidates.Add($env:PHOTO_EDITOR_PYTHON_EXE)
+    }
+
+    $pyLauncher = Find-CommandPath "py.exe"
+    if ($pyLauncher) {
+        $launchedPython = & $pyLauncher -3 -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $launchedPython) {
+            [void]$candidates.Add(([string]($launchedPython | Select-Object -First 1)).Trim())
+        }
+    }
+
+    $pythonBase = Join-Path $env:LOCALAPPDATA "Programs\Python"
+    if (Test-Path -LiteralPath $pythonBase -PathType Container) {
+        foreach ($installation in @(Get-ChildItem -LiteralPath $pythonBase -Directory | Sort-Object Name -Descending)) {
+            [void]$candidates.Add((Join-Path $installation.FullName "python.exe"))
+        }
+    }
+    foreach ($command in @(Get-Command "python.exe" -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        [void]$candidates.Add($command.Source)
+    }
+
+    $seen = @{}
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) {
+            continue
+        }
+        $resolved = [System.IO.Path]::GetFullPath($candidate)
+        if ($seen.ContainsKey($resolved) -or -not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+            continue
+        }
+        $seen[$resolved] = $true
+
+        $versionOutput = & $resolved -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $versionOutput) {
+            continue
+        }
+        $version = [version](([string]($versionOutput | Select-Object -First 1)).Trim())
+        if ($version -ge $minimumVersion) {
+            return $resolved
+        }
+    }
+
+    Fail "Python 3.7 or newer was not found. Install it with 'winget install --exact --id Python.Python.3.12', reopen PowerShell, and rerun this script. The zero-byte C:\Windows\System32\python launcher is not a usable Python installation."
+}
+
 function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     $preview = @($FilePath) + $Arguments
     Write-Info ("$ " + ($preview -join " "))
@@ -281,7 +331,8 @@ if (-not $NoBuild) {
     $cmakeBeforeVisualStudio = Find-CommandPath "cmake.exe"
     Import-VisualStudioEnvironment
     $cmake = Resolve-CMake $cmakeBeforeVisualStudio
-    [void](Require-Command "ninja.exe" "Install Ninja and add it to PATH.")
+    $ninja = Require-Command "ninja.exe" "Install Ninja and add it to PATH."
+    $python = Resolve-Python
     $cargo = Require-Command "cargo.exe" "Install the stable Rust toolchain from https://rustup.rs/."
     $qtRoot = Resolve-QtRoot
     $vcpkgRoot = Resolve-VcpkgRoot
@@ -292,6 +343,10 @@ if (-not $NoBuild) {
     if (($env:Path -split ';') -notcontains $qtBin) {
         $env:Path = "$qtBin;$env:Path"
     }
+    $pythonBin = Split-Path -Parent $python
+    if (($env:Path -split ';') -notcontains $pythonBin) {
+        $env:Path = "$pythonBin;$env:Path"
+    }
     if ($env:CMAKE_PREFIX_PATH) {
         $env:CMAKE_PREFIX_PATH = "$qtRoot;$env:CMAKE_PREFIX_PATH"
     } else {
@@ -300,6 +355,8 @@ if (-not $NoBuild) {
 
     Write-Info "MSVC: $((Find-CommandPath 'cl.exe'))"
     Write-Info "CMake: $cmake"
+    Write-Info "Ninja: $ninja"
+    Write-Info "Python: $python"
     Write-Info "Qt: $qtRoot"
     Write-Info "vcpkg: $vcpkgRoot"
 
@@ -314,12 +371,16 @@ if (-not $NoBuild) {
     Invoke-Native $cargo $cargoArguments
 
     $cacheFile = Join-Path $buildDir "CMakeCache.txt"
-    $needsConfigure = $Configure -or -not (Test-Path -LiteralPath $cacheFile -PathType Leaf)
+    $buildSystemFile = Join-Path $buildDir "build.ninja"
+    $needsConfigure = ($Configure -or
+        -not (Test-Path -LiteralPath $cacheFile -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $buildSystemFile -PathType Leaf))
     if ($needsConfigure) {
         Write-Step "Windows desktop configure"
         $configureArguments = @(
             "--preset", $configurePreset,
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+            "-DCMAKE_MAKE_PROGRAM=$ninja",
             "-DVCPKG_TARGET_TRIPLET=x64-windows",
             "-DCMAKE_PREFIX_PATH=$qtRoot",
             "-DPHOTO_EDITOR_RUST_BINARY_DIR=$rustBinDir"

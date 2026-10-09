@@ -138,7 +138,8 @@ Finalization writes nothing unless the complete v2 promotion validator passes.
 Install these host dependencies first:
 
 - Visual Studio 2019 or newer Build Tools with the **Desktop development with C++** workload
-- CMake 3.28 or newer and Ninja, both available on `PATH`
+- CMake 3.28 or newer (a standalone Kitware install is recommended) and Ninja
+- Python 3.7 or newer; a Windows app-execution alias without a real interpreter is not sufficient for vcpkg
 - the stable Rust toolchain from [rustup](https://rustup.rs/)
 - Qt 6.7.3 for **MSVC 2019 64-bit**, including Qt Multimedia, Shader Tools,
   Qt 5 Compatibility, and Qt Image Formats
