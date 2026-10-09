@@ -137,10 +137,10 @@ Finalization writes nothing unless the complete v2 promotion validator passes.
 
 Install these host dependencies first:
 
-- Visual Studio 2022 Build Tools with the **Desktop development with C++** workload
+- Visual Studio 2019 or newer Build Tools with the **Desktop development with C++** workload
 - CMake 3.28 or newer and Ninja, both available on `PATH`
 - the stable Rust toolchain from [rustup](https://rustup.rs/)
-- Qt 6.7.3 for **MSVC 2022 64-bit**, including Qt Multimedia, Shader Tools,
+- Qt 6.7.3 for **MSVC 2019 64-bit**, including Qt Multimedia, Shader Tools,
   Qt 5 Compatibility, and Qt Image Formats
 - vcpkg, exposed through `VCPKG_ROOT` (the Visual Studio vcpkg component is also detected)
 - PostgreSQL 16, unless `PHOTO_EDITOR_DATABASE_URL` points to an existing database
