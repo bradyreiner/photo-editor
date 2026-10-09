@@ -52,6 +52,52 @@ function Require-Command([string]$Name, [string]$InstallHint) {
     return $path
 }
 
+function Resolve-CMake([string]$PreVisualStudioPath) {
+    $minimumVersion = [version]"3.28.0"
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($env:PHOTO_EDITOR_CMAKE_EXE) {
+        [void]$candidates.Add($env:PHOTO_EDITOR_CMAKE_EXE)
+    }
+    [void]$candidates.Add("C:\Program Files\CMake\bin\cmake.exe")
+    if ($PreVisualStudioPath) {
+        [void]$candidates.Add($PreVisualStudioPath)
+    }
+    foreach ($command in @(Get-Command "cmake.exe" -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        [void]$candidates.Add($command.Source)
+    }
+
+    $seen = @{}
+    $found = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) {
+            continue
+        }
+        $resolved = [System.IO.Path]::GetFullPath($candidate)
+        if ($seen.ContainsKey($resolved) -or -not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+            continue
+        }
+        $seen[$resolved] = $true
+
+        $versionOutput = & $resolved --version 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+        $versionLine = $versionOutput | Select-Object -First 1
+        if ($versionLine -notmatch '^cmake version ([0-9]+(?:\.[0-9]+){1,3})') {
+            continue
+        }
+        $version = [version]$Matches[1]
+        [void]$found.Add("$resolved ($version)")
+        if ($version -ge $minimumVersion) {
+            return $resolved
+        }
+    }
+
+    $details = if ($found.Count -gt 0) { " Found: $($found -join '; ')." } else { "" }
+    Fail "CMake 3.28 or newer was not found.$details Install it with 'winget install --exact --id Kitware.CMake', reopen PowerShell, and rerun this script. Visual Studio 2019's bundled CMake is too old for this project's presets."
+}
+
 function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     $preview = @($FilePath) + $Arguments
     Write-Info ("$ " + ($preview -join " "))
@@ -232,8 +278,9 @@ Write-Host "============================================================" -Foreg
 
 if (-not $NoBuild) {
     Write-Step "Windows build toolchain"
+    $cmakeBeforeVisualStudio = Find-CommandPath "cmake.exe"
     Import-VisualStudioEnvironment
-    $cmake = Require-Command "cmake.exe" "Install CMake 3.28 or newer and add it to PATH."
+    $cmake = Resolve-CMake $cmakeBeforeVisualStudio
     [void](Require-Command "ninja.exe" "Install Ninja and add it to PATH.")
     $cargo = Require-Command "cargo.exe" "Install the stable Rust toolchain from https://rustup.rs/."
     $qtRoot = Resolve-QtRoot
@@ -252,6 +299,7 @@ if (-not $NoBuild) {
     }
 
     Write-Info "MSVC: $((Find-CommandPath 'cl.exe'))"
+    Write-Info "CMake: $cmake"
     Write-Info "Qt: $qtRoot"
     Write-Info "vcpkg: $vcpkgRoot"
 
