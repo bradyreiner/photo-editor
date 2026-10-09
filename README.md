@@ -133,6 +133,49 @@ Finalization writes nothing unless the complete v2 promotion validator passes.
 
 ## Run Natively
 
+### Windows
+
+Install these host dependencies first:
+
+- Visual Studio 2022 Build Tools with the **Desktop development with C++** workload
+- CMake 3.28 or newer and Ninja, both available on `PATH`
+- the stable Rust toolchain from [rustup](https://rustup.rs/)
+- Qt 6.7.3 for **MSVC 2022 64-bit**, including Qt Multimedia, Shader Tools,
+  Qt 5 Compatibility, and Qt Image Formats
+- vcpkg, exposed through `VCPKG_ROOT` (the Visual Studio vcpkg component is also detected)
+- PostgreSQL 16, unless `PHOTO_EDITOR_DATABASE_URL` points to an existing database
+
+The launcher finds Visual Studio, Qt under `C:\Qt`, vcpkg, and PostgreSQL under
+`C:\Program Files\PostgreSQL` automatically. For nonstandard installations, set
+`QT_ROOT`, `VCPKG_ROOT`, or `PHOTO_EDITOR_POSTGRES_BIN_DIR` before launching.
+
+From PowerShell, build and run the Debug app:
+
+```powershell
+.\scripts\run-native.ps1
+```
+
+Debug is the Windows launcher default so the first local build does not require
+the strict production color stack. Use `-Release` when those release dependencies
+are installed and you want optimized rendering.
+
+Common Windows launcher options are:
+
+```powershell
+.\scripts\run-native.ps1 -Debug -NoBuild
+.\scripts\run-native.ps1 -Debug -BuildOnly -Jobs 4
+.\scripts\run-native.ps1 -Debug -Configure
+.\scripts\run-native.ps1 -Release
+```
+
+The launcher builds the Rust catalog helpers and only the `photo_editor_app`
+CMake target, deploys the required Qt runtime beside `Looksy.exe`, prepares the
+managed PostgreSQL catalog, and starts the app. If local PowerShell execution is
+restricted, allow scripts for only the current terminal with
+`Set-ExecutionPolicy -Scope Process Bypass`.
+
+### macOS
+
 Install the macOS host dependencies first:
 
 ```sh
