@@ -9,6 +9,7 @@
 #include "edit_recipe_state.h"
 #include "linked_image_source.h"
 #include "photo_render_utils.h"
+#include "qimage_color_conversion.h"
 #include "raw_decode_policy.h"
 #include "raw_image_decoder.h"
 #include "source_image_decode.h"
@@ -101,8 +102,8 @@ QImage LibraryOriginalImageProvider::requestImage(
             RenderBackendPreference::CpuOnly, &metadata, nullptr, {},
             photo_editor::pipeline::RemovalQuality::Final,
             RenderOutputPolicy::DisplayReferred)
-      : source.convertedToColorSpace(
-            QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32);
+      : convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
+            QImage::Format_ARGB32, QImageColorConversionPurpose::OutputPublication);
   if (display_image.isNull()) {
     if (size != nullptr) *size = {};
     return {};

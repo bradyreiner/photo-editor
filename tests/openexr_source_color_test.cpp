@@ -1,6 +1,7 @@
 #include "photo_render_utils.h"
 #include "openexr_source_color.h"
 #include "photo_editor/io/openexr_io.h"
+#include "qimage_color_conversion.h"
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <cmath>
@@ -43,8 +44,9 @@ int main(int argc, char** argv) {
     QImage decoded;
     if (!desktop::decode_source_image(path, &decoded) || decoded.size() != QSize(4, 1) ||
         decoded.format() != QImage::Format_RGBA32FPx4 || !decoded.colorSpace().isValid()) return 1;
-    const auto converted = decoded.convertedToColorSpace(
-        QColorSpace(QColorSpace::SRgbLinear), QImage::Format_RGBA32FPx4);
+    const auto converted = desktop::convert_tagged_qimage_color_space(decoded,
+        QColorSpace(QColorSpace::SRgbLinear), QImage::Format_RGBA32FPx4,
+        desktop::QImageColorConversionPurpose::EvidenceMeasurement);
     if (converted.isNull()) return 1;
     const auto* actual = reinterpret_cast<const float*>(converted.constScanLine(0));
     // The independently established engine transform uses double canonical
@@ -180,8 +182,12 @@ int main(int argc, char** argv) {
     std::cout << "External equivalent encodings: max_relative=" << maximum_relative << " rms_relative=" << rms << '\n';
     const auto artifact = qEnvironmentVariable("PHOTO_EDITOR_TEST_EXR_OUTPUT");
     if (!artifact.isEmpty()) {
-      if (!reference_image.convertedToColorSpace(QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32).save(artifact + "-reference.png") ||
-          !candidate_image.convertedToColorSpace(QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32).save(artifact + "-candidate.png")) return 1;
+      if (!desktop::convert_tagged_qimage_color_space(reference_image,
+              QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+              desktop::QImageColorConversionPurpose::EvidenceMeasurement).save(artifact + "-reference.png") ||
+          !desktop::convert_tagged_qimage_color_space(candidate_image,
+              QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+              desktop::QImageColorConversionPurpose::EvidenceMeasurement).save(artifact + "-candidate.png")) return 1;
     }
     if (maximum_relative > .01 || rms > .001) return 1;
   }

@@ -113,8 +113,9 @@ int main() {
         packed_row[index] = QRgbaFloat32{
             pixel.red, pixel.green, pixel.blue, pixel.alpha};
       }
-      const auto restored = packed.convertedToColorSpace(
-          source_space, QImage::Format_RGBA32FPx4);
+      const auto restored = convert_tagged_qimage_color_space(
+          packed, source_space, QImage::Format_RGBA32FPx4,
+          QImageColorConversionPurpose::EvidenceMeasurement);
       if (restored.isNull()) {
         return fail("working RGB must remain convertible to its source profile");
       }

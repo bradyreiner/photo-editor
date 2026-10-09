@@ -1,4 +1,5 @@
 #include "photo_render_utils.h"
+#include "qimage_color_conversion.h"
 #include "thumbnail_worker_renderer_factory.h"
 
 #include <QCoreApplication>
@@ -73,7 +74,8 @@ bool verify_source(const QString& path) {
   const auto reference = scaled_layer_thumbnail_image(metadata.is_raw ? render_output_image_with_backend(
       decoded, neutral, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
       RenderBackendPreference::CpuOnly, &metadata)
-      : decoded.convertedToColorSpace(QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32));
+      : convert_tagged_qimage_color_space(decoded, QColorSpace(QColorSpace::SRgb),
+            QImage::Format_ARGB32, QImageColorConversionPurpose::EvidenceMeasurement));
   const auto left = actual.convertToFormat(QImage::Format_RGBA8888);
   const auto right = reference.convertToFormat(QImage::Format_RGBA8888);
   if (left.isNull() || right.size() != left.size()) return false;
