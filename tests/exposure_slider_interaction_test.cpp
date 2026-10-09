@@ -30,9 +30,10 @@ InspectorSlider {
     valueText: value.toFixed(2) + " EV"
     property int starts: 0
     property int finishes: 0
+    property int commits: 0
     onInteractionStarted: starts++
     onInteractionFinished: finishes++
-    onValueDragged: function(next) { value = next }
+    onValueDragged: function(next) { commits++; value = next }
 }
 )", QUrl());
   const auto fail = [](const char* message) { std::cerr << message << '\n'; return EXIT_FAILURE; };
@@ -78,6 +79,30 @@ InspectorSlider {
     QMetaObject::invokeMethod(item, "valueForPosition", Q_RETURN_ARG(QVariant, roundtrip), Q_ARG(QVariant, position));
     if (std::abs(roundtrip.toDouble() - ev) > 1e-8) return fail("Exposure track mapping is not reversible");
   }
+  const auto type_value = [&](const QString& text) {
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                      numeric->mapToScene(QPointF(numeric->width() / 2, numeric->height() / 2)).toPoint());
+    const auto select_all = QKeySequence(QKeySequence::SelectAll)[0];
+    QTest::keyClick(&window, select_all.key(), select_all.keyboardModifiers());
+    QKeyEvent input(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
+    QGuiApplication::sendEvent(&window, &input);
+  };
+  const int beforeFocusLossCommit = item->property("commits").toInt();
+  type_value(QStringLiteral("0.04 EV"));
+  item->forceActiveFocus(Qt::OtherFocusReason);
+  QTest::qWait(20);
+  if (std::abs(value() - 0.04) > 1e-8 ||
+      item->property("commits").toInt() != beforeFocusLossCommit + 1)
+    return fail("A valid unit-suffixed value must commit once when focus leaves the numeric field");
+
+  const int beforeInvalidCommit = item->property("commits").toInt();
+  numeric->setProperty("text", QString());
+  item->setProperty("valueInputDirty", true);
+  QVariant invalidCommitted;
+  if (!QMetaObject::invokeMethod(item, "commitValueText", Q_RETURN_ARG(QVariant, invalidCommitted)) ||
+      invalidCommitted.toBool() || item->property("commits").toInt() != beforeInvalidCommit ||
+      std::abs(value() - 0.04) > 1e-8)
+    return fail("Blank numeric input must be rejected instead of silently committing zero");
   item->setProperty("value", 0);
   const auto center = pointer->mapToScene(QPointF(pointer->width() / 2, pointer->height() / 2)).toPoint();
   QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, center + QPoint(3, 0));

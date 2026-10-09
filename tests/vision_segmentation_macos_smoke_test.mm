@@ -7,6 +7,8 @@
 #include <QString>
 
 #include "vision_segmentation.h"
+#include "object_pick_policy.h"
+#include "segmentation_result_schema.h"
 
 namespace {
 
@@ -25,6 +27,63 @@ bool valid_result(const photo_editor::desktop::SegmentationResult& result) {
 int main(int argc, char** argv) {
   @autoreleasepool {
     QCoreApplication app(argc, argv);
+    if (argc >= 5 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--smart-select")) {
+      const QImage source(QString::fromLocal8Bit(argv[2]));
+      if (source.isNull()) {
+        return fail(QStringLiteral("Failed to load the Smart Select source image"));
+      }
+      QVector<photo_editor::desktop::SmartSelectPrompt> prompts;
+      for (auto index = 4; index < argc; ++index) {
+        const auto fields = QString::fromLocal8Bit(argv[index]).split(',');
+        if (fields.size() != 3) {
+          return fail(QStringLiteral("Prompts must use normalized x,y,+ or x,y,- values"));
+        }
+        bool x_ok = false;
+        bool y_ok = false;
+        const auto x = fields.at(0).toDouble(&x_ok);
+        const auto y = fields.at(1).toDouble(&y_ok);
+        if (!x_ok || !y_ok || (fields.at(2) != QStringLiteral("+") &&
+                               fields.at(2) != QStringLiteral("-"))) {
+          return fail(QStringLiteral("Smart Select prompt is malformed"));
+        }
+        prompts.append(photo_editor::desktop::SmartSelectPrompt{
+            .x = x, .y = y, .negative = fields.at(2) == QStringLiteral("-")});
+      }
+      const auto result = photo_editor::desktop::generate_smart_select_mask(source, prompts);
+      if (!valid_result(result)) {
+        return fail(QStringLiteral("Smart Select returned no usable mask: %1")
+                        .arg(result.error_message));
+      }
+      QImage mask(result.width, result.height, QImage::Format_Grayscale8);
+      auto nonzero = qint64{0};
+      for (auto y = 0; y < result.height; ++y) {
+        auto* row = mask.scanLine(y);
+        for (auto x = 0; x < result.width; ++x) {
+          const auto alpha = static_cast<unsigned char>(
+              result.mask_data.at(y * result.width + x));
+          row[x] = alpha;
+          nonzero += alpha > 0 ? 1 : 0;
+        }
+      }
+      const auto output_path = QString::fromLocal8Bit(argv[3]);
+      if (!mask.save(output_path)) {
+        return fail(QStringLiteral("Failed to save the Smart Select matte to %1")
+                        .arg(output_path));
+      }
+      std::cout << "mask=" << output_path.toStdString()
+                << " dimensions=" << result.width << 'x' << result.height
+                << " selectedPixels=" << nonzero;
+      for (const auto& prompt : prompts) {
+        const auto value = photo_editor::desktop::segmentation_mask_value_at_normalized(
+            result.mask_data, result.width, result.height, prompt.x, prompt.y);
+        std::cout << " prompt=" << (prompt.negative ? '-' : '+') << ':' << value;
+      }
+      const auto accepted = photo_editor::desktop::smart_select_result_honors_prompts(
+          result, prompts);
+      std::cout << " acceptedByPromptPolicy=" << accepted << '\n';
+      return accepted ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (!photo_editor::desktop::vision_segmentation_available()) {
       return fail(QStringLiteral("Apple Vision segmentation should be available in the macOS build"));
     }

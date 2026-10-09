@@ -142,14 +142,25 @@ QString retouch_mode_display_name(const QString& mode_name) {
 }  // namespace
 
 QVariantList ThumbnailPresentationService::groupMaskSets(
-    const QVariantList& masks) const {
+    const QVariantList& masks,
+    bool masks_are_canonical) const {
+  QVariantList normalized_masks;
+  normalized_masks.reserve(masks.size());
+  auto normalize_ordinal = 1;
+  for (const auto& value : masks) {
+    const auto candidate = value.toMap();
+    normalized_masks.append(
+        masks_are_canonical
+            ? candidate
+            : normalized_mask_definition(candidate, normalize_ordinal));
+    ++normalize_ordinal;
+  }
+
   QVariantList grouped;
   QHash<QString, int> indices_by_id;
   QHash<QString, QString> mask_names_by_id;
-  auto name_ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), name_ordinal);
-    ++name_ordinal;
+  for (const auto& value : normalized_masks) {
+    const auto mask = value.toMap();
     const auto id = mask.value(QStringLiteral("id")).toString();
     if (!id.isEmpty()) {
       mask_names_by_id.insert(id, mask.value(QStringLiteral("name")).toString());
@@ -157,8 +168,8 @@ QVariantList ThumbnailPresentationService::groupMaskSets(
   }
 
   auto ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), ordinal);
+  for (const auto& value : normalized_masks) {
+    const auto mask = value.toMap();
     ++ordinal;
     if (!is_selection_mask(mask)) {
       continue;
@@ -372,54 +383,60 @@ QVariantList ThumbnailPresentationService::groupMaskSets(
 }
 
 QVariantList ThumbnailPresentationService::groupRetouchStack(
-    const QVariantList& masks) const {
+    const QVariantList& masks,
+    bool masks_are_canonical) const {
   QVariantList grouped;
   auto ordinal = 1;
   for (const auto& value : masks) {
-    auto mask = normalized_mask_definition(value.toMap(), ordinal);
+    const auto candidate = value.toMap();
     if (normalized_mask_tool_role(
-            mask.value(QStringLiteral("toolRole")).toString()) ==
+            candidate.value(QStringLiteral("toolRole")).toString()) !=
         QStringLiteral("retouch")) {
-      const auto point_count =
-          mask.value(QStringLiteral("brushPoints")).toList().size();
-      const auto committed = mask.value(QStringLiteral("committed")).toBool();
-      const auto mode_label = retouch_mode_display_name(
-          mask.value(QStringLiteral("retouchMode")).toString());
-      QStringList audit_parts{
-          committed ? QStringLiteral("applied") : QStringLiteral("staged")};
-      if (!mask.value(QStringLiteral("enabled")).toBool()) {
-        audit_parts.push_back(QStringLiteral("off"));
-      }
-      audit_parts.push_back(
-          point_count > 0 ? QStringLiteral("%1 pts").arg(point_count)
-                          : QStringLiteral("no strokes"));
-      const auto candidate_count =
-          mask.value(QStringLiteral("inpaintCandidateCount")).toInt();
-      if (candidate_count > 0) {
-        audit_parts.push_back(
-            QStringLiteral("%1 candidates").arg(candidate_count));
-      }
-      if (mask.value(QStringLiteral("inpaintFallback")).toBool()) {
-        audit_parts.push_back(QStringLiteral("fallback"));
-      }
-      const auto retouch_order = std::max(
-          1, map_int_value_or(mask, QStringLiteral("retouchOrder"), ordinal));
-      mask.insert(QStringLiteral("flatIndex"), ordinal - 1);
-      mask.insert(QStringLiteral("retouchOrder"), retouch_order);
-      mask.insert(
-          QStringLiteral("retouchOrderLabel"),
-          QStringLiteral("#%1").arg(retouch_order));
-      mask.insert(QStringLiteral("retouchModeLabel"), mode_label);
-      mask.insert(
-          QStringLiteral("retouchStatus"),
-          committed ? QStringLiteral("applied") : QStringLiteral("staged"));
-      mask.insert(QStringLiteral("retouchPointCount"), point_count);
-      mask.insert(
-          QStringLiteral("retouchAuditLabel"),
-          QStringLiteral("#%1 · %2 · ").arg(retouch_order).arg(mode_label) +
-              audit_parts.join(QStringLiteral(" · ")));
-      grouped.append(mask);
+      ++ordinal;
+      continue;
     }
+    auto mask = masks_are_canonical
+                    ? candidate
+                    : normalized_mask_definition(candidate, ordinal);
+    const auto point_count =
+        mask.value(QStringLiteral("brushPoints")).toList().size();
+    const auto committed = mask.value(QStringLiteral("committed")).toBool();
+    const auto mode_label = retouch_mode_display_name(
+        mask.value(QStringLiteral("retouchMode")).toString());
+    QStringList audit_parts{
+        committed ? QStringLiteral("applied") : QStringLiteral("staged")};
+    if (!mask.value(QStringLiteral("enabled")).toBool()) {
+      audit_parts.push_back(QStringLiteral("off"));
+    }
+    audit_parts.push_back(
+        point_count > 0 ? QStringLiteral("%1 pts").arg(point_count)
+                        : QStringLiteral("no strokes"));
+    const auto candidate_count =
+        mask.value(QStringLiteral("inpaintCandidateCount")).toInt();
+    if (candidate_count > 0) {
+      audit_parts.push_back(
+          QStringLiteral("%1 candidates").arg(candidate_count));
+    }
+    if (mask.value(QStringLiteral("inpaintFallback")).toBool()) {
+      audit_parts.push_back(QStringLiteral("fallback"));
+    }
+    const auto retouch_order = std::max(
+        1, map_int_value_or(mask, QStringLiteral("retouchOrder"), ordinal));
+    mask.insert(QStringLiteral("flatIndex"), ordinal - 1);
+    mask.insert(QStringLiteral("retouchOrder"), retouch_order);
+    mask.insert(
+        QStringLiteral("retouchOrderLabel"),
+        QStringLiteral("#%1").arg(retouch_order));
+    mask.insert(QStringLiteral("retouchModeLabel"), mode_label);
+    mask.insert(
+        QStringLiteral("retouchStatus"),
+        committed ? QStringLiteral("applied") : QStringLiteral("staged"));
+    mask.insert(QStringLiteral("retouchPointCount"), point_count);
+    mask.insert(
+        QStringLiteral("retouchAuditLabel"),
+        QStringLiteral("#%1 · %2 · ").arg(retouch_order).arg(mode_label) +
+            audit_parts.join(QStringLiteral(" · ")));
+    grouped.append(mask);
     ++ordinal;
   }
   return grouped;
@@ -597,7 +614,7 @@ QVariantList ThumbnailPresentationService::reusePhotoLayerThumbnails(
     copyThumbnailFields(
         layers_by_id.value(layer.value(QStringLiteral("id")).toString()),
         &layer);
-    const auto recipe_hash = photo_layer_thumbnail_recipe_hash(layer);
+    const auto recipe_hash = photo_layer_thumbnail_recipe_hash(layer, facts.photo_layer_revision);
     if (!reason.isEmpty() && insertProgressiveFields(
                                  &layer,
                                  reason,
@@ -753,7 +770,7 @@ QVariantList ThumbnailPresentationService::presentPhotoLayers(
   auto all_ready = true;
   for (auto index = 0; index < result.size(); ++index) {
     auto layer = result.at(index).toMap();
-    const auto recipe_hash = photo_layer_thumbnail_entry_recipe_hash(layer);
+    const auto recipe_hash = photo_layer_thumbnail_entry_recipe_hash(layer, facts.photo_layer_revision);
     const auto mask_id = selection_mask_set_identity_signature(layer);
     const auto key = thumbnail_entry_cache_key(
         facts.asset_id,

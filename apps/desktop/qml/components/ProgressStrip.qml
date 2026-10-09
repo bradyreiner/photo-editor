@@ -7,13 +7,14 @@ Item {
     property color accent: theme.accentCool400
     property color trackColor: theme.alpha(theme.glassBase, 0.76)
     property bool failed: false
+    property bool active: true
     property real phase: 0
 
     readonly property real boundedProgress: Math.max(0, Math.min(1, progress))
     readonly property bool indeterminate: progress < 0
-    readonly property bool animate: visible && !theme.reducedMotion
+    readonly property bool animate: active && visible && !theme.reducedMotion
     readonly property real sweepWidth: Math.min(width, Math.max(24, width * 0.28))
-    readonly property string progressStripContract: "progress-strip:v3|channels:rgb|composite:additive|scope:leading-glint|motion:eased-sweep|reduced-motion:static"
+    readonly property string progressStripContract: "progress-strip:v4|channels:soft-color|composite:additive|scope:leading-glint|motion:eased-sweep|reduced-motion:static"
 
     Theme { id: theme }
 
@@ -43,12 +44,14 @@ Item {
         visible: width > 0
 
         Behavior on width {
+            enabled: !theme.reducedMotion
             NumberAnimation {
                 duration: theme.durationMedium
                 easing.type: Easing.OutCubic
             }
         }
     }
+
 
     Rectangle {
         id: progressGlint
@@ -61,9 +64,23 @@ Item {
         visible: !root.indeterminate && !root.failed && root.boundedProgress > 0.015
     }
 
+    Item {
+        width: determinateFill.width
+        height: root.height
+        clip: true
+        visible: !root.indeterminate && !root.failed && root.boundedProgress > 0
+        AdditiveLightWaves {
+            anchors.fill: parent
+            active: root.animate && root.boundedProgress < 1
+            opacity: 0.65
+        }
+    }
+
     Canvas {
         id: additiveChannels
-        anchors.fill: parent
+        width: root.sweepWidth
+        height: root.height
+        x: (root.width - width) / 2
         visible: root.indeterminate && !root.failed
 
         onPaint: {
@@ -72,10 +89,8 @@ Item {
             if (width <= 0 || height <= 0)
                 return
 
-            const movingWidth = Math.min(width, Math.max(24, width * 0.28))
-            const x = root.animate
-                    ? -movingWidth + (width + movingWidth) * root.phase
-                    : (width - movingWidth) / 2
+            const movingWidth = width
+            const x = 0
             const barHeight = Math.max(1, height * 0.62)
             const barY = (height - barHeight) / 2
 
@@ -90,7 +105,9 @@ Item {
             context.fillStyle = beam
             context.fillRect(x, barY, movingWidth, barHeight)
 
-            const colors = [theme.brandRed, theme.brandGreen, theme.brandBlue]
+            const colors = [Qt.rgba(0.851, 0.627, 0.553, 1),
+                            Qt.rgba(0.659, 0.839, 0.831, 1),
+                            Qt.rgba(0.557, 0.682, 0.804, 1)]
             const headX = x + movingWidth * 0.82
             const centerY = height / 2
             const flareRadius = Math.max(3, height * 1.45)
@@ -117,21 +134,18 @@ Item {
         onVisibleChanged: requestPaint()
     }
 
-    SequentialAnimation on phase {
-        running: root.indeterminate && root.animate && !root.failed && root.width > root.sweepWidth
+    XAnimator {
+        target: additiveChannels
+        running: root.indeterminate && root.animate && !root.failed && root.width > 0
         loops: Animation.Infinite
-        NumberAnimation {
-            from: 0
-            to: 1
-            duration: 1560
-            easing.type: Easing.InOutSine
-        }
-        PauseAnimation { duration: 100 }
+        from: -root.sweepWidth
+        to: root.width
+        duration: 1660
+        easing.type: Easing.InOutSine
     }
 
     onAnimateChanged: additiveChannels.requestPaint()
     onAccentChanged: additiveChannels.requestPaint()
-    onPhaseChanged: additiveChannels.requestPaint()
     onProgressChanged: additiveChannels.requestPaint()
     onFailedChanged: additiveChannels.requestPaint()
     onWidthChanged: additiveChannels.requestPaint()

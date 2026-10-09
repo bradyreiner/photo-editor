@@ -280,13 +280,11 @@ QVector<SmartSelectPrompt> smart_select_prompts_for_path(
       const auto top = point.value(QStringLiteral("top")).toDouble();
       const auto right = point.value(QStringLiteral("right")).toDouble();
       const auto bottom = point.value(QStringLiteral("bottom")).toDouble();
-      for (const auto& box_point :
-           {QPointF((left + right) * 0.5, (top + bottom) * 0.5),
-            QPointF(left, top), QPointF(right, top), QPointF(right, bottom),
-            QPointF(left, bottom)}) {
-        prompts.append(SmartSelectPrompt{
-            .x = box_point.x(), .y = box_point.y(), .negative = false});
-      }
+      prompts.append(SmartSelectPrompt{
+          .x = (left + right) * 0.5,
+          .y = (top + bottom) * 0.5,
+          .negative = false,
+          .box = QRectF(QPointF(left, top), QPointF(right, bottom))});
       continue;
     }
     if (contributes_to_path) {

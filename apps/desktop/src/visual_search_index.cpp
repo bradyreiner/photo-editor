@@ -37,13 +37,62 @@ Database open(const QString& path, bool write) {
     if (!QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner) ||
         sqlite3_exec(raw, "CREATE TABLE IF NOT EXISTS descriptions ("
                          "key TEXT PRIMARY KEY, description TEXT NOT NULL, "
+                         "created_at INTEGER NOT NULL DEFAULT (unixepoch()));"
+                         "CREATE TABLE IF NOT EXISTS preparation_aliases ("
+                         "key TEXT PRIMARY KEY, description_key TEXT NOT NULL, "
                          "created_at INTEGER NOT NULL DEFAULT (unixepoch()))", nullptr, nullptr, nullptr) != SQLITE_OK) {
       return {nullptr, sqlite3_close};
     }
   }
   return database;
 }
+
+bool save_alias(sqlite3* database, const QString& preparation_key, const QString& key) {
+  if (preparation_key.isEmpty()) return true;
+  if (!valid_key(preparation_key) || !valid_key(key)) return false;
+  sqlite3_stmt* raw = nullptr;
+  if (sqlite3_prepare_v2(database, "INSERT OR REPLACE INTO preparation_aliases(key, description_key) "
+      "SELECT ?1, key FROM descriptions WHERE key=?2", -1, &raw, nullptr) != SQLITE_OK) return false;
+  Statement statement(raw, sqlite3_finalize);
+  const auto encoded_preparation = preparation_key.toUtf8(), encoded_key = key.toUtf8();
+  sqlite3_bind_text(raw, 1, encoded_preparation.constData(), static_cast<int>(encoded_preparation.size()), SQLITE_TRANSIENT);
+  sqlite3_bind_text(raw, 2, encoded_key.constData(), static_cast<int>(encoded_key.size()), SQLITE_TRANSIENT);
+  return sqlite3_step(raw) == SQLITE_DONE;
+}
+
+bool prune_aliases(sqlite3* database) {
+  return sqlite3_exec(database, "DELETE FROM preparation_aliases WHERE description_key NOT IN "
+      "(SELECT key FROM descriptions); DELETE FROM preparation_aliases WHERE key IN "
+      "(SELECT key FROM preparation_aliases ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 10000)",
+      nullptr, nullptr, nullptr) == SQLITE_OK;
+}
 }  // namespace
+
+QVariantMap VisualSearchIndex::lookupPrepared(const QString& path, const QString& preparation_key) {
+  if (!valid_key(preparation_key)) return {};
+  auto database = open(path, false);
+  if (!database) return {};
+  sqlite3_stmt* raw = nullptr;
+  // An older index without the alias table simply misses until its next write.
+  if (sqlite3_prepare_v2(database.get(), "SELECT d.key, d.description FROM preparation_aliases a "
+      "JOIN descriptions d ON d.key=a.description_key WHERE a.key=?1", -1, &raw, nullptr) != SQLITE_OK) return {};
+  Statement statement(raw, sqlite3_finalize);
+  const auto encoded = preparation_key.toUtf8();
+  sqlite3_bind_text(raw, 1, encoded.constData(), static_cast<int>(encoded.size()), SQLITE_TRANSIENT);
+  if (sqlite3_step(raw) != SQLITE_ROW || sqlite3_column_bytes(raw, 1) > 4800) return {};
+  const auto key = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(raw, 0)), sqlite3_column_bytes(raw, 0));
+  const auto description = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(raw, 1)), sqlite3_column_bytes(raw, 1));
+  if (!valid_key(key) || description.trimmed().isEmpty() || description.size() > 1200) return {};
+  return {{"descriptionKey", key}, {"description", description}};
+}
+
+bool VisualSearchIndex::savePreparation(const QString& path, const QString& preparation_key, const QString& key) {
+  if (!valid_key(preparation_key) || !valid_key(key)) return false;
+  auto database = open(path, true);
+  if (!database || sqlite3_exec(database.get(), "BEGIN IMMEDIATE", nullptr, nullptr, nullptr) != SQLITE_OK) return false;
+  return save_alias(database.get(), preparation_key, key) && prune_aliases(database.get()) &&
+      sqlite3_exec(database.get(), "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK;
+}
 
 QString VisualSearchIndex::lookup(const QString& path, const QString& key) {
   if (!valid_key(key)) return {};
@@ -59,7 +108,8 @@ QString VisualSearchIndex::lookup(const QString& path, const QString& key) {
   return value.trimmed().isEmpty() || value.size() > 1200 ? QString() : value;
 }
 
-bool VisualSearchIndex::save(const QString& path, const QString& key, const QString& description) {
+bool VisualSearchIndex::save(const QString& path, const QString& key, const QString& description,
+                             const QString& preparation_key) {
   if (!valid_key(key) || description.trimmed().isEmpty() || description.size() > 1200) return false;
   auto database = open(path, true);
   if (!database) return false;
@@ -73,9 +123,11 @@ bool VisualSearchIndex::save(const QString& path, const QString& key, const QStr
   sqlite3_bind_text(raw, 1, encoded_key.constData(), static_cast<int>(encoded_key.size()), SQLITE_TRANSIENT);
   sqlite3_bind_text(raw, 2, encoded_description.constData(), static_cast<int>(encoded_description.size()), SQLITE_TRANSIENT);
   if (sqlite3_step(raw) != SQLITE_DONE) return false;
-  return sqlite3_exec(database.get(), "DELETE FROM descriptions WHERE key IN ("
-                       "SELECT key FROM descriptions ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 10000); COMMIT",
-                       nullptr, nullptr, nullptr) == SQLITE_OK;
+  return save_alias(database.get(), preparation_key, key) &&
+      sqlite3_exec(database.get(), "DELETE FROM descriptions WHERE key IN ("
+          "SELECT key FROM descriptions ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET 10000)",
+          nullptr, nullptr, nullptr) == SQLITE_OK && prune_aliases(database.get()) &&
+      sqlite3_exec(database.get(), "COMMIT", nullptr, nullptr, nullptr) == SQLITE_OK;
 }
 
 bool VisualSearchIndex::clear(const QString& path) {
@@ -83,7 +135,8 @@ bool VisualSearchIndex::clear(const QString& path) {
   if (!QFileInfo::exists(path)) return true;
   auto database = open(path, true);
   if (!database) return false;
-  return sqlite3_exec(database.get(), "PRAGMA secure_delete=ON; DELETE FROM descriptions; VACUUM",
+  return sqlite3_exec(database.get(), "PRAGMA secure_delete=ON; BEGIN IMMEDIATE; "
+                      "DELETE FROM preparation_aliases; DELETE FROM descriptions; COMMIT; VACUUM",
                       nullptr, nullptr, nullptr) == SQLITE_OK;
 }
 }  // namespace photo_editor::desktop

@@ -10,6 +10,7 @@ Rectangle {
     property string subtitle: ""
     property color accent: theme.accentWarm400
     property bool selected: false
+    property bool showSubtitle: true
     readonly property string preferenceNavRowContract: "preference-nav-row:v1|selected-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-fit:true|subtitle-wrap:true|tooltip-full:true|accessibility-full:true"
 
@@ -18,18 +19,18 @@ Rectangle {
     Theme { id: theme }
 
     Layout.fillWidth: true
-    implicitHeight: Math.max(74, rowContent.implicitHeight + theme.space18)
-    radius: theme.radiusPanel
+    implicitHeight: Math.max(showSubtitle ? theme.sidebarRowHeightCompact + theme.space8 : theme.sidebarRowHeightCompact,
+                             rowContent.implicitHeight + theme.space10)
+    radius: theme.radiusControl
     color: selected
-           ? theme.alpha(accent, 0.14)
-           : (rowHover.hovered || activeFocus ? theme.alpha(theme.glassLift, 0.64) : theme.alpha(theme.glassBase, 0.38))
-    border.width: activeFocus ? 2 : 1
+           ? theme.editorSelectionFill
+           : (rowHover.hovered || activeFocus ? theme.editorControlHover : "transparent")
+    border.width: activeFocus ? theme.focusBorderWidth : (selected ? theme.hairlineWidth : 0)
     border.color: activeFocus
-                  ? theme.alpha(theme.focusRing, 0.88)
+                  ? theme.focusRing
                   : selected
-                    ? theme.alpha(accent, 0.58)
-                    : theme.alpha(theme.glassEdge, rowHover.hovered ? 0.42 : 0.22)
-    clip: true
+                    ? theme.alpha(theme.editorSelectionEdge, 0.72)
+                    : "transparent"
     activeFocusOnTab: true
     Accessible.name: title
     Accessible.description: subtitle
@@ -54,46 +55,42 @@ Rectangle {
     RowLayout {
         id: rowContent
         anchors.fill: parent
-        anchors.margins: theme.space12
-        spacing: theme.space12
-
-        Rectangle {
-            Layout.alignment: Qt.AlignTop
-            implicitWidth: 6
-            implicitHeight: 6
-            radius: 1
-            color: root.accent
-            opacity: root.selected ? 1.0 : 0.34
-        }
+        anchors.leftMargin: theme.space10
+        anchors.rightMargin: theme.space10
+        anchors.topMargin: theme.space6
+        anchors.bottomMargin: theme.space6
+        spacing: theme.space10
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: theme.space4
+            spacing: theme.space2
 
             Label {
                 id: titleLabel
                 Layout.fillWidth: true
                 text: root.title
-                color: root.selected ? theme.textStrong : theme.textMain
+                color: root.selected ? theme.interaction300 : theme.textMain
                 font.family: theme.fontUi
-                font.pixelSize: 13
-                font.weight: Font.DemiBold
-                fontSizeMode: Text.HorizontalFit
+                font.pixelSize: theme.typeControl
+                font.weight: root.selected ? Font.DemiBold : Font.Medium
+                fontSizeMode: root.showSubtitle ? Text.HorizontalFit : Text.FixedSize
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 minimumPixelSize: 10
                 elide: Text.ElideNone
-                ToolTip.visible: rowHover.hovered && contentWidth > width + 1
+                ToolTip.visible: rowHover.hovered && (!root.showSubtitle || contentWidth > width + 1)
                 ToolTip.delay: 350
                 ToolTip.timeout: 3600
-                ToolTip.text: root.title
+                ToolTip.text: root.showSubtitle ? root.title : root.subtitle
             }
 
             Label {
                 id: subtitleLabel
+                visible: root.showSubtitle
                 Layout.fillWidth: true
                 text: root.subtitle
-                color: theme.textFaint
+                color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone

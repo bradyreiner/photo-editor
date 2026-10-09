@@ -9,10 +9,12 @@
 #include "observability.h"
 #include "photo_render_utils.h"
 #include "photo_text_style.h"
+#include "photo_editor/pipeline/edit_recipe_v13.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -32,6 +34,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTime>
@@ -181,6 +184,210 @@ QByteArray read_file_bytes(const QString& file_path) {
   return file.readAll();
 }
 
+class ScopedEnvironmentOverride final {
+ public:
+  ScopedEnvironmentOverride(QByteArray name, QByteArray value)
+      : name_(std::move(name)), was_set_(qEnvironmentVariableIsSet(name_.constData())),
+        previous_value_(qgetenv(name_.constData())) {
+    qputenv(name_.constData(), value);
+  }
+
+  ~ScopedEnvironmentOverride() { restore(); }
+
+  ScopedEnvironmentOverride(const ScopedEnvironmentOverride&) = delete;
+  ScopedEnvironmentOverride& operator=(const ScopedEnvironmentOverride&) = delete;
+
+  void restore() {
+    if (restored_) return;
+    if (was_set_) {
+      qputenv(name_.constData(), previous_value_);
+    } else {
+      qunsetenv(name_.constData());
+    }
+    restored_ = true;
+  }
+
+  bool restoredCorrectly() const {
+    const auto currently_set = qEnvironmentVariableIsSet(name_.constData());
+    return currently_set == was_set_ &&
+        (!was_set_ || qgetenv(name_.constData()) == previous_value_);
+  }
+
+ private:
+  QByteArray name_;
+  bool was_set_ = false;
+  QByteArray previous_value_;
+  bool restored_ = false;
+};
+
+int run_private_recipe_persistence_helper(int argc, char** argv) {
+  const auto reject = [](const char* reason) {
+    std::cerr << "private recipe fixture helper: " << reason << '\n';
+    const auto fixture_root = qEnvironmentVariable("PHOTO_EDITOR_AGENT_RECIPE_FIXTURE_ROOT");
+    if (!fixture_root.isEmpty() && QDir(fixture_root).exists()) {
+      QFile diagnostic(QDir(fixture_root).filePath(QStringLiteral("helper-rejections.txt")));
+      if (diagnostic.open(QIODevice::WriteOnly | QIODevice::Append)) {
+        diagnostic.write(reason);
+        diagnostic.write("\n");
+      }
+    }
+    return 74;
+  };
+  if (argc != 2 || QString::fromLocal8Bit(argv[1]) != QStringLiteral("--stdin-json-v1"))
+    return reject("unexpected helper arguments");
+  const auto database_url = QUrl(qEnvironmentVariable("PHOTO_EDITOR_DATABASE_URL"));
+  if (!database_url.isValid() ||
+      !QStringList{QStringLiteral("postgres"), QStringLiteral("postgresql")}
+           .contains(database_url.scheme(), Qt::CaseInsensitive) ||
+      database_url.host() != QStringLiteral("127.0.0.1") || database_url.port(-1) != 1 ||
+      database_url.path() != QStringLiteral("/agent_recipe_controller_fixture_test") ||
+      !database_url.userName().isEmpty() || !database_url.password().isEmpty() ||
+      database_url.hasQuery() || database_url.hasFragment())
+    return reject("refusing a non-fixture database URL");
+  const QDir storage_root(qEnvironmentVariable("PHOTO_EDITOR_AGENT_RECIPE_FIXTURE_ROOT"));
+  if (storage_root.path().isEmpty() || !QDir().mkpath(storage_root.path()))
+    return reject("private fixture storage is unavailable");
+
+  QFile input;
+  if (!input.open(stdin, QIODevice::ReadOnly)) return reject("could not read the helper payload");
+  const auto payload = input.readAll();
+  QJsonParseError envelope_error;
+  const auto envelope = QJsonDocument::fromJson(payload, &envelope_error);
+  if (payload.isEmpty() || envelope_error.error != QJsonParseError::NoError || !envelope.isObject() ||
+      envelope.object().value(QStringLiteral("schema")) !=
+          QStringLiteral("photo-editor-catalog-arguments:v1"))
+    return reject("helper payload envelope is malformed");
+  const auto argument_values = envelope.object().value(QStringLiteral("arguments")).toArray();
+  QStringList arguments;
+  for (const auto& value : argument_values) {
+    if (!value.isString()) return reject("helper argument is not text");
+    arguments.append(value.toString());
+  }
+  if (arguments.isEmpty()) return reject("helper argument list is empty");
+
+  const auto owned = arguments.first() == QStringLiteral("--agent-owned-v1");
+  const auto revision_id = envelope.object()
+      .value(QStringLiteral("testFixtureRevisionId")).toString();
+  if ((owned && revision_id.isEmpty()) || (!owned && !revision_id.isEmpty()) ||
+      envelope.object().value(QStringLiteral("testFixturePersistenceBoundary")).toString() !=
+          QStringLiteral("synthetic-file-backed-helper"))
+    return reject("fixture revision identity does not match the owned payload");
+  QString asset_id;
+  QString recipe_json;
+  QString canonical_recipe_payload;
+  QString canonical_cache_key;
+  QString canonical_provenance_payload;
+  QJsonObject task_snapshot;
+  if (owned) {
+    if (arguments.size() < 5) return reject("owned save is missing its snapshot or recipe");
+    QJsonParseError snapshot_error;
+    const auto snapshot_document = QJsonDocument::fromJson(arguments.at(1).toUtf8(), &snapshot_error);
+    if (snapshot_error.error != QJsonParseError::NoError || !snapshot_document.isObject())
+      return reject("owned save snapshot is malformed");
+    task_snapshot = snapshot_document.object();
+    if (task_snapshot.value(QStringLiteral("schema")) != QStringLiteral("agent-asset-recipe:v1"))
+      return reject("owned save snapshot schema is invalid");
+    if (arguments.at(2) == QStringLiteral("--legacy-v1")) {
+      if (arguments.size() != 5) return reject("legacy owned save arguments are incomplete");
+      asset_id = arguments.at(3);
+      recipe_json = arguments.at(4);
+    } else {
+      if (arguments.size() != 7) return reject("owned save arguments are incomplete");
+      asset_id = arguments.at(2);
+      recipe_json = arguments.at(3);
+      canonical_recipe_payload = arguments.at(4);
+      canonical_cache_key = arguments.at(5);
+      canonical_provenance_payload = arguments.at(6);
+    }
+    const auto source_path = task_snapshot.value(QStringLiteral("source_path")).toString();
+    const auto source_sha256 = task_snapshot.value(QStringLiteral("source_sha256")).toString();
+    QFile source_file(source_path);
+    if (task_snapshot.value(QStringLiteral("asset_id")).toString() != asset_id ||
+        source_path.isEmpty() || source_sha256.size() != 64 ||
+        !source_file.open(QIODevice::ReadOnly) ||
+        QString::fromLatin1(QCryptographicHash::hash(source_file.readAll(), QCryptographicHash::Sha256).toHex()) !=
+            source_sha256)
+      return reject("owned save snapshot does not bind the admitted asset source");
+  } else if (arguments.first() == QStringLiteral("--legacy-v1")) {
+    if (arguments.size() != 3) return reject("legacy recipe arguments are incomplete");
+    asset_id = arguments.at(1);
+    recipe_json = arguments.at(2);
+  } else {
+    if (arguments.size() != 5) return reject("recipe arguments are incomplete");
+    asset_id = arguments.at(0);
+    recipe_json = arguments.at(1);
+    canonical_recipe_payload = arguments.at(2);
+    canonical_cache_key = arguments.at(3);
+    canonical_provenance_payload = arguments.at(4);
+  }
+  QJsonParseError recipe_error;
+  const auto recipe_document = QJsonDocument::fromJson(recipe_json.toUtf8(), &recipe_error);
+  if (asset_id.isEmpty() || recipe_error.error != QJsonParseError::NoError || !recipe_document.isObject())
+    return reject("legacy recipe content is malformed");
+  if (!canonical_recipe_payload.isEmpty()) {
+    QJsonParseError provenance_error;
+    const auto canonical_recipe = photo_editor::pipeline::deserialize_edit_recipe_v13(
+        canonical_recipe_payload.toStdString());
+    const auto provenance_document = QJsonDocument::fromJson(canonical_provenance_payload.toUtf8(), &provenance_error);
+    if (!canonical_recipe || !photo_editor::pipeline::validate_edit_recipe_v13(*canonical_recipe).ok() ||
+        canonical_cache_key != QString::fromStdString(
+            photo_editor::pipeline::edit_recipe_v13_cache_key(*canonical_recipe)) ||
+        provenance_error.error != QJsonParseError::NoError ||
+        !provenance_document.isObject())
+      return reject("canonical recipe checkpoint is malformed");
+  }
+
+  const auto payload_sha256 = QString::fromLatin1(
+      QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+  const auto asset_key = QString::fromLatin1(
+      QCryptographicHash::hash(asset_id.toUtf8(), QCryptographicHash::Sha256).toHex());
+  const auto revision_key = owned
+      ? QString::fromLatin1(QCryptographicHash::hash(
+            revision_id.toUtf8(), QCryptographicHash::Sha256).toHex())
+      : QStringLiteral("unowned");
+  const auto payload_directory = storage_root.filePath(
+      QStringLiteral("payloads/%1/%2").arg(asset_key, revision_key));
+  const auto receipt_directory = storage_root.filePath(
+      QStringLiteral("receipts/%1/%2").arg(asset_key, revision_key));
+  if (!QDir().mkpath(payload_directory) || !QDir().mkpath(receipt_directory))
+    return reject("could not create private receipt directories");
+  const auto payload_path = QDir(payload_directory).filePath(payload_sha256 + QStringLiteral(".json"));
+  QSaveFile payload_file(payload_path);
+  if (!payload_file.open(QIODevice::WriteOnly) || payload_file.write(payload) != payload.size() ||
+      !payload_file.commit())
+    return reject("could not persist the exact helper payload");
+  const auto receipt = QJsonObject{
+      {QStringLiteral("schema"), QStringLiteral("agent-controller-private-recipe-receipt-v1")},
+      {QStringLiteral("assetId"), asset_id},
+      {QStringLiteral("revisionId"), revision_id},
+      {QStringLiteral("payloadSha256"), payload_sha256},
+      {QStringLiteral("payloadBytes"), static_cast<double>(payload.size())},
+      {QStringLiteral("taskOwned"), owned},
+      {QStringLiteral("persistenceBoundary"), QStringLiteral("synthetic-file-backed-helper")},
+      {QStringLiteral("snapshotSourceSha256"), task_snapshot.value(QStringLiteral("source_sha256"))},
+      {QStringLiteral("databaseUrl"), database_url.toString(QUrl::RemovePassword)},
+      {QStringLiteral("writtenAndReopened"), true},
+  };
+  const auto receipt_path = QDir(receipt_directory).filePath(payload_sha256 + QStringLiteral(".json"));
+  QSaveFile receipt_file(receipt_path);
+  const auto receipt_bytes = QJsonDocument(receipt).toJson(QJsonDocument::Compact);
+  if (!receipt_file.open(QIODevice::WriteOnly) || receipt_file.write(receipt_bytes) != receipt_bytes.size() ||
+      !receipt_file.commit())
+    return reject("could not persist the private helper receipt");
+  QFile reopened_payload(payload_path);
+  QFile reopened_receipt(receipt_path);
+  if (!reopened_payload.open(QIODevice::ReadOnly) || reopened_payload.readAll() != payload ||
+      !reopened_receipt.open(QIODevice::ReadOnly))
+    return reject("persisted helper payload did not reopen byte-for-byte");
+  QJsonParseError receipt_error;
+  const auto reopened_document = QJsonDocument::fromJson(reopened_receipt.readAll(), &receipt_error);
+  if (receipt_error.error != QJsonParseError::NoError || !reopened_document.isObject() ||
+      reopened_document.object().value(QStringLiteral("payloadSha256")).toString() != payload_sha256 ||
+      !reopened_document.object().value(QStringLiteral("writtenAndReopened")).toBool())
+    return reject("reopened helper receipt did not match the written payload");
+  return EXIT_SUCCESS;
+}
+
 QByteArray fake_ollama_response(const QJsonObject& content_object) {
   return QJsonDocument(QJsonObject{
       {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
@@ -194,6 +401,7 @@ QByteArray fake_ollama_response(const QJsonObject& content_object) {
 }
 
 int observability_event_count(const QString& file_path, const QString& event_name) {
+  if (!photo_editor::desktop::observability::flush()) return 0;
   QFile file(file_path);
   if (!file.open(QIODevice::ReadOnly)) {
     return 0;
@@ -1175,6 +1383,18 @@ int run_search_edit_workflow_contract();
 int run_raw_locality_probe(const QStringList& arguments);
 
 int main(int argc, char** argv) {
+  const auto invoked_program = argc > 0
+      ? QFileInfo(QString::fromLocal8Bit(argv[0])).fileName()
+      : QString();
+  const auto recipe_helper_name =
+#if defined(Q_OS_WIN)
+      QStringLiteral("save_edit_recipe.exe");
+#else
+      QStringLiteral("save_edit_recipe");
+#endif
+  if (invoked_program == recipe_helper_name)
+    return run_private_recipe_persistence_helper(argc, argv);
+
   QCoreApplication app(argc, argv);
   const auto arguments = app.arguments();
   if (arguments.contains(QStringLiteral("--managed-download-handoff"))) {
@@ -1255,6 +1475,183 @@ int main(int argc, char** argv) {
       return fail("proof deadlines should count active UI-pump time while excluding only explicit long clock discontinuities");
     }
     std::cout << "agent_suspend_resilience_contract=passed\n";
+    return EXIT_SUCCESS;
+  }
+  if (arguments.contains(QStringLiteral("--agent-approved-tool-schema-budget-contract"))) {
+    const QStringList unowned_file_operations{
+        QStringLiteral("save_photo_fragment_preset"),
+        QStringLiteral("delete_photo_fragment_preset"),
+        QStringLiteral("import_photo_fragment_preset"),
+        QStringLiteral("export_photo_fragment_preset"),
+    };
+    const QStringList phase_tool_names{
+        QStringLiteral("photo.live_status"), QStringLiteral("photo.selected_assets"),
+        QStringLiteral("photo.read_adjustments"), QStringLiteral("photo.read_asset"),
+        QStringLiteral("photo.read_recipe"), QStringLiteral("photo.inspect_composition"),
+        QStringLiteral("photo.edit_composition"), QStringLiteral("app.list_commands"),
+        QStringLiteral("app.command_schema"), QStringLiteral("app.inspect_command"),
+        QStringLiteral("app.invoke_command"), QStringLiteral("photo.render_current_proof"),
+        QStringLiteral("photo.get_style_rulebook"), QStringLiteral("photo.get_recipe_patch_schema"),
+        QStringLiteral("photo.validate_recipe_patch"), QStringLiteral("photo.validate_edit"),
+        QStringLiteral("photo.apply_recipe_patch_draft"), QStringLiteral("photo.create_mask"),
+        QStringLiteral("photo.apply_mask_adjustment"), QStringLiteral("photo.cancel_agent_run"),
+        QStringLiteral("photo.rollback_agent_draft")};
+    const QStringList composition_operations{
+        QStringLiteral("add_text"), QStringLiteral("add_pixel_layer"), QStringLiteral("add_source_layer"),
+        QStringLiteral("text"), QStringLiteral("typography"), QStringLiteral("text_path"),
+        QStringLiteral("transform"), QStringLiteral("perspective"), QStringLiteral("move"),
+        QStringLiteral("copy_selection"), QStringLiteral("erase_selection"),
+        QStringLiteral("select_subject"), QStringLiteral("lasso_selection"), QStringLiteral("blur"),
+        QStringLiteral("opacity"), QStringLiteral("paint"), QStringLiteral("add_effect"),
+        QStringLiteral("update_effect"), QStringLiteral("remove_effect"), QStringLiteral("reorder_effect"),
+        QStringLiteral("mask_effect"), QStringLiteral("clear_effect_mask"),
+        QStringLiteral("save_photo_fragment_preset"), QStringLiteral("delete_photo_fragment_preset"),
+        QStringLiteral("import_photo_fragment_preset"), QStringLiteral("export_photo_fragment_preset")};
+    const auto operation_condition = [](const QVariantMap& operation_predicate) {
+      return QVariantMap{
+          {QStringLiteral("if"), QVariantMap{{QStringLiteral("properties"), QVariantMap{
+               {QStringLiteral("operation"), operation_predicate}}}}},
+          {QStringLiteral("then"), QVariantMap{{QStringLiteral("required"), QVariantList{
+               QStringLiteral("values")}}}},
+      };
+    };
+    QVariantList phase_schemas;
+    for (const auto& name : phase_tool_names) {
+      const QVariantMap payload_schema{
+          {QStringLiteral("type"), QStringLiteral("string")},
+          {QStringLiteral("description"), QString(2400, QLatin1Char('x'))},
+      };
+      auto input_schema = QVariantMap{
+          {QStringLiteral("type"), QStringLiteral("object")},
+          {QStringLiteral("properties"), QVariantMap{
+               {QStringLiteral("payload"), payload_schema}}},
+      };
+      if (name == QStringLiteral("photo.edit_composition")) {
+        QVariantList operations;
+        for (const auto& operation : composition_operations) operations.append(operation);
+        const QVariantList conditions{
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("text")}}),
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("typography")}}),
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("save_photo_fragment_preset")}}),
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("delete_photo_fragment_preset")}}),
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("import_photo_fragment_preset")}}),
+            operation_condition(QVariantMap{{QStringLiteral("const"), QStringLiteral("export_photo_fragment_preset")}}),
+            operation_condition(QVariantMap{{QStringLiteral("enum"), QVariantList{
+                QStringLiteral("text"), QStringLiteral("save_photo_fragment_preset")}}}),
+        };
+        auto properties = input_schema.value(QStringLiteral("properties")).toMap();
+        properties.insert(QStringLiteral("operation"), QVariantMap{
+            {QStringLiteral("type"), QStringLiteral("string")},
+            {QStringLiteral("enum"), operations}});
+        input_schema.insert(QStringLiteral("properties"), properties);
+        input_schema.insert(QStringLiteral("allOf"), conditions);
+      }
+      phase_schemas.append(QVariantMap{
+          {QStringLiteral("name"), name},
+          {QStringLiteral("inputSchema"), input_schema},
+      });
+    }
+    const auto original_phase_schemas = phase_schemas;
+    const auto find_schema = [](const QVariantList& schemas, const QString& name) {
+      for (const auto& value : schemas) {
+        const auto schema = value.toMap();
+        if (schema.value(QStringLiteral("name")).toString() == name) return schema;
+      }
+      return QVariantMap{};
+    };
+    const auto verify_file_operations_removed = [&](const QVariantList& schemas) {
+      const auto tool = find_schema(schemas, QStringLiteral("photo.edit_composition"));
+      if (tool.isEmpty()) return false;
+      const auto input_schema = tool.value(QStringLiteral("inputSchema")).toMap();
+      QStringList operation_values;
+      for (const auto& value : input_schema.value(QStringLiteral("properties")).toMap()
+               .value(QStringLiteral("operation")).toMap().value(QStringLiteral("enum")).toList())
+        operation_values.append(value.toString());
+      auto expected_operations = composition_operations;
+      for (const auto& file_operation : unowned_file_operations)
+        expected_operations.removeAll(file_operation);
+      if (operation_values != expected_operations) return false;
+      bool retained_typography_condition = false;
+      bool retained_safe_partial_condition = false;
+      for (const auto& condition_value : input_schema.value(QStringLiteral("allOf")).toList()) {
+        const auto predicate = condition_value.toMap().value(QStringLiteral("if")).toMap()
+            .value(QStringLiteral("properties")).toMap().value(QStringLiteral("operation")).toMap();
+        if (predicate.contains(QStringLiteral("const"))) {
+          const auto operation = predicate.value(QStringLiteral("const")).toString();
+          if (unowned_file_operations.contains(operation)) return false;
+          if (operation == QStringLiteral("typography")) retained_typography_condition = true;
+        }
+        if (predicate.contains(QStringLiteral("enum"))) {
+          QStringList conditional_operations;
+          for (const auto& operation : predicate.value(QStringLiteral("enum")).toList())
+            conditional_operations.append(operation.toString());
+          for (const auto& file_operation : unowned_file_operations)
+            if (conditional_operations.contains(file_operation)) return false;
+          if (conditional_operations.contains(QStringLiteral("text")))
+            retained_safe_partial_condition = true;
+        }
+      }
+      return retained_typography_condition && retained_safe_partial_condition;
+    };
+    const QVariantMap composition_snapshot{
+        {QStringLiteral("taskScopedCapabilities"), QStringList{
+             QStringLiteral("graphics"), QStringLiteral("layers_luts")} },
+        {QStringLiteral("plan"), QVariantMap{
+             {QStringLiteral("actions"), QVariantList{
+                  QVariantMap{{QStringLiteral("kind"), QStringLiteral("text")}},
+                  QVariantMap{{QStringLiteral("kind"), QStringLiteral("layers")}}}}}}};
+    const auto narrowed = photo_editor::desktop::agent_planning_tool_schemas_for_approved_task(
+        phase_schemas, composition_snapshot);
+    QStringList narrowed_names;
+    for (const auto& value : narrowed)
+      narrowed_names.append(value.toMap().value(QStringLiteral("name")).toString());
+    const QStringList expected_names{
+        QStringLiteral("photo.inspect_composition"), QStringLiteral("photo.edit_composition"),
+        QStringLiteral("app.list_commands"), QStringLiteral("app.command_schema"),
+        QStringLiteral("app.inspect_command"), QStringLiteral("app.invoke_command")};
+    if (narrowed_names != expected_names || phase_schemas.size() != 21 ||
+        narrowed.size() != 6 || !verify_file_operations_removed(narrowed) ||
+        QJsonDocument::fromVariant(narrowed).toJson(QJsonDocument::Compact).size() * 2 >=
+            QJsonDocument::fromVariant(phase_schemas).toJson(QJsonDocument::Compact).size())
+      return fail("approved text/layer construction should narrow tool names and remove unowned preset operations");
+    for (const auto& name : expected_names) {
+      if (name != QStringLiteral("photo.edit_composition") &&
+          find_schema(narrowed, name) != find_schema(phase_schemas, name))
+        return fail("composition filtering must preserve unrelated discovered tool schemas");
+    }
+
+    const QVariantMap unsupported_action_snapshot{
+        {QStringLiteral("taskScopedCapabilities"), QStringList{
+             QStringLiteral("graphics"), QStringLiteral("layers_luts")} },
+        {QStringLiteral("plan"), QVariantMap{
+             {QStringLiteral("actions"), QVariantList{
+                  QVariantMap{{QStringLiteral("kind"), QStringLiteral("crop")}}}}}}};
+    const QVariantMap broad_capability_snapshot{
+        {QStringLiteral("taskScopedCapabilities"), QStringList{
+             QStringLiteral("graphics"), QStringLiteral("global_color")} },
+        {QStringLiteral("plan"), composition_snapshot.value(QStringLiteral("plan"))}};
+    const auto guarded_nontext = photo_editor::desktop::agent_planning_tool_schemas_for_approved_task(
+        phase_schemas, unsupported_action_snapshot);
+    const auto guarded_broad = photo_editor::desktop::agent_planning_tool_schemas_for_approved_task(
+        phase_schemas, broad_capability_snapshot);
+    if (guarded_nontext.size() != phase_schemas.size() || guarded_broad.size() != phase_schemas.size() ||
+        !verify_file_operations_removed(guarded_nontext) || !verify_file_operations_removed(guarded_broad) ||
+        photo_editor::desktop::agent_planning_tool_schemas_for_approved_task(
+            phase_schemas, unsupported_action_snapshot) == phase_schemas ||
+        photo_editor::desktop::agent_planning_tool_schemas_for_approved_task(
+            phase_schemas, {}) != phase_schemas)
+      return fail("nonempty approved plans must remove preset file operations while retaining the broad tool phase");
+    for (const auto& value : phase_schemas) {
+      const auto source_schema = value.toMap();
+      const auto name = source_schema.value(QStringLiteral("name")).toString();
+      if (name != QStringLiteral("photo.edit_composition") &&
+          (find_schema(guarded_nontext, name) != source_schema ||
+           find_schema(guarded_broad, name) != source_schema))
+        return fail("unrelated tool schemas must remain unchanged for nontext approved tasks");
+    }
+    if (phase_schemas != original_phase_schemas)
+      return fail("schema projection must not mutate the canonical phase schemas");
+    std::cout << "agent_approved_tool_schema_budget_contract=passed\n";
     return EXIT_SUCCESS;
   }
   if (arguments.size() >= 2 &&
@@ -2059,6 +2456,7 @@ int main(int argc, char** argv) {
                {QStringLiteral("endpoint"), QStringLiteral("http://127.0.0.1:11434")},
                {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
                {QStringLiteral("vision"), true},
+               {QStringLiteral("contextWindow"), 24576},
                {QStringLiteral("available"), true},
            },
        }},
@@ -2096,6 +2494,7 @@ int main(int argc, char** argv) {
           {QStringLiteral("endpoint"), QStringLiteral("http://127.0.0.1:11434")},
           {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
           {QStringLiteral("vision"), true},
+          {QStringLiteral("contextWindow"), 24576},
           {QStringLiteral("status"), QStringLiteral("unavailable")},
           {QStringLiteral("available"), false},
       }}},
@@ -2138,6 +2537,7 @@ int main(int argc, char** argv) {
           {QStringLiteral("endpoint"), QStringLiteral("http://127.0.0.1:11434")},
           {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
           {QStringLiteral("vision"), true},
+          {QStringLiteral("contextWindow"), 24576},
           {QStringLiteral("status"), QStringLiteral("available")},
           {QStringLiteral("available"), true},
       }}},
@@ -2163,6 +2563,7 @@ int main(int argc, char** argv) {
   fake_ollama.write(
       "#!/bin/sh\n"
       "printf '{\"status\":\"pulling manifest\"}\\n'\n"
+      "sleep 0.05\n"
       "printf '{\"status\":\"downloading\",\"digest\":\"sha256:test-layer\",\"total\":100,\"completed\":25}\\n'\n"
       "printf '{\"status\":\"downloading\",\"digest\":\"sha256:test-layer\",\"total\":100,\"completed\":100}\\n'\n"
       "printf '{\"status\":\"success\"}\\n'\n"
@@ -2173,19 +2574,45 @@ int main(int argc, char** argv) {
       fake_ollama_path,
       QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
   qputenv("PHOTO_EDITOR_OLLAMA_BINARY", fake_ollama_path.toUtf8());
+  if (!QFileInfo(fake_ollama_path).isExecutable() ||
+      photo_editor::desktop::agent_runtime_binary() !=
+          QFileInfo(fake_ollama_path).canonicalFilePath()) {
+    return fail("the configured Ollama fixture should be the executable selected for installation");
+  }
   const auto confirmed_install = controller.installSelectedModel(true);
   if (!confirmed_install.value(QStringLiteral("ok")).toBool() ||
       !confirmed_install.value(QStringLiteral("started")).toBool() ||
       !controller.modelInstallRunning()) {
     return fail("confirmed Ollama install should start the configured local process");
   }
-  for (auto attempt = 0; attempt < 100 && controller.modelInstallRunning(); ++attempt) {
+  QElapsedTimer install_completion_timer;
+  install_completion_timer.start();
+  while (controller.modelInstallRunning() && install_completion_timer.elapsed() < 10000) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    QThread::msleep(10);
+    QThread::msleep(2);
   }
   if (controller.modelInstallRunning() ||
       controller.modelInstallStatus() != QStringLiteral("Installed") ||
       !controller.modelInstallOutput().contains(QStringLiteral("pulled pull qwen2.5vl:7b"))) {
+    const auto diagnostic = QStringLiteral(
+        "install status=%1 running=%2 elapsedMs=%3 program=%4 output=%5 progress=%6")
+        .arg(controller.modelInstallStatus())
+        .arg(controller.modelInstallRunning())
+        .arg(install_completion_timer.elapsed())
+        .arg(confirmed_install.value(QStringLiteral("programPath")).toString())
+        .arg(controller.modelInstallOutput())
+        .arg(QString::fromUtf8(QJsonDocument::fromVariant(controller.modelInstallProgress())
+            .toJson(QJsonDocument::Compact)));
+    std::cerr << diagnostic.toUtf8().constData() << '\n';
+    if (controller.modelInstallRunning()) {
+      controller.cancelModelInstall();
+      QElapsedTimer cancel_timer;
+      cancel_timer.start();
+      while (controller.modelInstallRunning() && cancel_timer.elapsed() < 1500) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(2);
+      }
+    }
     return fail("confirmed Ollama install should capture process completion and output");
   }
   const auto install_progress = controller.modelInstallProgress();
@@ -2195,6 +2622,16 @@ int main(int argc, char** argv) {
       install_progress.value(QStringLiteral("totalBytes")).toLongLong() != 100 ||
       install_progress.value(QStringLiteral("progressPercent")).toInt() != 100 ||
       install_progress.value(QStringLiteral("jsonLineCount")).toInt() < 4) {
+    const auto progress_diagnostic = QJsonDocument::fromVariant(QVariantMap{
+        {QStringLiteral("status"), install_progress.value(QStringLiteral("status"))},
+        {QStringLiteral("progressPercent"), install_progress.value(QStringLiteral("progressPercent"))},
+        {QStringLiteral("jsonLineCount"), install_progress.value(QStringLiteral("jsonLineCount"))},
+        {QStringLiteral("completedBytes"), install_progress.value(QStringLiteral("completedBytes"))},
+        {QStringLiteral("totalBytes"), install_progress.value(QStringLiteral("totalBytes"))},
+        {QStringLiteral("digest"), install_progress.value(QStringLiteral("digest"))},
+        {QStringLiteral("outputTail"), controller.modelInstallOutput().right(512)},
+    }).toJson(QJsonDocument::Compact);
+    std::cerr << "Ollama pull progress diagnostic=" << progress_diagnostic.constData() << '\n';
     return fail("confirmed Ollama install should parse streaming pull progress JSON");
   }
   const auto slow_ollama_path = QDir(runtime_root.path()).filePath(QStringLiteral("slow-ollama.sh"));
@@ -2219,9 +2656,11 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_OLLAMA_BINARY", fake_ollama_path.toUtf8());
   if (!controller.installSelectedModel(true).value("ok").toBool())
     return fail("a canceled download should permit an explicit retry");
-  for (auto attempt = 0; attempt < 100 && controller.modelInstallRunning(); ++attempt) {
+  QElapsedTimer retry_completion_timer;
+  retry_completion_timer.start();
+  while (controller.modelInstallRunning() && retry_completion_timer.elapsed() < 10000) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    QThread::msleep(10);
+    QThread::msleep(2);
   }
   if (controller.modelInstallRunning() || controller.modelInstallStatus() != "Installed")
     return fail("retry after cancellation should complete the new owned installer");
@@ -2471,6 +2910,7 @@ int main(int argc, char** argv) {
     controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
     auto render_started_observed = false;
+    auto render_controls_grounded = false;
     auto cancellation_requested = false;
     const auto run_event_connection = QObject::connect(
         &controller,
@@ -2489,6 +2929,8 @@ int main(int argc, char** argv) {
             return;
           }
           render_started_observed = true;
+          render_controls_grounded = latest_event.value(QStringLiteral("evidence")).toMap()
+              .value(QStringLiteral("adjustmentKeys")).toStringList().contains(QStringLiteral("exposure"));
           QTimer::singleShot(0, &controller, [&]() {
             cancellation_requested = true;
             controller.cancelRun(QStringLiteral("focused_render_cancel"));
@@ -2502,7 +2944,7 @@ int main(int argc, char** argv) {
     QObject::disconnect(run_event_connection);
     const auto canceled_proof_worker =
         canceled_report.value(QStringLiteral("proofWorker")).toMap();
-    if (!render_started_observed || !cancellation_requested ||
+    if (!render_started_observed || !render_controls_grounded || !cancellation_requested ||
         canceled_report.value(QStringLiteral("ok")).toBool() ||
         canceled_report.value(QStringLiteral("cancellationReason")).toString() !=
             QStringLiteral("focused_render_cancel") ||
@@ -3252,8 +3694,14 @@ int main(int argc, char** argv) {
       QStringLiteral("edit this wedding sample to my style"));
   const auto stale_context_worker_started = wait_for_condition(
       [&]() {
-        return controller.draftRequestPending() &&
-               !controller.activeDraftRequestId().isEmpty();
+        if (!controller.draftRequestPending() || controller.activeDraftRequestId().isEmpty()) return false;
+        const auto events = controller.runEvents();
+        for (auto iterator = events.crbegin(); iterator != events.crend(); ++iterator) {
+          const auto event = iterator->toMap();
+          if (event.value(QStringLiteral("stage")) == QStringLiteral("plan-worker"))
+            return event.value(QStringLiteral("status")) == QStringLiteral("running");
+        }
+        return false;
       },
       1000);
   catalog_model.toggleSelectionIndex(1);
@@ -3317,7 +3765,19 @@ int main(int argc, char** argv) {
             controller.running() && controller.draftRequestPending() &&
             async_planning_completion_count == 0;
       });
-  planning_heartbeat.start(20);
+  const auto planning_heartbeat_connection = QObject::connect(
+      &controller,
+      &photo_editor::desktop::AgentEditController::runEventsChanged,
+      &controller,
+      [&]() {
+        const auto events = controller.runEvents();
+        if (events.isEmpty()) return;
+        const auto event = events.last().toMap();
+        if (event.value(QStringLiteral("stage")) == QStringLiteral("plan-worker") &&
+            event.value(QStringLiteral("status")) == QStringLiteral("running")) {
+          planning_heartbeat.start(20);
+        }
+      });
   QElapsedTimer async_planning_start_timer;
   async_planning_start_timer.start();
   const auto async_planning_start = controller.startDraftOnSelected(
@@ -3330,6 +3790,7 @@ int main(int argc, char** argv) {
       [&]() { return async_planning_completion_count == 1; },
       5000);
   QObject::disconnect(async_planning_connection);
+  QObject::disconnect(planning_heartbeat_connection);
   planning_heartbeat.stop();
   qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_DELAY_MS");
   qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
@@ -3433,6 +3894,7 @@ int main(int argc, char** argv) {
           QStringList{
               QStringLiteral("primary-plan"),
               QStringLiteral("model-tool-follow-up"),
+              QStringLiteral("model-tool-follow-up-2"),
               QStringLiteral("batch-cluster-plan"),
               QStringLiteral("validation-repair"),
           } ||
@@ -3440,6 +3902,9 @@ int main(int argc, char** argv) {
               .value(QStringLiteral("modelStageReplayPolicy"))
               .toString() !=
           QStringLiteral("logical-stage-once-per-request") ||
+      async_planning_contract.value(QStringLiteral("maxModelToolPlanningRounds")).toInt() != -1 ||
+      !async_planning_contract.value(QStringLiteral("dynamicModelStagePrefixes")).toStringList()
+          .contains(QStringLiteral("model-tool-follow-up-")) ||
       async_planning_contract
               .value(QStringLiteral("proofCritiqueReplayPolicy"))
               .toString() !=
@@ -3538,11 +4003,20 @@ int main(int argc, char** argv) {
   };
   const auto answer_request_path =
       QDir(runtime_root.path()).filePath(QStringLiteral("ollama-clarification-answer-request.json"));
-  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON", fake_ollama_response(answered_patch_content));
+  // Clarification resumes and any evidence-driven follow-up repair turns are
+  // one logical conversation. Use the append-only sequence transport here so
+  // the request audit retains the answer-bearing planning request instead of
+  // being truncated to the last repair request.
+  const auto answered_response =
+      QJsonDocument::fromJson(fake_ollama_response(answered_patch_content))
+          .object();
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON",
+          QJsonDocument(QJsonArray{answered_response})
+              .toJson(QJsonDocument::Compact));
   qputenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH", answer_request_path.toUtf8());
   const auto answered_report =
       controller.answerPendingUserInput(QStringLiteral("Keep reception warm but protect skin and dress highlights."));
-  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON");
   qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH");
   const auto answer_request_bytes = read_file_bytes(answer_request_path);
   const auto answered_edit_intent =
@@ -3584,6 +4058,10 @@ int main(int argc, char** argv) {
                      .toList()
                      .size()
               << " masks=" << answered_mask_patch.size()
+              << " ok=" << answered_report.value(QStringLiteral("ok")).toBool()
+              << " draft_active=" << controller.draftActive()
+              << " awaiting_input=" << controller.awaitingUserInput()
+              << " request_has_answer=" << answer_request_bytes.contains("Keep reception warm but protect skin and dress highlights")
               << " validation_warnings="
               << answered_report.value(QStringLiteral("assetReports"))
                      .toList()
@@ -6148,7 +6626,7 @@ int main(int argc, char** argv) {
       revised_draft.value(QStringLiteral("editLoops")).toList().isEmpty() ||
       revised_edit_loop.value(QStringLiteral("version")).toString() != QStringLiteral("agent-edit-loop-v1") ||
       revised_edit_loop.value(QStringLiteral("attemptCount")).toInt() < 2 ||
-      revised_edit_loop.value(QStringLiteral("maxAttempts")).toInt() != 3 ||
+      revised_edit_loop.value(QStringLiteral("maxAttempts")).toInt() != -1 ||
       revised_edit_loop.value(QStringLiteral("finalScore")).toDouble() <= 0.0 ||
       revised_edit_loop.value(QStringLiteral("attempts")).toList().first().toMap().value(QStringLiteral("patchHash")).toString().isEmpty() ||
       revised_asset_report.value(QStringLiteral("revisionCount")).toInt() < 1 ||
@@ -6165,6 +6643,7 @@ int main(int argc, char** argv) {
   auto saw_review_ready_event = false;
   auto saw_render_tool = false;
   auto saw_validation_tool = false;
+  auto saw_applied_adjustment_keys = false;
   for (const auto& event_value : live_run_events) {
     const auto event = event_value.toMap();
     const auto stage = event.value(QStringLiteral("stage")).toString();
@@ -6179,13 +6658,19 @@ int main(int argc, char** argv) {
                           (stage == QStringLiteral("validate") &&
                            event.value(QStringLiteral("characterTool")).toString() ==
                                QStringLiteral("loupe"));
+    if (stage == QStringLiteral("act") && status == QStringLiteral("complete")) {
+      const auto applied_keys = event.value(QStringLiteral("evidence")).toMap()
+          .value(QStringLiteral("adjustmentKeys")).toStringList();
+      saw_applied_adjustment_keys = saw_applied_adjustment_keys ||
+          applied_keys.contains(QStringLiteral("exposure"));
+    }
     saw_review_ready_event = saw_review_ready_event ||
                              (stage == QStringLiteral("review") && status == QStringLiteral("ready"));
   }
   if (!saw_render_event || !saw_validation_event || !saw_review_ready_event ||
-      !saw_render_tool || !saw_validation_tool ||
+      !saw_render_tool || !saw_validation_tool || !saw_applied_adjustment_keys ||
       controller.lastRunReport().value(QStringLiteral("runEvents")).toList().isEmpty()) {
-    return fail("agent drafts should publish live render, validation, review-ready, and character-tool events into the final report");
+    return fail("agent drafts should publish live render, validation, review-ready, and exact applied adjustment keys into the final report");
   }
   const auto revised_rollback = controller.rollbackDraft();
   if (!revised_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
@@ -6459,6 +6944,62 @@ int main(int argc, char** argv) {
 
   const auto kept_fast_original_recipe =
       catalog_model.selectedAdjustmentPatchJson();
+  QTemporaryDir kept_fast_fixture_root(
+      QDir(runtime_root.path()).filePath(QStringLiteral("kept-fast-persistence-XXXXXX")));
+  if (!kept_fast_fixture_root.isValid())
+    return fail("kept-fast persistence proof needs a private temporary root");
+  const auto kept_fast_helper_repo =
+      QDir(kept_fast_fixture_root.path()).filePath(QStringLiteral("helper-repository"));
+  const auto kept_fast_helper_bin_dir =
+      QDir(kept_fast_helper_repo).filePath(QStringLiteral("rust/target/debug"));
+  const auto kept_fast_storage_root =
+      QDir(kept_fast_fixture_root.path()).filePath(QStringLiteral("persisted-recipes"));
+  if (!QDir().mkpath(kept_fast_helper_bin_dir) ||
+      !QDir().mkpath(kept_fast_storage_root))
+    return fail("kept-fast persistence proof should create its private directories");
+  QSaveFile kept_fast_manifest(
+      QDir(kept_fast_helper_repo).filePath(QStringLiteral("rust/Cargo.toml")));
+  const QByteArray kept_fast_manifest_contents(
+      "[workspace]\nmembers = []\nresolver = \"2\"\n");
+  if (!kept_fast_manifest.open(QIODevice::WriteOnly) ||
+      kept_fast_manifest.write(kept_fast_manifest_contents) !=
+          kept_fast_manifest_contents.size() ||
+      !kept_fast_manifest.commit())
+    return fail("kept-fast private helper repository marker should be durable");
+  const auto kept_fast_helper_name =
+#if defined(Q_OS_WIN)
+      QStringLiteral("save_edit_recipe.exe");
+#else
+      QStringLiteral("save_edit_recipe");
+#endif
+  const auto kept_fast_helper_path =
+      QDir(kept_fast_helper_bin_dir).filePath(kept_fast_helper_name);
+  if (!QFile::link(QCoreApplication::applicationFilePath(), kept_fast_helper_path) ||
+      !QFileInfo(kept_fast_helper_path).isExecutable())
+    return fail("kept-fast fixture helper should invoke this test binary as a real process");
+  ScopedEnvironmentOverride kept_fast_repository_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_REPOSITORY_ROOT"),
+      kept_fast_helper_repo.toUtf8());
+  ScopedEnvironmentOverride kept_fast_database_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_DATABASE_URL"),
+      QByteArrayLiteral("postgresql://127.0.0.1:1/agent_recipe_controller_fixture_test"));
+  ScopedEnvironmentOverride kept_fast_storage_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_AGENT_RECIPE_FIXTURE_ROOT"),
+      kept_fast_storage_root.toUtf8());
+  if (photo_editor::desktop::AppBootstrap::helperProgram(QStringLiteral("save_edit_recipe")) !=
+      QFileInfo(kept_fast_helper_path).absoluteFilePath())
+    return fail("kept-fast proof must select only its explicit private helper process");
+  const auto cleanup_kept_fast_fixture = [&]() {
+    kept_fast_repository_environment.restore();
+    kept_fast_database_environment.restore();
+    kept_fast_storage_environment.restore();
+    const auto removed = kept_fast_fixture_root.remove();
+    const auto environment_restored =
+        kept_fast_repository_environment.restoredCorrectly() &&
+        kept_fast_database_environment.restoredCorrectly() &&
+        kept_fast_storage_environment.restoredCorrectly();
+    return environment_restored && removed && !QFileInfo::exists(kept_fast_fixture_root.path());
+  };
   qputenv(
       "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON",
       fake_ollama_response(unsafe_plan_content));
@@ -6477,6 +7018,238 @@ int main(int argc, char** argv) {
         kept_fast_finished_report = report;
         ++kept_fast_completion_count;
       });
+  QStringList kept_fast_task_actions;
+  QString kept_fast_task_id;
+  const auto fail_fast_task_finalization = arguments.contains(QStringLiteral("--fast-task-finalization-contract"));
+  controller.setTaskTransactionHandler([&](const QString& action, const QString& id,
+      const QStringList& ids, const QVariantMap& context) -> QVariantMap {
+    kept_fast_task_actions.append(action);
+    if (action == "begin") {
+      if (!ids.contains("asset-1")) return {{"ok", false}, {"error", "Fast task target missing"}};
+      kept_fast_task_id = id;
+      return {{"ok", true}, {"taskId", id}, {"assetId", "asset-1"},
+          {"beforeRecipeJson", kept_fast_original_recipe}, {"revertAvailable", true}};
+    }
+    if (id != kept_fast_task_id) return {{"ok", false}, {"error", "Fast task identity changed"}};
+    if (action == "review") {
+      if (context.value("expectedRecipes").toMap().value("asset-1").toString().isEmpty())
+        return {{"ok", false}, {"error", "Fast task lost its authored recipe"}};
+      if (fail_fast_task_finalization)
+        return {{"ok", false}, {"taskId", id}, {"error", "fixture fast checkpoint failed"},
+            {"status", "interrupted"}, {"revertAvailable", true}};
+    }
+    if (action == "revert") {
+      if (catalog_model.applyAgentAdjustmentPatchJsonToAssetIds(
+              id, {QStringLiteral("asset-1")}, kept_fast_original_recipe,
+              photo_editor::desktop::all_adjustment_groups()) != 1)
+        return {{"ok", false}, {"error", "Fast task could not restore its captured recipe baseline"}};
+    }
+    return {{"ok", true}, {"taskId", id}, {"status", action},
+        {"revertAvailable", action != "revert"}};
+  });
+  QStringList kept_fast_persistence_stages;
+  QStringList kept_fast_persistence_task_ids;
+  QSet<QString> kept_fast_guarded_revisions;
+  QSet<QString> kept_fast_admitted_revisions;
+  QSet<QString> kept_fast_accepted_revisions;
+  auto kept_fast_persistence_finished_count = 0;
+  auto kept_fast_persistence_finished_successfully = false;
+  auto kept_fast_persisted_receipt_count = 0;
+  auto kept_fast_all_payloads_read_back = true;
+  QStringList kept_fast_payload_receipt_errors;
+  QVariantMap kept_fast_finished_context;
+  QString kept_fast_persistence_settlement_error;
+  QStringList kept_fast_persistence_resume_results;
+  catalog_model.setAgentRecipePersistenceHandler(
+      [&](const QString& stage, const QVariantMap& context) -> QVariantMap {
+        const auto task_id = context.value(QStringLiteral("taskId")).toString();
+        if (task_id.isEmpty() || task_id != kept_fast_task_id ||
+            context.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1") ||
+            context.value(QStringLiteral("patchJson")).toString().isEmpty())
+          return {{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("Fast Catalog write is outside the admitted task owner.")}};
+        kept_fast_persistence_stages.append(stage);
+        kept_fast_persistence_task_ids.append(task_id);
+        const auto revision_id = context.value(QStringLiteral("revisionId")).toString();
+        if (stage == QStringLiteral("guard")) {
+          kept_fast_guarded_revisions.insert(revision_id);
+          QJsonParseError fixture_payload_error;
+          auto fixture_payload_document = QJsonDocument::fromJson(
+              context.value(QStringLiteral("payload")).toByteArray(), &fixture_payload_error);
+          if (fixture_payload_error.error != QJsonParseError::NoError ||
+              !fixture_payload_document.isObject())
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Fast helper payload is malformed before ownership guard.")}};
+          // This synthetic Catalog target has no DB row. Model its exact
+          // asset/source baseline in the owned argument envelope, then let
+          // the private helper persist and reopen the bytes it receives.
+          auto fixture_payload = fixture_payload_document.object();
+          auto guarded_arguments = fixture_payload.value(QStringLiteral("arguments")).toArray();
+          if (guarded_arguments.isEmpty() ||
+              context.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1"))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Fast helper payload does not match the synthetic target.")}};
+          const auto source_path = context.value(QStringLiteral("sourcePath")).toString();
+          QFile source_file(source_path);
+          if (!source_file.open(QIODevice::ReadOnly))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Synthetic target source could not be hashed.")}};
+          const auto source_sha256 = QString::fromLatin1(QCryptographicHash::hash(
+              source_file.readAll(), QCryptographicHash::Sha256).toHex());
+          const QJsonObject synthetic_before_snapshot{
+              {QStringLiteral("schema"), QStringLiteral("agent-asset-recipe:v1")},
+              {QStringLiteral("state"), QStringLiteral("present")},
+              {QStringLiteral("asset_id"), context.value(QStringLiteral("assetId")).toString()},
+              {QStringLiteral("source_path"), source_path},
+              {QStringLiteral("source_sha256"), source_sha256},
+          };
+          QJsonArray owned_arguments{
+              QStringLiteral("--agent-owned-v1"),
+              QString::fromUtf8(QJsonDocument(synthetic_before_snapshot).toJson(QJsonDocument::Compact)),
+          };
+          for (const auto& value : guarded_arguments) {
+            if (!value.isString())
+              return {{QStringLiteral("ok"), false},
+                  {QStringLiteral("error"), QStringLiteral("Fast helper payload contains a non-text argument.")}};
+            owned_arguments.append(value);
+          }
+          fixture_payload.insert(QStringLiteral("arguments"), owned_arguments);
+          fixture_payload.insert(QStringLiteral("testFixtureRevisionId"), revision_id);
+          fixture_payload.insert(QStringLiteral("testFixturePersistenceBoundary"),
+              QStringLiteral("synthetic-file-backed-helper"));
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("payload"), QJsonDocument(fixture_payload).toJson(QJsonDocument::Compact)}};
+        }
+        if (stage == QStringLiteral("prepare")) {
+          if (!kept_fast_guarded_revisions.contains(revision_id))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Fast recipe revision skipped its exact guard.")}};
+          kept_fast_admitted_revisions.insert(revision_id);
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), revision_id}};
+        }
+        if (stage == QStringLiteral("accepted")) {
+          if (!kept_fast_admitted_revisions.contains(revision_id))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Fast recipe process was not admitted for this revision.")}};
+          kept_fast_accepted_revisions.insert(revision_id);
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), revision_id}};
+        }
+        if (stage == QStringLiteral("finished")) {
+          ++kept_fast_persistence_finished_count;
+          kept_fast_finished_context = context;
+          const auto payload = context.value(QStringLiteral("payload")).toByteArray();
+          const auto payload_sha256 = QString::fromLatin1(
+              QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+          const auto asset_key = QString::fromLatin1(QCryptographicHash::hash(
+              context.value(QStringLiteral("assetId")).toString().toUtf8(),
+              QCryptographicHash::Sha256).toHex());
+          const auto revision_key = QString::fromLatin1(QCryptographicHash::hash(
+              revision_id.toUtf8(), QCryptographicHash::Sha256).toHex());
+          const auto payload_path = QDir(kept_fast_storage_root)
+              .filePath(QStringLiteral("payloads/%1/%2/%3.json")
+                  .arg(asset_key, revision_key, payload_sha256));
+          const auto receipt_path = QDir(kept_fast_storage_root)
+              .filePath(QStringLiteral("receipts/%1/%2/%3.json")
+                  .arg(asset_key, revision_key, payload_sha256));
+          const auto reopened_payload = read_file_bytes(payload_path);
+          const auto receipt = read_json_object(receipt_path);
+          const auto payload_was_read_back = !payload.isEmpty() &&
+              reopened_payload == payload &&
+              receipt.value(QStringLiteral("schema")).toString() ==
+                  QStringLiteral("agent-controller-private-recipe-receipt-v1") &&
+              receipt.value(QStringLiteral("assetId")).toString() ==
+                  context.value(QStringLiteral("assetId")).toString() &&
+              receipt.value(QStringLiteral("revisionId")).toString() == revision_id &&
+              receipt.value(QStringLiteral("persistenceBoundary")).toString() ==
+                  QStringLiteral("synthetic-file-backed-helper") &&
+              receipt.value(QStringLiteral("payloadSha256")).toString() == payload_sha256 &&
+              receipt.value(QStringLiteral("payloadBytes")).toDouble() ==
+                  static_cast<double>(payload.size()) &&
+              receipt.value(QStringLiteral("taskOwned")).toBool() &&
+              receipt.value(QStringLiteral("databaseUrl")).toString() ==
+                  QStringLiteral("postgresql://127.0.0.1:1/agent_recipe_controller_fixture_test") &&
+              receipt.value(QStringLiteral("writtenAndReopened")).toBool();
+          bool helper_exit_code_valid = false;
+          const auto helper_exit_code = context.value(QStringLiteral("exitCode")).toInt(&helper_exit_code_valid);
+          if (payload_was_read_back) {
+            ++kept_fast_persisted_receipt_count;
+          } else {
+            kept_fast_all_payloads_read_back = false;
+            kept_fast_payload_receipt_errors.append(
+                QStringLiteral("%1:%2").arg(revision_id, payload_sha256));
+          }
+          kept_fast_persistence_finished_successfully =
+              kept_fast_accepted_revisions.contains(revision_id) &&
+              context.value(QStringLiteral("ok")).toBool() &&
+              helper_exit_code_valid && helper_exit_code == 0 &&
+              context.value(QStringLiteral("exitStatus")).toString() == QStringLiteral("normal") &&
+              payload_was_read_back;
+          return {{QStringLiteral("ok"), kept_fast_persistence_finished_successfully},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), revision_id}};
+        }
+        return {{QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("Unexpected fast Catalog persistence stage.")}};
+      });
+  const auto settle_kept_fast_writes = [&](int finished_before_action) {
+    auto observed_finished_count = finished_before_action;
+    kept_fast_persistence_settlement_error.clear();
+    if (!wait_for_condition([&]() {
+          return kept_fast_persistence_finished_count > observed_finished_count;
+        }, 20000)) {
+      kept_fast_persistence_settlement_error = QStringLiteral("No finished task-owned Catalog receipt arrived.");
+      return false;
+    }
+    while (kept_fast_persistence_finished_count > observed_finished_count) {
+      if (!kept_fast_persistence_finished_successfully) {
+        kept_fast_persistence_settlement_error = QStringLiteral(
+            "The latest Catalog finished receipt was not successful (helper exit %1, status %2, error %3).")
+            .arg(kept_fast_finished_context.value(QStringLiteral("exitCode")).toInt())
+            .arg(kept_fast_finished_context.value(QStringLiteral("exitStatus")).toString())
+            .arg(kept_fast_finished_context.value(QStringLiteral("error")).toString());
+        return false;
+      }
+      observed_finished_count = kept_fast_persistence_finished_count;
+      const auto resumed = catalog_model.resumeAgentAdjustmentPatchPersistence(kept_fast_task_id);
+      kept_fast_persistence_resume_results.append(resumed ? QStringLiteral("accepted") : QStringLiteral("rejected"));
+      if (!resumed) {
+        kept_fast_persistence_settlement_error = QStringLiteral("Catalog did not accept the exact finished task receipt.");
+        return false;
+      }
+      while (!catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"))) {
+        if (!wait_for_condition([&]() {
+              return kept_fast_persistence_finished_count > observed_finished_count;
+            }, 20000)) {
+          kept_fast_persistence_settlement_error = QStringLiteral("A resumed Catalog task revision did not finish.");
+          return false;
+        }
+        if (!kept_fast_persistence_finished_successfully) {
+          kept_fast_persistence_settlement_error = QStringLiteral("A resumed Catalog task revision failed its owner receipt.");
+          return false;
+        }
+        observed_finished_count = kept_fast_persistence_finished_count;
+        const auto next_resumed = catalog_model.resumeAgentAdjustmentPatchPersistence(kept_fast_task_id);
+        kept_fast_persistence_resume_results.append(
+            next_resumed ? QStringLiteral("accepted") : QStringLiteral("rejected"));
+        if (!next_resumed) {
+          kept_fast_persistence_settlement_error = QStringLiteral("Catalog rejected a later receipt for the same task.");
+          return false;
+        }
+      }
+    }
+    const auto settled = catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"));
+    if (!settled)
+      kept_fast_persistence_settlement_error = QStringLiteral("Catalog still has a pending writer or recipe revision.");
+    return settled;
+  };
+  const auto kept_fast_finished_before_start = kept_fast_persistence_finished_count;
   const auto kept_fast_start = controller.startDraftOnSelected(
       QStringLiteral("Make the whole photo slightly warmer and brighter."));
   const auto kept_fast_ready = wait_for_condition(
@@ -6505,6 +7278,54 @@ int main(int argc, char** argv) {
   qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_DELAY_MS");
   qunsetenv("PHOTO_EDITOR_AGENT_HARDWARE_TIER");
   qunsetenv("PHOTO_EDITOR_AGENT_DEEP_DEADLINE_MS");
+  if (fail_fast_task_finalization) {
+    const auto failed_fast_commit = controller.commitDraft(true);
+    if (failed_fast_commit.value(QStringLiteral("errorCode")).toString() !=
+            QStringLiteral("task_recovery_required") ||
+        !controller.canRevertTask() || !controller.draftActive()) {
+      const auto retained_task = controller.taskTransaction();
+      std::cerr << "failed fast commit recovery diagnostic="
+                << QJsonDocument::fromVariant(QVariantMap{
+                       {QStringLiteral("errorCode"), failed_fast_commit.value(QStringLiteral("errorCode"))},
+                       {QStringLiteral("error"), failed_fast_commit.value(QStringLiteral("error"))},
+                       {QStringLiteral("draftActive"), controller.draftActive()},
+                       {QStringLiteral("canRevert"), controller.canRevertTask()},
+                       {QStringLiteral("expectedTaskId"), kept_fast_task_id},
+                       {QStringLiteral("taskId"), retained_task.value(QStringLiteral("taskId"))},
+                       {QStringLiteral("status"), retained_task.value(QStringLiteral("status"))},
+                       {QStringLiteral("revertAvailable"), retained_task.value(QStringLiteral("revertAvailable"))},
+                   }).toJson(QJsonDocument::Compact).toStdString() << '\n';
+      return fail("A failed task checkpoint must refuse commit while retaining its Revert path");
+    }
+    const auto failed_fast_rollback = controller.rollbackDraft();
+    const auto failed_fast_writes_settled = settle_kept_fast_writes(kept_fast_finished_before_start);
+    const auto persisted_failed_task = read_json_object(kept_fast_report.value("manifestPath").toString());
+    if (persisted_failed_task.value("ok").toBool() ||
+        !persisted_failed_task.value("taskTransaction").toObject().value("error").toString().contains("fixture fast checkpoint failed"))
+      return fail("Durable fast task evidence must record the native finalization failure");
+    if (kept_fast_report.value("ok").toBool() || kept_fast_finished_report.value("ok").toBool() ||
+        kept_fast_completion_count != 1 || !late_deep_callback_ignored || controller.running() ||
+        !kept_fast_report.value("failureReason").toString().contains("fixture fast checkpoint failed") ||
+        !kept_fast_persistence_stages.contains(QStringLiteral("prepare")) ||
+        !kept_fast_persistence_task_ids.contains(kept_fast_task_id) ||
+        kept_fast_task_actions != QStringList{"begin", "check_revert", "cancel", "review", "check_revert", "revert"} ||
+        !kept_fast_all_payloads_read_back ||
+        kept_fast_persisted_receipt_count != kept_fast_persistence_finished_count ||
+        !failed_fast_rollback.value("ok").toBool() || !failed_fast_writes_settled ||
+        controller.draftActive() || controller.canRevertTask() ||
+        catalog_model.selectedAdjustmentPatchJson() != kept_fast_original_recipe)
+      return fail("Fast checkpoint failure must remain visible and reversible without late deep publication");
+    if (!cleanup_kept_fast_fixture())
+      return fail("Fast task fixture environment and private persistence files should be cleaned up");
+    controller.setTaskTransactionHandler({});
+    catalog_model.setAgentRecipePersistenceHandler({});
+    std::cout << "Fast task finalization failure preserved full reversal and ignored the late deep worker.\n";
+    return EXIT_SUCCESS;
+  }
+  if (kept_fast_task_actions != QStringList{"begin", "check_revert", "cancel", "review"} ||
+      !kept_fast_persistence_stages.contains(QStringLiteral("prepare")) ||
+      !kept_fast_persistence_task_ids.contains(kept_fast_task_id))
+    return fail("Keeping a fast draft must cancel producers and finalize the original owned task");
   const auto kept_fast_validation =
       kept_fast_preview.value(QStringLiteral("fastValidationReport")).toMap();
   const auto kept_fast_deadline =
@@ -6556,12 +7377,73 @@ int main(int argc, char** argv) {
     return fail("an independently proved fast result should become an explicit reversible draft before the hardware-tier deadline, cancel deep planning, and ignore its late callback");
   }
   const auto kept_fast_rollback = controller.rollbackDraft();
+  const auto kept_fast_writes_settled = settle_kept_fast_writes(kept_fast_finished_before_start);
+  const auto kept_fast_recipe_after_revert = catalog_model.selectedAdjustmentPatchJson();
   if (!kept_fast_rollback.value(QStringLiteral("ok")).toBool() ||
-      controller.draftActive() ||
-      catalog_model.selectedAdjustmentPatchJson() !=
-          kept_fast_original_recipe) {
-    return fail("discarding a kept fast draft should restore the exact pre-preview recipe");
+      !kept_fast_writes_settled || controller.draftActive() ||
+      kept_fast_recipe_after_revert != kept_fast_original_recipe) {
+    const auto mismatch_at = [&]() {
+      qsizetype index = 0;
+      while (index < kept_fast_recipe_after_revert.size() && index < kept_fast_original_recipe.size() &&
+             kept_fast_recipe_after_revert.at(index) == kept_fast_original_recipe.at(index))
+        ++index;
+      return index;
+    }();
+    const auto context_start = std::max<qsizetype>(0, mismatch_at - 72);
+  const QVariantMap diagnostic{
+        {QStringLiteral("rollbackResult"), kept_fast_rollback},
+        {QStringLiteral("draftActive"), controller.draftActive()},
+        {QStringLiteral("taskActions"), kept_fast_task_actions},
+        {QStringLiteral("persistenceStages"), kept_fast_persistence_stages},
+        {QStringLiteral("persistenceTaskIds"), kept_fast_persistence_task_ids},
+        {QStringLiteral("finishedCount"), kept_fast_persistence_finished_count},
+        {QStringLiteral("finishedSucceeded"), kept_fast_persistence_finished_successfully},
+        {QStringLiteral("finishedContextKeys"), kept_fast_finished_context.keys()},
+        {QStringLiteral("finishedHelperOk"), kept_fast_finished_context.value(QStringLiteral("ok"))},
+        {QStringLiteral("finishedExitCode"), kept_fast_finished_context.value(QStringLiteral("exitCode"))},
+        {QStringLiteral("finishedExitStatus"), kept_fast_finished_context.value(QStringLiteral("exitStatus"))},
+        {QStringLiteral("finishedError"), kept_fast_finished_context.value(QStringLiteral("error"))},
+        {QStringLiteral("finishedStderr"), kept_fast_finished_context.value(QStringLiteral("stderr"))},
+        {QStringLiteral("finishedStdout"), kept_fast_finished_context.value(QStringLiteral("stdout"))},
+        {QStringLiteral("helperRejections"), QString::fromUtf8(read_file_bytes(
+            QDir(kept_fast_storage_root).filePath(QStringLiteral("helper-rejections.txt"))))},
+        {QStringLiteral("finishedAttemptId"), kept_fast_finished_context.value(QStringLiteral("attemptId"))},
+        {QStringLiteral("finishedRevisionId"), kept_fast_finished_context.value(QStringLiteral("revisionId"))},
+        {QStringLiteral("finishedSourcePath"), kept_fast_finished_context.value(QStringLiteral("sourcePath"))},
+        {QStringLiteral("persistedReceiptCount"), kept_fast_persisted_receipt_count},
+        {QStringLiteral("finishedCount"), kept_fast_persistence_finished_count},
+        {QStringLiteral("allPayloadsReadBack"), kept_fast_all_payloads_read_back},
+        {QStringLiteral("payloadReceiptErrors"), kept_fast_payload_receipt_errors},
+        {QStringLiteral("catalogStatus"), catalog_model.status()},
+        {QStringLiteral("finishedBaseline"), kept_fast_finished_before_start},
+        {QStringLiteral("resumeResults"), kept_fast_persistence_resume_results},
+        {QStringLiteral("settlementError"), kept_fast_persistence_settlement_error},
+        {QStringLiteral("catalogSettled"), catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"))},
+        {QStringLiteral("exactRecipeMatches"), kept_fast_recipe_after_revert == kept_fast_original_recipe},
+        {QStringLiteral("expectedRecipeLength"), kept_fast_original_recipe.size()},
+        {QStringLiteral("actualRecipeLength"), kept_fast_recipe_after_revert.size()},
+        {QStringLiteral("expectedRecipeSha256"), QString::fromLatin1(QCryptographicHash::hash(
+             kept_fast_original_recipe.toUtf8(), QCryptographicHash::Sha256).toHex())},
+        {QStringLiteral("actualRecipeSha256"), QString::fromLatin1(QCryptographicHash::hash(
+             kept_fast_recipe_after_revert.toUtf8(), QCryptographicHash::Sha256).toHex())},
+        {QStringLiteral("firstRecipeDifference"), mismatch_at},
+        {QStringLiteral("expectedDifferenceContext"), kept_fast_original_recipe.mid(context_start, 144)},
+        {QStringLiteral("actualDifferenceContext"), kept_fast_recipe_after_revert.mid(context_start, 144)},
+    };
+    return fail(QStringLiteral("discarding a kept fast draft should restore the exact pre-preview recipe; diagnostic=%1")
+        .arg(QString::fromUtf8(QJsonDocument::fromVariant(diagnostic).toJson(QJsonDocument::Compact)))
+        .toUtf8().constData());
   }
+  if (kept_fast_task_actions != QStringList{"begin", "check_revert", "cancel", "review", "check_revert", "revert"})
+    return fail("Fast draft reversal must use the same task and baseline");
+  if (!kept_fast_all_payloads_read_back ||
+      kept_fast_persisted_receipt_count != kept_fast_persistence_finished_count ||
+      kept_fast_persistence_finished_count <= kept_fast_finished_before_start)
+    return fail("Every successful kept-fast task-owned helper write must persist and reopen its exact payload");
+  if (!cleanup_kept_fast_fixture())
+    return fail("Kept-fast task fixture environment and private persistence files should be cleaned up");
+  controller.setTaskTransactionHandler({});
+  catalog_model.setAgentRecipePersistenceHandler({});
   std::cout << "agent_validated_fast_proof_ms="
             << kept_fast_validation.value(QStringLiteral("durationMs"))
                    .toLongLong()
@@ -6716,6 +7598,37 @@ int main(int argc, char** argv) {
       deep_review_version = version;
     }
   }
+  const auto model_repair_boundary =
+      model_repaired_asset_report.value(QStringLiteral("repairBoundaryReport")).toMap();
+  const auto model_repair_boundary_composition =
+      model_repair_boundary.value(QStringLiteral("compositionReview")).toMap();
+  const auto model_repair_boundary_detail =
+      model_repair_boundary_composition.value(QStringLiteral("detailProofReport")).toMap();
+  QVariantList model_repair_report_summaries;
+  for (const auto& value : model_repaired_asset_report
+                               .value(QStringLiteral("modelRepairReports"))
+                               .toList()) {
+    const auto repair = value.toMap();
+    const auto composition = repair.value(QStringLiteral("compositionReview")).toMap();
+    const auto detail = composition.value(QStringLiteral("detailProofReport")).toMap();
+    model_repair_report_summaries.append(QVariantMap{
+        {QStringLiteral("repairRound"), repair.value(QStringLiteral("repairRound"))},
+        {QStringLiteral("ok"), repair.value(QStringLiteral("ok"))},
+        {QStringLiteral("decision"), repair.value(QStringLiteral("decision"))},
+        {QStringLiteral("toolCallPlanOnly"), repair.value(QStringLiteral("toolCallPlanOnly"))},
+        {QStringLiteral("errorCode"), repair.value(QStringLiteral("errorCode"))},
+        {QStringLiteral("proofBoundaryFailed"), repair.value(QStringLiteral("proofBoundaryFailed"))},
+        {QStringLiteral("resumedAcceptedDecision"), repair.value(QStringLiteral("resumedAcceptedDecision"))},
+        {QStringLiteral("errors"), repair.value(QStringLiteral("errors"))},
+        {QStringLiteral("compositionReviewOk"), composition.value(QStringLiteral("ok"))},
+        {QStringLiteral("inspectionAvailable"), composition.value(QStringLiteral("inspectionAvailable"))},
+        {QStringLiteral("detailProofAvailable"), composition.value(QStringLiteral("detailProofAvailable"))},
+        {QStringLiteral("compositionWarnings"), composition.value(QStringLiteral("warnings"))},
+        {QStringLiteral("detailProofError"), detail.value(QStringLiteral("error"))},
+        {QStringLiteral("detailBindingAudit"), detail.value(QStringLiteral("bindingAudit"))},
+        {QStringLiteral("requestOwnedContinuation"), repair.value(QStringLiteral("requestOwnedContinuation"))},
+    });
+  }
   if (!model_repair_start.value(QStringLiteral("accepted")).toBool() ||
       model_repair_start_duration_ms > 50 || !model_repair_completed ||
       !model_repair_fast_preview_published ||
@@ -6751,11 +7664,13 @@ int main(int argc, char** argv) {
            .toBool() ||
       model_repaired_asset_report.value(QStringLiteral("modelRepairCount")).toInt() < 1 ||
       model_repaired_asset_report.value(QStringLiteral("revisionCount")).toInt() < 1 ||
-      !model_repaired_repair_budget.value(QStringLiteral("hardLimit")).toBool() ||
-      model_repaired_repair_budget.value(QStringLiteral("maxValidationRevisionIterations")).toInt() != 2 ||
-      model_repaired_repair_budget.value(QStringLiteral("maxModelRepairTurns")).toInt() != 2 ||
+      model_repaired_repair_budget.value(QStringLiteral("hardLimit")).toBool() ||
+      model_repaired_repair_budget.value(QStringLiteral("maxValidationRevisionIterations")).toInt() != -1 ||
+      model_repaired_repair_budget.value(QStringLiteral("maxModelRepairTurns")).toInt() != -1 ||
       model_repaired_asset_report.value(QStringLiteral("editLoop")).toMap().value(QStringLiteral("attemptCount")).toInt() < 2 ||
       model_repaired_asset_report.value(QStringLiteral("modelRepairReports")).toList().isEmpty() ||
+      model_repaired_asset_report.value(QStringLiteral("modelRepairReports")).toList().size() != 1 ||
+      !first_model_repair_report.value(QStringLiteral("resumedAcceptedDecision")).toBool() ||
       model_repaired_draft.value(QStringLiteral("requestedRecipePatch")).toMap() ==
           model_repaired_draft.value(QStringLiteral("recipePatch")).toMap() ||
       !saw_model_proof_critique_tool_call ||
@@ -6863,6 +7778,53 @@ int main(int argc, char** argv) {
                .value(QStringLiteral("state"))
                .toString()
                .toStdString()
+        << " draft_failure="
+        << model_repaired_draft.value(QStringLiteral("failureReason")).toString().left(700).toStdString()
+        << " model_id=" << model_repaired_draft.value(QStringLiteral("modelId")).toString().toStdString()
+        << " model_audit="
+        << QJsonDocument::fromVariant(model_repaired_draft.value(QStringLiteral("modelPromptAudit")))
+               .toJson(QJsonDocument::Compact).left(1800).toStdString()
+        << " draft_errors="
+        << model_repaired_draft.value(QStringLiteral("errors")).toStringList()
+               .join(QStringLiteral("; ")).left(1000).toStdString()
+        << " asset_status="
+        << model_repaired_asset_report.value(QStringLiteral("status")).toString().toStdString()
+        << " asset_failure="
+        << model_repaired_asset_report.value(QStringLiteral("failureReason")).toString().left(700).toStdString()
+        << " boundary_report="
+        << QJsonDocument::fromVariant(QVariantMap{
+               {QStringLiteral("ok"), model_repair_boundary.value(QStringLiteral("ok"))},
+               {QStringLiteral("errorCode"), model_repair_boundary.value(QStringLiteral("errorCode"))},
+               {QStringLiteral("repairRound"), model_repair_boundary.value(QStringLiteral("repairRound"))},
+               {QStringLiteral("proofBoundaryFailed"), model_repair_boundary.value(QStringLiteral("proofBoundaryFailed"))},
+               {QStringLiteral("repairBoundaryFailed"), model_repair_boundary.value(QStringLiteral("repairBoundaryFailed"))},
+               {QStringLiteral("errors"), model_repair_boundary.value(QStringLiteral("errors"))},
+               {QStringLiteral("compositionReviewOk"), model_repair_boundary_composition.value(QStringLiteral("ok"))},
+               {QStringLiteral("inspectionAvailable"), model_repair_boundary_composition.value(QStringLiteral("inspectionAvailable"))},
+               {QStringLiteral("detailProofAvailable"), model_repair_boundary_composition.value(QStringLiteral("detailProofAvailable"))},
+               {QStringLiteral("compositionWarnings"), model_repair_boundary_composition.value(QStringLiteral("warnings"))},
+               {QStringLiteral("detailProofError"), model_repair_boundary_detail.value(QStringLiteral("error"))},
+               {QStringLiteral("detailBindingAudit"), model_repair_boundary_detail.value(QStringLiteral("bindingAudit"))},
+               {QStringLiteral("planningProof"), QVariantMap{
+                    {QStringLiteral("ok"), model_repair_boundary.value(QStringLiteral("ok"))},
+                    {QStringLiteral("errorCode"), model_repair_boundary.value(QStringLiteral("errorCode"))},
+                    {QStringLiteral("errors"), model_repair_boundary.value(QStringLiteral("errors"))},
+                    {QStringLiteral("proofWorker"), model_repair_boundary.value(QStringLiteral("proofWorker"))},
+                    {QStringLiteral("currentProofPath"), model_repair_boundary.value(QStringLiteral("currentProofPath"))},
+                    {QStringLiteral("taskStateHash"), model_repair_boundary.value(QStringLiteral("taskStateHash"))},
+               }},
+           }).toJson(QJsonDocument::Compact).toStdString()
+        << " repair_summaries="
+        << QJsonDocument::fromVariant(model_repair_report_summaries)
+               .toJson(QJsonDocument::Compact).left(4000).toStdString()
+        << " repair_reports="
+        << QJsonDocument::fromVariant(QVariantMap{
+               {QStringLiteral("repairReports"), model_repaired_asset_report.value(QStringLiteral("modelRepairReports"))},
+               {QStringLiteral("validationIterations"), model_repaired_asset_report.value(QStringLiteral("validationIterations"))},
+               {QStringLiteral("assetErrors"), model_repaired_asset_report.value(QStringLiteral("errors"))},
+               {QStringLiteral("modelPromptAudit"), model_repaired_asset_report.value(QStringLiteral("modelPromptAudit"))},
+               {QStringLiteral("toolCalls"), model_repaired_draft.value(QStringLiteral("toolCalls"))},
+           }).toJson(QJsonDocument::Compact).left(5000).toStdString()
         << '\n';
     return fail("model-planned drafts should use a request-owned scored repair turn, reuse prior critique evidence exactly once, and preserve validation history before procedural fallback");
   }
@@ -9467,8 +10429,13 @@ int main(int argc, char** argv) {
             {QStringLiteral("globalTone"),
              QVariantMap{{QStringLiteral("exposure"), 0.18}}},
         });
-    const auto alpha_revised = continuity_controller.reviseDraft(
+    const auto alpha_revision_start = continuity_controller.reviseDraft(
         QStringLiteral("Keep skin less warm, protect highlights, and leave the crop looser."));
+    if (!alpha_revision_start.value("accepted").toBool() || !wait_for_condition([&]() {
+      return !continuity_controller.running() &&
+          continuity_controller.lastRunReport().value("requestId") == alpha_revision_start.value("requestId");
+    }, 15000)) return fail("Project correction must finish its queued revision before committing");
+    const auto alpha_revised = continuity_controller.lastRunReport();
     continuity_catalog.setProjectFilter(QStringLiteral("Project Beta"));
     const auto alpha_commit = continuity_controller.commitDraft(true);
     alpha_run_id = alpha_commit.value(QStringLiteral("runId")).toString();
@@ -11105,6 +12072,11 @@ int main(int argc, char** argv) {
     return fail("A confirmed forget should remove future story influence without changing any existing edit");
   }
   controller.setSelectedModelId(model_before_story_revision);
+  // The prepared-task adoption contract is independent of the Story Director
+  // project fixture above; give this test an explicit unfiltered catalog
+  // context instead of accidentally exercising an unrelated cross-project
+  // approval boundary.
+  catalog_model.setProjectFilter(QStringLiteral("all"));
   catalog_model.replaceAssetsForTesting({
       make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
       make_asset(QStringLiteral("asset-2"), second_source_path,
@@ -11150,6 +12122,505 @@ int main(int argc, char** argv) {
       reset_vault_status.value(QStringLiteral("totalNoteCount")).toInt() != 0) {
     return fail("confirmed memory vault reset should remove local memory notes and refresh vault status");
   }
+
+  catalog_model.createProject(QStringLiteral("Prepared Confirmed Scope"));
+  catalog_model.addAssetToProject(QStringLiteral("asset-1"), QStringLiteral("Prepared Confirmed Scope"));
+  catalog_model.openProject(QStringLiteral("Prepared Confirmed Scope"));
+  catalog_model.selectIndex(0);
+  const auto prepared_original_recipe = catalog_model.selectedAdjustmentPatchJson();
+  photo_editor::desktop::AgentEditController prepared_controller;
+  prepared_controller.setCatalogModel(&catalog_model);
+  prepared_controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
+  const QVariantMap approved_snapshot{
+      {QStringLiteral("approvedInstructions"), QStringLiteral("Make a restrained, slightly warmer image.")},
+      {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")}},
+      {QStringLiteral("taskScopedCapabilities"), QStringList{
+          QStringLiteral("graphics"), QStringLiteral("layers_luts"),
+          QStringLiteral("masks"), QStringLiteral("crop")}},
+      {QStringLiteral("exactCopy"), QStringLiteral("APPROVED HEADLINE")},
+      {QStringLiteral("plan"), QVariantMap{{QStringLiteral("layout"), QStringLiteral("upper third")}}},
+  };
+  prepared_controller.setSelectedStyleId(QStringLiteral("natural-portrait"));
+  if (prepared_controller.authorizeNativeEditingCommand(QStringLiteral("addTextLayer"), false)
+          .value(QStringLiteral("ok")).toBool())
+    return fail("unapproved legacy tasks must not inherit composition permissions from the style UI");
+  if (!prepared_controller.setApprovedTaskSnapshot(approved_snapshot).value(QStringLiteral("ok")).toBool())
+    return fail("an approved brief should be frozen before prepared-task execution");
+  const auto approved_text_permission = prepared_controller
+      .authorizeNativeEditingCommand(QStringLiteral("addTextLayer"), false);
+  prepared_controller.setEditingFreedom(QStringLiteral("protect"));
+  const auto protected_text_permission = prepared_controller
+      .authorizeNativeEditingCommand(QStringLiteral("addTextLayer"), false);
+  prepared_controller.setEditingFreedom(QStringLiteral("balanced"));
+  if (!approved_text_permission.value(QStringLiteral("ok")).toBool() ||
+      protected_text_permission.value(QStringLiteral("ok")).toBool())
+    return fail("approved task capabilities should authorize only their bounded native operations and Protect must dominate them");
+  QString prepared_task_id = QStringLiteral("prepared-canvas-task-1");
+  QSet<QString> modeled_prepared_persistence_tasks{prepared_task_id};
+  QSet<QString> prepared_guarded_recipe_revisions;
+  QSet<QString> prepared_admitted_recipe_revisions;
+  QSet<QString> prepared_accepted_recipe_revisions;
+  QStringList prepared_persistence_stages;
+  QStringList prepared_persistence_task_ids;
+  auto prepared_persistence_finished_count = 0;
+  auto prepared_persistence_finished_successfully = false;
+  // Synthetic prepared tasks use a private helper, never the user's Catalog.
+  QTemporaryDir prepared_fixture_root(QDir(runtime_root.path()).filePath(
+      QStringLiteral("prepared-persistence-XXXXXX")));
+  const auto prepared_helper_repo = QDir(prepared_fixture_root.path()).filePath(QStringLiteral("helper-repository"));
+  const auto prepared_helper_bin = QDir(prepared_helper_repo).filePath(QStringLiteral("rust/target/debug"));
+  const auto prepared_storage_root = QDir(prepared_fixture_root.path()).filePath(QStringLiteral("persisted-recipes"));
+  if (!prepared_fixture_root.isValid() || !QDir().mkpath(prepared_helper_bin) ||
+      !QDir().mkpath(prepared_storage_root))
+    return fail("Prepared task persistence needs a private helper fixture");
+  QSaveFile prepared_manifest(QDir(prepared_helper_repo).filePath(QStringLiteral("rust/Cargo.toml")));
+  if (!prepared_manifest.open(QIODevice::WriteOnly) ||
+      prepared_manifest.write(kept_fast_manifest_contents) != kept_fast_manifest_contents.size() ||
+      !prepared_manifest.commit() ||
+      !QFile::link(QCoreApplication::applicationFilePath(),
+          QDir(prepared_helper_bin).filePath(kept_fast_helper_name)))
+    return fail("Prepared task private helper fixture must be executable");
+  ScopedEnvironmentOverride prepared_repository_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_REPOSITORY_ROOT"), prepared_helper_repo.toUtf8());
+  ScopedEnvironmentOverride prepared_database_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_DATABASE_URL"),
+      QByteArrayLiteral("postgresql://127.0.0.1:1/agent_recipe_controller_fixture_test"));
+  ScopedEnvironmentOverride prepared_storage_environment(
+      QByteArrayLiteral("PHOTO_EDITOR_AGENT_RECIPE_FIXTURE_ROOT"), prepared_storage_root.toUtf8());
+  catalog_model.setAgentRecipePersistenceHandler(
+      [&](const QString& stage, const QVariantMap& context) -> QVariantMap {
+        const auto task_id = context.value(QStringLiteral("taskId")).toString();
+        if (!modeled_prepared_persistence_tasks.contains(task_id) ||
+            context.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1") ||
+            context.value(QStringLiteral("patchJson")).toString().isEmpty() ||
+            context.value(QStringLiteral("revisionId")).toString().isEmpty())
+          return {{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("Unknown prepared recipe owner context")}};
+        const auto revision_id = context.value(QStringLiteral("revisionId")).toString();
+        prepared_persistence_stages.append(stage);
+        prepared_persistence_task_ids.append(task_id);
+        if (stage == QStringLiteral("finished")) {
+          ++prepared_persistence_finished_count;
+          prepared_persistence_finished_successfully =
+              prepared_accepted_recipe_revisions.contains(revision_id) &&
+              context.value(QStringLiteral("ok")).toBool();
+        }
+        if (stage == QStringLiteral("guard")) {
+          prepared_guarded_recipe_revisions.insert(revision_id);
+          auto envelope = QJsonDocument::fromJson(context.value(QStringLiteral("payload")).toByteArray()).object();
+          const auto source_path = context.value(QStringLiteral("sourcePath")).toString();
+          QFile source_file(source_path);
+          if (!source_file.open(QIODevice::ReadOnly) || envelope.isEmpty())
+            return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("Prepared fixture source or payload is unavailable")}};
+          const QJsonObject snapshot{
+              {QStringLiteral("schema"), QStringLiteral("agent-asset-recipe:v1")},
+              {QStringLiteral("state"), QStringLiteral("present")},
+              {QStringLiteral("asset_id"), context.value(QStringLiteral("assetId")).toString()},
+              {QStringLiteral("source_path"), source_path},
+              {QStringLiteral("source_sha256"), QString::fromLatin1(QCryptographicHash::hash(
+                   source_file.readAll(), QCryptographicHash::Sha256).toHex())},
+          };
+          QJsonArray arguments{QStringLiteral("--agent-owned-v1"),
+              QString::fromUtf8(QJsonDocument(snapshot).toJson(QJsonDocument::Compact))};
+          for (const auto& argument : envelope.value(QStringLiteral("arguments")).toArray())
+            arguments.append(argument);
+          envelope.insert(QStringLiteral("arguments"), arguments);
+          envelope.insert(QStringLiteral("testFixtureRevisionId"), revision_id);
+          envelope.insert(QStringLiteral("testFixturePersistenceBoundary"), QStringLiteral("synthetic-file-backed-helper"));
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("payload"), QJsonDocument(envelope).toJson(QJsonDocument::Compact)}};
+        }
+        if (stage == QStringLiteral("prepare")) {
+          if (!prepared_guarded_recipe_revisions.contains(revision_id))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Prepared recipe revision skipped its exact guard")}};
+          prepared_admitted_recipe_revisions.insert(revision_id);
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), context.value(QStringLiteral("revisionId"))}};
+        }
+        if (stage == QStringLiteral("accepted")) {
+          if (!prepared_admitted_recipe_revisions.contains(revision_id))
+            return {{QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("Accepted prepared revision has no matching admission")}};
+          prepared_accepted_recipe_revisions.insert(revision_id);
+          return {{QStringLiteral("ok"), true},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), revision_id}};
+        }
+        if (stage == QStringLiteral("finished"))
+          return {{QStringLiteral("ok"),
+                      prepared_accepted_recipe_revisions.contains(revision_id) &&
+                          context.value(QStringLiteral("ok")).toBool()},
+              {QStringLiteral("taskId"), task_id},
+              {QStringLiteral("assetId"), context.value(QStringLiteral("assetId"))},
+              {QStringLiteral("revisionId"), revision_id}};
+        return {{QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("Unexpected prepared recipe owner stage")}};
+      });
+  QStringList prepared_task_actions;
+  auto prepared_review_receipt_issued = false;
+  const auto prepared_review_receipt_id = QStringLiteral("prepared-review-receipt-1");
+  prepared_controller.setTaskTransactionHandler(
+      [&](const QString& action, const QString& id, const QStringList& ids,
+          const QVariantMap& context) -> QVariantMap {
+        prepared_task_actions.append(action);
+        if (action == QStringLiteral("adopt_prepared")) {
+          if (id != prepared_task_id || ids != QStringList{QStringLiteral("asset-1")} ||
+              !context.value(QStringLiteral("requireExistingJournal")).toBool() ||
+              !context.value(QStringLiteral("requireResourceCheckpoints")).toBool() ||
+              context.value(QStringLiteral("approvedTaskSnapshot")).toMap()
+                      .value(QStringLiteral("approvedInstructions")) !=
+                  approved_snapshot.value(QStringLiteral("approvedInstructions")))
+            return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("Prepared task contract mismatch")}};
+          return {{QStringLiteral("ok"), true}, {QStringLiteral("adopted"), true},
+              {QStringLiteral("taskId"), id}, {QStringLiteral("targetIds"), ids},
+              {QStringLiteral("assetId"), QStringLiteral("asset-1")},
+              {QStringLiteral("beforeRecipeJson"), prepared_original_recipe},
+              {QStringLiteral("status"), QStringLiteral("prepared")},
+              {QStringLiteral("revertAvailable"), true}};
+        }
+        if (id != prepared_task_id)
+          return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("Prepared task identity changed")}};
+        if (action == QStringLiteral("review") &&
+            context.value(QStringLiteral("expectedRecipes")).toMap()
+                    .value(QStringLiteral("asset-1")).toString().isEmpty())
+          return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("Prepared task lost its authored recipe")}};
+        if (action == QStringLiteral("review") && !prepared_review_receipt_issued) {
+          prepared_review_receipt_issued = true;
+          return {{QStringLiteral("ok"), true}, {QStringLiteral("pending"), true},
+              {QStringLiteral("taskId"), id}, {QStringLiteral("receiptId"), prepared_review_receipt_id}};
+        }
+        if (action == QStringLiteral("revert") &&
+            catalog_model.applyAgentAdjustmentPatchJsonToAssetIds(
+                id, {QStringLiteral("asset-1")}, prepared_original_recipe,
+                photo_editor::desktop::all_adjustment_groups()) != 1)
+          return {{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), QStringLiteral("Prepared task could not restore its captured recipe baseline.")}};
+        return {{QStringLiteral("ok"), true}, {QStringLiteral("taskId"), id},
+            {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")} },
+            {QStringLiteral("status"), action},
+            {QStringLiteral("revertAvailable"), action != QStringLiteral("revert")}};
+      });
+  QVariantMap prepared_completion;
+  auto prepared_completion_count = 0;
+  const auto prepared_connection = QObject::connect(
+      &prepared_controller,
+      &photo_editor::desktop::AgentEditController::draftRunFinished,
+      &prepared_controller,
+      [&](const QString&, const QVariantMap& result) {
+        prepared_completion = result;
+        ++prepared_completion_count;
+      });
+  prepared_controller.setUserInstructions(QStringLiteral("A later mutable UI value must not replace the approved brief."));
+  const auto prepared_start = prepared_controller.startDraftForPreparedTask(
+      {QStringLiteral("asset-1")}, QStringLiteral("unapproved fallback"), prepared_task_id);
+  const auto prepared_admission_locked =
+      !prepared_controller.setApprovedTaskSnapshot(
+          QVariantMap{{QStringLiteral("approvedInstructions"), QStringLiteral("Change the approved task")},
+                      {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")}}})
+           .value(QStringLiteral("ok")).toBool();
+  const auto prepared_settlement_pending = wait_for_condition(
+      [&]() { return !prepared_controller.pendingTaskFinalization().isEmpty(); }, 20000);
+  const auto pending_task_request_id = prepared_controller.activeDraftRequestId();
+  const auto stale_prepared_receipt = prepared_controller.settleTaskFinalization(
+      prepared_task_id, {{QStringLiteral("ok"), true},
+          {QStringLiteral("taskId"), prepared_task_id},
+          {QStringLiteral("receiptId"), QStringLiteral("wrong-receipt")},
+          {QStringLiteral("status"), QStringLiteral("review")}});
+  const auto retryable_prepared_receipt = prepared_controller.settleTaskFinalization(
+      prepared_task_id, {{QStringLiteral("ok"), false}, {QStringLiteral("pending"), true},
+          {QStringLiteral("retryable"), true}, {QStringLiteral("taskId"), prepared_task_id},
+          {QStringLiteral("receiptId"), prepared_review_receipt_id},
+          {QStringLiteral("error"), QStringLiteral("fixture save is still retryable")}});
+  const auto prepared_waits_for_exact_receipt = prepared_settlement_pending &&
+      prepared_completion_count == 0 && prepared_controller.running() &&
+      prepared_controller.activeDraftRequestId() == pending_task_request_id &&
+      !stale_prepared_receipt.value(QStringLiteral("ok")).toBool() &&
+      !retryable_prepared_receipt.value(QStringLiteral("ok")).toBool() &&
+      retryable_prepared_receipt.value(QStringLiteral("pending")).toBool() &&
+      !prepared_controller.pendingTaskFinalization().isEmpty() &&
+      !prepared_controller.canRevertTask();
+  const auto prepared_recipe_write_settled = wait_for_condition(
+      [&]() {
+        return prepared_persistence_stages.contains(QStringLiteral("prepare")) &&
+            prepared_persistence_finished_count > 0 &&
+            prepared_persistence_finished_successfully &&
+            prepared_controller.draftActive() &&
+            catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"));
+      },
+      20000);
+  if (!prepared_recipe_write_settled) {
+    return fail(QStringLiteral(
+        "Prepared Review must remain pending until its task-owned Catalog recipe write settles; stages=[%1]; taskIds=[%2]; finishedCount=%3; finishedSucceeded=%4; catalogSettled=%5")
+        .arg(prepared_persistence_stages.join(QStringLiteral(", ")),
+             prepared_persistence_task_ids.join(QStringLiteral(", ")),
+             QString::number(prepared_persistence_finished_count),
+             prepared_persistence_finished_successfully ? QStringLiteral("true") : QStringLiteral("false"),
+             catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"))
+                 ? QStringLiteral("true") : QStringLiteral("false"))
+        .toUtf8().constData());
+  }
+  const auto prepared_review_settled = prepared_controller.settleTaskFinalization(
+      prepared_task_id, {{QStringLiteral("ok"), true},
+          {QStringLiteral("taskId"), prepared_task_id},
+          {QStringLiteral("receiptId"), prepared_review_receipt_id},
+          {QStringLiteral("status"), QStringLiteral("review")},
+          {QStringLiteral("revertAvailable"), true}});
+  const auto prepared_catalog_owner_resumed =
+      catalog_model.resumeAgentAdjustmentPatchPersistence(prepared_task_id);
+  const auto prepared_completion_ready = prepared_review_settled.value(QStringLiteral("settled")).toBool() &&
+      prepared_catalog_owner_resumed &&
+      wait_for_condition([&]() { return prepared_completion_count == 1; }, 20000);
+  const auto prepared_review_transaction = prepared_controller.taskTransaction();
+  const auto prepared_review_retains_task_identity = prepared_controller.activeTaskId().isEmpty() &&
+      prepared_review_transaction.value(QStringLiteral("taskId")).toString() == prepared_task_id &&
+      prepared_review_transaction.value(QStringLiteral("status")).toString() == QStringLiteral("review");
+  const auto prepared_review_can_revert = prepared_controller.canRevertTask();
+  QObject::disconnect(prepared_connection);
+  const auto approved_revision = prepared_controller.approveTaskRevision(
+      QVariantMap{
+          {QStringLiteral("approvedInstructions"), QStringLiteral("Keep the same image, but make the warmth subtler.")},
+          {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")}},
+          {QStringLiteral("taskScopedCapabilities"), QStringList{
+              QStringLiteral("graphics"), QStringLiteral("layers_luts")}},
+          {QStringLiteral("isRevision"), true}},
+      prepared_task_id);
+  const auto approved_revision_permission = prepared_controller
+      .authorizeNativeEditingCommand(QStringLiteral("addTextLayer"), false);
+  const auto retargeted_revision = prepared_controller.approveTaskRevision(
+      QVariantMap{{QStringLiteral("approvedInstructions"), QStringLiteral("Move the task to another photo.")},
+                  {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-2")}}},
+      prepared_task_id);
+  const auto prepared_persistence_finished_before_revert = prepared_persistence_finished_count;
+  const auto prepared_revert = prepared_controller.revertTask();
+  const auto prepared_revert_write_settled = wait_for_condition(
+      [&]() {
+        return prepared_persistence_finished_count > prepared_persistence_finished_before_revert &&
+            prepared_persistence_finished_successfully &&
+            catalog_model.agentTaskRecipePersistenceSettled(QStringLiteral("asset-1"));
+      },
+      20000);
+  const auto prepared_revert_catalog_owner_resumed =
+      catalog_model.resumeAgentAdjustmentPatchPersistence(prepared_task_id);
+  const auto post_revert_text_permission = prepared_controller
+      .authorizeNativeEditingCommand(QStringLiteral("addTextLayer"), false);
+  QStringList prepared_revision_failures;
+  const auto require_prepared_revision = [&prepared_revision_failures](
+      bool condition, const QString& name) {
+    if (!condition) prepared_revision_failures.append(name);
+  };
+  require_prepared_revision(prepared_start.value(QStringLiteral("accepted")).toBool(),
+                            QStringLiteral("start accepted"));
+  require_prepared_revision(prepared_start.value(QStringLiteral("taskId")).toString() == prepared_task_id,
+                            QStringLiteral("stable task ID"));
+  require_prepared_revision(!prepared_start.value(QStringLiteral("requestId")).toString().isEmpty() &&
+                                prepared_start.value(QStringLiteral("requestId")).toString() != prepared_task_id,
+                            QStringLiteral("separate request ID"));
+  require_prepared_revision(prepared_controller.activeTaskId().isEmpty(),
+                            QStringLiteral("request is inactive after settlement"));
+  require_prepared_revision(prepared_admission_locked,
+                            QStringLiteral("approved snapshot remains locked during execution"));
+  require_prepared_revision(prepared_waits_for_exact_receipt,
+                            QStringLiteral("settlement waits for exact receipt"));
+  require_prepared_revision(prepared_completion_ready && prepared_completion_count == 1 &&
+                                prepared_completion.value(QStringLiteral("ok")).toBool(),
+                            QStringLiteral("review completion published once"));
+  require_prepared_revision(prepared_review_can_revert,
+                            QStringLiteral("settled review exposes task-owned Revert"));
+  require_prepared_revision(prepared_recipe_write_settled,
+                            QStringLiteral("prepared recipe writer settled before review receipt"));
+  require_prepared_revision(prepared_catalog_owner_resumed,
+                            QStringLiteral("review receipt releases the exact Catalog owner queue"));
+  require_prepared_revision(prepared_revert_write_settled && prepared_revert_catalog_owner_resumed,
+                            QStringLiteral("whole Revert is durably written by the same prepared task"));
+  const auto prepared_asset_reports = prepared_completion.value(QStringLiteral("assetReports")).toList();
+  const auto prepared_asset_risk = prepared_asset_reports.isEmpty()
+      ? QVariantMap{}
+      : prepared_asset_reports.first().toMap().value(QStringLiteral("riskAssessment")).toMap();
+  const auto prepared_scope_context = prepared_asset_risk.value(QStringLiteral("scopeContext")).toMap();
+  require_prepared_revision(
+      prepared_scope_context.value(QStringLiteral("requestedScope")).toString() ==
+              QStringLiteral("confirmed-assets") &&
+          prepared_scope_context.value(QStringLiteral("activeProjectRequired")).toBool() &&
+          !prepared_scope_context.value(QStringLiteral("outsideActiveProject")).toBool() &&
+          prepared_scope_context.value(QStringLiteral("outsideActiveProjectAssetIds")).toStringList().isEmpty() &&
+          !prepared_asset_risk.value(QStringLiteral("approvalTypes")).toStringList().contains(
+              QStringLiteral("outside_project_scope")),
+      QStringLiteral("actual confirmed target inside the active project remains bounded"));
+  require_prepared_revision(!prepared_controller.running() &&
+                                prepared_controller.pendingTaskFinalization().isEmpty(),
+                            QStringLiteral("review settlement is complete"));
+  require_prepared_revision(prepared_review_retains_task_identity,
+                            QStringLiteral("settled Review clears execution ID but retains transaction identity"));
+  require_prepared_revision(prepared_persistence_task_ids.contains(prepared_task_id) &&
+                                prepared_persistence_stages.contains(QStringLiteral("prepare")),
+                            QStringLiteral("writes remain owned by prepared task"));
+  require_prepared_revision(!prepared_task_actions.isEmpty() &&
+                                prepared_task_actions.first() == QStringLiteral("adopt_prepared") &&
+                                !prepared_task_actions.contains(QStringLiteral("begin")),
+                            QStringLiteral("adoption preserves journal instead of beginning again"));
+  require_prepared_revision(approved_revision.value(QStringLiteral("ok")).toBool() &&
+                                approved_revision.value(QStringLiteral("taskId")).toString() == prepared_task_id &&
+                                approved_revision.value(QStringLiteral("originalBaselineRetained")).toBool(),
+                            QStringLiteral("approved same-target revision retains original baseline"));
+  require_prepared_revision(approved_revision_permission.value(QStringLiteral("ok")).toBool(),
+                            QStringLiteral("approved revision retains scoped native permission"));
+  require_prepared_revision(!retargeted_revision.value(QStringLiteral("ok")).toBool(),
+                            QStringLiteral("revision cannot change target IDs"));
+  require_prepared_revision(prepared_revert.value(QStringLiteral("ok")).toBool(),
+                            QStringLiteral("whole task Revert succeeds"));
+  require_prepared_revision(!post_revert_text_permission.value(QStringLiteral("ok")).toBool(),
+                            QStringLiteral("Revert clears task-scoped permission"));
+  require_prepared_revision(!prepared_controller.canRevertTask(),
+                            QStringLiteral("settled Revert clears task availability"));
+  require_prepared_revision(catalog_model.selectedAdjustmentPatchJson() == prepared_original_recipe,
+                            QStringLiteral("Revert restores exact original recipe"));
+  if (!prepared_revision_failures.isEmpty()) {
+    const auto diagnostic = QStringLiteral(
+        "Prepared task adoption must keep its original journal ID and Revert baseline through an approved same-target revision; failed: %1; actions=[%2]; persistenceStages=[%3]; persistenceTaskIds=[%4]; start=%5; review=%6; Revert=%7; recipeRestored=%8")
+            .arg(prepared_revision_failures.join(QStringLiteral(", ")),
+                 prepared_task_actions.join(QStringLiteral(", ")),
+                 prepared_persistence_stages.join(QStringLiteral(", ")),
+                 prepared_persistence_task_ids.join(QStringLiteral(", ")),
+                 QJsonDocument::fromVariant(prepared_start).toJson(QJsonDocument::Compact),
+                 QJsonDocument::fromVariant(prepared_completion).toJson(QJsonDocument::Compact),
+                 QJsonDocument::fromVariant(prepared_revert).toJson(QJsonDocument::Compact),
+                 catalog_model.selectedAdjustmentPatchJson() == prepared_original_recipe
+                     ? QStringLiteral("true") : QStringLiteral("false"));
+    return fail(diagnostic.toUtf8().constData());
+  }
+  catalog_model.setProjectFilter(QStringLiteral("all"));
+
+  photo_editor::desktop::AgentEditController pending_stop_controller;
+  pending_stop_controller.setCatalogModel(&catalog_model);
+  pending_stop_controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
+  pending_stop_controller.setSelectedStyleId(QStringLiteral("natural-portrait"));
+  const auto pending_stop_task_id = QStringLiteral("prepared-canvas-stop-task");
+  modeled_prepared_persistence_tasks.insert(pending_stop_task_id);
+  const auto pending_stop_receipt_id = QStringLiteral("prepared-stop-receipt-1");
+  auto pending_stop_action = QStringLiteral("review");
+  QStringList pending_stop_actions;
+  if (!pending_stop_controller.setApprovedTaskSnapshot(approved_snapshot)
+           .value(QStringLiteral("ok")).toBool())
+    return fail("A second prepared task should capture its own approved snapshot");
+  pending_stop_controller.setTaskTransactionHandler(
+      [&](const QString& action, const QString& id, const QStringList& ids,
+          const QVariantMap&) -> QVariantMap {
+        pending_stop_actions.append(action);
+        if (id != pending_stop_task_id)
+          return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("Stop task identity changed")}};
+        if (action == QStringLiteral("adopt_prepared"))
+          return {{QStringLiteral("ok"), true}, {QStringLiteral("adopted"), true},
+              {QStringLiteral("taskId"), id}, {QStringLiteral("targetIds"), ids},
+              {QStringLiteral("assetId"), QStringLiteral("asset-1")},
+              {QStringLiteral("beforeRecipeJson"), prepared_original_recipe},
+              {QStringLiteral("status"), QStringLiteral("prepared")},
+              {QStringLiteral("revertAvailable"), true}};
+        if (action == QStringLiteral("review")) {
+          pending_stop_action = QStringLiteral("review");
+          return {{QStringLiteral("ok"), true}, {QStringLiteral("pending"), true},
+              {QStringLiteral("taskId"), id}, {QStringLiteral("receiptId"), pending_stop_receipt_id}};
+        }
+        if (action == QStringLiteral("cancel")) {
+          pending_stop_action = QStringLiteral("revert");
+          return {{QStringLiteral("ok"), true}, {QStringLiteral("taskId"), id},
+              {QStringLiteral("status"), QStringLiteral("running")},
+              {QStringLiteral("revertAvailable"), true}};
+        }
+        return {{QStringLiteral("ok"), true}, {QStringLiteral("taskId"), id},
+            {QStringLiteral("status"), action},
+            {QStringLiteral("revertAvailable"), action != QStringLiteral("revert")}};
+      });
+  QVariantMap pending_stop_completion;
+  auto pending_stop_completion_count = 0;
+  const auto pending_stop_connection = QObject::connect(
+      &pending_stop_controller,
+      &photo_editor::desktop::AgentEditController::draftRunFinished,
+      &pending_stop_controller,
+      [&](const QString&, const QVariantMap& result) {
+        pending_stop_completion = result;
+        ++pending_stop_completion_count;
+      });
+  const auto pending_stop_start = pending_stop_controller.startDraftForPreparedTask(
+      {QStringLiteral("asset-1")}, QStringLiteral("ignored in favor of approved brief"),
+      pending_stop_task_id);
+  const auto pending_stop_waiting = wait_for_condition(
+      [&]() { return !pending_stop_controller.pendingTaskFinalization().isEmpty(); }, 20000);
+  const auto pending_stop_result = pending_stop_controller.cancelRun(
+      QStringLiteral("Stop during task save finalization"));
+  const auto pending_stop_kept_receipt = pending_stop_waiting &&
+      pending_stop_start.value(QStringLiteral("accepted")).toBool() &&
+      pending_stop_completion_count == 0 && pending_stop_result.value(QStringLiteral("pending")).toBool() &&
+      pending_stop_controller.pendingTaskFinalization().value(QStringLiteral("action")) == QStringLiteral("revert") &&
+      pending_stop_controller.pendingTaskFinalization().value(QStringLiteral("receiptId")) == pending_stop_receipt_id &&
+      pending_stop_action == QStringLiteral("revert") && pending_stop_actions.contains(QStringLiteral("cancel"));
+  // The fixture's persistence owner restores the prepared task baseline only
+  // when its pending write has quiesced and it supplies the matching receipt.
+  static_cast<void>(catalog_model.applyAdjustmentPatchJsonToAssetIds(
+      {QStringLiteral("asset-1")}, prepared_original_recipe));
+  const auto pending_stop_settled = pending_stop_controller.settleTaskFinalization(
+      pending_stop_task_id, {{QStringLiteral("ok"), true},
+          {QStringLiteral("taskId"), pending_stop_task_id},
+          {QStringLiteral("receiptId"), pending_stop_receipt_id},
+          {QStringLiteral("status"), QStringLiteral("reverted")},
+          {QStringLiteral("revertAvailable"), false}});
+  QObject::disconnect(pending_stop_connection);
+  if (!pending_stop_kept_receipt || !pending_stop_settled.value(QStringLiteral("settled")).toBool() ||
+      pending_stop_completion_count != 1 || pending_stop_completion.value(QStringLiteral("ok")).toBool() ||
+      pending_stop_completion.value(QStringLiteral("status")) != QStringLiteral("canceled") ||
+      pending_stop_completion.value(QStringLiteral("cancellationReason")) !=
+          QStringLiteral("Stop during task save finalization") ||
+      pending_stop_controller.running() || pending_stop_controller.draftActive() ||
+      !pending_stop_controller.pendingTaskFinalization().isEmpty() ||
+      catalog_model.selectedAdjustmentPatchJson() != prepared_original_recipe)
+    return fail("Stop during finalization must keep the exact receipt pending, switch it to whole-task Revert, and publish only after the matching reverted receipt settles");
+
+  photo_editor::desktop::AgentEditController constrained_permission_controller;
+  const auto restrictive_tools = QVariantMap{
+      {QStringLiteral("raw"), true}, {QStringLiteral("global_color"), true},
+      {QStringLiteral("curves"), true}, {QStringLiteral("hsl"), true},
+      {QStringLiteral("color_grading"), true}, {QStringLiteral("detail"), true},
+      {QStringLiteral("crop"), QStringLiteral("conservative")},
+      {QStringLiteral("masks"), false}, {QStringLiteral("retouch"), false},
+      {QStringLiteral("layers_luts"), false}, {QStringLiteral("graphics"), false},
+      {QStringLiteral("export"), false}};
+  const auto protected_group_style = constrained_permission_controller.createStyle(
+      QStringLiteral("Composition protected style"),
+      QStringLiteral("A style with a hard project protection for graphic layers."),
+      restrictive_tools,
+      QVariantMap{{QStringLiteral("protectedChangeGroups"), QStringList{QStringLiteral("graphics")}}},
+      {}, {});
+  if (!protected_group_style.value(QStringLiteral("ok")).toBool())
+    return fail("protected-group permission fixture style should validate");
+  if (!constrained_permission_controller.setApprovedTaskSnapshot(QVariantMap{
+          {QStringLiteral("approvedInstructions"), QStringLiteral("Create the approved title.")},
+          {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")}},
+          {QStringLiteral("taskScopedCapabilities"), QStringList{
+              QStringLiteral("graphics"), QStringLiteral("layers_luts")}}})
+           .value(QStringLiteral("ok")).toBool() ||
+      constrained_permission_controller.authorizeNativeEditingCommand(
+          QStringLiteral("addTextLayer"), false).value(QStringLiteral("ok")).toBool())
+    return fail("an explicit protectedChangeGroups entry must block an approved capability grant");
+
+  const auto denied_tool_style = constrained_permission_controller.createStyle(
+      QStringLiteral("Composition denied tool style"),
+      QStringLiteral("A style with a hard project denial for native composition writes."),
+      restrictive_tools,
+      QVariantMap{{QStringLiteral("denyTools"), QStringList{QStringLiteral("photo.edit_composition")}}},
+      {}, {});
+  if (!denied_tool_style.value(QStringLiteral("ok")).toBool() ||
+      !constrained_permission_controller.setApprovedTaskSnapshot(QVariantMap{
+          {QStringLiteral("approvedInstructions"), QStringLiteral("Create the approved title.")},
+          {QStringLiteral("targetIds"), QStringList{QStringLiteral("asset-1")}},
+          {QStringLiteral("taskScopedCapabilities"), QStringList{
+              QStringLiteral("graphics"), QStringLiteral("layers_luts")}}})
+           .value(QStringLiteral("ok")).toBool() ||
+      constrained_permission_controller.authorizeNativeEditingCommand(
+          QStringLiteral("addTextLayer"), false).value(QStringLiteral("ok")).toBool())
+    return fail("an explicit denyTools entry must block approved native composition writes");
 
   return EXIT_SUCCESS;
 }

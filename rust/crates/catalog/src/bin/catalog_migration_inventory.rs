@@ -148,6 +148,7 @@ mod tests {
                 capture_year: 2026,
                 capture_month: 8,
                 capture_day: 3,
+                capture_timestamp: None,
                 camera_make: "Test".to_string(),
                 camera_model: "Camera".to_string(),
                 lens_model: "Lens".to_string(),

@@ -73,6 +73,7 @@ class VisualSearchController final : public QObject {
   void searchFailed(const QString& message);
 
  private:
+  friend struct VisualSearchPreparationTestAccess;
   void preflight();
   void planInstruction();
   void next();
@@ -99,6 +100,7 @@ class VisualSearchController final : public QObject {
   bool use_index_ = false;
   QString index_path_;
   QString description_key_;
+  QString preparation_key_;
   QString index_warning_;
   QHash<QString, QString> descriptions_;
   QVariantList pending_descriptions_;

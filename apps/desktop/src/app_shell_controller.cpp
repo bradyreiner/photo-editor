@@ -77,6 +77,17 @@ const auto kPhotoLibraryLocationKey = "storage/photoLibraryLocation";
 const auto kOriginalsBackupLocationKey = "storage/originalsBackupLocation";
 const auto kCatalogBackupLocationKey = "storage/catalogBackupLocation";
 
+QString normalized_interface_density(const QString& density) {
+  const auto value = density.trimmed().toLower();
+  if (value == QStringLiteral("comfortable") || value == QStringLiteral("inspect")) {
+    return QStringLiteral("comfortable");
+  }
+  if (value == QStringLiteral("compact") || value == QStringLiteral("clean")) {
+    return QStringLiteral("compact");
+  }
+  return QStringLiteral("balanced");
+}
+
 QString normalized_storage_path(const QString& path_or_url) {
   const auto trimmed = path_or_url.trimmed();
   if (trimmed.isEmpty()) {
@@ -236,10 +247,8 @@ QString AppShellController::colorVisionMode() const {
 
 QString AppShellController::interfaceDensity() const {
   const QSettings settings;
-  const auto value = settings.value(kInterfaceDensityKey, QStringLiteral("pro")).toString();
-  return value == QStringLiteral("clean") || value == QStringLiteral("inspect")
-      ? value
-      : QStringLiteral("pro");
+  return normalized_interface_density(
+      settings.value(kInterfaceDensityKey, QStringLiteral("balanced")).toString());
 }
 
 QString AppShellController::importWorkflowProfile() const {
@@ -271,7 +280,7 @@ QStringList AppShellController::workspaceNames() const {
   return {
       QStringLiteral("Library"),
       QStringLiteral("Edit"),
-      QStringLiteral("Carousel"),
+      QStringLiteral("Edit - Boards"),
       QStringLiteral("Timeline"),
       QStringLiteral("Export"),
   };
@@ -399,10 +408,7 @@ void AppShellController::setColorVisionMode(const QString& mode) {
 }
 
 void AppShellController::setInterfaceDensity(const QString& density) {
-  const auto normalized = density.trimmed().toLower();
-  const auto sanitized = normalized == QStringLiteral("clean") || normalized == QStringLiteral("inspect")
-      ? normalized
-      : QStringLiteral("pro");
+  const auto sanitized = normalized_interface_density(density);
   if (interfaceDensity() == sanitized) {
     return;
   }

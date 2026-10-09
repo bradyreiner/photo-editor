@@ -1,0 +1,11 @@
+{
+  "id": "soundbed",
+  "origin": "Original deterministic sine-wave composition authored for this marketing kit",
+  "duration_s": 24,
+  "sample_rate": 48000,
+  "channels": 1,
+  "source_code": "tools/make_soundbed.py",
+  "rights_status": "cleared",
+  "third_party_samples": false,
+  "sha256": "1a8e8528cfb6a90993f83b2e63f9d35ee497e238724ef49f926d32ee7c6739ec"
+}

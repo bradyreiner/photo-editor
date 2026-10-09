@@ -1,8 +1,11 @@
 #pragma once
 
 #include "job_store.h"
+#include "job_admission_policy.h"
 
 #include <QElapsedTimer>
+#include <QHash>
+#include <QPointer>
 #include <QFutureWatcher>
 #include <QObject>
 #include <QString>
@@ -23,6 +26,7 @@ struct JobCancellationReadResult {
 
 struct JobQueueReadResult {
   QVector<PersistentJobRecord> records;
+  QHash<QString, JobResourceClaim> resources;
   QString error;
 };
 
@@ -42,15 +46,30 @@ class JobRunner final : public QObject {
   friend struct JobRunnerTestAccess;
   void observeActiveJobCancellation();
   void finishCancellationObservation();
-  void handleAsyncJobFinished();
+  struct Attempt {
+    QString job_id;
+    QString job_kind;
+    JobResourceClaim resources;
+    qint64 queue_wait_ms = 0;
+    QElapsedTimer timer;
+    QPointer<QFutureWatcher<QVariantMap>> watcher;
+    ~Attempt() { if (watcher) watcher->deleteLater(); }
+    std::shared_ptr<std::atomic_bool> cancellation = std::make_shared<std::atomic_bool>(false);
+  };
+  using AttemptPtr = std::shared_ptr<Attempt>;
+  JobAdmissionBudget admissionBudget() const;
+  bool refreshAttemptResources(const AttemptPtr& attempt, const PersistentJobRecord& job);
+  AttemptPtr beginAttempt(const PersistentJobRecord& job);
+  bool isCurrentAttempt(const AttemptPtr& attempt) const;
+  void releaseAttempt(const AttemptPtr& attempt);
+  void handleAsyncJobFinished(const AttemptPtr& attempt);
   void processNextJob();
   void finishQueueObservation();
-  void runExportJob(const QString& job_id);
-  void runImportJob(const QString& job_id);
-  void runTimelineRenderJob(const QString& job_id);
+  void runExportJob(const AttemptPtr& attempt);
+  void runImportJob(const AttemptPtr& attempt);
+  void runTimelineRenderJob(const AttemptPtr& attempt);
 
-  QFutureWatcher<QVariantMap> async_job_watcher_;
-  QFutureWatcher<JobCancellationReadResult> cancellation_watcher_;
+  QFutureWatcher<QVector<JobCancellationReadResult>> cancellation_watcher_;
   QFutureWatcher<JobQueueReadResult> queue_watcher_;
   QFutureWatcher<QString> recovery_watcher_;
   bool recovery_requested_ = false;
@@ -61,11 +80,7 @@ class JobRunner final : public QObject {
   bool cancellation_reading_ = false;
   bool cancellation_pending_ = false;
   QTimer wake_timer_;
-  QString active_job_id_;
-  QString active_job_kind_;
-  qint64 active_queue_wait_ms_ = 0;
-  QElapsedTimer active_job_timer_;
-  std::shared_ptr<std::atomic_bool> active_job_cancellation_;
+  QHash<QString, AttemptPtr> active_attempts_;
 };
 
 }  // namespace photo_editor::desktop

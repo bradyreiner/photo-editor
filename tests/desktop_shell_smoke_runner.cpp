@@ -1,5 +1,6 @@
 #include "canonical_composite_mask_alpha.h"
 #include "desktop_shell_smoke_runner.h"
+#include "native_window_test_input.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,39 +21,66 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontDatabase>
 #include <QImage>
+#include <QInputMethodEvent>
+#include <QJSValue>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QLineF>
 #include <QMouseEvent>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QCursor>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlIncubator>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QPointer>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QRectF>
 #include <QRegularExpression>
 #include <QScopedPointer>
+#include <QScopeGuard>
+#include <QStyleHints>
+#include <QSettings>
 #include <QSet>
 #include <QStringList>
 #include <QThread>
+#include <QTimer>
 #include <QTime>
 #include <QUrl>
 #include <QVariant>
 #include <qqml.h>
 #include <QQuickStyle>
 #include <QTemporaryDir>
+#include <QMutex>
 #include <QVector>
 
 #include "app_shell_controller.h"
+#include "app_bootstrap.h"
 #include "brush_live_preview_item.h"
 #include "photo_text_document_style.h"
+#include "photo_text_style.h"
+#include "photo_paint_surface.h"
+#include "photo_render_utils.h"
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
+#include "library_workflow_controller.h"
+#include "library_original_image_provider.h"
 #include "editor_preview_controller.h"
 #include "editor_preview_image_provider.h"
+#include "observability.h"
+#include "editor_preview_texture.h"
 #include "editor_preview_texture_item.h"
 #include "edit_adjustment_patch.h"
 #include "export_job_controller.h"
@@ -65,21 +93,83 @@
 #include "timeline_audio_output.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
+#include "recent_user_input_filter.h"
+#include "raw_image_decoder.h"
+#include "fixtures/synthetic_dng.h"
+
+void initialize_desktop_shell_test_visual_resources() {
+  Q_INIT_RESOURCE(looksy_agent_sprite);
+  Q_INIT_RESOURCE(looksy_brand_assets);
+  Q_INIT_RESOURCE(shell_visual_test_shaders);
+}
 
 namespace photo_editor::desktop {
 
+#if defined(PHOTO_EDITOR_TEST_NATIVE_PREVIEW_TEXTURE)
+std::unique_ptr<EditorPreviewTexture> create_metal_editor_preview_texture();
+#endif
+
+struct TimelinePlaybackFrameTestAccess {
+  static QMediaPlayer* player(TimelinePlaybackController& controller) { return &controller.player_; }
+  static QVariantMap readiness(const TimelinePlaybackController& controller) {
+    return {
+        {QStringLiteral("nativeEnabled"), controller.native_media_enabled_},
+        {QStringLiteral("waitingForMedia"), controller.awaiting_media_source_},
+        {QStringLiteral("waitingForPosition"), controller.awaiting_position_sync_},
+        {QStringLiteral("awaitedPositionMs"), controller.awaited_position_ms_},
+        {QStringLiteral("positionMs"), controller.player_.position()},
+        {QStringLiteral("durationMs"), controller.player_.duration()},
+        {QStringLiteral("seekable"), controller.player_.isSeekable()},
+        {QStringLiteral("playerState"), static_cast<int>(controller.player_.playbackState())},
+        {QStringLiteral("mediaStatus"), static_cast<int>(controller.player_.mediaStatus())},
+        {QStringLiteral("outputAttached"), !controller.video_frame_item_.isNull()},
+        {QStringLiteral("decodedFrameAvailable"), controller.video_sink_.videoFrame().isValid()},
+        {QStringLiteral("decodedFrameStartUs"), controller.video_sink_.videoFrame().startTime()},
+        {QStringLiteral("sequenceSeconds"), controller.timeline_document_->sequencePlayheadSeconds()},
+        {QStringLiteral("sourceSeconds"), controller.timeline_document_->currentClipPlayheadSeconds()},
+    };
+  }
+};
+
 struct EditorPreviewControllerTestAccess {
+  static bool set_active_mask_definition(EditorPreviewController& controller, const QVariantMap& mask) {
+    return controller.updateActiveMaskDefinition(mask);
+  }
+  static bool enable_native_preview_texture(EditorPreviewController& controller) {
+#if defined(PHOTO_EDITOR_TEST_NATIVE_PREVIEW_TEXTURE)
+    controller.display_preview_texture_ = create_metal_editor_preview_texture();
+    return controller.display_preview_texture_ && controller.display_preview_texture_->available();
+#else
+    (void)controller;
+    return false;
+#endif
+  }
   static QString recipe_json(const EditorPreviewController& controller) {
     return serialize_edit_recipe_json(controller.currentState());
   }
   static bool brush_commit_running(const EditorPreviewController& controller) {
     return controller.mask_worker_coordinator_.brushRasterCommitWatcher().isRunning();
   }
+  static bool brush_commit_active(const EditorPreviewController& controller) {
+    return controller.brush_raster_commit_active_;
+  }
+  static bool brush_commit_scheduled(const EditorPreviewController& controller) {
+    return controller.pending_brush_commit_scheduled_;
+  }
+  static qsizetype pending_brush_commit_count(const EditorPreviewController& controller) {
+    return controller.pending_brush_commits_.size();
+  }
   static bool edit_transaction_active(const EditorPreviewController& controller) {
     return controller.history_service_.transactionActive();
   }
   static int render_generation(const EditorPreviewController& controller) {
     return controller.preview_session_.generation();
+  }
+  static std::optional<RenderResult> ready_interactive_render_result(
+      const EditorPreviewController& controller) {
+    const auto future = controller.interactive_render_watcher_.future();
+    if (!future.isFinished() || future.resultCount() <= 0) return std::nullopt;
+    return future.result();
   }
 
   static QString file_path(const EditorPreviewController& controller) {
@@ -439,7 +529,7 @@ bool named_object_visible_for_proof(QObject* root, const QString& object_name) {
   }
   const auto is_visible = [](QObject* candidate) {
     if (auto* item = qobject_cast<QQuickItem*>(candidate); item != nullptr) {
-      return item_visible(item);
+      return item_visible(item) && item->window() != nullptr;
     }
     const auto visible = candidate->property("visible");
     return !visible.isValid() || visible.toBool();
@@ -512,9 +602,20 @@ bool capture_visual_proof(
               << '\n';
     return false;
   }
-  const auto image = window->grabWindow();
-  if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
-    std::cerr << "Visual proof state " << state.toStdString() << " produced a blank capture\n";
+  QImage image;
+  const auto capture_matches_size = [&] {
+    window->requestUpdate();
+    image = window->grabWindow();
+    const auto ratio = window->devicePixelRatio();
+    return window->width() == width && window->height() == height &&
+           image.size() == QSize(qRound(width * ratio), qRound(height * ratio));
+  };
+  if (!wait_for_condition(capture_matches_size, 2000)) {
+    std::cerr << "Visual proof state " << state.toStdString()
+              << " capture dimensions did not settle: requested=" << width << 'x' << height
+              << " window=" << window->width() << 'x' << window->height()
+              << " pixels=" << image.width() << 'x' << image.height()
+              << " ratio=" << window->devicePixelRatio() << '\n';
     return false;
   }
   const auto file_name = visual_proof_file_stem(state, width, height) + QStringLiteral(".png");
@@ -527,6 +628,9 @@ bool capture_visual_proof(
   entry.insert(QStringLiteral("state"), state);
   entry.insert(QStringLiteral("width"), width);
   entry.insert(QStringLiteral("height"), height);
+  entry.insert(QStringLiteral("pixel_width"), image.width());
+  entry.insert(QStringLiteral("pixel_height"), image.height());
+  entry.insert(QStringLiteral("device_pixel_ratio"), window->devicePixelRatio());
   entry.insert(QStringLiteral("path"), file_path);
   entry.insert(QStringLiteral("required_objects"), QJsonArray::fromStringList(required_objects));
   if (!metadata.isEmpty()) {
@@ -707,10 +811,61 @@ QSet<QString> literal_shortcut_sequences(const QString& source) {
 
 
 int run_desktop_shell_smoke(int argc, char** argv) {
+  ::initialize_desktop_shell_test_visual_resources();
+  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+  }
+  QQuickStyle::setStyle(QStringLiteral("Basic"));
+  QApplication app(argc, argv);
+  QApplication::setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
+  QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("DesktopShellSmokeTest"));
+
+struct AccessibilityCatalogCleanup {
+  QTemporaryDir* runtime_root = nullptr;
+  bool enabled = false;
+
+  ~AccessibilityCatalogCleanup() {
+    if (!enabled || runtime_root == nullptr) {
+      return;
+    }
+    const auto helper_path = QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                                 .filePath(QStringLiteral("rust/target/debug/catalog_local_db"));
+    if (!QFileInfo(helper_path).isExecutable()) {
+      return;
+    }
+
+    QProcess process;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.remove(QStringLiteral("PHOTO_EDITOR_DATABASE_URL"));
+    environment.insert(QStringLiteral("PHOTO_EDITOR_APP_DATA_DIR"), runtime_root->path());
+    process.setProcessEnvironment(environment);
+    process.start(helper_path, {QStringLiteral("stop")});
+    if (!process.waitForStarted(3000) || !process.waitForFinished(10000) ||
+        process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+      if (process.state() != QProcess::NotRunning) {
+        process.kill();
+        process.waitForFinished(1000);
+      }
+      runtime_root->setAutoRemove(false);
+      std::cerr << "Accessibility shard could not stop its isolated catalog; preserving "
+                << runtime_root->path().toStdString() << ".\n";
+    }
+  }
+};
+
 // Keep focused ownership-source checks in the sharded source contract.
+  const auto run_proof = [&]() -> int {
 #include "desktop_shell_smoke/source_contract.inc"
 #include "desktop_shell_smoke/shell_and_editing.inc"
 #include "desktop_shell_smoke/adjustments_crop_selection.inc"
 #include "desktop_shell_smoke/mask_brush_retouch_layers.inc"
 #include "desktop_shell_smoke/library_and_application.inc"
+  };
+
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")) {
+    QTimer::singleShot(0, &app, [&app, &run_proof]() { app.exit(run_proof()); });
+    return app.exec();
+  }
+  return run_proof();
 }

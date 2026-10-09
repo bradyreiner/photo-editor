@@ -1,4 +1,7 @@
 #include "observability.h"
+#include "observability_writer.h"
+
+#include <memory>
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -43,9 +46,41 @@ constexpr bool kLocalObservabilityEnabled = true;
 constexpr bool kLocalObservabilityEnabled = false;
 #endif
 
+struct LogEvent final {
+  QtMsgType type;
+  QString timestamp;
+  QString thread_id;
+  QString category;
+  QString file;
+  QString function;
+  int line = 0;
+  QString message;
+  QString console_line;
+  QJsonObject prepared_fields;
+  bool prepared = false;
+
+  std::size_t retainedBytes() const {
+    return sizeof(LogEvent) + 2 * static_cast<std::size_t>(timestamp.size() + thread_id.size() +
+        category.size() + file.size() + function.size() + message.size() + console_line.size()) +
+        (prepared ? 8 * static_cast<std::size_t>(message.size()) : 0);
+  }
+};
+
+// The Qt message text is still emitted unchanged, including to custom handlers.
+// Only our handler can reuse this prepared object while the exact message is live.
+struct PreparedLogEvent final {
+  const QString& message;
+  const QJsonObject& fields;
+  PreparedLogEvent* previous;
+  static thread_local PreparedLogEvent* current;
+  PreparedLogEvent(const QString& text, const QJsonObject& object)
+      : message(text), fields(object), previous(current) { current = this; }
+  ~PreparedLogEvent() { current = previous; }
+};
+thread_local PreparedLogEvent* PreparedLogEvent::current = nullptr;
+
 struct ObservabilityState final {
   QMutex mutex;
-  QFile log_file;
   QString session_id;
   QString log_level;
   QString log_color_mode;
@@ -55,9 +90,13 @@ struct ObservabilityState final {
   QHash<QString, int> warning_repeat_counts;
   bool colorize_console = false;
   bool initialized = false;
+  QtMessageHandler previous_handler = nullptr;
+  std::unique_ptr<detail::ObservabilityWriter<LogEvent>> writer;
 };
 
-ObservabilityState g_state;
+// Keep configuration alive for late Qt/static-destructor messages. The worker is
+// explicitly drained and joined at exit; no background thread outlives this state.
+ObservabilityState& g_state = *new ObservabilityState;
 
 QString normalized_level(const QString& value) {
   const auto normalized = value.trimmed().toLower();
@@ -316,6 +355,20 @@ QString compact_budget_summary(const QJsonObject& fields) {
 
 QString compact_console_line_for_fields(const QString& event_name, const QJsonObject& fields) {
   QStringList parts{event_name};
+  if (event_name == QStringLiteral("agent.edit.run_failed") ||
+      event_name == QStringLiteral("agent.edit.tool_failed")) {
+    append_field(&parts, QStringLiteral("run"), string_field(fields, QStringLiteral("run_id")));
+    append_field(&parts, QStringLiteral("tool"), string_field(fields, QStringLiteral("tool_name")));
+    append_field(&parts, QStringLiteral("model"), string_field(fields, QStringLiteral("model_id")));
+  }
+  if (event_name.startsWith(QStringLiteral("catalog.helper."))) {
+    const auto binary = string_field(fields, QStringLiteral("binary"));
+    const auto operation = string_field(fields, QStringLiteral("operation"));
+    append_field(
+        &parts,
+        QStringLiteral("helper"),
+        operation.isEmpty() ? binary : QStringLiteral("%1:%2").arg(binary, operation));
+  }
   append_field(&parts, QStringLiteral("stage"), string_field(fields, QStringLiteral("stage")));
   append_field(
       &parts,
@@ -504,51 +557,49 @@ void write_session_metadata_file(const QString& file_path) {
   metadata_file.close();
 }
 
-void observability_message_handler(
-    QtMsgType type,
-    const QMessageLogContext& context,
-    const QString& message) {
-  QString console_line;
+detail::EncodedLogEvent serialize_log_event(const LogEvent& event) {
+  const auto type = event.type;
+  const auto& message = event.message;
+  QString console_line = event.console_line;
   bool print_console_line = true;
   QByteArray log_line;
 
   {
-    QMutexLocker locker(&g_state.mutex);
-    const auto timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-    console_line = qFormatLogMessage(type, context, message);
-
-    const auto category =
-        QString::fromUtf8(context.category == nullptr ? "" : context.category);
+    const auto& timestamp = event.timestamp;
+    const auto& category = event.category;
     QJsonObject record{
         {QStringLiteral("timestamp"), timestamp},
         {QStringLiteral("severity"), severity_name(type)},
         {QStringLiteral("category"), category},
         {QStringLiteral("session_id"), g_state.session_id},
         {QStringLiteral("pid"), static_cast<qint64>(QCoreApplication::applicationPid())},
-        {QStringLiteral("thread_id"), thread_id_string()},
+        {QStringLiteral("thread_id"), event.thread_id},
     };
-    if (context.file != nullptr) {
-      record.insert(QStringLiteral("file"), QString::fromUtf8(context.file));
+    if (!event.file.isNull()) {
+      record.insert(QStringLiteral("file"), event.file);
     }
-    if (context.line > 0) {
-      record.insert(QStringLiteral("line"), context.line);
+    if (event.line > 0) {
+      record.insert(QStringLiteral("line"), event.line);
     }
-    if (context.function != nullptr) {
-      record.insert(QStringLiteral("function"), QString::fromUtf8(context.function));
+    if (!event.function.isNull()) {
+      record.insert(QStringLiteral("function"), event.function);
     }
 
-    const auto trimmed_message = message.trimmed();
-    QJsonParseError parse_error;
-    const auto parsed_message =
-        QJsonDocument::fromJson(trimmed_message.toUtf8(), &parse_error);
     QString event_name;
-    QJsonObject fields;
-    if (parse_error.error == QJsonParseError::NoError && parsed_message.isObject()) {
-      fields = parsed_message.object();
+    QJsonObject fields = event.prepared_fields;
+    bool structured = event.prepared;
+    if (!structured) {
+      QJsonParseError parse_error;
+      const auto parsed_message = QJsonDocument::fromJson(message.trimmed().toUtf8(), &parse_error);
+      structured = parse_error.error == QJsonParseError::NoError && parsed_message.isObject();
+      if (structured) fields = parsed_message.object();
+    }
+    if (structured) {
       event_name = fields.value(QStringLiteral("event")).toString().trimmed();
       if (!event_name.isEmpty()) {
         record.insert(QStringLiteral("event"), event_name);
       }
+      add_if_missing(&fields, QStringLiteral("thread"), event.thread_id);
       add_standard_event_fields(event_name, &fields);
       record.insert(QStringLiteral("fields"), fields);
     } else {
@@ -557,10 +608,6 @@ void observability_message_handler(
 
     log_line = QJsonDocument(record).toJson(QJsonDocument::Compact);
     log_line.append('\n');
-    if (g_state.log_file.isOpen()) {
-      g_state.log_file.write(log_line);
-      g_state.log_file.flush();
-    }
 
     if (g_state.console_mode != QStringLiteral("json")) {
       print_console_line = console_mode_prints_event_for_fields(
@@ -590,15 +637,56 @@ void observability_message_handler(
         type, category, console_line, g_state.colorize_console);
   }
 
+  detail::EncodedLogEvent encoded(std::move(log_line));
   if (print_console_line) {
-    std::fputs(console_line.toUtf8().constData(), stderr);
+    encoded.console = console_line.toUtf8();
+    encoded.console.append('\n');
+  }
+  return encoded;
+}
+
+void observability_message_handler(
+    QtMsgType type, const QMessageLogContext& context, const QString& message) {
+  const auto fallback = [&] {
+    const auto bytes = message.toUtf8();
+    std::fwrite(bytes.constData(), 1, static_cast<std::size_t>(bytes.size()), stderr);
     std::fputc('\n', stderr);
     std::fflush(stderr);
+  };
+  // A Qt diagnostic generated inside the writer must never wait on itself.
+  if (g_state.writer->isWriterThread()) {
+    fallback();
+    if (type == QtFatalMsg) std::abort();
+    return;
   }
+  LogEvent event;
+  event.type = type;
+  event.timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+  event.thread_id = thread_id_string();
+  event.category = QString::fromUtf8(context.category == nullptr ? "" : context.category);
+  if (context.file != nullptr) event.file = QString::fromUtf8(context.file);
+  if (context.function != nullptr) event.function = QString::fromUtf8(context.function);
+  event.line = context.line;
+  event.message = message;
+  const auto* prepared = PreparedLogEvent::current;
+  if (prepared != nullptr && prepared->message == message) {
+    event.prepared_fields = prepared->fields;
+    event.prepared = true;
+  }
+  const bool immediate = type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg;
+  const bool uses_compact_event = event.prepared && g_state.console_mode != QStringLiteral("json") &&
+      !event.prepared_fields.value(QStringLiteral("event")).toString().trimmed().isEmpty();
+  if (!uses_compact_event && (immediate || g_state.console_mode != QStringLiteral("quiet")))
+    event.console_line = qFormatLogMessage(type, context, message);
+  const auto bytes = event.retainedBytes();
+  const auto result = g_state.writer->submit(std::move(event), bytes, immediate);
+  if (result == detail::ObservabilityWriter<LogEvent>::Result::stopped) fallback();
+  if (type == QtFatalMsg) std::abort();
+}
 
-  if (type == QtFatalMsg) {
-    std::abort();
-  }
+void shutdown_logging() {
+  qInstallMessageHandler(g_state.previous_handler);
+  g_state.writer->shutdown();
 }
 
 void ensure_initialized_locked() {
@@ -627,8 +715,9 @@ void ensure_initialized_locked() {
   QDir().mkpath(g_state.run_directory);
   cleanup_old_run_directories(AppBootstrap::logLocation());
 
-  g_state.log_file.setFileName(g_state.desktop_log_file_path);
-  if (g_state.log_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+  g_state.writer = std::make_unique<detail::ObservabilityWriter<LogEvent>>(
+      g_state.desktop_log_file_path, serialize_log_event);
+  if (g_state.writer->statistics().opened) {
     write_session_metadata_file(
         QDir(g_state.run_directory).filePath(QStringLiteral("session.json")));
   }
@@ -643,7 +732,8 @@ void ensure_initialized_locked() {
   qSetMessagePattern(
       QStringLiteral("%{time yyyy-MM-ddTHH:mm:ss.zzzZ} [%{type}] %{category}: %{message}"));
   apply_logging_rules(g_state.log_level);
-  qInstallMessageHandler(observability_message_handler);
+  g_state.previous_handler = qInstallMessageHandler(observability_message_handler);
+  std::atexit(shutdown_logging);
   g_state.initialized = true;
 }
 
@@ -663,6 +753,15 @@ void initialize() {
   }
   QMutexLocker locker(&g_state.mutex);
   ensure_initialized_locked();
+}
+
+bool flush() {
+  if (!kLocalObservabilityEnabled) return true;
+  {
+    QMutexLocker locker(&g_state.mutex);
+    ensure_initialized_locked();
+  }
+  return g_state.writer->flush();
 }
 
 QString sessionId() {
@@ -724,28 +823,36 @@ bool consoleModePrintsEvent(
       fields_object_from_variant_map(fields));
 }
 
-QString structuredMessage(const QString& event_name, const QVariantMap& fields) {
+namespace {
+QJsonObject structured_fields(const QString& event_name, const QVariantMap& fields) {
   QJsonObject message_fields;
   message_fields.insert(QStringLiteral("event"), event_name);
   for (auto iterator = fields.cbegin(); iterator != fields.cend(); ++iterator) {
     message_fields.insert(iterator.key(), QJsonValue::fromVariant(iterator.value()));
   }
   add_standard_event_fields(event_name, &message_fields);
-  return QString::fromUtf8(QJsonDocument(message_fields).toJson(QJsonDocument::Compact));
+  return message_fields;
+}
+}  // namespace
+
+QString structuredMessage(const QString& event_name, const QVariantMap& fields) {
+  return QString::fromUtf8(QJsonDocument(structured_fields(event_name, fields)).toJson(QJsonDocument::Compact));
 }
 
 void logInfo(const QLoggingCategory& category, const QString& event_name, const QVariantMap& fields) {
-  if (!kLocalObservabilityEnabled) {
-    return;
-  }
-  qCInfo(category).noquote() << structuredMessage(event_name, fields);
+  if (!kLocalObservabilityEnabled || !category.isInfoEnabled()) return;
+  const auto object = structured_fields(event_name, fields);
+  const auto message = QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+  PreparedLogEvent prepared(message, object);
+  qCInfo(category).noquote() << message;
 }
 
 void logWarning(const QLoggingCategory& category, const QString& event_name, const QVariantMap& fields) {
-  if (!kLocalObservabilityEnabled) {
-    return;
-  }
-  qCWarning(category).noquote() << structuredMessage(event_name, fields);
+  if (!kLocalObservabilityEnabled || !category.isWarningEnabled()) return;
+  const auto object = structured_fields(event_name, fields);
+  const auto message = QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+  PreparedLogEvent prepared(message, object);
+  qCWarning(category).noquote() << message;
 }
 
 }  // namespace photo_editor::desktop::observability

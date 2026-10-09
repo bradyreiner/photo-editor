@@ -14,6 +14,8 @@ enum class ColorPrimaries {
   ProPhotoRgb,
   Rec709,
   Rec2020,
+  SonySGamut3,
+  SonySGamut3Cine,
   AcesAp0,
   AcesAp1,
 };
@@ -27,6 +29,7 @@ enum class TransferFunction {
   Gamma24,
   Bt2020,
   Acescct,
+  Bt709,
 };
 
 enum class WhitePoint {
@@ -58,7 +61,10 @@ struct RgbColorSpace final {
 [[nodiscard]] RgbColorSpace make_adobe_rgb_color_space();
 [[nodiscard]] RgbColorSpace make_prophoto_rgb_color_space();
 [[nodiscard]] RgbColorSpace make_rec709_color_space();
+[[nodiscard]] RgbColorSpace make_linear_rec709_color_space();
 [[nodiscard]] RgbColorSpace make_rec2020_color_space();
+[[nodiscard]] RgbColorSpace make_linear_sony_s_gamut3_color_space();
+[[nodiscard]] RgbColorSpace make_linear_sony_s_gamut3_cine_color_space();
 // Resolves the canonical built-in RGB spaces accepted at declared color
 // boundaries such as creative LUT inputs and outputs. Matching ignores ASCII
 // punctuation, whitespace, and case so serialized aliases remain stable.

@@ -10,8 +10,8 @@ Item {
     property color accent: theme.accentWarm400
     property bool showAccentMarker: false
     property string titleFontFamily: theme.fontDisplay
-    property int titlePixelSize: theme.typeDialogTitle
-    property int titleWeight: Font.DemiBold
+    property int titlePixelSize: theme.typeSection
+    property int titleWeight: theme.weightSection
 
     implicitHeight: columnLayout.implicitHeight
 
@@ -35,12 +35,16 @@ Item {
             }
 
             Label {
+                Layout.fillWidth: true
                 text: root.title
                 color: theme.textStrong
                 font.family: root.titleFontFamily
                 font.pixelSize: root.titlePixelSize
                 font.weight: root.titleWeight
                 font.letterSpacing: 0.2
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                maximumLineCount: 2
+                elide: Text.ElideNone
             }
 
             Item { Layout.fillWidth: true }

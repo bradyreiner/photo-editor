@@ -6,30 +6,30 @@ RowLayout {
     id: row
     required property string label
     required property string value
-    property real labelWidth: 74
+    property real labelWidth: theme.scaled(74)
     Layout.fillWidth: true
-    spacing: 12
+    spacing: theme.gapControl
 
     Theme { id: theme }
 
     Label {
         Layout.preferredWidth: row.labelWidth
         Layout.alignment: Qt.AlignTop
-        topPadding: 3
+        topPadding: theme.space2
         text: row.label
         color: theme.textMuted
         font.family: theme.fontUi
-        font.pixelSize: theme.typeLabel
+        font.pixelSize: theme.typeCaption
     }
     TextEdit {
         Layout.fillWidth: true
         Layout.minimumWidth: 0
-        Layout.minimumHeight: 24
-        topPadding: 3
+        Layout.minimumHeight: theme.controlHeightDense
+        topPadding: theme.space2
         text: row.value
         color: theme.textMain
         font.family: theme.fontUi
-        font.pixelSize: theme.typeLabel
+        font.pixelSize: theme.typeControl
         wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
         readOnly: true
         selectByMouse: true

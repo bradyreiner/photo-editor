@@ -93,6 +93,18 @@ BuiltinIccProfileCache& builtin_icc_profile_cache() {
       };
       return cmsBuildParametricToneCurve(nullptr, 4, parameters);
     }
+    case TransferFunction::Bt709: {
+      constexpr cmsFloat64Number parameters[] = {
+          1.0 / 0.45,
+          1.0 / 1.099,
+          0.099 / 1.099,
+          0.0,
+          0.081,
+          1.0 / 4.5,
+          0.0,
+      };
+      return cmsBuildParametricToneCurve(nullptr, 4, parameters);
+    }
     case TransferFunction::Bt2020: {
       constexpr auto alpha = 1.09929682680944;
       constexpr auto beta = 0.018053968510807;
@@ -642,7 +654,9 @@ bool CompiledIccTransform::apply(std::span<IccRgbaFloat> pixels) const {
     return true;
   }
 #if defined(PHOTO_EDITOR_HAS_LCMS2) && PHOTO_EDITOR_HAS_LCMS2
-  const std::lock_guard lock(impl_->apply_mutex);
+  // Little CMS 2.18 documents cmsDoTransform as reentrant on a shared handle.
+  // Our RGBA float transforms use NOCACHE and are immutable after compilation;
+  // independent pixel buffers can therefore run concurrently on this handle.
   constexpr std::size_t kChunkPixels = 1U << 20U;
   std::size_t offset = 0;
   while (offset < pixels.size()) {
@@ -913,6 +927,16 @@ std::array<ColorChromaticity, 3> rgb_primaries(ColorPrimaries primaries) {
       return {{{.x = 0.708, .y = 0.292},
                {.x = 0.170, .y = 0.797},
                {.x = 0.131, .y = 0.046}}};
+    case ColorPrimaries::SonySGamut3:
+      // Sony's reference table lists these S-Gamut3 primaries with a D65 white.
+      return {{{.x = 0.730, .y = 0.280},
+               {.x = 0.140, .y = 0.855},
+               {.x = 0.100, .y = -0.050}}};
+    case ColorPrimaries::SonySGamut3Cine:
+      // Sony's reference table lists these S-Gamut3.Cine primaries with D65.
+      return {{{.x = 0.766, .y = 0.275},
+               {.x = 0.225, .y = 0.800},
+               {.x = 0.089, .y = -0.087}}};
     case ColorPrimaries::Rec709:
     case ColorPrimaries::Srgb:
     case ColorPrimaries::Unknown:

@@ -115,26 +115,69 @@ Item {
             border.color: theme.alpha(theme.polar, 0.92)
         }
 
-        Label {
-            objectName: cursorStack.objectNameFor("BrushCursorModeLabel", "brushCursorModeLabel")
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.bottom
-            anchors.topMargin: 5
-            text: brushCursorRing.brushModeLabel + " Size " +
-                  cursorStack.brushSizeText +
-                  " / Hard " + cursorStack.brushHardnessText +
-                  " / Flow " + cursorStack.brushFlowText +
-                  " / Density " + cursorStack.brushDensityText
-            color: theme.textStrong
-            font.family: theme.fontMono
-            font.pixelSize: 10
-            padding: 4
-            background: Rectangle {
-                color: theme.alpha(theme.ink950, 0.78)
-                border.width: theme.chromeBorderWidth
-                border.color: theme.alpha(theme.polar, 0.28)
-                radius: 2
+        Item {
+            objectName: cursorStack.objectNameFor("BrushCursorCenter", "brushCursorCenter")
+            anchors.centerIn: parent
+            width: 10
+            height: 10
+            visible: brushCursorRing.width >= 24
+            Rectangle {
+                anchors.centerIn: parent
+                width: 9; height: 3
+                color: theme.ink950
             }
+            Rectangle {
+                anchors.centerIn: parent
+                width: 7; height: 1
+                color: theme.brandPaper
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                width: 3; height: 9
+                visible: cursorStack.activeMaskOperation !== "subtract"
+                color: theme.ink950
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1; height: 7
+                visible: cursorStack.activeMaskOperation !== "subtract"
+                color: theme.brandPaper
+            }
+        }
+
+    }
+
+    Label {
+        id: brushCursorReadout
+        objectName: cursorStack.objectNameFor("BrushCursorModeLabel", "brushCursorModeLabel")
+        visible: brushCursorRing.visible
+        readonly property real viewportMargin: theme.space8
+        width: Math.max(1, Math.min(implicitWidth, cursorStack.width - viewportMargin * 2))
+        x: cursorStack.clamp(
+               brushCursorRing.x + (brushCursorRing.width - width) / 2,
+               viewportMargin,
+               Math.max(viewportMargin, cursorStack.width - width - viewportMargin))
+        y: cursorStack.clamp(
+               brushCursorRing.y + brushCursorRing.height + theme.space4,
+               viewportMargin,
+               Math.max(viewportMargin, cursorStack.height - height - viewportMargin))
+        text: brushCursorRing.brushModeLabel + " Size " +
+              cursorStack.brushSizeText +
+              " / Hard " + cursorStack.brushHardnessText +
+              " / Flow " + cursorStack.brushFlowText +
+              " / Density " + cursorStack.brushDensityText
+        color: theme.textStrong
+        font.family: theme.fontMono
+        font.pixelSize: theme.typeCaption
+        padding: 4
+        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+        elide: Text.ElideNone
+        z: 23
+        background: Rectangle {
+            color: theme.alpha(theme.ink950, 0.78)
+            border.width: theme.chromeBorderWidth
+            border.color: theme.alpha(theme.polar, 0.28)
+            radius: 2
         }
     }
 

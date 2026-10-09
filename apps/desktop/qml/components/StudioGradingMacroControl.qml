@@ -11,7 +11,7 @@ Rectangle {
     property real to: 100
     property real value: 0
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
-    property int controlHeight: 46
+    property int controlHeight: theme.controlHeightTall
     property color accent: theme.accentWarm400
     property color leftColor: theme.alpha(theme.polar, 0.22)
     property color centerColor: theme.alpha(theme.polar, 0.42)
@@ -27,10 +27,11 @@ Rectangle {
     Theme { id: theme }
 
     Layout.fillWidth: true
-    Layout.preferredHeight: controlHeight
-    radius: 4
-    color: pointer.containsMouse || modified ? theme.alpha(theme.glassLift, 0.22)
-                                             : theme.alpha(theme.glassBase, 0.42)
+    Layout.preferredHeight: control.controlHeight
+    radius: theme.radiusControl
+    color: pointer.containsMouse ? theme.alpha(theme.opticalHoverFill, 0.42)
+                                 : control.modified ? theme.alpha(theme.opticalSelectedFill, 0.34)
+                                                    : "transparent"
     border.width: 0
 
     function valueFromX(mouseX) {
@@ -40,22 +41,22 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
-        spacing: 10
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        spacing: theme.gapControl
 
         Label {
-            Layout.preferredWidth: 92
-            Layout.minimumWidth: 92
+            Layout.preferredWidth: 82
+            Layout.minimumWidth: 64
             text: control.label
             color: control.modified ? control.accent : theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: 11
-            font.weight: Font.Black
-            font.capitalization: Font.AllUppercase
+            font.pixelSize: theme.typeLabel
+            font.weight: theme.weightControl
+            font.capitalization: Font.MixedCase
             font.letterSpacing: 0
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
+            minimumPixelSize: theme.typeMicro
             elide: Text.ElideNone
         }
 
@@ -68,7 +69,7 @@ Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                height: 8
+                height: 5
 
                 Row {
                     anchors.fill: parent
@@ -104,7 +105,7 @@ Rectangle {
                     x: Math.max(0, Math.min(parent.width - width, control.defaultPosition * parent.width - width / 2))
                     anchors.verticalCenter: parent.verticalCenter
                     width: 1
-                    height: 18
+                    height: 14
                     color: theme.alpha(theme.polar, 0.42)
                 }
                 Rectangle {
@@ -120,9 +121,9 @@ Rectangle {
                 Rectangle {
                     x: Math.max(0, Math.min(parent.width - width, control.normalizedValue * parent.width - width / 2))
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 18
-                    height: 18
-                    radius: 4
+                    width: 16
+                    height: 16
+                    radius: theme.radiusControl
                     rotation: 45
                     color: control.modified ? control.accent : theme.alpha(theme.polar, 0.92)
                     border.width: 2
@@ -132,14 +133,14 @@ Rectangle {
         }
 
         Label {
-            Layout.preferredWidth: 54
-            Layout.minimumWidth: 54
+            Layout.preferredWidth: theme.valueColumnWidth
+            Layout.minimumWidth: theme.valueColumnWidth
             horizontalAlignment: Text.AlignRight
             text: control.valueText
             color: control.modified ? control.accent : "#C8D2DC"
             font.family: theme.fontMono
-            font.pixelSize: 11
-            font.weight: Font.Bold
+            font.pixelSize: theme.typeCaption
+            font.weight: theme.weightSection
             font.letterSpacing: 0
         }
     }

@@ -15,9 +15,10 @@ namespace photo_editor::desktop {
 struct JobRunnerTestAccess {
   static auto setActive(JobRunner& runner) {
     runner.ready_ = true;
-    runner.active_job_id_ = QStringLiteral("active");
-    runner.active_job_cancellation_ = std::make_shared<std::atomic_bool>(false);
-    return runner.active_job_cancellation_;
+    PersistentJobRecord job;
+    job.job_id = QStringLiteral("active");
+    runner.active_attempts_.remove(job.job_id);
+    return runner.beginAttempt(job)->cancellation;
   }
   static void observe(JobRunner& runner) { runner.observeActiveJobCancellation(); }
   static bool reading(const JobRunner& runner) { return runner.cancellation_reading_; }

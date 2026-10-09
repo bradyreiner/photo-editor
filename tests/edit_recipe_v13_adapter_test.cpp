@@ -43,6 +43,19 @@ bool has_error_path(
 }  // namespace
 
 int main() {
+  {
+    photo_editor::desktop::EditRecipeState rectangle;
+    rectangle.mask_stack = {QVariantMap{{"id", "rectangle-selection"}, {"kind", "rectangle"},
+        {"operation", "add"}, {"blendMode", "normal"}, {"maskSetId", "rectangle-set"}}};
+    photo_editor::desktop::DesktopRenderPlanRequest request;
+    request.source_id = QStringLiteral("rectangle-photo");
+    request.recipe_id = QStringLiteral("rectangle-recipe");
+    request.decoder_provenance = QStringLiteral("qt-image-reader:srgb");
+    request.source_width = 640;
+    request.source_height = 400;
+    const auto plan = photo_editor::desktop::compile_desktop_render_plan_with_derived_assets(rectangle, request);
+    if (!plan.ok()) return fail("rectangle selection must be admitted for preview and export");
+  }
   photo_editor::desktop::EditRecipeState state;
   state.photographic_rendering_model =
       QStringLiteral("aces2-ocio-v1");
@@ -855,6 +868,28 @@ int main() {
     const auto adapted = photo_editor::desktop::adapt_desktop_recipe_to_v13(pixel_layer_state, pixel_context);
     if (!adapted.ok() || adapted.recipe->layers.front().effects != effects)
       return fail("desktop adapter must retain typed layer effects in the canonical recipe");
+
+    auto canonical_export_request = production_request;
+    canonical_export_request.purpose = photo_editor::pipeline::RenderPurpose::Export;
+    canonical_export_request.scope_domain = photo_editor::pipeline::RenderScopeDomain::FinalDisplay;
+    for (const auto* type : {"film_grain", "light_leak", "split_tone", "vignette", "duotone", "soft_fade"}) {
+      auto typed_effect = photo_editor::pipeline::PhotoEffectInstance{};
+      typed_effect.id = std::string("canonical-") + type;
+      typed_effect.type_id = type;
+      auto typed_layer = pixel_layer_state.layers[0].toMap();
+      const std::vector typed_effects{typed_effect};
+      const auto typed_stack = photo_editor::desktop::encode_photo_layer_effects(
+          typed_effects);
+      if (!typed_stack) return fail("new photographic operator should encode before canonical export admission");
+      typed_layer.insert(QStringLiteral("effectStack"), *typed_stack);
+      auto typed_state = pixel_layer_state;
+      typed_state.layers[0] = typed_layer;
+      const auto typed_plan = photo_editor::desktop::compile_desktop_render_plan_with_derived_assets(
+          typed_state, canonical_export_request);
+      if (!typed_plan.ok())
+        return fail(std::string("new photographic operator should pass canonical export admission: ") + type);
+    }
+
     effect_layer.insert(QStringLiteral("effectStack"), QStringLiteral("unrecognized future envelope"));
     pixel_layer_state.layers[0] = effect_layer;
     const auto rejected = photo_editor::desktop::adapt_desktop_recipe_to_v13(pixel_layer_state, pixel_context);

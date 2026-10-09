@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QImage>
+#include <QRectF>
 #include <QSize>
 #include <QVector>
 
@@ -11,6 +12,8 @@ struct SmartSelectPrompt final {
   double x = 0.5;
   double y = 0.5;
   bool negative = false;
+  // A box is a spatial prompt, not a set of foreground corner clicks.
+  QRectF box;
 };
 
 struct SegmentationResult final {
@@ -20,6 +23,9 @@ struct SegmentationResult final {
   QByteArray confidence_data;
   int confidence_width = 0;
   int confidence_height = 0;
+  QByteArray refinement_logits;
+  int refinement_logits_width = 0;
+  int refinement_logits_height = 0;
   bool success = false;
   QString error_message;
 };

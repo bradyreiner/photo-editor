@@ -25,6 +25,15 @@ Popup {
     }
 
     objectName: ownerObjectName.length > 0 ? ownerObjectName + "Popup" : ""
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "scale"; from: theme.reducedMotion ? 1 : 0.985; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
+        }
+    }
+    exit: Transition {
+        NumberAnimation { property: "opacity"; to: 0; duration: theme.reducedMotion ? 0 : 80 }
+    }
 
     function itemEnabledAt(index) {
         if (index < 0 || index >= root.menuItems.length)
@@ -130,10 +139,13 @@ Popup {
 
             Repeater {
                 id: menuRepeater
-                model: root.menuItems
+                model: root.visible ? root.menuItems : []
 
                 delegate: PopupMenuRow {
                     previousItem: index > 0 ? root.menuItems[index - 1] : ({})
+                    objectNamePrefix: root.ownerObjectName.length > 0
+                                      ? root.ownerObjectName + "Popup"
+                                      : ""
                     accent: root.accent
                     labelMaxLines: root.menuItemMaxLines
                     tooltipTimeout: 3000
@@ -161,9 +173,9 @@ Popup {
 
     background: PopupSurface {
         accent: root.accent
-        radius: root.strongSurface ? theme.radiusPanel : theme.radius8
-        fillColor: root.strongSurface ? theme.surfaceTop : theme.surfaceBottom
+        radius: theme.radiusSurface
+        fillColor: theme.popupFill
         borderColor: theme.alpha(theme.glassEdge, root.strongSurface ? 0.54 : 0.36)
-        shadowColor: root.strongSurface ? theme.alpha("#000000", 0.42) : "transparent"
+        shadowColor: theme.alpha("#000000", root.strongSurface ? 0.42 : 0.32)
     }
 }

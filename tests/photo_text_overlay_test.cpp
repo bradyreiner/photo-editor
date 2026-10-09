@@ -33,12 +33,31 @@ Item {
     property int toolShortcuts: 0
     property var createdBox: []
     property var createdPoint: []
+    property var createdRequest: ({})
     property int creations: 0
+    property int pointCreations: 0
+    property int styleCalls: 0
+    property int coalescedBegins: 0
+    property int coalescedEnds: 0
     property string createdText: ""
+    property var createdStyle: ({})
     function addParagraphTextLayer(text, x, y, width, height, canvasWidth, canvasHeight) {
         if (rejectEdits) return false
         creations++; createdText = text; return true
     }
+    function addPointTextLayer(text, x, y, canvasWidth, canvasHeight) {
+        if (rejectEdits) return false
+        pointCreations++; createdText = text; return true
+    }
+    function setPhotoLayerTextStyle(index, fontFamily, fontSize, color, face, alignment) {
+        if (rejectEdits) return false
+        styleCalls++
+        createdStyle = {index: index, family: fontFamily, size: fontSize,
+                        color: color, face: face, alignment: alignment}
+        return true
+    }
+    function beginCoalescedEdit() { coalescedBegins++ }
+    function endCoalescedEdit() { coalescedEnds++ }
     Shortcut { sequence: "F"; onActivated: harness.toolShortcuts++ }
     property string saved: ""
     function setPhotoLayerText(index, value) { if (rejectEdits) return false; commits++; saved = value; return true }
@@ -47,9 +66,12 @@ Item {
         anchors.fill: parent
         imageX: 40; imageY: 50; imageWidth: 400; imageHeight: 200
         canvasWidth: 800; canvasHeight: 400
+        controlsParent: controlsHost
         onBoxRequested: function(x, y, width, height) { harness.createdBox = [x, y, width, height] }
         onPointRequested: function(x, y) { harness.createdPoint = [x, y] }
+        onTextRequested: function(request) { harness.createdRequest = request }
     }
+    Item { id: controlsHost; x: 620; y: 0; width: 180; height: 400 }
     PhotoTextOverlay {
         objectName: "overlay"
         documentId: "document-1"
@@ -100,6 +122,13 @@ Item {
   }
   overlay->setProperty("layerIndex", 0);
   QMetaObject::invokeMethod(overlay, "beginEditing");
+  if (!overlay->property("textSelectionActive").toBool() ||
+      overlay->property("textSelectionStart").toInt() != input->property("selectionStart").toInt() ||
+      overlay->property("textSelectionEnd").toInt() != input->property("selectionEnd").toInt() ||
+      !input->property("persistentSelection").toBool()) {
+    std::cerr << "Canvas editing must expose its active selection and keep it visible while formatting controls take focus\n";
+    return 1;
+  }
   key(Qt::Key_F, Qt::NoModifier, "f");
   if (input->property("text").toString() != "f" || root->property("toolShortcuts").toInt() != 1) {
     std::cerr << "Typing must replace the selection without triggering tool shortcuts\n";
@@ -162,10 +191,24 @@ Item {
     std::cerr << "Reverse drag must create a normalized box in document pixels\n";
     return 1;
   }
+  const auto paragraph_request = root->property("createdRequest").value<QJSValue>().toVariant().toMap();
+  if (paragraph_request.value("x").toInt() != 200 || paragraph_request.value("y").toInt() != 100 ||
+      paragraph_request.value("width").toInt() != 400 || paragraph_request.value("height").toInt() != 200 ||
+      paragraph_request.value("pointText").toBool() || paragraph_request.value("text").toString() != "Text") {
+    std::cerr << "Paragraph creation must carry its geometry and initial typography draft\n";
+    return 1;
+  }
   mouse(QEvent::MouseButtonPress, {100, 70}, Qt::LeftButton, Qt::LeftButton);
   mouse(QEvent::MouseButtonRelease, {100, 70}, Qt::LeftButton, Qt::NoButton);
   const auto clicked_box = root->property("createdBox").value<QJSValue>().toVariant().toList();
   if (root->property("createdPoint").value<QJSValue>().toVariant().toList() != QVariantList{120, 40} || clicked_box != box) return 1;
+  const auto point_request = root->property("createdRequest").value<QJSValue>().toVariant().toMap();
+  if (!point_request.value("pointText").toBool() || point_request.value("width").toInt() != 512 ||
+      point_request.value("height").toInt() != 128 || point_request.value("canvasWidth").toInt() != 800 ||
+      point_request.value("canvasHeight").toInt() != 400) {
+    std::cerr << "Point creation must carry point-text mode and document dimensions\n";
+    return 1;
+  }
   mouse(QEvent::MouseButtonPress, {100, 70}, Qt::LeftButton, Qt::LeftButton);
   creator->setProperty("active", false);
   mouse(QEvent::MouseButtonRelease, {200, 170}, Qt::LeftButton, Qt::NoButton);
@@ -236,6 +279,98 @@ Item {
   style.paragraph_spacing = 17.25;
   style.baseline_offset = -7;
   style.color = QColor("#e78c39");
+
+  const QVariantMap point_creation{{"x", 120}, {"y", 80}, {"width", 512}, {"height", 128},
+      {"canvasWidth", 800}, {"canvasHeight", 400}, {"pointText", true},
+      {"text", "Styled point"}, {"fontFamily", "Lyskamm"}, {"fontSize", 52}, {"color", "#80445566"}};
+  QMetaObject::invokeMethod(overlay, "beginCreation", Q_ARG(QVariant, point_creation), Q_ARG(QVariant, creation_view));
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, true));
+  const auto created_style = root->property("createdStyle").value<QJSValue>().toVariant().toMap();
+  if (overlay->property("editing").toBool() || root->property("pointCreations").toInt() != 1 ||
+      root->property("styleCalls").toInt() != 1 || root->property("createdText").toString() != "Styled point" ||
+      created_style.value("index").toInt() != 0 || created_style.value("family").toString() != "Lyskamm" ||
+      created_style.value("size").toDouble() != 52 || created_style.value("color").toString() != "#80445566" ||
+      root->property("coalescedBegins").toInt() != root->property("coalescedEnds").toInt()) {
+    std::cerr << "Point text creation must commit its initial typography in one coalesced edit\n";
+    return 1;
+  }
+
+  QMetaObject::invokeMethod(overlay, "beginEditing");
+  input->setProperty("text", "Draft during style update");
+  auto style_update = QVariantMap{{"id", "text-1"}, {"kind", "text"}, {"text", "External revision"},
+      {"pixelWidth", 300}, {"pixelHeight", 100},
+      {"textTypography", photo_editor::desktop::encode_photo_text_style(style).toVariantMap()}};
+  overlay->setProperty("layerData", style_update);
+  if (!overlay->property("editing").toBool() || input->property("text").toString() != "Draft during style update" ||
+      input->property("color").value<QColor>() != style.color) {
+    std::cerr << "Style-only updates must refresh the draft style without discarding typed text\n";
+    return 1;
+  }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, true));
+  if (root->property("commits").toInt() != 5 || root->property("saved").toString() != "Draft during style update") {
+    std::cerr << "A style-only update must preserve the pending text commit\n";
+    return 1;
+  }
+
+  photo_editor::desktop::PhotoTextStyle path_style;
+  path_style.family = QStringLiteral("Georgia");
+  path_style.size = 29.5;
+  path_style.tracking = 2.25;
+  path_style.path_points.reserve(200);
+  for (int index = 0; index < 200; ++index)
+    path_style.path_points.push_back(QPointF(static_cast<qreal>(index) / 199.0, 0.5));
+  QVariantMap path_layer{{"id", "path-text"}, {"kind", "text"}, {"text", "Text on a path"},
+      {"pixelWidth", 300}, {"pixelHeight", 100},
+      {"textTypography", photo_editor::desktop::encode_photo_text_style(path_style).toVariantMap()}};
+  overlay->setProperty("layerData", path_layer);
+  overlay->setProperty("pathHandlesActive", true);
+  QCoreApplication::processEvents();
+  const auto find_named_item = [&](auto&& self, QQuickItem* item, const QString& name) -> QQuickItem* {
+    if (!item) return nullptr;
+    if (item->objectName() == name) return item;
+    for (auto* child : item->childItems())
+      if (auto* match = self(self, child, name)) return match;
+    return nullptr;
+  };
+  auto* first_path_handle = find_named_item(find_named_item,
+      qobject_cast<QQuickItem*>(overlay), QStringLiteral("photoTextPathHandle_0"));
+  if (!first_path_handle || overlay->property("pathHandleCount").toInt() != 64 ||
+      !overlay->property("styledText").toBool() || !overlay->property("straightTextDraftNotice").toBool()) {
+    std::cerr << "Large path state: handle=" << (first_path_handle != nullptr)
+        << " count=" << overlay->property("pathHandleCount").toInt()
+        << " styled=" << overlay->property("styledText").toBool()
+        << " notice=" << overlay->property("straightTextDraftNotice").toBool() << '\n';
+    return 1;
+  }
+  path_style.path_points[0].setX(0.15);
+  path_layer.insert("textTypography", photo_editor::desktop::encode_photo_text_style(path_style).toVariantMap());
+  overlay->setProperty("layerData", path_layer);
+  QCoreApplication::processEvents();
+  if (find_named_item(find_named_item, qobject_cast<QQuickItem*>(overlay),
+          QStringLiteral("photoTextPathHandle_0")) != first_path_handle) {
+    std::cerr << "Moving a path point must preserve handle delegates during the drag\n";
+    return 1;
+  }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, false));
+
+  photo_editor::desktop::PhotoTextStyle variable_style;
+  variable_style.axes.insert(QStringLiteral("wght"), 650.0);
+  const QVariantMap variable_layer{{"id", "variable-text"}, {"kind", "text"},
+      {"text", "Variable font"}, {"pixelWidth", 300}, {"pixelHeight", 100},
+      {"textTypography", photo_editor::desktop::encode_photo_text_style(variable_style).toVariantMap()}};
+  overlay->setProperty("layerData", variable_layer);
+  QMetaObject::invokeMethod(overlay, "beginEditing");
+  QCoreApplication::processEvents();
+  const auto variable_font = input->property("font").value<QFont>();
+  const auto weight_axis = QFont::Tag::fromString("wght");
+  if (!overlay->property("styledText").toBool() || !weight_axis ||
+      !variable_font.isVariableAxisSet(*weight_axis) ||
+      std::abs(variable_font.variableAxisValue(*weight_axis) - 650.0f) > 0.1f) {
+    std::cerr << "Version-4 variable font axes must reach the canvas draft font\n";
+    return 1;
+  }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, false));
+
   const QVariantMap styled_layer{{"id", "styled"}, {"kind", "text"},
       {"text", "Golden text\nSecond line"}, {"pixelWidth", 360}, {"pixelHeight", 180},
       {"textTypography", photo_editor::desktop::encode_photo_text_style(style).toVariantMap()}};
@@ -296,6 +431,42 @@ Item {
   }
   if (ink == 0 || mismatched > ink / 20) {
     std::cerr << "Canvas document glyph layout must agree with the committed renderer\n";
+    return 1;
+  }
+
+  style.material = QStringLiteral("soft_emboss");
+  const QVariantMap material_layer{{"id", "material"}, {"kind", "text"},
+      {"text", "Material text"}, {"pixelWidth", 360}, {"pixelHeight", 180},
+      {"textTypography", photo_editor::desktop::encode_photo_text_style(style).toVariantMap()}};
+  overlay->setProperty("layerData", material_layer);
+  QMetaObject::invokeMethod(overlay, "beginEditing");
+  QCoreApplication::processEvents();
+  auto* draft_notice = overlay->findChild<QObject*>("photoTextDraftStyleNotice");
+  const auto draft_font = input->property("font").value<QFont>();
+  if (!overlay->property("styledText").toBool() || !draft_notice || !draft_notice->property("visible").toBool() ||
+      draft_font.family() != style.family) {
+    std::cerr << "Material text drafts must retain the saved base font and explain the preview fallback\n";
+    return 1;
+  }
+  QMetaObject::invokeMethod(overlay, "finish", Q_ARG(QVariant, false));
+
+  auto point_material_style = style;
+  point_material_style.family = QStringLiteral("Georgia");
+  point_material_style.size = 31.5;
+  point_material_style.point_text = true;
+  const QVariantMap point_material_layer{{"id", "material-point"}, {"kind", "text"},
+      {"text", "Material point"}, {"pixelWidth", 512}, {"pixelHeight", 128},
+      {"textTypography", photo_editor::desktop::encode_photo_text_style(point_material_style).toVariantMap()}};
+  overlay->setProperty("layerData", point_material_layer);
+  QMetaObject::invokeMethod(overlay, "beginEditing");
+  QCoreApplication::processEvents();
+  const auto logical_width = overlay->property("logicalWidth").toDouble();
+  const auto logical_height = overlay->property("logicalHeight").toDouble();
+  const auto point_geometry = overlay->property("pointGeometry").value<QVariantMap>();
+  const auto point_draft_font = input->property("font").value<QFont>();
+  if (!overlay->property("validPointGeometry").toBool() || logical_width <= 0 || logical_height <= 0 ||
+      !point_geometry.value("error").toString().isEmpty() || point_draft_font.family() != point_material_style.family) {
+    std::cerr << "Version-8 point text must measure valid draft bounds with its saved base font\n";
     return 1;
   }
   return 0;

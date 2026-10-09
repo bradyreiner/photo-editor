@@ -197,6 +197,58 @@ int main(int argc, char** argv) {
     return fail("named snapshots should survive relaunch and restore the exact recipe");
   }
 
+  // Carousel boards are document-owned: their explicit canonical recipe is
+  // authoritative when shared text changes outside this preview controller.
+  photo_editor::desktop::EditorPreviewController shared_text_board;
+  shared_text_board.setCatalogRecipePersistenceEnabled(false);
+  const auto shared_text_asset = QStringLiteral("shared-text-document-source");
+  shared_text_board.loadAsset(shared_text_asset, {}, {}, {}, {}, {}, {});
+  const auto before_shared_text = shared_text_board.currentAssetBoundAdjustmentPatchJson();
+  if (!shared_text_board.addTextLayer(QStringLiteral("July 18–20"), QStringLiteral("Shared copy"))) {
+    return fail("document-owned text should be creatable before an external recipe reload");
+  }
+  const auto unchanged_board_recipe = shared_text_board.currentAssetBoundAdjustmentPatchJson();
+  if (!shared_text_board.canUndo()) {
+    return fail("document-owned text creation should establish an undo step");
+  }
+  shared_text_board.loadAsset(shared_text_asset, {}, {}, {}, {}, {}, unchanged_board_recipe);
+  const auto reloaded_unchanged_recipe = shared_text_board.currentAssetBoundAdjustmentPatchJson();
+  if (reloaded_unchanged_recipe != unchanged_board_recipe || !shared_text_board.canUndo()) {
+    std::cerr << "unchanged-board reload current_recipe_matches="
+        << (reloaded_unchanged_recipe == unchanged_board_recipe)
+        << " can_undo=" << shared_text_board.canUndo()
+        << " history_index=" << shared_text_board.editHistoryCurrentIndex() << '\n';
+    return fail("reloading an unchanged board recipe should preserve its undo history");
+  }
+  shared_text_board.undo();
+  if (shared_text_board.currentAssetBoundAdjustmentPatchJson() != before_shared_text) {
+    return fail("unchanged document-owned board history should still undo to its prior state");
+  }
+
+  photo_editor::desktop::EditorPreviewController peer_text_board;
+  peer_text_board.setCatalogRecipePersistenceEnabled(false);
+  peer_text_board.loadAsset(QStringLiteral("shared-text-peer-source"), {}, {}, {}, {}, {}, {});
+  if (!peer_text_board.addTextLayer(QStringLiteral("August 1–3"), QStringLiteral("Shared copy"))) {
+    return fail("peer board should create an updated shared text recipe");
+  }
+  const auto fresh_shared_text_recipe = peer_text_board.currentAssetBoundAdjustmentPatchJson();
+  shared_text_board.loadAsset(shared_text_asset, {}, {}, {}, {}, {}, fresh_shared_text_recipe);
+  if (shared_text_board.currentAssetBoundAdjustmentPatchJson() != fresh_shared_text_recipe ||
+      shared_text_board.canUndo() || shared_text_board.editHistoryCurrentIndex() != 0) {
+    return fail("an external shared-text recipe should replace stale cached state and rebase history");
+  }
+  shared_text_board.undo();
+  if (shared_text_board.currentAssetBoundAdjustmentPatchJson() != fresh_shared_text_recipe) {
+    return fail("undo after external text replacement must not resurrect stale peer text");
+  }
+  if (!shared_text_board.setPhotoLayerText(0, QStringLiteral("August 1–3 revised"))) {
+    return fail("a local edit should remain undoable after external recipe rebasing");
+  }
+  shared_text_board.undo();
+  if (shared_text_board.currentAssetBoundAdjustmentPatchJson() != fresh_shared_text_recipe) {
+    return fail("new undo history should use the external shared-text recipe as its baseline");
+  }
+
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
   return EXIT_SUCCESS;
 }

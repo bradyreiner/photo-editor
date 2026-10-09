@@ -47,7 +47,7 @@ Item {
                                                   imageHeight <= maximumCanvasBackingEdge
     readonly property string canvasMemorySafetyContract: "mask-canvas-memory:v1|max-backing-edge:2048|hidden-or-oversized:1x1|repaint:visible-safe-only"
     readonly property bool outlineActivationDeferred: editRoot && editRoot.maskOutlineActivationDeferred === true
-    readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
+    readonly property string outlineRenderContract: "anti-aliased|zoom-stable|subpixel-contours:v2"
     readonly property string outlineScaleBucketContract: "outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale"
     readonly property string outlineAnimationContract: editRoot.selectionOutlineAnimationContract
     readonly property bool outlinePhaseAnimationEnabled: editRoot.selectionOutlineAnimationEnabled === true
@@ -231,8 +231,8 @@ Item {
         const point = root.viewPointForImage(normalizedX, normalizedY)
         return {
             valid: point.valid,
-            x: root.pixelAligned(point.x),
-            y: root.pixelAligned(point.y)
+            x: point.x,
+            y: point.y
         }
     }
 
@@ -656,21 +656,22 @@ Item {
     }
 
     function outlineHaloColor() {
-        return theme.alpha(theme.ink950, 0.58)
+        return theme.alpha(theme.ink950, 0.92)
     }
 
     function outlineAccentColor(accentColor, isCandidate) {
         return theme.alpha(accentColor, isCandidate ? 0.84 : 0.76)
     }
 
-    function buildOutlinePath(ctx, points) {
+    function buildOutlinePath(ctx, points, appendToCurrentPath) {
         const count = points.length
         if (count < 2)
             return false
         const firstPoint = root.previewOutlinePoint(
                     root.pointXValue(points[0]),
                     root.pointYValue(points[0]))
-        ctx.beginPath()
+        if (appendToCurrentPath !== true)
+            ctx.beginPath()
         ctx.moveTo(firstPoint.x, firstPoint.y)
         for (let i = 1; i < count; ++i) {
             const point = root.previewOutlinePoint(
@@ -684,8 +685,10 @@ Item {
     }
 
     function displayOutlinePathLargeEnough(points, isCandidate) {
-        if (isCandidate || !points || points.length < 2)
+        if (isCandidate)
             return true
+        if (!points || points.length < 2)
+            return false
         let minX = Number.POSITIVE_INFINITY
         let minY = Number.POSITIVE_INFINITY
         let maxX = Number.NEGATIVE_INFINITY
@@ -694,14 +697,18 @@ Item {
             const point = root.viewPointForImage(
                         root.pointXValue(points[i]),
                         root.pointYValue(points[i]))
-            minX = Math.min(minX, point.x)
-            minY = Math.min(minY, point.y)
-            maxX = Math.max(maxX, point.x)
-            maxY = Math.max(maxY, point.y)
+            if (!Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y)))
+                return false
+            minX = Math.min(minX, Number(point.x))
+            minY = Math.min(minY, Number(point.y))
+            maxX = Math.max(maxX, Number(point.x))
+            maxY = Math.max(maxY, Number(point.y))
         }
-        const pixelWidth = Math.abs(maxX - minX)
-        const pixelHeight = Math.abs(maxY - minY)
-        return Math.max(pixelWidth, pixelHeight) >= 3.0 && pixelWidth * pixelHeight >= 18.0
+        const devicePixelRatio = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+        const minimumVisibleSpan = 0.5 / devicePixelRatio
+        const pixelWidth = maxX - minX
+        const pixelHeight = maxY - minY
+        return pixelWidth >= minimumVisibleSpan || pixelHeight >= minimumVisibleSpan
     }
 
     function strokeOutlinePaths(ctx, outlinePaths, accentColor, isCandidate) {
@@ -711,11 +718,12 @@ Item {
         ctx.lineJoin = "round"
         ctx.lineCap = "round"
         const marching = editorPreview.maskPreviewMode === "marching-ants"
-        const dashOn = root.stableOutlineDash(10)
+        const dashOn = root.stableOutlineDash(7)
         const dashOff = root.stableOutlineDash(7)
-        const phase = marching && root.outlinePhaseAnimationEnabled
-                      ? root.stableOutlineDash(editRoot.selectionOutlinePhase)
-                      : 0
+        const dashCycle = dashOn + dashOff
+        const rawPhase = marching && root.outlinePhaseAnimationEnabled
+                         ? Number(editRoot.selectionOutlinePhase || 0) : 0
+        const phase = ((rawPhase % dashCycle) + dashCycle) % dashCycle
 
         for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
             const accentPoints = outlinePaths[pathIndex]
@@ -723,15 +731,29 @@ Item {
                 continue
             if (!root.buildOutlinePath(ctx, accentPoints))
                 continue
-            if (ctx.setLineDash)
-                ctx.setLineDash(marching ? [dashOn, dashOff] : [])
-            ctx.lineDashOffset = marching ? -phase : 0
-            ctx.lineWidth = root.stableOutlineWidth(isCandidate ? 2.2 : 2)
-            ctx.strokeStyle = Qt.alpha(accentColor, marching ? 0.95 : (isCandidate ? 0.84 : 0.76))
+            if (ctx.setLineDash) ctx.setLineDash([])
+            ctx.lineDashOffset = 0
+            ctx.lineWidth = root.stableOutlineWidth(isCandidate ? 2.75 : 2.5)
+            ctx.strokeStyle = root.outlineHaloColor()
             ctx.stroke()
+            ctx.lineWidth = root.stableOutlineWidth(isCandidate ? 1.5 : 1.25)
+            if (marching) {
+                if (ctx.setLineDash) ctx.setLineDash([dashOn, dashOff])
+                ctx.lineDashOffset = -phase
+                ctx.strokeStyle = Qt.alpha(root.outlineBaseColor(), 0.98)
+                ctx.stroke()
+                ctx.lineDashOffset = -(phase + dashOn)
+                ctx.strokeStyle = Qt.alpha(accentColor, 0.98)
+                ctx.stroke()
+            } else {
+                ctx.lineDashOffset = 0
+                ctx.strokeStyle = Qt.alpha(accentColor, isCandidate ? 0.84 : 0.76)
+                ctx.stroke()
+            }
         }
         if (ctx.setLineDash)
             ctx.setLineDash([])
+        ctx.lineDashOffset = 0
     }
 
     function fillOutlinePaths(ctx, outlinePaths, accentColor, opacity) {
@@ -740,11 +762,19 @@ Item {
             return
         const opacityScale = Math.max(0.0, Math.min(1.0, Number(editorPreview.maskPreviewOverlayOpacity || 0)))
         ctx.fillStyle = theme.alpha(accentColor, Math.max(0.0, Math.min(1.0, opacity)) * opacityScale)
+        ctx.beginPath()
+        let hasClosedContour = false
         for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
             const points = outlinePaths[pathIndex]
-            if (!root.buildOutlinePath(ctx, points))
+            if (!root.buildOutlinePath(ctx, points, true))
                 continue
+            hasClosedContour = true
+        }
+        if (hasClosedContour) {
+            const previousFillRule = ctx.fillRule
+            ctx.fillRule = Qt.OddEvenFill
             ctx.fill()
+            ctx.fillRule = previousFillRule
         }
     }
 
@@ -1624,14 +1654,12 @@ Item {
                             const firstViewPoint = root.viewPointForImage(
                                         root.pointXValue(points[0]),
                                         root.pointYValue(points[0]))
-                            ctx.moveTo(root.pixelAligned(firstViewPoint.x),
-                                       root.pixelAligned(firstViewPoint.y))
+                            ctx.moveTo(firstViewPoint.x, firstViewPoint.y)
                             for (let i = 1; i < count; ++i) {
                                 const viewPoint = root.viewPointForImage(
                                             root.pointXValue(points[i]),
                                             root.pointYValue(points[i]))
-                                ctx.lineTo(root.pixelAligned(viewPoint.x),
-                                           root.pixelAligned(viewPoint.y))
+                                ctx.lineTo(viewPoint.x, viewPoint.y)
                             }
                             if (count >= 3)
                                 ctx.closePath()

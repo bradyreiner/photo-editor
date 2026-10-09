@@ -39,6 +39,7 @@ struct CompiledFillLayer final {
   std::array<std::uint32_t, 6> curve_offsets{};
   std::uint32_t curve_active_mask = 0U;
   bool mask_inverted = false, has_mask = false, clipping_mask = false;
+  bool erase_base_image = false;
   bool has_tone = false, has_advanced_tone = false, has_curves = false;
   bool has_white_balance = false, has_look = false, has_local_chroma = false;
   bool has_downstream_look = false, has_user_lut = false;

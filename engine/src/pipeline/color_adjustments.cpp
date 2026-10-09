@@ -53,6 +53,13 @@ void parallel_for(int count, Work&& work) {
       count, std::function<void(int)>(std::forward<Work>(work)));
 }
 
+[[nodiscard]] bool finite_color_stage_surface(
+    const std::vector<ColorPixel>& pixels,
+    bool input_finite_validated = false) {
+  return input_finite_validated ||
+         color_surface_is_finite(std::span<const ColorPixel>{pixels});
+}
+
 using StageClock = std::chrono::steady_clock;
 [[nodiscard]] std::int64_t elapsed_stage_ms(StageClock::time_point start) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(StageClock::now() - start).count();
@@ -169,13 +176,17 @@ bool apply_color_geometry_stage(
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() !=
           static_cast<std::size_t>(width) *
               static_cast<std::size_t>(height) ||
       cancellation.cancelled()) {
     return false;
+  }
+  if (geometry_corrections_are_identity(state)) {
+    return finite_color_stage_surface(*pixels, input_finite_validated);
   }
   const auto geometry_timer = StageClock::now();
   apply_geometry_corrections(pixels, width, height, state);
@@ -186,14 +197,7 @@ bool apply_color_geometry_stage(
     telemetry->geometry_ms +=
         elapsed_stage_ms(geometry_timer);
   }
-  return std::ranges::all_of(
-      *pixels,
-      [](const ColorPixel& pixel) {
-        return std::isfinite(pixel.red) &&
-               std::isfinite(pixel.green) &&
-               std::isfinite(pixel.blue) &&
-               std::isfinite(pixel.alpha);
-      });
+  return finite_color_stage_surface(*pixels);
 }
 
 bool apply_color_photographic_output_stage(
@@ -204,7 +208,9 @@ bool apply_color_photographic_output_stage(
     GamutWarningTarget target,
     Aces2OutputLutQuality quality,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    std::span<const PhotoLayer> display_referred_text_layers,
+    bool display_referred_text_overlay_enabled) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() !=
           static_cast<std::size_t>(width) *
@@ -228,15 +234,88 @@ bool apply_color_photographic_output_stage(
         config,
         target);
   }
-  if (cancellation.cancelled() ||
-      !std::ranges::all_of(
-          *pixels,
-          [](const ColorPixel& pixel) {
-            return std::isfinite(pixel.red) &&
-                   std::isfinite(pixel.green) &&
-                   std::isfinite(pixel.blue) &&
-                   std::isfinite(pixel.alpha);
-          })) {
+  if (!display_referred_text_layers.empty() &&
+      display_referred_text_overlay_enabled) {
+    const auto& display_target =
+        target == GamutWarningTarget::PreviewDisplay
+            ? config.preview_display_target
+            : config.export_display_target;
+    if (!application.ready() || display_target.eotf != DisplayEotf::Srgb ||
+        display_target.mastering_mode != DisplayMasteringMode::Sdr) {
+      if (telemetry != nullptr) {
+        telemetry->failure_reason =
+            "Display-referred text overlay requires the verified SDR ACES 2 output path.";
+      }
+      return false;
+    }
+
+    // PhotographicOutput produces target-linear pixels here. Convert only the
+    // glyph rasters from the working profile, then use the same tested layer
+    // compositor for placement, opacity, alpha and source-over ordering.
+    const auto working_to_display = invert_matrix3(application.target_to_working);
+    std::vector<PhotoLayer> display_text_layers(
+        display_referred_text_layers.begin(),
+        display_referred_text_layers.end());
+    for (auto& layer : display_text_layers) {
+      if (layer.kind != "text" || !layer.parent_id.empty() ||
+          layer.blend_mode != "normal" || layer.clipping_mask ||
+          !layer.effects.empty() || !layer.effect_masks.empty() ||
+          ((layer.mask_width > 0 || layer.mask_height > 0 ||
+            !layer.mask_data.empty()) &&
+           (layer.mask_width <= 0 || layer.mask_height <= 0 ||
+            layer.mask_data.size() !=
+                static_cast<std::size_t>(layer.mask_width) *
+                    static_cast<std::size_t>(layer.mask_height) ||
+            static_cast<std::int64_t>(layer.mask_width) * height !=
+                static_cast<std::int64_t>(layer.mask_height) * width)) ||
+          !layer.text_material.empty() ||
+          layer.pixel_width <= 0 || layer.pixel_height <= 0 ||
+          layer.pixels.size() != static_cast<std::size_t>(layer.pixel_width) *
+                                     static_cast<std::size_t>(layer.pixel_height)) {
+        if (telemetry != nullptr) {
+          telemetry->failure_reason =
+              "Display-referred text layer exceeded the compiled plain-text policy.";
+        }
+        return false;
+      }
+      for (auto& pixel : layer.pixels) {
+        pixel = apply_rgb_matrix(pixel, working_to_display);
+      }
+    }
+
+    ColorAdjustmentState display_state;
+    display_state.color_pipeline = config;
+    display_state.color_pipeline.working_profile.color_space =
+        display_target.color_space;
+    display_state.color_pipeline.output_headroom =
+        display_target_linear_headroom(display_target);
+    display_state.input_transform.chromatic_adaptation_method = "Bradford";
+    const auto display_context = make_pipeline_color_context(display_state);
+    std::string layer_error;
+    if (!apply_standard_photo_layers(
+            pixels, width, height, display_context,
+            config.photographic_rendering_model, display_text_layers,
+            cancellation, &layer_error)) {
+      if (telemetry != nullptr) {
+        telemetry->failure_reason = layer_error.empty()
+            ? "Display-referred text composition failed."
+            : layer_error;
+      }
+      return false;
+    }
+    if (cancellation.cancelled()) return false;
+    if (telemetry != nullptr) {
+      telemetry->display_referred_text_color_domain = "display-linear";
+      telemetry->display_referred_text_eligibility =
+          "eligible-sdr-top-text-suffix";
+      telemetry->display_referred_text_eligibility_reason = "applied";
+      telemetry->display_referred_text_layer_count =
+          static_cast<std::int64_t>(display_referred_text_layers.size());
+      telemetry->display_referred_text_applied_layer_count =
+          static_cast<std::int64_t>(display_referred_text_layers.size());
+    }
+  }
+  if (cancellation.cancelled() || !finite_color_stage_surface(*pixels)) {
     return false;
   }
   if (telemetry != nullptr) {
@@ -292,14 +371,7 @@ bool apply_color_publish_stage(
   });
   const auto valid =
       !cancellation.cancelled() &&
-      std::ranges::all_of(
-          *pixels,
-          [](const ColorPixel& pixel) {
-            return std::isfinite(pixel.red) &&
-                   std::isfinite(pixel.green) &&
-                   std::isfinite(pixel.blue) &&
-                   std::isfinite(pixel.alpha);
-          });
+      color_surface_is_finite(std::span<const ColorPixel>{*pixels});
   if (valid && telemetry != nullptr) {
     telemetry->publish_ms +=
         elapsed_stage_ms(publish_timer);
@@ -460,18 +532,6 @@ namespace {
          pixels->size() == safe_width * safe_height;
 }
 
-[[nodiscard]] bool finite_color_stage_surface(
-    const std::vector<ColorPixel>& pixels) {
-  return std::ranges::all_of(
-      pixels,
-      [](const ColorPixel& pixel) {
-        return std::isfinite(pixel.red) &&
-               std::isfinite(pixel.green) &&
-               std::isfinite(pixel.blue) &&
-               std::isfinite(pixel.alpha);
-      });
-}
-
 }  // namespace
 
 ColorPrefixStageContext prepare_color_prefix_stage_context(
@@ -497,7 +557,8 @@ bool apply_color_normalize_raw_stage(
     const ColorAdjustmentState& state,
     ColorPrefixStageContext* context,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_color_stage_surface(pixels, width, height) ||
       context == nullptr || cancellation.cancelled()) {
     return false;
@@ -518,7 +579,7 @@ bool apply_color_normalize_raw_stage(
       color_context,
       &context->highlight_reconstruction);
   if (normalize_raw_stage_is_identity(input_stage)) {
-    return finite_color_stage_surface(*pixels);
+    return finite_color_stage_surface(*pixels, input_finite_validated);
   }
   const auto safe_width = static_cast<std::size_t>(width);
   parallel_for(height, [&](int y) {
@@ -549,7 +610,8 @@ bool apply_color_camera_characterization_stage(
     const ColorAdjustmentState& state,
     const ColorPrefixStageContext& context,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_color_stage_surface(pixels, width, height) ||
       !context.prepared || cancellation.cancelled()) {
     return false;
@@ -575,7 +637,7 @@ bool apply_color_camera_characterization_stage(
       &context.highlight_reconstruction);
   if (std::abs(state.lens_vignette) <= 1.0e-6 &&
       camera_characterization_stage_is_identity(input_stage)) {
-    return finite_color_stage_surface(*pixels);
+    return finite_color_stage_surface(*pixels, input_finite_validated);
   }
   const auto safe_width = static_cast<std::size_t>(width);
   parallel_for(height, [&](int y) {
@@ -610,7 +672,8 @@ bool apply_color_scene_adjustments_stage(
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_color_stage_surface(pixels, width, height) ||
       cancellation.cancelled()) {
     return false;
@@ -620,7 +683,7 @@ bool apply_color_scene_adjustments_stage(
   const auto input_stage =
       make_input_stage_parameters(state, color_context);
   if (scene_adjustments_stage_is_identity(input_stage)) {
-    return finite_color_stage_surface(*pixels);
+    return finite_color_stage_surface(*pixels, input_finite_validated);
   }
   const auto safe_width = static_cast<std::size_t>(width);
   parallel_for(height, [&](int y) {
@@ -649,13 +712,14 @@ bool apply_color_tone_stage(
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_color_stage_surface(pixels, width, height) ||
       cancellation.cancelled()) {
     return false;
   }
   if (color_tone_stage_is_identity(state)) {
-    return finite_color_stage_surface(*pixels);
+    return finite_color_stage_surface(*pixels, input_finite_validated);
   }
   const auto timer = StageClock::now();
   const auto safe_width = static_cast<std::size_t>(width);
@@ -686,6 +750,49 @@ bool apply_color_tone_stage(
       has_tone_adjustments
           ? acquire_tone_luminance_table(state, telemetry)
           : std::shared_ptr<const ToneLuminanceTable>{};
+  const auto modern_aces =
+      photographic_rendering_model_uses_aces2(
+          state.color_pipeline
+              .photographic_rendering_model) &&
+      state.color_pipeline.render_intent ==
+          RenderIntent::Perceptual;
+  const auto skip_automatic_shoulder =
+      modern_aces &&
+      std::abs(state.filmic_shoulder) <= 1.0e-9;
+  if (hdr_local_tone_strength <= 1.0e-6 &&
+      skip_automatic_shoulder) {
+    parallel_for(height, [&](int y) {
+      if (cancellation.cancelled()) {
+        return;
+      }
+      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+      for (int x = 0; x < width; ++x) {
+        const auto index = row_offset + static_cast<std::size_t>(x);
+        const auto source_luminance =
+            luminance_for_pixel((*pixels)[index], color_context);
+        const auto target =
+            tone_table != nullptr
+                ? evaluate_tone_luminance_table(
+                      *tone_table,
+                      source_luminance,
+                      state)
+                : apply_global_tone(source_luminance, state);
+        (*pixels)[index] = scale_pixel_for_global_tone(
+            (*pixels)[index],
+            target,
+            output_headroom,
+            color_context);
+      }
+    });
+    if (telemetry != nullptr) {
+      const auto elapsed = elapsed_stage_ms(timer);
+      telemetry->tone_ms += elapsed;
+      telemetry->tone_mask_ms += elapsed;
+    }
+    return !cancellation.cancelled() &&
+           finite_color_stage_surface(*pixels);
+  }
+
   std::vector<double> target_luminances(
       safe_width * safe_height,
       0.0);
@@ -801,15 +908,6 @@ bool apply_color_tone_stage(
     }
   }
 
-  const auto modern_aces =
-      photographic_rendering_model_uses_aces2(
-          state.color_pipeline
-              .photographic_rendering_model) &&
-      state.color_pipeline.render_intent ==
-          RenderIntent::Perceptual;
-  const auto skip_automatic_shoulder =
-      modern_aces &&
-      std::abs(state.filmic_shoulder) <= 1.0e-9;
   const auto maximum_target =
       robust_highlight_reference_from_row_maxima(
           row_max_luminances);
@@ -859,7 +957,8 @@ bool apply_color_look_stage(
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_color_stage_surface(pixels, width, height) ||
       cancellation.cancelled()) {
     return false;
@@ -874,7 +973,9 @@ bool apply_color_look_stage(
       clamp_signed_percent(state.vibrance) / 100.0;
   const auto user_luts = user_luts_from_state(state, color_context);
   if (color_look_stage_is_identity(state, saturation_strength, vibrance_strength) &&
-      user_luts.empty()) return finite_color_stage_surface(*pixels);
+      user_luts.empty()) {
+    return finite_color_stage_surface(*pixels, input_finite_validated);
+  }
   parallel_for(height, [&](int y) {
     if (cancellation.cancelled()) {
       return;
@@ -1041,7 +1142,21 @@ bool apply_color_detail_stage(
     const ColorAdjustmentState& state,
     RemovalQuality removal_quality,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
+  const auto no_spatial_detail =
+      std::abs(clamp_signed_percent(state.texture) / 100.0) <= 1e-6 &&
+      std::abs(clamp_signed_percent(state.clarity) / 100.0) <= 1e-6 &&
+      std::abs(clamp_signed_percent(state.dehaze) / 100.0) <= 1e-6;
+  const auto no_fine_detail =
+      std::abs(clamp_signed_percent(state.sharpening) / 100.0) <= 1e-6 &&
+      std::abs(clamp_signed_percent(state.luminance_nr) / 100.0) <= 1e-6 &&
+      std::abs(clamp_signed_percent(state.color_nr) / 100.0) <= 1e-6;
+  if (no_spatial_detail && no_fine_detail) {
+    return valid_color_stage_surface(pixels, width, height) &&
+           !cancellation.cancelled() &&
+           finite_color_stage_surface(*pixels, input_finite_validated);
+  }
   if (!apply_spatial_detail_effects(
           pixels,
           width,

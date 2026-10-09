@@ -44,6 +44,22 @@ int main() {
           QStringLiteral("Invalid segmentation payload")) {
     return fail("segmentation variant round trips must be exact and fail closed");
   }
+  auto refinement_result = square;
+  const float refinement_logits[4]{-2.0F, -0.5F, 0.5F, 2.0F};
+  refinement_result.refinement_logits = QByteArray(
+      reinterpret_cast<const char*>(refinement_logits),
+      static_cast<qsizetype>(sizeof(refinement_logits)));
+  refinement_result.refinement_logits_width = 2;
+  refinement_result.refinement_logits_height = 2;
+  const auto refinement_variant =
+      segmentation_mask_variant(refinement_result, QStringLiteral("object"));
+  const auto refinement_restored =
+      segmentation_result_from_mask_variant(refinement_variant);
+  if (refinement_restored.refinement_logits != refinement_result.refinement_logits ||
+      refinement_restored.refinement_logits_width != 2 ||
+      refinement_restored.refinement_logits_height != 2) {
+    return fail("Smart Select preview variants must preserve exact decoder logits for iterative refinement");
+  }
 
   if (segmentation_result_nonzero_count(square) != 4 ||
       segmentation_result_coverage(square) != 0.25 ||

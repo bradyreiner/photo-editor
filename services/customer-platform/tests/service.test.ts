@@ -48,7 +48,7 @@ beforeAll(async () => {
   };
 });
 beforeEach(async () => {
-  for (const table of ['audit','staff','rate_buckets','webhook_receipts','installations','licenses','subscriptions','customers','refresh_sequences']) await env.DB.prepare(`DELETE FROM ${table}`).run();
+  for (const table of ['audit','staff','rate_buckets','webhook_receipts','installations','licenses','subscriptions','privacy_tombstones','customers','refresh_sequences']) await env.DB.prepare(`DELETE FROM ${table}`).run();
 });
 afterEach(() => vi.unstubAllGlobals());
 

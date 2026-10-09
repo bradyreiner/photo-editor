@@ -17,3 +17,8 @@ resolver = "2"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Agent checkpoint receipts rehash source photos. Keep exact content validation
+# fast in local desktop builds without optimizing the application crates.
+[profile.dev.package.sha2]
+opt-level = 3

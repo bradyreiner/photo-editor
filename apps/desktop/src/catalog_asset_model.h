@@ -1,11 +1,13 @@
 #pragma once
 
 #include "customer_edit_access.h"
+#include "catalog_duplicate_analysis.h"
 
 #include <QAbstractListModel>
 #include <QDate>
 #include <QDateTime>
 #include <QFutureWatcher>
+#include <QLockFile>
 #include <QHash>
 #include <QJsonObject>
 #include <QProcess>
@@ -19,19 +21,35 @@
 #include <QVector>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "job_store.h"
+#include "agent_task_journal.h"
+
+class QThreadPool;
+class QTemporaryFile;
 
 namespace photo_editor::desktop {
 
 struct EditRecipeState;
+struct ImportPreflightRequest;
+struct ImportPreflightScan;
+
+struct CatalogMediaDurationResult final {
+  QString file_path;
+  QStringList asset_ids;
+  quint64 generation = 0;
+  double seconds = 0.0;
+};
 
 struct CatalogAssetItem final {
+  bool operator==(const CatalogAssetItem&) const = default;
   QString asset_id;
   QString capture_date;
   QDate capture_date_value;
+  QDateTime capture_timestamp;
   QString camera_label;
   QString lens_model;
   QString iso_label;
@@ -43,6 +61,8 @@ struct CatalogAssetItem final {
   // Set only by a thumbnail completion matching the current source and recipe.
   // Historical stale-result diagnostics are not current-preview provenance.
   bool search_preview_current = false;
+  QString thumbnail_provenance_token;
+  QHash<QString, QString> thumbnail_dependency_revisions;
   bool thumbnail_stale_detected = false;
   bool thumbnail_stale_mismatch = false;
   QString thumbnail_stale_detection_reason;
@@ -50,6 +70,11 @@ struct CatalogAssetItem final {
   QString thumbnail_stale_current_recipe_hash;
   QString thumbnail_stale_detection_signature;
   QString adjustment_patch_json;
+  QString recipe_snapshot_patch_json;
+  QString legacy_recipe_json;
+  QString canonical_recipe_payload;
+  QString canonical_recipe_cache_key;
+  QString canonical_recipe_provenance_payload;
   QString drive_id;
   QString import_mode;
   QString imported_at;
@@ -68,6 +93,7 @@ struct CatalogAssetItem final {
   QString burst_key;
   int burst_size = 1;
   int burst_position = 1;
+  bool burst_time_based = false;
   QString duplicate_group_key;
   int duplicate_group_size = 1;
   int duplicate_group_position = 1;
@@ -107,11 +133,33 @@ struct ProjectRecord final {
   QSet<QString> asset_ids;
 };
 
+struct CatalogLibraryState final {
+  bool present = false;
+  QVector<ProjectRecord> projects;
+  QHash<QString, CullingStateRecord> review_states;
+  QHash<QString, QString> relinked_paths;
+  QHash<QString, QVariantMap> asset_metadata;
+};
+
+struct CatalogSnapshotResult final {
+  quint64 generation = 0;
+  QVector<CatalogAssetItem> assets;
+  QHash<QString, QString> reusable_thumbnail_tokens;
+  CatalogLibraryState library_state;
+  int drive_count = 0;
+  qint64 payload_bytes = 0;
+  qint64 preparation_ms = 0;
+  QString error;
+};
+
 struct ThumbnailTaskResult final {
   QString asset_id;
   QString file_path;
   QString adjustment_patch_json;
   QString thumbnail_source;
+  QString thumbnail_provenance_token;
+  QHash<QString, QString> thumbnail_dependency_revisions;
+  bool source_changed = false;
   qint64 thumbnail_cache_bytes = 0;
   int thumbnail_cache_entries = 0;
   qint64 thumbnail_cache_probe_ms = 0;
@@ -141,6 +189,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(int deleteTargetCount READ deleteTargetCount NOTIFY deleteProgressChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
   Q_PROPERTY(int assetCount READ assetCount NOTIFY assetCountChanged)
+  Q_PROPERTY(int firstVisiblePhotoIndex READ firstVisiblePhotoIndex NOTIFY firstVisiblePhotoIndexChanged)
   Q_PROPERTY(int totalAssetCount READ totalAssetCount NOTIFY totalAssetCountChanged)
   Q_PROPERTY(int driveCount READ driveCount NOTIFY driveCountChanged)
   Q_PROPERTY(QStringList selectedAssetIds READ selectedAssetIds NOTIFY selectionChanged)
@@ -156,6 +205,10 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(int visibleOnlineCount READ visibleOnlineCount NOTIFY cullingStatsChanged)
   Q_PROPERTY(int visibleOfflineCount READ visibleOfflineCount NOTIFY cullingStatsChanged)
   Q_PROPERTY(QVariantList importSources READ importSources NOTIFY importSourcesChanged)
+  Q_PROPERTY(QVariantMap importPreflightResult READ importPreflightResult NOTIFY importPreflightChanged)
+  Q_PROPERTY(bool importPreflightBusy READ importPreflightBusy NOTIFY importPreflightChanged)
+  Q_PROPERTY(bool blankCanvasBusy READ blankCanvasBusy NOTIFY blankCanvasBusyChanged)
+  Q_PROPERTY(int importPreflightScannedCount READ importPreflightScannedCount NOTIFY importPreflightChanged)
   Q_PROPERTY(QStringList importFileNameFilters READ importFileNameFilters CONSTANT)
   Q_PROPERTY(int selectedIndex READ selectedIndex NOTIFY selectedIndexChanged)
   Q_PROPERTY(QString selectedAssetId READ selectedAssetId NOTIFY selectedAssetChanged)
@@ -208,16 +261,27 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(QStringList cameraLabels READ cameraLabels NOTIFY cameraLabelsChanged)
   Q_PROPERTY(QString projectFilter READ projectFilter WRITE setProjectFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString importDateFilter READ importDateFilter WRITE setImportDateFilter NOTIFY filtersChanged)
+  Q_PROPERTY(QString importSessionFromFilter READ importSessionFromFilter NOTIFY filtersChanged)
+  Q_PROPERTY(QString importSessionToFilter READ importSessionToFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString captureYearFilter READ captureYearFilter WRITE setCaptureYearFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString cameraFilter READ cameraFilter WRITE setCameraFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString captureDateFromFilter READ captureDateFromFilter WRITE setCaptureDateFromFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString captureDateToFilter READ captureDateToFilter WRITE setCaptureDateToFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString mediaTypeFilter READ mediaTypeFilter WRITE setMediaTypeFilter NOTIFY filtersChanged)
+  Q_PROPERTY(QString mediaCollectionFilter READ mediaCollectionFilter WRITE setMediaCollectionFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString reviewFilter READ reviewFilter WRITE setReviewFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString availabilityFilter READ availabilityFilter WRITE setAvailabilityFilter NOTIFY filtersChanged)
   Q_PROPERTY(int minimumRatingFilter READ minimumRatingFilter WRITE setMinimumRatingFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString searchFilter READ searchFilter WRITE setSearchFilter NOTIFY filtersChanged)
   Q_PROPERTY(bool visualSearchActive READ visualSearchActive NOTIFY filtersChanged)
+  Q_PROPERTY(QString sortOrder READ sortOrder WRITE setSortOrder NOTIFY filtersChanged)
+  Q_PROPERTY(QVariantMap selectedMetadata READ selectedMetadata NOTIFY selectedAssetChanged)
+  Q_PROPERTY(int metadataPendingCount READ metadataPendingCount NOTIFY metadataStateChanged)
+  Q_PROPERTY(QString metadataStatus READ metadataStatus NOTIFY metadataStateChanged)
+  Q_PROPERTY(bool metadataFileBusy READ metadataFileBusy NOTIFY metadataStateChanged)
+  Q_PROPERTY(bool duplicateAnalysisBusy READ duplicateAnalysisBusy NOTIFY duplicateAnalysisChanged)
+  Q_PROPERTY(QString duplicateAnalysisStatus READ duplicateAnalysisStatus NOTIFY duplicateAnalysisChanged)
+  Q_PROPERTY(int confirmedDuplicateGroupCount READ confirmedDuplicateGroupCount NOTIFY duplicateAnalysisChanged)
 
  public:
   void setEditAccessPolicy(std::function<bool()> policy) { customer_edit_access_.setPolicy(std::move(policy)); }
@@ -282,6 +346,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] int deleteTargetCount() const;
   [[nodiscard]] bool busy() const;
   [[nodiscard]] int assetCount() const;
+  [[nodiscard]] int firstVisiblePhotoIndex() const { return first_visible_photo_index_; }
   [[nodiscard]] int totalAssetCount() const;
   [[nodiscard]] int driveCount() const;
   [[nodiscard]] QStringList selectedAssetIds() const;
@@ -349,11 +414,14 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QStringList cameraLabels() const;
   [[nodiscard]] QString projectFilter() const;
   [[nodiscard]] QString importDateFilter() const;
+  [[nodiscard]] QString importSessionFromFilter() const;
+  [[nodiscard]] QString importSessionToFilter() const;
   [[nodiscard]] QString captureYearFilter() const;
   [[nodiscard]] QString cameraFilter() const;
   [[nodiscard]] QString captureDateFromFilter() const;
   [[nodiscard]] QString captureDateToFilter() const;
   [[nodiscard]] QString mediaTypeFilter() const;
+  [[nodiscard]] QString mediaCollectionFilter() const;
   [[nodiscard]] QString reviewFilter() const;
   [[nodiscard]] QString availabilityFilter() const;
   [[nodiscard]] int minimumRatingFilter() const;
@@ -363,9 +431,79 @@ class CatalogAssetModel final : public QAbstractListModel {
   void beginCatalogStartup();
   void reportCatalogStartupFailure(const QString& error_message);
   Q_INVOKABLE void clearFilters();
+  Q_INVOKABLE void refreshDocumentSourceExclusions();
+  QString sortOrder() const { return sort_order_; }
+  void setSortOrder(const QString& order);
+  QVariantMap selectedMetadata() const;
+  int metadataPendingCount() const { return static_cast<int>(pending_metadata_.size()); }
+  QString metadataStatus() const { return metadata_status_; }
+  bool metadataFileBusy() const { return metadata_file_busy_; }
+  Q_INVOKABLE bool saveMetadataToSelected(const QVariantMap& patch);
+  Q_INVOKABLE void retryMetadataPersistence();
+  Q_INVOKABLE bool readSelectedMetadataSidecars();
+  Q_INVOKABLE bool writeSelectedMetadataSidecars();
+  bool duplicateAnalysisBusy() const { return duplicate_analysis_busy_; }
+  QString duplicateAnalysisStatus() const { return duplicate_analysis_status_; }
+  int confirmedDuplicateGroupCount() const;
+  Q_INVOKABLE bool analyzeDuplicates();
+  Q_INVOKABLE void cancelDuplicateAnalysis();
+  Q_INVOKABLE QString originalPreviewSource(const QString& file_path) const;
+  Q_INVOKABLE void setImportSessionFilter(const QString& from, const QString& to);
   Q_INVOKABLE void refreshImportSources(bool force = false);
   Q_INVOKABLE void importFolder();
   Q_INVOKABLE void importFolderPath(const QString& folder_path);
+  Q_INVOKABLE bool createBlankCanvas(const QVariantMap& settings);
+  bool blankCanvasBusy() const;
+  bool startPreparedBlankCanvas(const QString& task_id, const QString& document_id,
+                                const QString& import_job_id, const QVariantMap& settings);
+  bool acceptPreparedBlankCanvasSource(const QString& task_id, const QString& source_sha256);
+  bool cancelPreparedBlankCanvas(const QString& task_id);
+  [[nodiscard]] bool preparedBlankCanvasBusy(const QString& task_id) const;
+  [[nodiscard]] QVariantMap preparedBlankCanvasStatus(const QString& task_id) const;
+  [[nodiscard]] QByteArray preparedBlankCanvasCatalogSnapshot(
+      const QString& source_path, const QString& task_id, const QString& import_job_id) const;
+  [[nodiscard]] AgentTaskJournal::ResourceAdapter preparedBlankCanvasCatalogResourceAdapter(
+      const QString& source_path, const QString& task_id, const QString& import_job_id);
+  bool restorePreparedBlankCanvasCatalogSnapshot(
+      const QString& source_path, const QByteArray& expected, const QByteArray& before, const QString& task_id,
+      const QString& import_job_id, QString* error_message = nullptr);
+  [[nodiscard]] AgentTaskJournal::ResourceAdapter agentTaskRecipeResourceAdapter(
+      const QString& asset_id, const QString& task_id = {});
+  // Task writes are admitted before the native save starts. Completion returns
+  // a full catalog receipt only when both source identity and the exact authored
+  // recipe tuple match the persisted row after the owner has drained its queue.
+  bool registerAgentTaskRecipeCheckpoint(
+      const QString& task_id, const QString& asset_id, const QByteArray& expected_current,
+      const QVariantMap& exact_recipes, const QString& preparing_revision_id = {});
+  bool cancelAgentTaskRecipeCheckpoint(
+      const QString& task_id, const QString& asset_id, const QByteArray& expected_current,
+      const QString& terminal_revision_id = {});
+  [[nodiscard]] QByteArray completeAgentTaskRecipeCheckpoint(
+      const QString& task_id, const QString& asset_id, const QString& terminal_revision_id = {});
+  // Native-photo restoration may persist a blank recipe before the catalog
+  // recipe owner reverses it. Register that one exact output before restoring.
+  bool registerAgentTaskRecipeRestoreReceipt(
+      const QString& task_id, const QString& asset_id, const QByteArray& expected_current,
+      const QVariantMap& exact_recipes);
+  [[nodiscard]] bool agentTaskRecipePersistenceSettled(const QString& asset_id) const;
+  using AgentRecipePersistenceHandler =
+      std::function<QVariantMap(const QString&, const QVariantMap&)>;
+  void setAgentRecipePersistenceHandler(AgentRecipePersistenceHandler handler) {
+    agent_recipe_persistence_handler_ = std::move(handler);
+  }
+  // Agent patches bind a task ID and immutable revision at edit admission; the
+  // persistence handler receives prepare/accepted/finished with the exact
+  // bounded stdin payload that the helper process receives.
+  int applyAgentAdjustmentPatchJsonToAssetIds(
+      const QString& task_id,
+      const QStringList& asset_ids,
+      const QString& patch_json,
+      const QStringList& adjustment_groups = {});
+  bool retryAgentAdjustmentPatchPersistence(
+      const QString& task_id, const QString& asset_id);
+  // Resume a retained task revision after the shared persistence owner reports
+  // quiescence. This does not change the revision payload or its identity.
+  bool resumeAgentAdjustmentPatchPersistence(const QString& task_id);
   Q_INVOKABLE void importSelection(
       const QString& source_root_path,
       const QStringList& file_paths,
@@ -377,6 +515,14 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QString& duplicate_policy = QStringLiteral("skip"),
       const QString& organization_template = QStringLiteral("source"),
       const QString& raw_jpeg_policy = QStringLiteral("both")) const;
+  QVariantMap importPreflightResult() const { return import_preflight_result_; }
+  bool importPreflightBusy() const { return import_preflight_requested_; }
+  int importPreflightScannedCount() const { return import_preflight_scanned_count_; }
+  Q_INVOKABLE void requestImportPreflight(
+      const QString& source_root_path, const QStringList& file_paths,
+      const QString& import_mode, const QString& duplicate_policy,
+      const QString& organization_template, const QString& raw_jpeg_policy);
+  Q_INVOKABLE void cancelImportPreflight();
   Q_INVOKABLE void importSelectionWithOptions(
       const QString& source_root_path,
       const QStringList& file_paths,
@@ -396,16 +542,21 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE QString localPathForUrl(const QString& url) const;
   Q_INVOKABLE QString parentFolderUrl(const QString& url) const;
   Q_INVOKABLE void createProject(const QString& name);
+  Q_INVOKABLE void createProjectWithSelectedAssets(const QString& name);
   Q_INVOKABLE void openProject(const QString& project_name);
   Q_INVOKABLE void addAssetToProject(const QString& asset_id, const QString& project_name);
+  Q_INVOKABLE bool addAssetToProjectAsync(const QString& asset_id, const QString& project_name);
   Q_INVOKABLE void addSelectedAssetsToProject(const QString& project_name);
   Q_INVOKABLE void removeAssetFromProject(const QString& asset_id, const QString& project_name);
+  Q_INVOKABLE void removeSelectedAssetsFromProject(const QString& project_name);
   Q_INVOKABLE void deleteSelectedAssets();
   Q_INVOKABLE bool assetInProject(const QString& asset_id, const QString& project_name) const;
   Q_INVOKABLE int assetCountForProject(const QString& project_name) const;
   Q_INVOKABLE QVariantList visibleAssets() const;
   Q_INVOKABLE QVariantList assetsForProject(const QString& project_name) const;
   Q_INVOKABLE QVariantList timelinePickerAssets(const QString& project_name = QString()) const;
+  Q_INVOKABLE QVariantList mediaPickerAssets(
+      const QString& project_name, const QStringList& media_types = {}) const;
   Q_INVOKABLE QVariantMap assetAt(int index) const;
   Q_INVOKABLE QVariantList galleryAssets() const;
   Q_INVOKABLE QVariantMap galleryAssetAt(int index) const;
@@ -474,6 +625,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] int activeThumbnailWorkerCount() const;
   [[nodiscard]] int pendingThumbnailWorkerCount() const;
   void replaceAssetsForTesting(const QVector<CatalogAssetItem>& items);
+  void replaceTimelineAssetsForTesting(const QVector<CatalogAssetItem>& items);
   void clearVirtualCopiesForTesting();
   bool applyThumbnailResultForTesting(
       const QString& asset_id,
@@ -488,6 +640,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void setCaptureDateFromFilter(const QString& capture_date_from_filter);
   void setCaptureDateToFilter(const QString& capture_date_to_filter);
   void setMediaTypeFilter(const QString& media_type_filter);
+  void setMediaCollectionFilter(const QString& media_collection_filter);
   void setReviewFilter(const QString& review_filter);
   void setAvailabilityFilter(const QString& availability_filter);
   void setMinimumRatingFilter(int minimum_rating_filter);
@@ -496,7 +649,22 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE void setVisualSearchResults(const QStringList& ranked_asset_ids);
   Q_INVOKABLE void clearVisualSearchResults();
 
- signals:
+signals:
+  void metadataStateChanged();
+  void duplicateAnalysisChanged();
+  void blankCanvasBusyChanged();
+  void blankCanvasCreated(const QString& asset_id);
+  void blankCanvasFailed(const QString& error);
+  void preparedBlankCanvasSourceCreated(const QString& task_id, const QString& document_id,
+                                        const QString& source_path, const QString& source_sha256);
+  void preparedBlankCanvasImportAccepted(const QString& task_id, const QString& import_job_id,
+                                         const QString& source_path, const QString& source_sha256);
+  void preparedBlankCanvasFinished(const QString& task_id, const QString& import_job_id,
+                                   const QString& status, const QString& asset_id,
+                                   const QString& source_path, const QString& source_sha256,
+                                   const QString& error);
+  void preparedBlankCanvasChanged(const QString& task_id);
+  void agentTaskRecipePersistenceChanged(const QString& asset_id);
   void statusChanged();
   void errorMessageChanged();
   void loadingChanged();
@@ -505,9 +673,12 @@ class CatalogAssetModel final : public QAbstractListModel {
   void deleteProgressChanged();
   void busyChanged();
   void assetCountChanged();
+  void firstVisiblePhotoIndexChanged();
   void totalAssetCountChanged();
+  void mediaDurationsChanged();
   void driveCountChanged();
   void importSourcesChanged();
+  void importPreflightChanged();
   void selectedIndexChanged();
   void selectedAssetChanged();
   void selectionChanged();
@@ -527,14 +698,61 @@ class CatalogAssetModel final : public QAbstractListModel {
 
  private slots:
   void handleSnapshotFinished(int exit_code, QProcess::ExitStatus exit_status);
+  void handleSnapshotParsed();
   void handleImportFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleThumbnailFinished();
+  void handleMediaDurationFinished();
+  void handleTimelineAssetsLoaded();
   void handleDeleteFinished();
   void pollActiveImportJob();
+  void handleImportJobPollFinished();
   void handleCullingPersistenceFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleRecipePersistenceFinished(int exit_code, QProcess::ExitStatus exit_status);
 
  private:
+  friend struct CatalogImportPreflightTestAccess;
+  friend struct CatalogThumbnailReuseTestAccess;
+  friend struct CatalogTimelineReconciliationTestAccess;
+  friend struct CatalogFilterBenchmarkAccess;
+  friend struct CatalogSnapshotBenchmarkAccess;
+  friend struct CatalogSnapshotContractAccess;
+  static QThreadPool& importPreflightThreadPool();
+  void queueImportPreflight(
+      const QString& source_root_path, const QStringList& file_paths,
+      const QString& import_mode, const QString& duplicate_policy,
+      const QString& organization_template, const QString& raw_jpeg_policy,
+      const QString& project_name, bool admission, const QString& prepared_task_id = {});
+  void startNextImportPreflight();
+  void handleImportPreflightFinished();
+  void consumeImportedJobRecords(const QVector<PersistentJobRecord>& records);
+  QFutureWatcher<QVariantMap> import_preflight_watcher_;
+  QFutureWatcher<QVector<PersistentJobRecord>> import_job_poll_watcher_;
+  QFutureWatcher<QVariantMap>* prepared_blank_canvas_watcher_ = nullptr;
+  bool blank_canvas_generating_ = false;
+  QString pending_blank_canvas_path_;
+  bool blank_canvas_import_finished_ = false;
+  void failPendingBlankCanvas(const QString& error);
+  struct PreparedBlankCanvasOperation;
+  void finishPreparedBlankCanvas(const QString& status, const QString& error = {});
+  void resolvePreparedBlankCanvasAfterRefresh();
+  [[nodiscard]] QByteArray recipeResourceSnapshot(const QString& asset_id) const;
+  bool restoreRecipeResourceSnapshot(const QString& asset_id, const QByteArray& expected,
+                                     const QByteArray& before, const QString& task_id,
+                                     QString* error_message = nullptr);
+  bool restorePreparedBlankCanvasCatalogSnapshotExpected(
+      const QString& source_path, const QByteArray& expected, const QByteArray& before,
+      const QString& task_id, const QString& import_job_id,
+      QString* error_message = nullptr);
+  QTimer import_preflight_progress_timer_;
+  std::shared_ptr<ImportPreflightRequest> active_import_preflight_;
+  std::shared_ptr<ImportPreflightRequest> pending_import_preflight_;
+  std::shared_ptr<const ImportPreflightScan> import_preflight_scan_;
+  QVariantMap import_preflight_result_;
+  quint64 import_preflight_generation_ = 0;
+  int import_preflight_scanned_count_ = 0;
+  bool import_preflight_requested_ = false;
+  bool import_preparing_ = false;
+  void startSnapshotFetch();
   CustomerEditAccess customer_edit_access_;
   void setStatus(const QString& status);
   void setErrorMessage(const QString& message);
@@ -543,16 +761,24 @@ class CatalogAssetModel final : public QAbstractListModel {
   void setDeleting(bool deleting);
   void setDeleteProgress(int delete_progress);
   void setDeleteTargetCount(int delete_target_count);
-  void beginImportJob(
+  bool beginImportJob(
       const QString& folder_path,
       const QString& project_name,
       const QStringList& selected_file_paths,
       int selection_count,
       const QString& import_mode,
-      const QJsonObject& import_preflight = {});
+      const QJsonObject& import_preflight = {},
+      const QString& prepared_task_id = {},
+      const QString& prepared_job_id = {},
+      const QString& prepared_document_id = {},
+      const QString& prepared_source_sha256 = {});
   void finishImportJob(bool success, const QString& message);
   void setDriveCount(int drive_count);
-  void updateAssets(const QVector<CatalogAssetItem>& items);
+  void updateAssets(QVector<CatalogAssetItem> items,
+                    const QHash<QString, QString>& reusable_thumbnail_tokens = {});
+  void restartMediaDurationRefresh();
+  void prioritizeMediaDurationTasks();
+  void startNextMediaDurationTask();
   void removeDeletedAssets(const QStringList& asset_ids);
   void queueThumbnailRefreshes();
   void startNextThumbnailTask();
@@ -566,7 +792,8 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QString& project_name,
       const QString& import_mode = QStringLiteral("managed"),
       const QString& duplicate_policy = QStringLiteral("skip"),
-      const QVariantMap& reviewed_preflight = {});
+      const QVariantMap& reviewed_preflight = {},
+      const QString& prepared_task_id = {});
   void applyFilters(const QString& preferred_asset_id = {});
   void rebuildAllAssetIndexMap();
   void rebuildVisibleAssetIndexMap();
@@ -576,13 +803,20 @@ class CatalogAssetModel final : public QAbstractListModel {
   void rebuildBurstMetadata();
   void rebuildIntelligenceMetadata();
   void reconcileSelection(const QString& preferred_asset_id = {});
+  void startTimelineAssetsLoad();
   void loadTimelineAssets();
+  void reconcileTimelineAssets();
   void loadProjects();
   void saveProjects() const;
   void scheduleProjectsSave();
   bool runCatalogStateCommand(const QStringList& command_arguments, QString* error_message = nullptr) const;
-  void loadPersistedLibraryState(const QJsonObject& root);
+  void loadPersistedLibraryState(CatalogLibraryState state);
   void addAssetsToProject(const QStringList& asset_ids, const QString& project_name);
+  bool changeProjectMemberships(const QString& project_name, const QStringList& asset_ids, bool add, bool open_project = false);
+  void loadProjectChanges();
+  bool saveProjectChanges(const QJsonObject& changes);
+  void overlayProjectChanges(bool acknowledge_snapshot);
+  void startNextProjectChange();
   void finalizePendingImportProjectAssignment();
   void bumpProjectStatsRevision();
   [[nodiscard]] QString projectsFilePath() const;
@@ -590,16 +824,28 @@ class CatalogAssetModel final : public QAbstractListModel {
   void setAssetCullingState(const QString& asset_id, const CullingStateRecord& state);
   void queueCullingPersistence(const QString& asset_id, const CullingStateRecord& state);
   void startNextCullingPersistence();
+  void loadCullingChanges();
+  void initializeMetadataPersistence();
+  bool saveMetadataOutbox(const QHash<QString, QVariantMap>& records);
+  void startMetadataPersistence();
+  void finishMetadataPersistence(int exit_code, QProcess::ExitStatus exit_status);
+  QString metadataAssetId(const CatalogAssetItem& item) const;
+  void initializeDuplicateAnalysis();
+  void applyConfirmedDuplicateGroups();
+  bool saveCullingChanges(const QHash<QString, CullingStateRecord>& states);
+  void overlayCullingChanges();
   void queueAdjustmentPatchPersistence(
       const QString& asset_id,
-      const QString& adjustment_patch_json);
+      const QString& adjustment_patch_json,
+      const QString& task_id = {});
   void startNextAdjustmentPatchPersistence();
   int applyRecipeStateToAssetIds(
       const QStringList& asset_ids,
       const EditRecipeState& state,
       const QStringList& groups,
       bool transient_preview = false,
-      bool clipboard_paste = false);
+      bool clipboard_paste = false,
+      const QString& task_id = {});
   int applyExactAdjustmentPatches(
       const QHash<QString, QString>& adjustment_patch_jsons);
   void recordCullingChange(
@@ -611,6 +857,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] const ProjectRecord* findProject(const QString& project_name) const;
   [[nodiscard]] QString normalizedProjectName(const QString& project_name) const;
   [[nodiscard]] bool matchesImportDateFilter(const CatalogAssetItem& item) const;
+  [[nodiscard]] bool matchesImportSessionFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesCaptureYearFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesCameraFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesCaptureDateRangeFilter(const CatalogAssetItem& item) const;
@@ -621,10 +868,11 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] bool matchesMinimumRatingFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesSearchFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] const CatalogAssetItem* selectedItem() const;
-  [[nodiscard]] QVariantMap assetMap(const CatalogAssetItem& item) const;
+  [[nodiscard]] QVariantMap assetMap(const CatalogAssetItem& item, bool include_adjustment_patch = true) const;
   [[nodiscard]] QString adjustmentPatchProjection(
       const QString& adjustment_payload) const;
   void refreshVisibleCullingStats();
+  void updateFirstVisiblePhotoIndex();
   bool refreshAssetOnlineState(const QString& asset_id);
   int relinkAssetsToFolder(const QString& folder_url, bool selected_only);
 
@@ -636,9 +884,22 @@ class CatalogAssetModel final : public QAbstractListModel {
   QStringList stateArguments(const QStringList& command_arguments) const;
   QVector<CatalogAssetItem> all_assets_;
   QVector<CatalogAssetItem> assets_;
+  QVector<CatalogAssetItem> timeline_assets_;
+  int first_visible_photo_index_ = -1;
   QHash<QString, qsizetype> all_asset_index_by_id_;
   QHash<QString, qsizetype> visible_asset_index_by_id_;
+  QVariantMap last_timeline_reconciliation_;
   QVector<ProjectRecord> projects_;
+  QJsonObject pending_project_changes_;
+  QHash<QString, quint64> project_change_revisions_;
+  QHash<QString, quint64> attempted_project_change_revisions_;
+  QSet<QString> failed_project_changes_;
+  quint64 next_project_change_revision_ = 0;
+  bool project_changes_readable_ = true;
+  bool project_refresh_after_save_ = false;
+  QString active_project_change_;
+  QFutureWatcher<QVariantMap> project_change_watcher_;
+  std::shared_ptr<std::atomic_bool> project_change_cancellation_;
   QHash<QString, CullingStateRecord> culling_states_;
   QVector<CullingHistoryEntry> culling_undo_stack_;
   QVector<CullingHistoryEntry> culling_redo_stack_;
@@ -646,6 +907,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   QVector<BatchRecipeHistoryEntry> batch_recipe_redo_stack_;
   QHash<QString, QString>
       adjustment_patch_overrides_;
+  QHash<QString, QJsonObject> task_recipe_checkpoint_requests_;
+  QHash<QString, QJsonObject> task_recipe_restore_receipts_;
+  QHash<QString, QJsonObject> task_recipe_terminal_revisions_;
   QSet<QString> transient_adjustment_asset_ids_;
   mutable QHash<QString, QString>
       adjustment_patch_projection_cache_;
@@ -659,17 +923,67 @@ class CatalogAssetModel final : public QAbstractListModel {
   QVariantList import_sources_;
   qint64 import_sources_last_rebuilt_msecs_ = 0;
   QProcess snapshot_process_;
+  QFutureWatcher<CatalogSnapshotResult> snapshot_parse_watcher_;
+  std::shared_ptr<std::atomic_bool> snapshot_parse_cancellation_;
+  quint64 snapshot_request_generation_ = 0;
+  quint64 snapshot_fetch_generation_ = 0;
+  bool snapshot_fetch_active_ = false;
+  bool snapshot_parse_active_ = false;
+  QSet<QString> snapshot_changed_review_ids_;
+  QSet<QString> snapshot_changed_relink_ids_;
+  QSet<QString> snapshot_deleted_asset_ids_;
   QProcess import_process_;
   QProcess culling_persistence_process_;
+  QString sort_order_ = QStringLiteral("imported-desc");
+  QHash<QString, QVariantMap> asset_metadata_;
+  QHash<QString, QVariantMap> pending_metadata_;
+  std::unique_ptr<QLockFile> metadata_outbox_lock_;
+  QSet<QString> deferred_metadata_ids_;
+  QHash<QString, QVariantMap> active_metadata_;
+  QSet<QString> changed_metadata_during_snapshot_;
+  QProcess metadata_process_;
+  QTimer metadata_timeout_;
+  std::unique_ptr<QTemporaryFile> metadata_request_;
+  QFutureWatcher<QVariantMap> metadata_file_watcher_;
+  bool metadata_file_busy_ = false;
+  QString metadata_status_;
+  bool metadata_outbox_readable_ = true;
+  bool metadata_persistence_blocked_ = false;
+  QFutureWatcher<CatalogDuplicateAnalysisResult> duplicate_analysis_watcher_;
+  bool duplicate_analysis_busy_ = false;
+  CatalogDuplicateCancellationToken duplicate_analysis_cancellation_;
+  QHash<QString, QString> duplicate_analysis_sources_;
+  QHash<QString, QString> confirmed_duplicate_groups_;
+  QString duplicate_analysis_status_;
+  QTimer culling_save_timer_;
+  QTimer culling_timeout_timer_;
+  std::unique_ptr<QTemporaryFile> culling_request_;
+  QHash<QString, CullingStateRecord> active_culling_persistence_;
+  QSet<QString> failed_culling_persistence_;
+  bool culling_outbox_readable_ = true;
+  bool culling_outbox_dirty_ = false;
+  bool culling_persistence_paused_ = false;
   QTimer projects_save_timer_;
   QHash<QString, CullingStateRecord> pending_culling_persistence_;
   QStringList pending_culling_persistence_order_;
   QProcess recipe_persistence_process_;
-  QHash<QString, QString>
-      pending_adjustment_patch_persistence_;
-  QStringList
-      pending_adjustment_patch_persistence_order_;
+  struct AdjustmentPatchPersistenceRevision final {
+    QString asset_id;
+    QString patch_json;
+    QString task_id;
+    QString revision_id;
+  };
+  QVector<AdjustmentPatchPersistenceRevision> pending_adjustment_patch_persistence_;
   std::vector<std::unique_ptr<QFutureWatcher<ThumbnailTaskResult>>> thumbnail_watchers_;
+  std::vector<std::unique_ptr<QFutureWatcher<CatalogMediaDurationResult>>> media_duration_watchers_;
+  QSet<QFutureWatcher<CatalogMediaDurationResult>*> active_media_duration_watchers_;
+  QTimer media_duration_notification_timer_;
+  QVector<CatalogMediaDurationResult> pending_media_durations_;
+  QHash<QString, qsizetype> pending_media_duration_index_by_path_;
+  qsizetype next_media_duration_ = 0;
+  quint64 media_duration_generation_ = 0;
+  std::shared_ptr<std::atomic_bool> media_duration_cancellation_;
+  QFutureWatcher<QVector<CatalogAssetItem>> timeline_assets_watcher_;
   QFutureWatcher<DeleteAssetsTaskResult> delete_watcher_;
   std::shared_ptr<std::atomic_bool> delete_cancellation_;
   quint64 delete_request_generation_ = 0;
@@ -687,11 +1001,17 @@ class CatalogAssetModel final : public QAbstractListModel {
   int project_stats_revision_ = 0;
   QString project_filter_ = QStringLiteral("all");
   QString import_date_filter_ = QStringLiteral("all");
+  QString import_session_from_filter_;
+  QString import_session_to_filter_;
   QString capture_year_filter_ = QStringLiteral("all");
   QString camera_filter_ = QStringLiteral("all");
   QString capture_date_from_filter_;
   QString capture_date_to_filter_;
   QString media_type_filter_ = QStringLiteral("all");
+  QString media_collection_filter_ = QStringLiteral("all");
+  QSet<QString> document_source_exclusions_;
+  QFutureWatcher<QSet<QString>> document_source_exclusions_watcher_;
+  bool document_source_exclusions_refresh_pending_ = false;
   QString review_filter_ = QStringLiteral("all");
   QString availability_filter_ = QStringLiteral("all");
   int minimum_rating_filter_ = 0;
@@ -713,15 +1033,30 @@ class CatalogAssetModel final : public QAbstractListModel {
   QHash<QFutureWatcher<ThumbnailTaskResult>*, std::shared_ptr<std::atomic_bool>>
       active_thumbnail_cancellation_by_watcher_;
   bool thumbnail_work_deferred_for_interactive_render_ = false;
+  bool timeline_asset_loading_suppressed_for_testing_ = false;
   int interactive_render_priority_depth_ = 0;
   int visible_thumbnail_first_index_ = -1;
   int visible_thumbnail_last_index_ = -1;
+  bool timeline_assets_load_started_ = false;
+  bool timeline_assets_loaded_ = false;
   QString import_selection_manifest_path_;
   QStringList pending_import_file_paths_;
   QString pending_import_project_name_;
   PersistentJobRecord active_import_job_;
+  std::shared_ptr<PreparedBlankCanvasOperation> prepared_blank_canvas_operation_;
+  QString active_adjustment_patch_persistence_asset_id_;
+  QString active_adjustment_patch_persistence_task_id_;
+  QString active_adjustment_patch_persistence_revision_id_;
+  QVariantMap active_adjustment_patch_persistence_context_;
+  bool active_adjustment_patch_persistence_owner_accepted_ = true;
+  bool adjustment_patch_persistence_queue_blocked_ = false;
+  QString adjustment_patch_persistence_waiting_task_id_;
+  AgentRecipePersistenceHandler agent_recipe_persistence_handler_;
+  QSet<QString> failed_adjustment_patch_persistence_asset_ids_;
   QString import_job_observation_started_at_;
   QSet<QString> observed_finished_import_job_ids_;
+  bool import_job_poll_in_flight_ = false;
+  bool import_job_poll_dirty_ = false;
 };
 
 }  // namespace photo_editor::desktop

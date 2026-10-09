@@ -11,6 +11,9 @@ Rectangle {
     property color accent: theme.accentWarm400
     property bool emphasized: false
     property string tone: emphasized ? "accent" : "neutral"
+    property string iconName: tone === "error" ? "error" : tone === "warning" ? "warning"
+                              : tone === "success" || progressValue >= 1 ? "check"
+                              : tone === "info" ? "info" : ""
     readonly property string activityBannerContract: "activity-banner:v1|title-detail-actions-progress|tone:" +
                                                      root.tone +
                                                      "|progress:" +
@@ -22,10 +25,10 @@ Rectangle {
 
     Theme { id: theme }
 
-    radius: theme.radius10
-    color: root.emphasized ? theme.alpha(root.accent, 0.14) : theme.alpha(theme.glassBase, 0.58)
-    border.width: 1
-    border.color: root.emphasized ? theme.alpha(root.accent, 0.42) : theme.alpha(theme.glassEdge, 0.18)
+    radius: theme.radiusPanel
+    color: root.emphasized ? theme.alpha(root.accent, 0.08) : theme.ink900
+    border.width: theme.hairlineWidth
+    border.color: root.emphasized ? theme.alpha(root.accent, 0.3) : theme.alpha(theme.lineSoft, 0.72)
 
     implicitHeight: contentColumn.implicitHeight + (theme.space10 * 2)
     Accessible.name: root.title
@@ -42,6 +45,17 @@ Rectangle {
             Layout.fillWidth: true
             spacing: theme.space8
 
+            AppIcon {
+                visible: root.iconName.length > 0
+                name: root.iconName
+                color: root.tone === "error" ? theme.error : root.tone === "warning" ? theme.warning
+                       : root.iconName === "check" ? theme.success : theme.textMuted
+                Layout.preferredWidth: theme.scaled(18)
+                Layout.preferredHeight: theme.scaled(18)
+                Layout.alignment: Qt.AlignTop
+                Accessible.ignored: true
+            }
+
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
@@ -51,7 +65,7 @@ Rectangle {
                     text: root.title
                     color: theme.textStrong
                     font.family: theme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: theme.typeControl
                     font.weight: Font.DemiBold
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
@@ -64,7 +78,7 @@ Rectangle {
                     text: root.detail
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeCaption
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone

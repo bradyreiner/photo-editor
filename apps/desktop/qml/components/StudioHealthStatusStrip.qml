@@ -18,8 +18,6 @@ Rectangle {
     border.width: studioTheme.chromeBorderWidth
     border.color: hairlineStrong
 
-    HoverHandler { id: healthHover }
-
     RowLayout {
         id: healthRow
         anchors.centerIn: parent
@@ -32,6 +30,8 @@ Rectangle {
                 required property var modelData
                 spacing: 4
 
+                HoverHandler { id: itemHover }
+
                 Rectangle {
                     Layout.preferredWidth: 7
                     Layout.preferredHeight: 7
@@ -40,14 +40,18 @@ Rectangle {
                 }
 
                 Label {
-                    text: modelData.label
+                    text: modelData.state === "CPU" ? "CPU preview"
+                          : modelData.state === "Warn" ? modelData.label + " limited"
+                          : modelData.state === "Busy" ? modelData.label + " working"
+                          : modelData.state === "Error" ? modelData.label + " error"
+                          : modelData.label
                     color: healthStrip.studioTheme.textMain
                     font.family: healthStrip.studioTheme.fontMono
                     font.pixelSize: 9
                     font.weight: Font.DemiBold
                 }
 
-                ToolTip.visible: healthHover.hovered
+                ToolTip.visible: itemHover.hovered
                 ToolTip.delay: 350
                 ToolTip.timeout: 4200
                 ToolTip.text: modelData.label + " " + modelData.state + ": " + modelData.detail

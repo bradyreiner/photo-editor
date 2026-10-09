@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iostream>
 
@@ -31,6 +32,7 @@
 #include "carousel_document_controller.h"
 #include "decoded_image_cache.h"
 #include "edit_adjustment_patch.h"
+#include "photo_point_text.h"
 
 namespace {
 
@@ -277,6 +279,142 @@ QRect non_background_bounds(const QImage& image, const QRect& region, const QCol
   return bounds;
 }
 
+int run_creative_ux_linked_text_test(const QDir& dir) {
+  const auto source = write_image(
+      dir, QStringLiteral("creative-ux-linked-text.png"),
+      split_image(QSize(320, 240), QColor(QStringLiteral("#182b42")),
+                  QColor(QStringLiteral("#947044"))));
+  photo_editor::desktop::PhotoTextStyle text_style;
+  text_style.family = QStringLiteral("Helvetica");
+  text_style.size = 28.0;
+  text_style.color = QColor(QStringLiteral("#fff4d8"));
+  text_style.point_text = true;
+  QVariantMap text_layer{
+      {QStringLiteral("id"), QStringLiteral("creative-ux-tour-dates")},
+      {QStringLiteral("kind"), QStringLiteral("text")},
+      {QStringLiteral("text"), QStringLiteral("July 10–12, 2026")},
+      {QStringLiteral("locked"), false},
+      {QStringLiteral("x"), 40.0},
+      {QStringLiteral("y"), 36.0},
+      {QStringLiteral("pixelWidth"), 240},
+      {QStringLiteral("pixelHeight"), 56},
+      {QStringLiteral("textOriginX"), 0.0},
+      {QStringLiteral("textOriginY"), 0.0},
+      {QStringLiteral("scale"), 1.0},
+      {QStringLiteral("rotation"), 0.0},
+      {QStringLiteral("textTypography"),
+       photo_editor::desktop::encode_photo_text_style(text_style).toVariantMap()},
+  };
+  if (!photo_editor::desktop::fit_photo_point_text(&text_layer)) {
+    return fail("Focused shared-text fixture should fit its native text layer");
+  }
+  CarouselDocumentController::RecipeState recipe;
+  recipe.layers = {text_layer};
+  const auto base_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+      recipe, photo_editor::desktop::all_adjustment_groups(),
+      photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+  CarouselDocumentController controller;
+  if (source.isEmpty() ||
+      !controller.createBoardsFromEdit(source, QStringLiteral("Guided tour"), base_patch,
+          320, 240, 1) ||
+      !controller.createBoardVariant()) {
+    return fail("Focused shared-text fixture should create a source board and variant");
+  }
+
+  const auto layer_id = QStringLiteral("creative-ux-tour-dates");
+  const auto source_board_id = controller.slides().at(0).toMap()
+      .value(QStringLiteral("boardId")).toString();
+  const auto variant_board_id = controller.slides().at(1).toMap()
+      .value(QStringLiteral("boardId")).toString();
+  controller.editBoardPayload(0);
+  const auto candidates = controller.photoTextLinkCandidates(layer_id);
+  if (source_board_id.isEmpty() || variant_board_id.isEmpty() ||
+      source_board_id == variant_board_id || candidates.size() != 2 ||
+      controller.photoTextLinkState(layer_id).value(QStringLiteral("linked")).toBool() ||
+      !controller.linkEditBoardPhotoText(layer_id, QStringLiteral("Tour dates"),
+          {variant_board_id})) {
+    return fail("Focused shared-text fixture should explicitly link the two matching board layers");
+  }
+
+  const auto patch_text = [&controller](int board, const QString& text) {
+    const auto payload = controller.editBoardPayload(board);
+    const auto decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!decoded.ok() || decoded.state->layers.isEmpty()) return false;
+    auto state = *decoded.state;
+    auto layer = state.layers.constFirst().toMap();
+    layer.insert(QStringLiteral("text"), text);
+    if (layer.contains(QStringLiteral("textTypography")) &&
+        !photo_editor::desktop::fit_photo_point_text(&layer)) return false;
+    state.layers[0] = layer;
+    const auto patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        state, decoded.groups, photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    return controller.applyAdjustmentPatchToPhotoEditTarget(
+        payload.value(QStringLiteral("targetKey")).toString(), patch);
+  };
+  const auto text_on = [&controller](int board) {
+    const auto decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.editBoardPayload(board).value(QStringLiteral("adjustmentPatchJson")).toString());
+    return decoded.ok() && !decoded.state->layers.isEmpty()
+        ? decoded.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString()
+        : QString{};
+  };
+  if (!patch_text(1, QStringLiteral("July 18–20, 2026")) ||
+      text_on(0) != QStringLiteral("July 18–20, 2026") ||
+      !patch_text(0, QStringLiteral("July 25–27, 2026")) ||
+      text_on(1) != QStringLiteral("July 25–27, 2026")) {
+    return fail("Shared native text should fan out from either board");
+  }
+  controller.undo();
+  if (text_on(0) != QStringLiteral("July 18–20, 2026") ||
+      text_on(1) != QStringLiteral("July 18–20, 2026")) {
+    return fail("Undo should restore the shared text on both boards as one edit");
+  }
+  controller.redo();
+  if (text_on(0) != QStringLiteral("July 25–27, 2026") ||
+      text_on(1) != QStringLiteral("July 25–27, 2026")) {
+    return fail("Redo should restore the shared text on both boards as one edit");
+  }
+
+  auto variant_payload = controller.editBoardPayload(1);
+  auto variant_recipe = photo_editor::desktop::parse_adjustment_patch_json(
+      variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+  if (!variant_recipe.ok() || variant_recipe.state->layers.isEmpty()) {
+    return fail("Focused shared-text peer should retain a valid recipe before locking");
+  }
+  auto variant_state = *variant_recipe.state;
+  auto variant_layer = variant_state.layers.constFirst().toMap();
+  variant_layer.insert(QStringLiteral("locked"), true);
+  variant_state.layers[0] = variant_layer;
+  const auto locked_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+      variant_state, variant_recipe.groups,
+      photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+  if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+          variant_payload.value(QStringLiteral("targetKey")).toString(), locked_patch)) {
+    return fail("Focused shared-text peer should allow an explicit lock before rejection test");
+  }
+  const auto before_rejection = controller.documentContentHash();
+  if (patch_text(0, QStringLiteral("August 1–3, 2026")) ||
+      controller.documentContentHash() != before_rejection ||
+      !controller.status().contains(QStringLiteral("Unlock the matching text"))) {
+    return fail("A locked peer should reject shared text changes without a partial source update");
+  }
+
+  const auto persisted_document = controller.savedDocumentId();
+  if (!controller.saveDocument() || persisted_document.isEmpty()) {
+    return fail("Focused shared-text fixture should persist its link group");
+  }
+  CarouselDocumentController reopened;
+  if (!reopened.loadDocument(persisted_document)) {
+    return fail("Focused shared-text fixture should reopen successfully");
+  }
+  reopened.selectSlide(0);
+  if (!reopened.photoTextLinkState(layer_id).value(QStringLiteral("linked")).toBool()) {
+    return fail("Reopened document should retain its opt-in shared-text group");
+  }
+  return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -297,6 +435,303 @@ int main(int argc, char** argv) {
   qputenv(
       "PHOTO_EDITOR_APP_DATA_DIR",
       QFile::encodeName(dir.filePath(QStringLiteral("app-data"))));
+
+  if (app.arguments().contains(QStringLiteral("--creative-ux"))) {
+    qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArrayLiteral("postgres://example/test"));
+    return run_creative_ux_linked_text_test(dir);
+  }
+
+  if (app.arguments().contains(QStringLiteral("--edit-boards"))) {
+    qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArrayLiteral("postgres://example/test"));
+    const auto source = write_image(dir, QStringLiteral("edit-source.png"),
+        split_image(QSize(640, 400), QColor("#c09055"), QColor("#334477")));
+    CarouselDocumentController::RecipeState state;
+    state.exposure = 0.45;
+    state.layers = {QVariantMap{{"id", "editable-shape"}, {"kind", "shape"},
+        {"visible", true}, {"opacity", 1.0}, {"x", 50.0}, {"y", 30.0},
+        {"width", 120.0}, {"height", 80.0}, {"fillColor", "#ff3344"}}};
+    const auto patch = photo_editor::desktop::serialize_adjustment_patch_json(state,
+        photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    CarouselDocumentController controller;
+    controller.createCarouselWithSettings({{"carouselName", "Existing document"}, {"slideCount", 1}});
+    controller.addTextItem("Keep this existing work");
+    if (!controller.saveDocument()) return fail("Save existing board document");
+    const auto previous = controller.savedDocumentId();
+    controller.addTextItem("Preserve this pending change too");
+    if (!controller.createBoardsFromEdit(source, "Editable canvas", patch, 640, 400) ||
+        controller.savedDocumentId().isEmpty() || controller.savedDocumentId() == previous ||
+        controller.documentDirty() || controller.slideCount() != 2 || controller.currentIndex() != 0 ||
+        controller.documentPixelWidth() != 1280 || controller.documentPixelHeight() != 400)
+      { std::cerr << controller.status().toStdString() << " id=" << controller.savedDocumentId().toStdString()
+                  << " previous=" << previous.toStdString() << " size=" << controller.documentPixelWidth() << "x" << controller.documentPixelHeight()
+                  << " count=" << controller.slideCount() << " dirty=" << controller.documentDirty() << "\n";
+        return fail("Adding boards saves a new exact-size two-board document"); }
+    const auto saved = controller.savedDocumentId();
+    const auto decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.selectedPhotoEditPayload().value("adjustmentPatchJson").toString());
+    if (!decoded.ok() || !(*decoded.state == state)) return fail("Board 1 preserves the entire editable recipe");
+    if (controller.createBoardsFromEdit(source, "Invalid", "{}", 640, 400) ||
+        controller.savedDocumentId() != saved || controller.slideCount() != 2)
+      return fail("Invalid conversion cannot replace the current document");
+    controller.selectSlide(1);
+    if (!controller.selectedPhotoEditPayload().value("filePath").toString().isEmpty())
+      return fail("Board 2 starts without copied photo content");
+    controller.addShapeItem();
+    controller.addTextItem("Board 2 type");
+    if (!controller.saveDocument()) return fail("Save independent board 2 content");
+    CarouselDocumentController reopened;
+    if (!reopened.loadDocument(saved) || reopened.slideCount() != 2 ||
+        reopened.documentPixelWidth() != 1280 || reopened.documentPixelHeight() != 400)
+      return fail("Saved boards reopen with their exact dimensions");
+    reopened.selectSlide(0);
+    const auto reloaded = photo_editor::desktop::parse_adjustment_patch_json(
+        reopened.selectedPhotoEditPayload().value("adjustmentPatchJson").toString());
+    if (!reloaded.ok() || !(*reloaded.state == state)) return fail("Reopening retains the original editable source layers");
+    reopened.selectSlide(1);
+    if (reopened.canvasItems().size() != 2) return fail("New board graphics persist independently");
+    if (!reopened.loadDocument(previous) || reopened.canvasItems().size() != 2)
+      return fail("The previous board document remains saved and intact");
+    state.crop_rect_width = 0.5;
+    state.crop_rect_height = 0.5;
+    const auto cropped_patch = photo_editor::desktop::serialize_adjustment_patch_json(state,
+        photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!reopened.createBoardsFromEdit(source, "Cropped edit", cropped_patch, 640, 400) ||
+        reopened.documentPixelWidth() != 640 || reopened.documentPixelHeight() != 200)
+      return fail("Adding boards preserves the displayed crop dimensions");
+    const auto cropped_id = reopened.savedDocumentId();
+    if (!reopened.loadDocument(cropped_id) || reopened.documentPixelWidth() != 640 || reopened.documentPixelHeight() != 200)
+      return fail("Cropped board dimensions survive reopening");
+    if (!reopened.loadDocument(saved) || !reopened.prepareEditBoards()) return fail("Prepare saved layout boards for the standard Edit tools");
+    const auto board0 = reopened.editBoardPayload(0);
+    const auto board1 = reopened.editBoardPayload(1);
+    const auto board1_state = photo_editor::desktop::parse_adjustment_patch_json(board1.value("adjustmentPatchJson").toString());
+    if (board0.value("boardId").toString().isEmpty() || board0.value("boardId") == board1.value("boardId") ||
+        !board1_state.ok() || board1_state.state->layers.size() != 2 || !reopened.canvasItems().isEmpty())
+      return fail("Each existing board gets its own base and imported graphic layers");
+    if (!reopened.addEditBoard(false) || reopened.slideCount() != 3 || reopened.currentIndex() != 2)
+      return fail("Add an independent blank board directly to an Edit document");
+    const auto blank = reopened.editBoardPayload(2);
+    const QImage blank_source(blank.value("filePath").toString());
+    const auto blank_state = photo_editor::desktop::parse_adjustment_patch_json(blank.value("adjustmentPatchJson").toString());
+    if (blank_source.size() != QSize(640,400) || blank_source.pixelColor(20,20).alpha() != 0 ||
+        !blank_state.ok() || !blank_state.state->layers.isEmpty() || blank.value("filePath") == board1.value("filePath"))
+      return fail("A new board has a separate transparent base and empty layer stack");
+    auto edge_state = *blank_state.state;
+    QFile pixel_file(source);
+    if (!pixel_file.open(QIODevice::ReadOnly)) return fail("Read edge fixture pixels");
+    edge_state.layers = {QVariantMap{{"id", "edge-shape"}, {"kind", "pixel"}, {"pixelData", pixel_file.readAll()},
+        {"pixelWidth", 40}, {"pixelHeight", 30}, {"canvasWidth", 640}, {"canvasHeight", 400},
+        {"x", 300}, {"y", 180}, {"enabled", true}, {"opacity", 1.0}, {"scale", 1.0}}};
+    const auto edge_patch = photo_editor::desktop::serialize_adjustment_patch_json(edge_state,
+        photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!reopened.applyAdjustmentPatchToPhotoEditTarget(blank.value("targetKey").toString(), edge_patch) ||
+        !reopened.addEditBoard(true) || reopened.slideCount() != 4)
+      return fail("Extend an existing canvas into an adjoining board");
+    const auto extended = reopened.editBoardPayload(3);
+    const auto shared = reopened.editBoardPayload(2);
+    const auto extended_state = photo_editor::desktop::parse_adjustment_patch_json(extended.value("adjustmentPatchJson").toString());
+    if (!extended_state.ok() || !(*extended_state.state == edge_state) ||
+        extended.value("targetKey") != shared.value("targetKey") || extended.value("filePath") != shared.value("filePath") ||
+        extended.value("imageId") != shared.value("imageId") || extended.value("boardId") == shared.value("boardId") ||
+        !reopened.slides().at(3).toMap().value("joinedPrevious").toBool())
+      return fail("Extension shares the exact original image and editable recipe across distinct export tiles");
+    reopened.editBoardPayload(3);
+    edge_state.exposure = 0.3;
+    const auto shared_patch = photo_editor::desktop::serialize_adjustment_patch_json(edge_state,
+        photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!reopened.applyAdjustmentPatchToPhotoEditTarget(extended.value("targetKey").toString(), shared_patch) || reopened.currentIndex() != 3)
+      return fail("Editing a later tile must retain the active board");
+    if (reopened.editBoardPayload(2).value("adjustmentPatchJson") != shared_patch)
+      return fail("Changes on an extended tile are live on the original tile");
+    if (!reopened.addEditBoard(false) || reopened.slideCount() != 5 || reopened.savedDocumentId() != saved ||
+        reopened.editBoardPayload(3).value("targetKey") != extended.value("targetKey"))
+      return fail("Adding an independent board retains the shared image and carousel identity");
+    reopened.editBoardPayload(3);
+    if (!reopened.removeEditBoard() || reopened.slideCount() != 4 || reopened.savedDocumentId() != saved ||
+        reopened.editBoardPayload(2).value("imageId") != extended.value("imageId") ||
+        reopened.editBoardPayload(2).value("adjustmentPatchJson") != shared_patch)
+      return fail("Removing one extended tile keeps the other tile and its entire shared recipe");
+    reopened.undo();
+    if (reopened.slideCount() != 5 || reopened.editBoardPayload(3).value("imageId") != extended.value("imageId"))
+      return fail("Undo board removal restores the shared image membership");
+    reopened.redo();
+    reopened.editBoardPayload(2);
+    if (!reopened.addEditBoard(true) || reopened.slideCount() != 5 ||
+        reopened.editBoardPayload(3).value("imageId") != extended.value("imageId"))
+      return fail("Extending again preserves the image identity and all editable layers");
+    reopened.setCurrentSlideName("Continuation");
+    if (!reopened.saveDocument() || !reopened.loadDocument(saved) || reopened.slideCount() != 5 ||
+        reopened.editBoardPayload(3).value("adjustmentPatchJson") != shared_patch ||
+        reopened.slides().at(3).toMap().value("boardName").toString() != QStringLiteral("Continuation"))
+      return fail("Shared photo, layers, board identity and names survive reopening");
+    const auto export_dir = dir.filePath("shared-export");
+    QDir().mkpath(export_dir);
+    reopened.setExportImageFormat("png");
+    reopened.setExportManifestEnabled(false);
+    if (!reopened.exportCarouselToDirectory(export_dir)) { std::cerr << reopened.status().toStdString(); return fail("Export shared tiles"); }
+    const auto outputs = QDir(export_dir).entryList({"*.png"}, QDir::Files, QDir::Name);
+    if (outputs.size() != 5) return fail("Every board exports as a separate image");
+    QImage stitched(1280,400,QImage::Format_RGBA8888);
+    stitched.fill(Qt::transparent);
+    QPainter stitch(&stitched);
+    for (int tile=0; tile<2; ++tile) {
+      const QImage pixels(QDir(export_dir).filePath(outputs.at(2+tile)));
+      if (pixels.size() != QSize(640,400)) return fail("All carousel outputs use the same board dimensions");
+      stitch.drawImage(tile*640,0,pixels);
+    }
+    stitch.end();
+    CarouselDocumentController reference;
+    if (!reference.createBoardsFromEdit(blank.value("filePath").toString(), "Reference", shared_patch,1280,400,1))
+      return fail("Create unsplit reference composition");
+    reference.setCurrentFitMode("cover");
+    reference.setCurrentMediaCropMode("manual");
+    reference.setExportManifestEnabled(false);
+    const auto reference_dir = dir.filePath("reference-export");
+    QDir().mkpath(reference_dir);
+    if (!reference.exportCarouselToDirectory(reference_dir)) return fail("Export unsplit reference composition");
+    const auto reference_files = QDir(reference_dir).entryList({"*.png"},QDir::Files);
+    const auto reference_pixels = QImage(QDir(reference_dir).filePath(reference_files.first())).convertToFormat(QImage::Format_RGBA8888);
+    if (stitched.size() != reference_pixels.size()) return fail("Continuous reference dimensions");
+    for (int row=0; row<stitched.height(); ++row) {
+      if (std::memcmp(stitched.constScanLine(row),reference_pixels.constScanLine(row),static_cast<std::size_t>(stitched.width()*4)) != 0) {
+        std::cerr << "Split mismatch at row " << row << " stitched=" << stitched.pixelColor(640,row).name().toStdString()
+                  << " reference=" << reference_pixels.pixelColor(640,row).name().toStdString() << '\n';
+        return fail("Stitched tile pixels must exactly match the single continuous edited image");
+      }
+    }
+    if (!reference.createEditCanvas({{"name","Unified canvas"},{"width",640},{"height",400}}) ||
+        reference.slideCount() != 1 || reference.editBoardPayload(0).value("boardId").toString().isEmpty() ||
+        !reference.addEditBoard(true) || reference.slideCount() != 2)
+      return fail("A new canvas is the first board of an extendable saved document");
+    if (!reference.addEditPhotoBoard(source) || reference.slideCount() != 3 ||
+        reference.editBoardPayload(2).value("filePath").toString() != source || !reference.addEditBoard(true) ||
+        reference.editBoardPayload(3).value("filePath").toString() != source)
+      return fail("A different photo joins the same-ratio carousel with its own base and live extension");
+    QImage replacement_portrait(400,640,QImage::Format_ARGB32);
+    replacement_portrait.fill(Qt::white);
+    { QPainter painter(&replacement_portrait); painter.fillRect(150,270,100,100,QColor("#338833")); }
+    const auto replacement_path = write_image(dir, QStringLiteral("portrait-replacement.png"), replacement_portrait);
+    reference.editBoardPayload(2);
+    if (!reference.applyAdjustmentPatchToPhotoEditTarget(reference.editBoardPayload(2).value("targetKey").toString(), shared_patch))
+      return fail("Prepare editable shared graphics before replacing the base");
+    const auto replacement_before = reference.editBoardPayload(2);
+    const auto replacement_board_ids = reference.slides();
+    if (reference.replaceEditBoardImage(dir.filePath("missing.png")) ||
+        reference.editBoardPayload(2).value("filePath") != replacement_before.value("filePath"))
+      return fail("Unreadable replacement images leave the shared board unchanged");
+    if (!reference.replaceEditBoardImage(QUrl::fromLocalFile(replacement_path).toString()) ||
+        !reference.editBoardImageBusy() || !wait_until([&] { return !reference.editBoardImageBusy(); }))
+      return fail("A dropped file URL replaces the base asynchronously");
+    const auto replaced = reference.editBoardPayload(2);
+    const QImage replaced_pixels(replaced.value("filePath").toString());
+    if (replaced.value("filePath") == replacement_before.value("filePath") || replaced_pixels.size() != QSize(640, 400) ||
+        replaced.value("adjustmentPatchJson") != replacement_before.value("adjustmentPatchJson") ||
+        reference.editBoardPayload(3).value("filePath") != replaced.value("filePath") ||
+        reference.editBoardPayload(3).value("imageId") != replacement_before.value("imageId") ||
+        reference.slides().at(2).toMap().value("boardId") != replacement_board_ids.at(2).toMap().value("boardId") ||
+        reference.slides().at(3).toMap().value("boardId") != replacement_board_ids.at(3).toMap().value("boardId"))
+      return fail("Replacement keeps exact layer geometry, shared image identity and separate board IDs");
+    int green_width=0;
+    int green_height=0;
+    const auto is_green=[](const QColor& pixel) {return pixel.green()>100 && pixel.red()<100 && pixel.blue()<100;};
+    for (int x=0;x<replaced_pixels.width();++x) green_width+=is_green(replaced_pixels.pixelColor(x,200));
+    for (int y=0;y<replaced_pixels.height();++y) green_height+=is_green(replaced_pixels.pixelColor(320,y));
+    if (std::abs(green_width-green_height)>2 || green_width<150 || replaced_pixels.pixelColor(0,0).alpha()!=255)
+      return fail("The replacement fills the canonical canvas while keeping photo proportions");
+    if (reference.undoEditBoardImageReplacement(QStringLiteral("invalid baseline")) ||
+        reference.editBoardPayload(2).value("filePath") != replaced.value("filePath"))
+      return fail("Replacement undo rejects a mismatched baseline without touching history");
+    auto replacement_edit = *photo_editor::desktop::parse_adjustment_patch_json(
+        replaced.value("adjustmentPatchJson").toString()).state;
+    replacement_edit.exposure += 0.2;
+    if (!reference.applyAdjustmentPatchToPhotoEditTarget(replaced.value("targetKey").toString(),
+            photo_editor::desktop::serialize_adjustment_patch_json(replacement_edit,
+                photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound)) ||
+        !reference.applyAdjustmentPatchToPhotoEditTarget(replaced.value("targetKey").toString(),
+            replaced.value("adjustmentPatchJson").toString()) ||
+        !reference.undoEditBoardImageReplacement(replaced.value("adjustmentPatchJson").toString()))
+      return fail("Returning to the replacement baseline can undo the source through mirrored photo history");
+    if (reference.editBoardPayload(2).value("filePath") != replacement_before.value("filePath"))
+      return fail("One undo restores the original shared base image");
+    reference.redo();
+    if (reference.editBoardPayload(3).value("filePath") != replaced.value("filePath") ||
+        !reference.saveDocument() || !reference.loadDocument(reference.savedDocumentId()) ||
+        reference.editBoardPayload(2).value("filePath") != replaced.value("filePath"))
+      return fail("The replaced base survives redo, save and reopening");
+    const auto order_ids = [](const CarouselDocumentController& document) {
+      QStringList ids;
+      for (const auto& board : document.slides()) ids.push_back(board.toMap().value("boardId").toString());
+      return ids;
+    };
+    const auto original_order = order_ids(reference);
+    const auto selected_tile = reference.editBoardPayload(3).value("boardId");
+    const auto move_recipe = reference.editBoardPayload(3).value("adjustmentPatchJson").toString();
+    const auto before_move_export = dir.filePath("before-move-export");
+    QDir().mkpath(before_move_export);
+    reference.setExportImageFormat("png");
+    reference.setExportManifestEnabled(false);
+    if (!reference.exportCarouselToDirectory(before_move_export)) return fail("Export the move baseline");
+    const auto before_files = QDir(before_move_export).entryList({"*.png"}, QDir::Files, QDir::Name);
+    const auto history_label = reference.undoText();
+    if (reference.moveEditBoard(-1,0) || reference.moveEditBoard(0,3) || reference.moveEditBoard(3,2) ||
+        order_ids(reference) != original_order || reference.undoText() != history_label)
+      return fail("Invalid, unchanged and split-image insertion points leave order and history intact");
+    if (!reference.moveEditBoard(3,0) || order_ids(reference) != QStringList{original_order.at(2),original_order.at(3),original_order.at(0),original_order.at(1)} ||
+        reference.currentIndex()!=1 || reference.slides().at(1).toMap().value("boardId")!=selected_tile ||
+        reference.slides().at(0).toMap().value("imageSpanCount").toInt()!=2 ||
+        reference.slides().at(1).toMap().value("imageSpanStart").toInt()!=0 ||
+        reference.editBoardPayload(1).value("adjustmentPatchJson").toString()!=move_recipe)
+      return fail("Dragging either shared tile moves the entire image and preserves the active tile and editable stack");
+    const auto moved_order = order_ids(reference);
+    const auto after_move_export = dir.filePath("after-move-export");
+    QDir().mkpath(after_move_export);
+    if (!reference.exportCarouselToDirectory(after_move_export)) return fail("Export reordered boards");
+    const auto after_files = QDir(after_move_export).entryList({"*.png"}, QDir::Files, QDir::Name);
+    if (before_files.size()!=4 || after_files.size()!=4) return fail("Reordered boards still export individually");
+    for (int tile=0;tile<2;++tile) {
+      const QImage before(QDir(before_move_export).filePath(before_files.at(tile+2)));
+      const QImage after(QDir(after_move_export).filePath(after_files.at(tile)));
+      if (before.isNull() || before.convertToFormat(QImage::Format_RGBA8888)!=after.convertToFormat(QImage::Format_RGBA8888))
+        return fail("Reordering changes export order without changing shared-tile pixels or seams");
+    }
+    if (!reference.canUndoEditBoardMove() || !reference.undoEditBoardMove() || order_ids(reference)!=original_order)
+      return fail("One undo restores the complete board order");
+    reference.redo();
+    auto move_edit = *photo_editor::desktop::parse_adjustment_patch_json(move_recipe).state;
+    move_edit.exposure += 0.2;
+    const auto move_target = reference.editBoardPayload(1).value("targetKey").toString();
+    if (!reference.applyAdjustmentPatchToPhotoEditTarget(move_target,
+            photo_editor::desktop::serialize_adjustment_patch_json(move_edit,
+                photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound)) ||
+        reference.canUndoEditBoardMove() || reference.undoEditBoardMove())
+      return fail("Reorder undo cannot discard later photo edits");
+    if (!reference.applyAdjustmentPatchToPhotoEditTarget(move_target,move_recipe)) return fail("Restore the mirrored edit baseline");
+    reference.selectSlide(2);
+    if (!reference.canUndoEditBoardMove() || !reference.undoEditBoardMove() || order_ids(reference)!=original_order)
+      return fail("Undo reaches the earlier move after photo edits return to baseline, regardless of selected board");
+    reference.redo();
+    if (order_ids(reference)!=moved_order || !reference.saveDocument() || !reference.loadDocument(reference.savedDocumentId()) ||
+        order_ids(reference)!=moved_order || reference.editBoardPayload(0).value("adjustmentPatchJson").toString()!=move_recipe)
+      return fail("Reordered identities and shared layers survive redo, save and reopening");
+    CarouselDocumentController legacy;
+    legacy.createCarouselWithSettings({{"primaryMediaPath",source},{"slideCount",1}});
+    legacy.applyTemplateToCurrent("linked-horizontal-pair");
+    const auto legacy_target = legacy.selectedPhotoEditPayload().value("targetKey");
+    if (legacy.slideCount()!=2 || !legacy.prepareEditBoards() ||
+        legacy.editBoardPayload(1).value("targetKey")!=legacy_target ||
+        legacy.editBoardPayload(0).value("filePath").toString()!=source ||
+        !legacy.addEditBoard(false) || legacy.editBoardPayload(1).value("targetKey")!=legacy_target)
+      return fail("Existing photo spreads retain their shared source and editable identity when opened or expanded in Edit");
+    legacy.selectSlide(0);
+    legacy.selectSlideRange(1);
+    if (!legacy.createBoardSection(QStringLiteral("Connected opening")) || !legacy.moveEditBoard(1,3) ||
+        legacy.slides().at(0).toMap().value("groupSpan").toInt()!=0 ||
+        legacy.slides().at(1).toMap().value("moveSpanCount").toInt()!=2 ||
+        legacy.slides().at(2).toMap().value("moveSpanStart").toInt()!=1)
+      return fail("Existing board sections and their spanning images move intact");
+    std::cout << "Edit boards: unified canvas, shared image/recipe, active-tile edits, add/delete/undo/reopen and exact split-export parity passed\n";
+    return EXIT_SUCCESS;
+  }
 
   if (app.arguments().contains(
           QStringLiteral("--adjustment-patch-only"))) {
@@ -3246,9 +3681,22 @@ int main(int argc, char** argv) {
             edited_state,
             photo_editor::desktop::all_adjustment_groups(),
             photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    const auto preview_revision_before_edit =
+        controller.previewDiagnostics().value(QStringLiteral("revision")).toInt();
     if (!controller.applyAdjustmentPatchToPhotoEditTarget(
             payload.value(QStringLiteral("targetKey")).toString(), edited_patch)) {
       return fail("Edit adjustments should apply back to the selected Carousel instance");
+    }
+
+    if (!wait_until([&controller, &source_path, preview_revision_before_edit]() {
+          const auto items = controller.canvasItems();
+          return controller.previewDiagnostics().value(QStringLiteral("revision")).toInt() >
+                     preview_revision_before_edit &&
+                 items.size() == 1 &&
+                 items.constFirst().toMap().value(QStringLiteral("sourceUrl")).toString() !=
+                     QUrl::fromLocalFile(source_path).toString();
+        })) {
+      return fail("round-trip photo edits should publish a refreshed preview");
     }
 
     const auto after = controller.selectionDetails();
@@ -3324,6 +3772,14 @@ int main(int argc, char** argv) {
     controller.assignPrimaryImage(spread_path, QStringLiteral("spread"));
     controller.applyTemplateToCurrent(QStringLiteral("linked-horizontal-pair"));
 
+    if (!wait_until([&controller]() {
+          const auto continuity = controller.continuityPreview();
+          return continuity.value(QStringLiteral("available")).toBool() &&
+              !continuity.value(QStringLiteral("leftPreviewSource")).toString().isEmpty() &&
+              !continuity.value(QStringLiteral("rightPreviewSource")).toString().isEmpty();
+        })) {
+      return fail("linked spread board previews should publish asynchronously");
+    }
     auto continuity = controller.continuityPreview();
     if (!continuity.value(QStringLiteral("available")).toBool() ||
         continuity.value(QStringLiteral("leftBoardIndex")).toInt() != 0 ||
@@ -3402,6 +3858,13 @@ int main(int argc, char** argv) {
     controller.selectSlide(0);
     const auto document_hash = controller.documentContentHash();
 
+    if (!wait_until([&controller]() {
+          const auto comparison = controller.neighborComparison();
+          return !comparison.value(QStringLiteral("leftPreviewSource")).toString().isEmpty() &&
+              !comparison.value(QStringLiteral("rightPreviewSource")).toString().isEmpty();
+        })) {
+      return fail("neighbor comparison previews should publish asynchronously");
+    }
     auto comparison = controller.neighborComparison();
     if (!comparison.value(QStringLiteral("available")).toBool() ||
         !comparison.value(QStringLiteral("temporary")).toBool() ||
@@ -4369,19 +4832,30 @@ int main(int argc, char** argv) {
     controller.addSlide();
     controller.setCurrentSlideBackgroundColor(QStringLiteral("#0000ff"));
 
+    controller.selectSlide(0);
+    const auto moved_board_id = controller.slides().at(0).toMap().value(QStringLiteral("boardId")).toString();
     controller.moveSlide(0, 2);
     auto slides = controller.slides();
     if (controller.currentIndex() != 2 ||
         slides.at(0).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#00ff00") ||
         slides.at(1).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0000ff") ||
-        slides.at(2).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#ff0000")) {
+        slides.at(2).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#ff0000") ||
+        slides.at(2).toMap().value(QStringLiteral("boardId")).toString() != moved_board_id ||
+        !slides.at(2).toMap().value(QStringLiteral("selected")).toBool() ||
+        !slides.at(2).toMap().value(QStringLiteral("active")).toBool() ||
+        slides.at(0).toMap().value(QStringLiteral("selected")).toBool() ||
+        slides.at(0).toMap().value(QStringLiteral("active")).toBool()) {
       return fail("drag-style board reordering should move a board directly to its requested position");
     }
     controller.undo();
     slides = controller.slides();
     if (slides.at(0).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#ff0000") ||
         slides.at(1).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#00ff00") ||
-        slides.at(2).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0000ff")) {
+        slides.at(2).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0000ff") ||
+        controller.currentIndex() != 0 ||
+        slides.at(0).toMap().value(QStringLiteral("boardId")).toString() != moved_board_id ||
+        !slides.at(0).toMap().value(QStringLiteral("selected")).toBool() ||
+        !slides.at(0).toMap().value(QStringLiteral("active")).toBool()) {
       return fail("direct board reordering should undo as one history entry");
     }
 
@@ -4411,6 +4885,510 @@ int main(int argc, char** argv) {
     controller.undo();
     if (controller.slideCount() != 3) {
       return fail("batch board removal should undo as one history entry");
+    }
+  }
+
+  {
+    const auto item_for_component_on_board = [](const CarouselDocumentController& controller,
+                                                 const QString& component_id,
+                                                 int board_index) {
+      for (const auto& value : controller.canvasItems()) {
+        const auto item = value.toMap();
+        if (item.value(QStringLiteral("componentLinkId")).toString() == component_id &&
+            item.value(QStringLiteral("slideIndex")).toInt() == board_index) {
+          return item;
+        }
+      }
+      return QVariantMap{};
+    };
+
+    CarouselDocumentController controller;
+    controller.createCarouselWithSettings(QVariantMap{
+        {QStringLiteral("carouselName"), QStringLiteral("Guided Tour Variants")},
+        {QStringLiteral("documentFormat"), QStringLiteral("4x5")},
+        {QStringLiteral("slideCount"), 2},
+    });
+    controller.selectSlide(0);
+    controller.setCurrentSlideName(QStringLiteral("Guided tour"));
+    controller.addTextItem(QStringLiteral("July 10–12, 2026"));
+    const auto source_date_id = controller.selectedItemId();
+    if (!controller.createRepeatedElementLink(QStringLiteral("Tour dates"), QStringLiteral("all"))) {
+      return fail("tour date text should be linkable across the original boards");
+    }
+    QString date_component_id;
+    for (const auto& value : controller.canvasItems()) {
+      const auto item = value.toMap();
+      if (item.value(QStringLiteral("itemId")).toString() == source_date_id) {
+        date_component_id = item.value(QStringLiteral("componentLinkId")).toString();
+        break;
+      }
+    }
+    const auto original_date_links = controller.repeatedElementLinks();
+    if (date_component_id.isEmpty() || original_date_links.size() != 1 ||
+        original_date_links.constFirst().toMap()
+                .value(QStringLiteral("instanceCount")).toInt() != 2) {
+      return fail("the original tour date link should expose both repeated layer instances");
+    }
+
+    if (!controller.createBoardVariant()) {
+      return fail("Create variant should duplicate and name the current board");
+    }
+    auto slides = controller.slides();
+    const auto variant_content_hash = controller.documentContentHash();
+    const bool copied_board_active = controller.currentIndex() == 1 &&
+        slides.at(1).toMap().value(QStringLiteral("selected")).toBool() &&
+        slides.at(1).toMap().value(QStringLiteral("active")).toBool() &&
+        !slides.at(0).toMap().value(QStringLiteral("selected")).toBool() &&
+        !slides.at(0).toMap().value(QStringLiteral("active")).toBool();
+    controller.selectSlide(0);
+    const auto comparison = controller.neighborComparison();
+    if (controller.slideCount() != 3 || !copied_board_active || controller.currentIndex() != 0 ||
+        slides.at(1).toMap().value(QStringLiteral("boardName")).toString() !=
+            QStringLiteral("Guided tour · Variant 1") ||
+        comparison.value(QStringLiteral("leftBoardIndex")).toInt() != 0 ||
+        comparison.value(QStringLiteral("rightBoardIndex")).toInt() != 1 ||
+        comparison.value(QStringLiteral("leftName")).toString() != QStringLiteral("Guided tour") ||
+        comparison.value(QStringLiteral("rightName")).toString() !=
+            QStringLiteral("Guided tour · Variant 1") ||
+        controller.repeatedElementLinks().constFirst().toMap()
+                .value(QStringLiteral("instanceCount")).toInt() != 3 ||
+        item_for_component_on_board(controller, date_component_id, 1).isEmpty()) {
+      return fail("a named variant should become the active comparison neighbor and preserve shared layers");
+    }
+    controller.undo();
+    if (controller.slideCount() != 2 ||
+        controller.repeatedElementLinks().constFirst().toMap()
+                .value(QStringLiteral("instanceCount")).toInt() != 2) {
+      return fail("creating a named variant with linked elements should undo as one operation");
+    }
+    controller.redo();
+    if (controller.slideCount() != 3 ||
+        controller.currentIndex() != 0 ||
+        controller.documentContentHash() != variant_content_hash ||
+        controller.slides().at(1).toMap().value(QStringLiteral("boardName")).toString() !=
+            QStringLiteral("Guided tour · Variant 1")) {
+      return fail("redo should restore the exact named variant and its independent board content");
+    }
+
+    controller.selectItem(source_date_id);
+    controller.setSelectedText(QStringLiteral("August 1–3, 2026"));
+    const auto linked_variant_date = item_for_component_on_board(controller, date_component_id, 1);
+    const auto linked_original_date = item_for_component_on_board(controller, date_component_id, 2);
+    if (linked_variant_date.value(QStringLiteral("text")).toString() !=
+            QStringLiteral("August 1–3, 2026") ||
+        linked_original_date.value(QStringLiteral("text")).toString() !=
+            QStringLiteral("August 1–3, 2026")) {
+      return fail("editing shared tour dates should update the variant and every linked board");
+    }
+
+    controller.selectItem(linked_variant_date.value(QStringLiteral("itemId")).toString());
+    if (!controller.detachSelectedRepeatedElement()) {
+      return fail("a variant should support a local date override through Detach this board");
+    }
+    controller.setSelectedText(QStringLiteral("August 8–10, 2026"));
+    if (item_for_component_on_board(controller, date_component_id, 0)
+                .value(QStringLiteral("text")).toString() != QStringLiteral("August 1–3, 2026") ||
+        item_for_component_on_board(controller, date_component_id, 2)
+                .value(QStringLiteral("text")).toString() != QStringLiteral("August 1–3, 2026")) {
+      return fail("a detached variant date should become a local override without changing the source");
+    }
+  }
+
+  {
+    const auto source = write_image(
+        dir, QStringLiteral("tour-date-source.png"),
+        split_image(QSize(320, 240), QColor(QStringLiteral("#182b42")), QColor(QStringLiteral("#947044"))));
+    photo_editor::desktop::PhotoTextStyle source_style;
+    source_style.family = QStringLiteral("Helvetica");
+    source_style.size = 32.0;
+    source_style.color = QColor(QStringLiteral("#fff4d8"));
+    source_style.point_text = true;
+    QVariantMap source_text_layer{
+        {QStringLiteral("id"), QStringLiteral("tour-dates-native-text")},
+        {QStringLiteral("kind"), QStringLiteral("text")},
+        {QStringLiteral("text"), QStringLiteral("July 10–12, 2026")},
+        {QStringLiteral("locked"), false},
+        {QStringLiteral("x"), 72.0},
+        {QStringLiteral("y"), 54.0},
+        {QStringLiteral("pixelWidth"), 260},
+        {QStringLiteral("pixelHeight"), 64},
+        {QStringLiteral("textOriginX"), 0.0},
+        {QStringLiteral("textOriginY"), 0.0},
+        {QStringLiteral("scale"), 1.0},
+        {QStringLiteral("rotation"), 0.0},
+        {QStringLiteral("textTypography"),
+         photo_editor::desktop::encode_photo_text_style(source_style).toVariantMap()},
+    };
+    if (!photo_editor::desktop::fit_photo_point_text(&source_text_layer)) {
+      return fail("Native photo text fixture should have valid fitted geometry");
+    }
+    CarouselDocumentController::RecipeState base_state;
+    base_state.exposure = 0.12;
+    base_state.layers = {source_text_layer};
+    const auto base_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        base_state, photo_editor::desktop::all_adjustment_groups(),
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+
+    CarouselDocumentController controller;
+    if (!controller.createBoardsFromEdit(source, QStringLiteral("Guided tour"), base_patch,
+            320, 240, 1) || !controller.createBoardVariant()) {
+      return fail("Native photo text should be carried into a named variant");
+    }
+    auto variant_payload = controller.editBoardPayload(1);
+    auto variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!variant_decoded.ok()) return fail("Variant should retain a valid independent photo recipe");
+    auto variant_state = *variant_decoded.state;
+    auto variant_layers = variant_state.layers;
+    auto variant_text_layer = variant_layers.constFirst().toMap();
+    photo_editor::desktop::PhotoTextStyle variant_style = source_style;
+    variant_style.family = QStringLiteral("Helvetica");
+    variant_style.size = 19.0;
+    variant_style.color = QColor(QStringLiteral("#9be1ff"));
+    variant_text_layer.insert(QStringLiteral("textTypography"),
+        photo_editor::desktop::encode_photo_text_style(variant_style).toVariantMap());
+    variant_text_layer.insert(QStringLiteral("x"), 112.0);
+    variant_text_layer.insert(QStringLiteral("y"), 92.0);
+    variant_text_layer.insert(QStringLiteral("scale"), 1.35);
+    variant_text_layer.insert(QStringLiteral("rotation"), 13.0);
+    variant_layers[0] = variant_text_layer;
+    variant_state.layers = variant_layers;
+    variant_state.exposure = 0.73;
+    const auto variant_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        variant_state, variant_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+            variant_payload.value(QStringLiteral("targetKey")).toString(), variant_patch)) {
+      return fail("Variant-specific text styling should remain independently editable before linking");
+    }
+
+    const auto source_board_id = controller.slides().at(0).toMap()
+        .value(QStringLiteral("boardId")).toString();
+    const auto variant_board_id = controller.slides().at(1).toMap()
+        .value(QStringLiteral("boardId")).toString();
+    controller.editBoardPayload(0);
+    const auto candidates = controller.photoTextLinkCandidates(QStringLiteral("tour-dates-native-text"));
+    if (source_board_id.isEmpty() || variant_board_id.isEmpty() ||
+        source_board_id == variant_board_id || candidates.size() != 2 ||
+        controller.photoTextLinkState(QStringLiteral("tour-dates-native-text"))
+                .value(QStringLiteral("linked")).toBool()) {
+      return fail("Matching native layer IDs should remain unlinked until an explicit board selection");
+    }
+    if (!controller.linkEditBoardPhotoText(QStringLiteral("tour-dates-native-text"),
+            QStringLiteral("Tour dates"), {variant_board_id})) {
+      return fail("An explicit selection should link matching unlocked native text layers");
+    }
+    variant_payload = controller.editBoardPayload(1);
+    variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!variant_decoded.ok()) return fail("Linked variant should remain editable before testing atomic sync");
+    variant_state = *variant_decoded.state;
+    variant_layers = variant_state.layers;
+    variant_text_layer = variant_layers.constFirst().toMap();
+    variant_text_layer.insert(QStringLiteral("locked"), true);
+    variant_layers[0] = variant_text_layer;
+    variant_state.layers = variant_layers;
+    const auto locked_variant_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        variant_state, variant_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+            variant_payload.value(QStringLiteral("targetKey")).toString(), locked_variant_patch)) {
+      return fail("A linked peer should be lockable before validating shared-edit rejection");
+    }
+    auto source_payload = controller.editBoardPayload(0);
+    auto source_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        source_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!source_decoded.ok()) return fail("Source should retain a valid photo recipe");
+    auto shared_source_state = *source_decoded.state;
+    auto shared_source_layer = shared_source_state.layers.constFirst().toMap();
+    shared_source_layer.insert(QStringLiteral("text"), QStringLiteral("July 18–20, 2026"));
+    auto shared_source_layers = shared_source_state.layers;
+    shared_source_layers[0] = shared_source_layer;
+    shared_source_state.layers = shared_source_layers;
+    shared_source_state.exposure = -0.22;
+    const auto shared_source_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        shared_source_state, source_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    const auto content_hash_before_rejected_sync = controller.documentContentHash();
+    if (controller.applyAdjustmentPatchToPhotoEditTarget(
+            source_payload.value(QStringLiteral("targetKey")).toString(), shared_source_patch) ||
+        controller.documentContentHash() != content_hash_before_rejected_sync ||
+        !controller.status().contains(QStringLiteral("Unlock the matching text"))) {
+      return fail("A locked linked peer should reject the source edit atomically with a clear reason");
+    }
+    variant_payload = controller.editBoardPayload(1);
+    variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!variant_decoded.ok()) return fail("Locked linked variant should remain a valid recipe after rejection");
+    variant_state = *variant_decoded.state;
+    variant_layers = variant_state.layers;
+    variant_text_layer = variant_layers.constFirst().toMap();
+    variant_text_layer.insert(QStringLiteral("locked"), false);
+    variant_layers[0] = variant_text_layer;
+    variant_state.layers = variant_layers;
+    const auto unlocked_variant_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        variant_state, variant_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+            variant_payload.value(QStringLiteral("targetKey")).toString(), unlocked_variant_patch)) {
+      return fail("The linked peer should accept an explicit unlock before a shared edit");
+    }
+    if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+            source_payload.value(QStringLiteral("targetKey")).toString(), shared_source_patch)) {
+      return fail("Editing linked source text should commit through the normal Edit return path");
+    }
+
+    variant_payload = controller.editBoardPayload(1);
+    variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!variant_decoded.ok()) return fail("Linked variant should remain a valid photo recipe");
+    const auto& linked_variant_state = *variant_decoded.state;
+    const auto linked_variant_layer = linked_variant_state.layers.constFirst().toMap();
+    const auto link_state = controller.photoTextLinkState(QStringLiteral("tour-dates-native-text"));
+    if (linked_variant_layer.value(QStringLiteral("text")).toString() != QStringLiteral("July 18–20, 2026") ||
+        linked_variant_layer.value(QStringLiteral("id")).toString() != QStringLiteral("tour-dates-native-text") ||
+        linked_variant_layer.value(QStringLiteral("textTypography")).toMap() !=
+            photo_editor::desktop::encode_photo_text_style(variant_style).toVariantMap() ||
+        linked_variant_layer.value(QStringLiteral("scale")).toDouble() != 1.35 ||
+        linked_variant_layer.value(QStringLiteral("rotation")).toDouble() != 13.0 ||
+        linked_variant_state.exposure != 0.73 ||
+        !link_state.value(QStringLiteral("linked")).toBool() ||
+        link_state.value(QStringLiteral("name")).toString() != QStringLiteral("Tour dates") ||
+        link_state.value(QStringLiteral("boardNumbers")).toList() != QVariantList{1, 2}) {
+      return fail("Shared edits should merge text only while preserving the peer recipe, style, transform, and layer ID");
+    }
+
+    variant_payload = controller.editBoardPayload(1);
+    variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!variant_decoded.ok()) return fail("Linked variant should remain editable after source fanout");
+    variant_state = *variant_decoded.state;
+    variant_layers = variant_state.layers;
+    variant_text_layer = variant_layers.constFirst().toMap();
+    variant_text_layer.insert(QStringLiteral("text"), QStringLiteral("July 25–27, 2026"));
+    variant_layers[0] = variant_text_layer;
+    variant_state.layers = variant_layers;
+    const auto linked_variant_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        variant_state, variant_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!controller.applyAdjustmentPatchToPhotoEditTarget(
+            variant_payload.value(QStringLiteral("targetKey")).toString(), linked_variant_patch)) {
+      return fail("Editing linked variant text should update the source through the same return path");
+    }
+    source_payload = controller.editBoardPayload(0);
+    source_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        source_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    variant_payload = controller.editBoardPayload(1);
+    variant_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        variant_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!source_decoded.ok() || !variant_decoded.ok() ||
+        source_decoded.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026") ||
+        variant_decoded.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026") ||
+        variant_decoded.state->layers.constFirst().toMap().value(QStringLiteral("textTypography")).toMap() !=
+            photo_editor::desktop::encode_photo_text_style(variant_style).toVariantMap() ||
+        variant_decoded.state->layers.constFirst().toMap().value(QStringLiteral("scale")).toDouble() != 1.35 ||
+        variant_decoded.state->layers.constFirst().toMap().value(QStringLiteral("rotation")).toDouble() != 13.0 ||
+        variant_decoded.state->exposure != 0.73) {
+      return fail("Variant-originated shared edits should fan out while retaining each board's local styling");
+    }
+    controller.undo();
+    auto undone_source = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.editBoardPayload(0).value(QStringLiteral("adjustmentPatchJson")).toString());
+    auto undone_variant = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.editBoardPayload(1).value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!undone_source.ok() || !undone_variant.ok() ||
+        undone_source.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 18–20, 2026") ||
+        undone_variant.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 18–20, 2026") ||
+        !controller.photoTextLinkState(QStringLiteral("tour-dates-native-text"))
+             .value(QStringLiteral("linked")).toBool()) {
+      return fail("One undo should restore both sides of a variant text edit while retaining link metadata");
+    }
+    controller.redo();
+    const auto redone_source = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.editBoardPayload(0).value(QStringLiteral("adjustmentPatchJson")).toString());
+    const auto redone_variant = photo_editor::desktop::parse_adjustment_patch_json(
+        controller.editBoardPayload(1).value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!redone_source.ok() || !redone_variant.ok() ||
+        redone_source.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026") ||
+        redone_variant.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026")) {
+      return fail("Redo should reapply the linked variant text edit to every member");
+    }
+    if (!controller.saveDocument(QStringLiteral("Shared tour dates"))) {
+      return fail("Linked native text and board recipes should save together");
+    }
+    CarouselDocumentController reopened;
+    if (!reopened.loadDocument(controller.savedDocumentId())) {
+      return fail("Linked native text document should reopen");
+    }
+    reopened.selectSlide(0);
+    if (!reopened.photoTextLinkState(QStringLiteral("tour-dates-native-text"))
+             .value(QStringLiteral("linked")).toBool()) {
+      return fail("Explicit shared text links should survive save and reopen");
+    }
+    const auto reopened_source = photo_editor::desktop::parse_adjustment_patch_json(
+        reopened.editBoardPayload(0).value(QStringLiteral("adjustmentPatchJson")).toString());
+    const auto reopened_variant = photo_editor::desktop::parse_adjustment_patch_json(
+        reopened.editBoardPayload(1).value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!reopened_source.ok() || !reopened_variant.ok() ||
+        reopened_source.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026") ||
+        reopened_variant.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("July 25–27, 2026") ||
+        reopened_variant.state->layers.constFirst().toMap().value(QStringLiteral("id")).toString() !=
+            QStringLiteral("tour-dates-native-text") || reopened_variant.state->exposure != 0.73) {
+      return fail("Reopen should retain shared text plus the peer's own photo recipe");
+    }
+    if (!reopened.detachEditBoardPhotoText(QStringLiteral("tour-dates-native-text")) ||
+        reopened.photoTextLinkState(QStringLiteral("tour-dates-native-text"))
+                .value(QStringLiteral("linked")).toBool()) {
+      return fail("A board should detach its native text into a local override");
+    }
+    auto local_payload = reopened.editBoardPayload(1);
+    auto local_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        local_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    auto local_state = *local_decoded.state;
+    auto local_layer = local_state.layers.constFirst().toMap();
+    local_layer.insert(QStringLiteral("text"), QStringLiteral("August 1–3, 2026"));
+    auto local_layers = local_state.layers;
+    local_layers[0] = local_layer;
+    local_state.layers = local_layers;
+    const auto local_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        local_state, local_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!reopened.applyAdjustmentPatchToPhotoEditTarget(
+            local_payload.value(QStringLiteral("targetKey")).toString(), local_patch)) {
+      return fail("Detached native text should accept a board-local override");
+    }
+    auto detached_source_payload = reopened.editBoardPayload(0);
+    auto detached_source_decoded = photo_editor::desktop::parse_adjustment_patch_json(
+        detached_source_payload.value(QStringLiteral("adjustmentPatchJson")).toString());
+    auto detached_source_state = *detached_source_decoded.state;
+    auto detached_source_layer = detached_source_state.layers.constFirst().toMap();
+    detached_source_layer.insert(QStringLiteral("text"), QStringLiteral("August 8–10, 2026"));
+    auto detached_source_layers = detached_source_state.layers;
+    detached_source_layers[0] = detached_source_layer;
+    detached_source_state.layers = detached_source_layers;
+    const auto detached_source_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        detached_source_state, detached_source_decoded.groups,
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    if (!reopened.applyAdjustmentPatchToPhotoEditTarget(
+            detached_source_payload.value(QStringLiteral("targetKey")).toString(), detached_source_patch) ||
+        !reopened.saveDocument()) {
+      return fail("Detached boards should save independently editable text");
+    }
+    CarouselDocumentController detached_reopened;
+    if (!detached_reopened.loadDocument(reopened.savedDocumentId())) {
+      return fail("Detached local text should reopen");
+    }
+    const auto final_source = photo_editor::desktop::parse_adjustment_patch_json(
+        detached_reopened.editBoardPayload(0).value(QStringLiteral("adjustmentPatchJson")).toString());
+    const auto final_variant = photo_editor::desktop::parse_adjustment_patch_json(
+        detached_reopened.editBoardPayload(1).value(QStringLiteral("adjustmentPatchJson")).toString());
+    if (!final_source.ok() || !final_variant.ok() ||
+        !detached_reopened.linkedPhotoTextGroups().isEmpty() ||
+        final_source.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("August 8–10, 2026") ||
+        final_variant.state->layers.constFirst().toMap().value(QStringLiteral("text")).toString() !=
+            QStringLiteral("August 1–3, 2026")) {
+      return fail("Saved detached text should remain a local override after later source edits");
+    }
+  }
+
+  {
+    const auto reorder_source = write_image(
+        dir, QStringLiteral("selected-board-reorder.png"),
+        split_image(QSize(320, 240), QColor(QStringLiteral("#263649")), QColor(QStringLiteral("#8a5b3c"))));
+    const auto reorder_patch = photo_editor::desktop::serialize_adjustment_patch_json(
+        CarouselDocumentController::RecipeState{}, photo_editor::desktop::all_adjustment_groups(),
+        photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    CarouselDocumentController controller;
+    if (reorder_source.isEmpty() ||
+        !controller.createBoardsFromEdit(reorder_source, QStringLiteral("Selected board reorder"),
+            reorder_patch, 320, 240, 2) ||
+        !controller.addEditBoard(false) || !controller.addEditBoard(false)) {
+      return fail("Edit-ready reorder fixture should create four persistent board identities");
+    }
+    int slides_notifications = 0;
+    int selection_notifications = 0;
+    QString last_notified_active_board_id;
+    QObject::connect(&controller, &CarouselDocumentController::slidesChanged,
+        &controller, [&slides_notifications]() { ++slides_notifications; });
+    QObject::connect(&controller, &CarouselDocumentController::selectionChanged,
+        &controller, [&controller, &selection_notifications, &last_notified_active_board_id]() {
+          ++selection_notifications;
+          const auto current = controller.currentIndex();
+          const auto current_slides = controller.slides();
+          if (current >= 0 && current < current_slides.size()) {
+            last_notified_active_board_id = current_slides.at(current).toMap()
+                .value(QStringLiteral("boardId")).toString();
+          }
+        });
+    QStringList original_board_ids;
+    for (const auto& value : controller.slides()) {
+      original_board_ids.push_back(value.toMap().value(QStringLiteral("boardId")).toString());
+    }
+    QSet<QString> unique_board_ids;
+    for (const auto& board_id : original_board_ids) unique_board_ids.insert(board_id);
+    if (original_board_ids.size() != 4 || unique_board_ids.size() != 4 ||
+        std::any_of(original_board_ids.cbegin(), original_board_ids.cend(),
+            [](const QString& board_id) { return board_id.isEmpty(); })) {
+      return fail("Edit-ready boards should each have a unique stable identity before reordering");
+    }
+    controller.selectSlide(1);
+    controller.selectSlideRange(2);
+    const auto selected_notifications_before_move = selection_notifications;
+    const auto slide_notifications_before_move = slides_notifications;
+    if (selected_notifications_before_move < 2 ||
+        last_notified_active_board_id != original_board_ids.at(2)) {
+      return fail("Selecting a board range should notify the active board identity before moving it");
+    }
+    controller.moveSlide(1, 3);
+    auto moved_slides = controller.slides();
+    if (moved_slides.at(0).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(0) ||
+        moved_slides.at(1).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(3) ||
+        moved_slides.at(2).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(1) ||
+        moved_slides.at(3).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(2) ||
+        !moved_slides.at(2).toMap().value(QStringLiteral("selected")).toBool() ||
+        !moved_slides.at(3).toMap().value(QStringLiteral("selected")).toBool() ||
+        controller.currentIndex() != 3 ||
+        selection_notifications <= selected_notifications_before_move ||
+        slides_notifications <= slide_notifications_before_move ||
+        last_notified_active_board_id != original_board_ids.at(2)) {
+      return fail("Moving a selected board range should preserve its order, active identity, and outline");
+    }
+    const auto selected_notifications_after_move = selection_notifications;
+    const auto slide_notifications_after_move = slides_notifications;
+    controller.undo();
+    const auto undone_slides = controller.slides();
+    if (undone_slides.at(1).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(1) ||
+        undone_slides.at(2).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(2) ||
+        !undone_slides.at(1).toMap().value(QStringLiteral("selected")).toBool() ||
+        !undone_slides.at(2).toMap().value(QStringLiteral("selected")).toBool() ||
+        controller.currentIndex() != 2 ||
+        selection_notifications <= selected_notifications_after_move ||
+        slides_notifications <= slide_notifications_after_move ||
+        last_notified_active_board_id != original_board_ids.at(2)) {
+      return fail("Undo should restore selected board identities after a multi-board reorder");
+    }
+    const auto selected_notifications_after_undo = selection_notifications;
+    const auto slide_notifications_after_undo = slides_notifications;
+    controller.redo();
+    const auto redone_slides = controller.slides();
+    if (redone_slides.at(2).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(1) ||
+        redone_slides.at(3).toMap().value(QStringLiteral("boardId")).toString() != original_board_ids.at(2) ||
+        !redone_slides.at(2).toMap().value(QStringLiteral("selected")).toBool() ||
+        !redone_slides.at(3).toMap().value(QStringLiteral("selected")).toBool() ||
+        controller.currentIndex() != 3 ||
+        selection_notifications <= selected_notifications_after_undo ||
+        slides_notifications <= slide_notifications_after_undo ||
+        last_notified_active_board_id != original_board_ids.at(2)) {
+      return fail("Redo should restore the selected board identities after a multi-board reorder");
     }
   }
 

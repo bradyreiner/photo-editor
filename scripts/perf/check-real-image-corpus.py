@@ -19,6 +19,19 @@ REQUIRED_TAGS = {
     "foliage": "landscape foliage",
     "textured_detail": "fine texture/detail",
 }
+CREATIVE_TOOLS_CATEGORIES = {
+    "portrait": 3,
+    "night": 2,
+    "architecture": 2,
+    "product_glass": 2,
+    "landscape": 2,
+    "monochrome": 1,
+}
+CREATIVE_TOOLS_VISUAL_TAGS = {
+    "hair_detail": "portrait",
+    "skin_tone": "portrait",
+    "glass_transparency": "product_glass",
+}
 
 ALLOWED_AGENT_PIXEL_CHECKS = {
     "brighter",
@@ -69,6 +82,11 @@ def parse_args() -> argparse.Namespace:
         "--require-human-ratings",
         action="store_true",
         help="Require every agent case to have a completed passing human review.",
+    )
+    parser.add_argument(
+        "--creative-tools",
+        action="store_true",
+        help="Validate the exact 12-photo creative-tools corpus profile instead of the performance tag profile.",
     )
     return parser.parse_args()
 
@@ -378,6 +396,8 @@ def main() -> int:
             f"asset_count mismatch: manifest={asset_count}, actual={len(assets)}"
         )
     covered_tags: set[str] = set()
+    creative_category_counts = {category: 0 for category in CREATIVE_TOOLS_CATEGORIES}
+    creative_visual_coverage: set[str] = set()
     asset_ids: set[str] = set()
     agent_case_ids: set[str] = set()
     for index, asset in enumerate(assets):
@@ -397,26 +417,53 @@ def main() -> int:
                 index,
             )
         )
+        if args.creative_tools:
+            asset_id = asset.get("asset_id")
+            categories = asset.get("creative_categories")
+            if not isinstance(categories, list) or len(categories) != 1 or not isinstance(categories[0], str):
+                errors.append(f"asset {asset_id or index}: creative_categories must contain exactly one category")
+            elif categories[0] not in creative_category_counts:
+                errors.append(f"asset {asset_id or index}: unknown creative category {categories[0]!r}")
+            else:
+                creative_category_counts[categories[0]] += 1
+                for tag, category in CREATIVE_TOOLS_VISUAL_TAGS.items():
+                    visual_tags = asset.get("creative_visual_tags", [])
+                    if categories[0] == category and isinstance(visual_tags, list) and tag in visual_tags:
+                        creative_visual_coverage.add(tag)
         asset_id = asset.get("asset_id")
         if isinstance(asset_id, str) and asset_id:
             if asset_id in asset_ids:
                 errors.append(f"duplicate asset_id: {asset_id}")
             asset_ids.add(asset_id)
 
-    missing_tags = sorted(set(REQUIRED_TAGS) - covered_tags)
-    for tag in missing_tags:
-        errors.append(f"missing required scene coverage tag: {tag} ({REQUIRED_TAGS[tag]})")
+    if args.creative_tools:
+        if len(assets) != sum(CREATIVE_TOOLS_CATEGORIES.values()):
+            errors.append("creative-tools corpus must contain exactly 12 photos")
+        for category, expected in CREATIVE_TOOLS_CATEGORIES.items():
+            actual = creative_category_counts[category]
+            if actual != expected:
+                errors.append(f"creative category {category} must contain {expected} photos; found {actual}")
+        for tag in set(CREATIVE_TOOLS_VISUAL_TAGS) - creative_visual_coverage:
+            category = CREATIVE_TOOLS_VISUAL_TAGS[tag]
+            errors.append(f"creative-tools corpus requires a {category} photo tagged {tag}")
+    else:
+        missing_tags = sorted(set(REQUIRED_TAGS) - covered_tags)
+        for tag in missing_tags:
+            errors.append(f"missing required scene coverage tag: {tag} ({REQUIRED_TAGS[tag]})")
 
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
 
-    print(
-        "real-image corpus manifest ok: "
-        f"{len(assets)} assets, {len(agent_case_ids)} agent cases, "
-        f"required tags covered: {', '.join(sorted(covered_tags))}"
-    )
+    if args.creative_tools:
+        print("creative-tools photo corpus ok: 12 licensed, hash-verified photos; category mix and difficult subjects covered")
+    else:
+        print(
+            "real-image corpus manifest ok: "
+            f"{len(assets)} assets, {len(agent_case_ids)} agent cases, "
+            f"required tags covered: {', '.join(sorted(covered_tags))}"
+        )
     return 0
 
 

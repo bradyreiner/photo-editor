@@ -44,6 +44,11 @@ void EditorPreviewImageProvider::clearImage(const QString& key) {
   images_.remove(key);
 }
 
+QImage EditorPreviewImageProvider::image(const QString& key) const {
+  QMutexLocker locker(&mutex_);
+  return images_.value(normalized_key(key));
+}
+
 QString EditorPreviewImageProvider::normalized_key(const QString& id) {
   const auto query_index = id.indexOf(QLatin1Char('?'));
   return query_index >= 0 ? id.left(query_index) : id;

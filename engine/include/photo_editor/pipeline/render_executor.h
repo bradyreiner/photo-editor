@@ -77,6 +77,11 @@ class RenderSurfaceBacking {
   [[nodiscard]] virtual bool copy_pixels(
       std::vector<ColorPixel>* destination,
       CancellationToken cancellation = {}) const = 0;
+  // Backings that validate every copied channel let the surface skip a second
+  // full-frame finite-value scan after materialization.
+  [[nodiscard]] virtual bool copy_pixels_validates_finite() const noexcept {
+    return false;
+  }
 };
 
 struct RenderSurface final {
@@ -132,6 +137,7 @@ struct RenderCompletedStage;
 
 struct RenderExecutionRequest final {
   RenderPlan plan;
+  std::string source_revision_identity;
   std::string backend_version;
   std::string target_identity;
   std::string profile_identity;
@@ -151,6 +157,10 @@ struct RenderExecutionRequest final {
   std::function<bool()> cancelled;
   std::function<std::uint64_t()> latest_generation;
   bool bypass_cache = false;
+  bool skip_cache_writes = false;
+  // When set, cache writes are allowed only for plan stages whose index is
+  // strictly less than this value. Cache reads remain available at all stages.
+  std::optional<std::size_t> cache_write_stage_index_exclusive_limit;
   std::optional<RenderSurface> initial_surface;
   std::size_t start_stage_index = 0;
   std::optional<std::size_t> stop_after_stage_index;
@@ -169,6 +179,7 @@ struct RenderCompletedStage final {
   std::optional<RenderFusionEvidence>
       fusion_evidence;
   bool cache_hit = false;
+  std::int64_t elapsed_ms = 0;
 
   bool operator==(const RenderCompletedStage&) const = default;
 };
@@ -190,6 +201,7 @@ struct RenderExecutionResult final {
   std::string plan_cache_key;
   std::string failure_stage;
   std::string failure_reason;
+  std::int64_t in_flight_stage_elapsed_ms = 0;
 
   [[nodiscard]] bool ok() const noexcept {
     return status == RenderExecutionStatus::Completed &&

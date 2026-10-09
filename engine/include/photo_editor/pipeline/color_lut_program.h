@@ -29,6 +29,15 @@ struct CompiledUserLutStageProgram final {
   [[nodiscard]] bool ready() const;
 };
 
+// Applies the transfer curves used by tagged user LUT stages. These scalar
+// helpers also let export adapters share the engine's exact transfer math.
+[[nodiscard]] double decode_color_transfer_function(
+    double encoded_value,
+    TransferFunction transfer);
+[[nodiscard]] double encode_color_transfer_function(
+    double linear_value,
+    TransferFunction transfer);
+
 [[nodiscard]] bool user_lut_state_supports_compiled_execution(
     const ColorAdjustmentState& state);
 [[nodiscard]] CompiledUserLutStageProgram compile_user_lut_stage_program(

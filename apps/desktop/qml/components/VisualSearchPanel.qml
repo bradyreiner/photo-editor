@@ -62,13 +62,13 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             visible: root.similarityAvailable
-            CheckBox {
+            ToolOptionToggle {
                 objectName: "visualSearchSimilarityToggle"
-                palette.windowText: theme.textStrong
-                text: "Similarity search · SigLIP 2"
+                label: "Similarity search · SigLIP 2"
+                helperText: "Ranks similar photos locally. Specific details are not verified."
                 checked: root.similarityMode
-                enabled: root.controller && !root.controller.running
-                onToggled: root.similarityModeRequested(checked)
+                toggleEnabled: root.controller && !root.controller.running
+                onToggled: function(nextChecked) { root.similarityModeRequested(nextChecked) }
             }
             Label {
                 Layout.fillWidth: true
@@ -82,13 +82,13 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             visible: !root.similarityMode
-            CheckBox {
+            ToolOptionToggle {
                 objectName: "visualSearchIndexToggle"
-                palette.windowText: theme.textStrong
-                text: "Reuse saved image descriptions"
+                label: "Reuse saved image descriptions"
+                helperText: "Reuse descriptions saved on this computer, then check missing details against local previews."
                 checked: Boolean(!root.similarityMode && root.controller && root.controller.useIndex)
-                enabled: root.controller && !root.controller.running
-                onToggled: root.modeRequested(checked)
+                toggleEnabled: root.controller && !root.controller.running
+                onToggled: function(nextChecked) { root.modeRequested(nextChecked) }
             }
             Label {
                 Layout.fillWidth: true

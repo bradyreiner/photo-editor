@@ -17,6 +17,7 @@
   if (root_window == nullptr) {
     return fail("desktop shell visual proof requires the root QML object to be a window");
   }
+  new photo_editor::desktop::RecentUserInputFilter(root_window);
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_CAROUSEL_RESPONSIVE_LAYOUT")) {
     root->setProperty("currentWorkspace", root->property("carouselWorkspaceIndex"));
     process_layout_events(8);
@@ -115,6 +116,29 @@
     timeline_document.seekSequenceSeconds(5.0);
     timeline_document.insertSourceClipAtPlayhead();
     trace_smoke_progress("timeline proof source insert complete");
+    auto proof_audio_track_row = -1;
+    const auto proof_tracks = timeline_document.sequenceTracks();
+    for (int row = 0; row < proof_tracks.size(); ++row) {
+      if (proof_tracks.at(row).toMap().value(QStringLiteral("trackKind")).toString() ==
+          QStringLiteral("audio")) {
+        proof_audio_track_row = row;
+        break;
+      }
+    }
+    if (proof_audio_track_row < 0) {
+      return fail("Timeline UI proof should create an audio automation target");
+    }
+    timeline_document.seekSequenceSeconds(0.25);
+    if (!timeline_document.toggleTrackAutomationKeyframe(
+            proof_audio_track_row, QStringLiteral("audioGainDb"))) {
+      return fail("Timeline UI proof should create track automation points");
+    }
+    timeline_document.setTrackAutomationValue(
+        proof_audio_track_row, QStringLiteral("audioGainDb"), -4.0);
+    timeline_document.seekSequenceSeconds(1.0);
+    timeline_document.setTrackAutomationValue(
+        proof_audio_track_row, QStringLiteral("audioGainDb"), -8.0);
+    timeline_document.seekSequenceSeconds(5.0);
     timeline_document.addTitleClip();
     timeline_document.generateCaptionsFromTranscript(
         QStringLiteral("Build the story clearly. Keep every moment readable."));
@@ -140,6 +164,17 @@
         {QStringLiteral("text"), QStringLiteral("Polished social cut")},
         {QStringLiteral("fontSize"), 56.0},
     });
+    const auto title_motion_start_seconds =
+        timeline_document.currentClip().value(QStringLiteral("startSeconds")).toDouble();
+    if (!timeline_document.applySelectedClipMotionPreset(QStringLiteral("title-pop"))) {
+      return fail("Timeline UI proof should apply an editable title entrance and exit preset");
+    }
+    timeline_document.seekSequenceSeconds(title_motion_start_seconds + 0.15);
+    if (timeline_document.currentClip().value(QStringLiteral("mediaType")).toString() !=
+            QStringLiteral("title") ||
+        timeline_document.currentClip().value(QStringLiteral("opacity")).toDouble() <= 0.5) {
+      return fail("Timeline UI proof should keep the animated title selected while scrubbing its entrance");
+    }
     const auto expected_clip_count = timeline_document.clipCount();
     if (!timeline_document.saveTimeline() || timeline_document.savedDocumentPath().isEmpty()) {
       return fail("Timeline UI proof should save its test document");
@@ -177,7 +212,7 @@
                      find_named_object(root, QStringLiteral("timelineProgramMonitor")) != nullptr &&
                      find_named_object(root, QStringLiteral("timelineViewport")) != nullptr;
             },
-            5000)) {
+            10000)) {
       return fail("Timeline UI proof should route to a fully loaded Timeline workspace");
     }
     trace_smoke_progress("timeline proof route ready");
@@ -203,6 +238,71 @@
         timeline_workspace->property("timelineUiConsistencyContract").toString().isEmpty()) {
       return fail("Timeline UI proof should expose the styled workspace contract");
     }
+
+    QVariantList loaded_track_rows =
+        timeline_workspace->property("sequenceTrackModel").toList();
+    QVariantMap proof_audio_track;
+    for (const auto& track_value : loaded_track_rows) {
+      const auto track = track_value.toMap();
+      if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("audio")) {
+        proof_audio_track = track;
+        break;
+      }
+    }
+    if (proof_audio_track.value(QStringLiteral("trackId")).toString().isEmpty()) {
+      return fail("Timeline UI proof should expose the stable audio track target");
+    }
+    if (!QMetaObject::invokeMethod(
+            timeline_workspace,
+            "toggleTrackAutomationLane",
+            Q_ARG(QVariant, QVariant(proof_audio_track)),
+            Q_ARG(QVariant, QVariant(QStringLiteral("audioGainDb"))))) {
+      return fail("the audio track should expose its contextual automation lane");
+    }
+    process_layout_events(12);
+    auto* open_curve_button = static_cast<QQuickItem*>(nullptr);
+    for (auto* candidate : find_named_items(
+             timeline_workspace, QStringLiteral("timelineTrackAutomationOpenCurveEditorButton"))) {
+      if (item_visible(candidate) && candidate->window() == root_window) {
+        open_curve_button = candidate;
+        break;
+      }
+    }
+    if (open_curve_button == nullptr) {
+      return fail("an expanded audio automation lane should expose its full curve editor button");
+    }
+    if (!QMetaObject::invokeMethod(
+            timeline_workspace,
+            "openTrackAutomationCurveEditor",
+            Q_ARG(QVariant, QVariant(proof_audio_track)),
+            Q_ARG(QVariant, QVariant(QStringLiteral("audioGainDb"))))) {
+      return fail("the full track curve editor should open from the automation lane");
+    }
+    process_layout_events(12);
+    auto* curve_window = find_named_object(root, QStringLiteral("timelineKeyframeCurveWindow"));
+    if (curve_window == nullptr || !curve_window->property("visible").toBool() ||
+        timeline_workspace->property("curveEditorTarget").toString() != QStringLiteral("track") ||
+        timeline_workspace->property("curveEditorTrackId").toString() !=
+            proof_audio_track.value(QStringLiteral("trackId")).toString() ||
+        !curve_window->property("trackAutomationMode").toBool() ||
+        curve_window->property("curveKeyframes").toList().size() != 2) {
+      return fail("track curve editing should open the same weighted value and speed editor on the selected track");
+    }
+    auto* batch_keyframe_menu = qobject_cast<QQuickItem*>(find_named_object(
+        curve_window, QStringLiteral("timelineKeyframeBatchMenuButton")));
+    if (batch_keyframe_menu == nullptr || !item_visible(batch_keyframe_menu)) {
+      return fail("track curve editing should expose the shared multi-key batch operations");
+    }
+    curve_window->setProperty("visible", false);
+    timeline_workspace->setProperty("curveEditorTarget", QStringLiteral("clip"));
+    timeline_workspace->setProperty("curveEditorTrackId", QString{});
+    QMetaObject::invokeMethod(
+        timeline_workspace,
+        "toggleTrackAutomationLane",
+        Q_ARG(QVariant, QVariant(proof_audio_track)),
+        Q_ARG(QVariant, QVariant(QStringLiteral("audioGainDb"))));
+    process_layout_events(8);
+
     const auto settle_timeline_proof = [root_window]() {
       auto frame_has_content = [](const QImage& frame) {
         if (frame.isNull()) {
@@ -337,7 +437,28 @@
         }
 
         timeline_document.selectClip(title_clip_index);
+        const auto reopened_title_start_seconds =
+            timeline_document.currentClip().value(QStringLiteral("startSeconds")).toDouble();
+        timeline_document.seekSequenceSeconds(reopened_title_start_seconds + 0.15);
+        if (timeline_document.currentClip().value(QStringLiteral("mediaType")).toString() !=
+                QStringLiteral("title") ||
+            timeline_document.currentClip().value(QStringLiteral("opacity")).toDouble() <= 0.5) {
+          return fail("reopened title motion should stay selected and active in the Program workflow");
+        }
+        timeline_workspace->setProperty("effectsPanelDetached", false);
+        timeline_workspace->setProperty("effectsPanelCollapsed", false);
+        timeline_workspace->setProperty("inspectorTab", QStringLiteral("title"));
+        timeline_workspace->setProperty(
+            "inspectorScrollByContext",
+            QVariantMap{{QStringLiteral("title|title"), 360.0}});
         process_layout_events(8);
+        QStringList title_inspector_objects = required_timeline_objects;
+        title_inspector_objects << QStringLiteral("timelineTitlePositionXSlider")
+                                << QStringLiteral("timelineTitlePositionYSlider")
+                                << QStringLiteral("timelineTitlePositionXKeyframeButton")
+                                << QStringLiteral("timelineTitlePositionYKeyframeButton")
+                                << QStringLiteral("timelineTitleMotionMenuButton")
+                                << QStringLiteral("timelineProgramTitleDragArea");
         if (!capture_visual_proof(
                 root_window,
                 root,
@@ -345,7 +466,7 @@
                 QStringLiteral("timeline-%1-title-inspector").arg(theme_name),
                 1440,
                 900,
-                required_timeline_objects,
+                title_inspector_objects,
                 &visual_proof_manifest,
                 QJsonObject{
                     {QStringLiteral("theme"), theme_name},
@@ -354,6 +475,71 @@
                     {QStringLiteral("saved_document"), persistent_timeline_path},
                 })) {
           return fail("Timeline UI proof should capture the title Inspector state");
+        }
+
+        QQuickItem* title_drag_area = nullptr;
+        for (auto* candidate : find_named_items(
+                 root, QStringLiteral("timelineProgramTitleDragArea"))) {
+          if (item_visible(candidate) && candidate->window() == root_window) {
+            title_drag_area = candidate;
+            break;
+          }
+        }
+        if (title_drag_area == nullptr) {
+          return fail("selected title should expose a direct Program Monitor drag target");
+        }
+        const auto title_position_before = timeline_document.currentClip();
+        const auto title_x_before = title_position_before
+                                        .value(QStringLiteral("titlePositionX")).toDouble();
+        const auto title_y_before = title_position_before
+                                        .value(QStringLiteral("titlePositionY")).toDouble();
+        const auto title_drag_start = title_drag_area->mapToScene(
+            QPointF(title_drag_area->width() * 0.5, title_drag_area->height() * 0.5));
+        const auto title_drag_end = title_drag_start + QPointF(42.0, 30.0);
+        const auto title_drag_start_global = QPointF(
+            root_window->mapToGlobal(title_drag_start.toPoint()));
+        const auto title_drag_end_global = QPointF(
+            root_window->mapToGlobal(title_drag_end.toPoint()));
+        QMouseEvent title_drag_press(
+            QEvent::MouseButtonPress,
+            title_drag_start,
+            title_drag_start_global,
+            Qt::LeftButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QCoreApplication::sendEvent(root_window, &title_drag_press);
+        QMouseEvent title_drag_move(
+            QEvent::MouseMove,
+            title_drag_end,
+            title_drag_end_global,
+            Qt::NoButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QCoreApplication::sendEvent(root_window, &title_drag_move);
+        QCoreApplication::processEvents();
+        QMouseEvent title_drag_release(
+            QEvent::MouseButtonRelease,
+            title_drag_end,
+            title_drag_end_global,
+            Qt::LeftButton,
+            Qt::NoButton,
+            Qt::NoModifier);
+        QCoreApplication::sendEvent(root_window, &title_drag_release);
+        QCoreApplication::processEvents();
+        const auto title_position_after = timeline_document.currentClip();
+        if (title_position_after.value(QStringLiteral("titlePositionX")).toDouble() <=
+                title_x_before + 0.02 ||
+            title_position_after.value(QStringLiteral("titlePositionY")).toDouble() <=
+                title_y_before + 0.015) {
+          return fail("dragging a title in the Program Monitor should update its anchor coordinates");
+        }
+        timeline_document.undo();
+        const auto title_position_undone = timeline_document.currentClip();
+        if (qAbs(title_position_undone.value(QStringLiteral("titlePositionX")).toDouble() -
+                 title_x_before) > 0.001 ||
+            qAbs(title_position_undone.value(QStringLiteral("titlePositionY")).toDouble() -
+                 title_y_before) > 0.001) {
+          return fail("one undo should restore a direct title drag as a single edit");
         }
 
         timeline_workspace->setProperty("sourcePanelCollapsed", true);
@@ -461,6 +647,10 @@
     root->setProperty("width", 1440);
     root->setProperty("height", 900);
     process_layout_events(8);
+    const auto dialog_proof_dir = qEnvironmentVariable("PHOTO_EDITOR_DIALOG_SURFACE_PROOF_DIR");
+    QJsonArray dialog_proof_manifest;
+    if (!dialog_proof_dir.isEmpty() && !QDir().mkpath(dialog_proof_dir))
+      return fail("Dialog surface proof should create its capture directory");
     if (!QMetaObject::invokeMethod(root, "openFirstRunGuide", Qt::DirectConnection)) {
       return fail("accessibility proof should be able to start the first-run guide");
     }
@@ -473,6 +663,95 @@
             3000)) {
       return fail("maximum-scale keyboard proof should open first-run guidance");
     }
+    auto* first_run_guide = find_named_object(root, QStringLiteral("firstRunGuideDialog"));
+    if (first_run_guide == nullptr) {
+      return fail("first-run guidance should expose its visible dialog object for proof");
+    }
+    if (!capture_visual_proof(
+            root_window,
+            root,
+            visual_proof_dir,
+            QStringLiteral("first-run-choice"),
+            1440,
+            900,
+            {QStringLiteral("firstRunSampleButton"), QStringLiteral("firstRunOwnPhotosButton")},
+            &visual_proof_manifest,
+            QJsonObject{
+                {QStringLiteral("state"), QStringLiteral("first-run-photo-choice")},
+                {QStringLiteral("display_scale"), 1.3},
+                {QStringLiteral("native_window"), qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER")},
+            })) {
+      return fail("first-run guidance should save a capture of both photo-entry choices");
+    }
+    QFile first_run_manifest_file(QDir(visual_proof_dir).filePath(QStringLiteral("accessibility-manifest.json")));
+    if (!first_run_manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+        first_run_manifest_file.write(QJsonDocument(visual_proof_manifest).toJson(QJsonDocument::Indented)) <= 0) {
+      return fail("first-run guidance capture should be recorded before later shortcut checks");
+    }
+    first_run_manifest_file.close();
+    const auto persist_accessibility_manifest = [&]() {
+      QFile manifest_file(
+          QDir(visual_proof_dir).filePath(QStringLiteral("accessibility-manifest.json")));
+      return manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+             manifest_file.write(
+                 QJsonDocument(visual_proof_manifest).toJson(QJsonDocument::Indented)) > 0;
+    };
+    const auto capture_accessibility_proof = [&](const QString& state,
+                                                 const int requested_width,
+                                                 const int requested_height,
+                                                 const QStringList& required_objects,
+                                                 QJsonObject metadata = {}) {
+      auto capture_width = requested_width;
+      auto capture_height = requested_height;
+      const auto native_window = qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER");
+      auto screen_available = QRect{};
+      auto frame_margins = QMargins{};
+      if (native_window && root_window->screen() != nullptr) {
+        screen_available = root_window->screen()->availableGeometry();
+        frame_margins = root_window->frameMargins();
+        const auto max_content_width = std::max(
+            1,
+            screen_available.width() - frame_margins.left() - frame_margins.right());
+        const auto max_content_height = std::max(
+            1,
+            screen_available.height() - frame_margins.top() - frame_margins.bottom());
+        capture_width = std::min(capture_width, max_content_width);
+        capture_height = std::min(capture_height, max_content_height);
+      }
+      const auto native_viewport_constrained =
+          native_window && (capture_width != requested_width || capture_height != requested_height);
+      metadata.insert(QStringLiteral("originalRequestedWidth"), requested_width);
+      metadata.insert(QStringLiteral("originalRequestedHeight"), requested_height);
+      metadata.insert(QStringLiteral("actualViewportWidth"), capture_width);
+      metadata.insert(QStringLiteral("actualViewportHeight"), capture_height);
+      metadata.insert(QStringLiteral("nativeViewportConstrained"), native_viewport_constrained);
+      if (native_window && !screen_available.isNull()) {
+        metadata.insert(QStringLiteral("screenAvailableWidth"), screen_available.width());
+        metadata.insert(QStringLiteral("screenAvailableHeight"), screen_available.height());
+        metadata.insert(QStringLiteral("frameMarginLeft"), frame_margins.left());
+        metadata.insert(QStringLiteral("frameMarginTop"), frame_margins.top());
+        metadata.insert(QStringLiteral("frameMarginRight"), frame_margins.right());
+        metadata.insert(QStringLiteral("frameMarginBottom"), frame_margins.bottom());
+      }
+      if (!capture_visual_proof(
+              root_window,
+              root,
+              visual_proof_dir,
+              state,
+              capture_width,
+              capture_height,
+              required_objects,
+              &visual_proof_manifest,
+              metadata)) {
+        return false;
+      }
+      if (!persist_accessibility_manifest()) {
+        std::cerr << "Unable to persist accessibility proof manifest after "
+                  << state.toStdString() << '\n';
+        return false;
+      }
+      return true;
+    };
 
     auto require_named_control = [root](const QString& object_name) {
       auto* object = find_named_object(root, object_name);
@@ -486,9 +765,26 @@
 
     auto* own_photos = find_named_object(root, QStringLiteral("firstRunOwnPhotosButton"));
     auto* own_photos_item = qobject_cast<QQuickItem*>(own_photos);
+    auto* sample_photos = find_named_object(root, QStringLiteral("firstRunSampleButton"));
+    auto* sample_photos_item = qobject_cast<QQuickItem*>(sample_photos);
+    if (!require_named_control(QStringLiteral("firstRunSampleButton")) ||
+        sample_photos_item == nullptr || sample_photos_item->height() < 46.0 ||
+        !sample_photos->property("enabled").toBool()) {
+      return fail("first-run sample-photo choice should retain its primary pointer target and remain named, visible, and enabled");
+    }
     if (!require_named_control(QStringLiteral("firstRunOwnPhotosButton")) ||
         own_photos_item == nullptr || own_photos_item->height() < 46.0 ||
-        !send_activation_key(own_photos) ||
+        !own_photos->property("enabled").toBool()) {
+      return fail("first-run import choice should retain its primary pointer target and remain named, visible, and enabled");
+    }
+    if (first_run_guide->property("currentStep").toInt() != 0 ||
+        sample_photos_item->parentItem() != own_photos_item->parentItem() ||
+        !contains_with_tolerance(scene_rect(sample_photos_item->parentItem()), scene_rect(sample_photos_item)) ||
+        !contains_with_tolerance(scene_rect(own_photos_item->parentItem()), scene_rect(own_photos_item)) ||
+        overlaps_with_tolerance(scene_rect(sample_photos_item), scene_rect(own_photos_item))) {
+      return fail("first-run sample and own-photo choices should fit their shared page without overlapping at proof scale");
+    }
+    if (!send_activation_key(own_photos) ||
         !wait_for_condition([root]() { return root->property("libraryWorkspaceMode").toString() == QStringLiteral("import"); })) {
       return fail("first-run import choice should retain its primary pointer target and remain named, focusable, visible, and keyboard operable");
     }
@@ -522,7 +818,257 @@
       return fail("first-run workflow should finish explicitly by keyboard");
     }
 
-    const auto primary_modifier = Qt::MetaModifier;
+    const auto primary_modifier = Qt::ControlModifier;
+    const auto ensure_native_window_active = [root_window]() {
+      if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER") || root_window->isActive()) {
+        return true;
+      }
+      activate_native_test_application();
+      root_window->raise();
+      root_window->requestActivate();
+      return wait_for_condition([root_window]() { return root_window->isActive(); }, 2000);
+    };
+    QVariant command_palette_sequence;
+    if (!QMetaObject::invokeMethod(
+            root,
+            "primaryShortcut",
+            Q_RETURN_ARG(QVariant, command_palette_sequence),
+            Q_ARG(QVariant, QStringLiteral("K"))) ||
+        command_palette_sequence.toString() != QStringLiteral("Ctrl+K")) {
+      return fail("the primary shortcut sequence should use Qt's portable Command/Ctrl mapping");
+    }
+    auto* library_tab = find_named_object(root, QStringLiteral("workspaceTabLibrary"));
+    auto* library_tab_item = qobject_cast<QQuickItem*>(library_tab);
+    if (!require_named_control(QStringLiteral("workspaceTabLibrary")) || library_tab_item == nullptr) {
+      return fail("workspace navigation should provide a named focus target for modal workflows");
+    }
+    if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER") && !root_window->isActive()) {
+      activate_native_test_application();
+      root_window->raise();
+      root_window->requestActivate();
+      if (!wait_for_condition([root_window]() { return root_window->isActive(); }, 2000)) {
+        return fail("native Command Palette proof should activate the isolated Cocoa window before dispatch");
+      }
+    }
+    library_tab_item->forceActiveFocus(Qt::TabFocusReason);
+    process_layout_events(2);
+    if ((qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_NATIVE_POINTER") && !root_window->isActive()) ||
+        root_window->activeFocusItem() != library_tab_item ||
+        !send_window_key(root_window, Qt::Key_K, primary_modifier) ||
+        !wait_for_condition(
+            [root]() {
+              return named_object_visible_for_proof(root, QStringLiteral("commandPaletteDialog"));
+            },
+            3000)) {
+      std::cerr << "Command Palette shortcut context: active=" << root_window->isActive()
+                << " focus=" << (root_window->activeFocusItem() ? root_window->activeFocusItem()->objectName().toStdString() : "none")
+                << " primaryModifier=" << static_cast<int>(primary_modifier) << '\n';
+      return fail("the Command Palette shortcut should open from the focused workspace navigation using the platform primary modifier");
+    }
+    auto* command_palette = find_named_object(root, QStringLiteral("commandPaletteDialog"));
+    auto* command_search = find_named_object(root, QStringLiteral("commandPaletteSearchField"));
+    auto* command_search_item = qobject_cast<QQuickItem*>(command_search);
+    QVariant filtered_palette_commands;
+    if (!require_named_control(QStringLiteral("commandPaletteSearchField")) ||
+        command_search_item == nullptr || root_window->activeFocusItem() != command_search_item ||
+        accessible_name_for_object(command_search) != QStringLiteral("Search commands")) {
+      return fail("Command Palette opening should focus its named command search field");
+    }
+    command_search->setProperty("text", QStringLiteral("crop tool"));
+    process_layout_events(3);
+    if (!QMetaObject::invokeMethod(
+            command_palette,
+            "filteredCommands",
+            Q_RETURN_ARG(QVariant, filtered_palette_commands)) ||
+        filtered_palette_commands.toList().isEmpty() ||
+        filtered_palette_commands.toList().first().toMap().value(QStringLiteral("label"))
+            .toString() != QStringLiteral("Crop Tool")) {
+      return fail("Command Palette search should keep the exact matching tool command available");
+    }
+    if (!send_window_key(root_window, Qt::Key_Escape) ||
+        !wait_for_condition(
+            [command_palette]() {
+              return command_palette != nullptr &&
+                     !command_palette->property("visible").toBool();
+            },
+            1000) ||
+        root_window->activeFocusItem() != library_tab_item) {
+      return fail("Escape should dismiss Command Palette and return focus to its invoking workspace control");
+    }
+
+    if (!QMetaObject::invokeMethod(
+            root,
+            "openPreferencesDialog",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, QVariant(0))) ||
+        !wait_for_condition(
+            [root]() { return named_object_visible_for_proof(root, QStringLiteral("preferencesDialog")); },
+            3000)) {
+      return fail("the Preferences shell action should open its dialog from workspace navigation");
+    }
+    auto* preferences = find_named_object(root, QStringLiteral("preferencesDialog"));
+    auto* preferences_nav = find_named_object(root, QStringLiteral("preferencesPageNav_0"));
+    auto* preferences_nav_item = qobject_cast<QQuickItem*>(preferences_nav);
+    if (preferences == nullptr || preferences->property("currentPage").toInt() != 0 ||
+        preferences_nav_item == nullptr || root_window->activeFocusItem() != preferences_nav_item ||
+        accessible_name_for_object(preferences_nav) != QStringLiteral("General")) {
+      return fail("Preferences should open on General with its named navigation control focused");
+    }
+    if (!dialog_proof_dir.isEmpty()) {
+      app_shell.setHighContrast(false);
+      app_shell.setColorVisionMode(QStringLiteral("standard"));
+      for (const auto scale : {1.0, 2.0}) {
+        app_shell.setInterfaceScale(scale);
+        root->setProperty("width", scale == 1.0 ? 1280 : 1024);
+        root->setProperty("height", scale == 1.0 ? 800 : 760);
+        process_layout_events(8);
+        for (int page = 0; page < 6; ++page) {
+          auto* nav = qobject_cast<QQuickItem*>(find_named_object(root, QStringLiteral("preferencesPageNav_%1").arg(page)));
+          if (!nav) return fail("Every Preferences page should retain its navigation control");
+          nav->forceActiveFocus(Qt::TabFocusReason);
+          if (!send_window_key(root_window, Qt::Key_Return) || preferences->property("currentPage").toInt() != page)
+            return fail("Every Preferences page should open through its keyboard navigation control");
+          process_layout_events(8);
+          auto* background = preferences->property("background").value<QQuickItem*>();
+          if (!background) return fail("Preferences should retain its dialog surface");
+          const auto bounds = background->mapRectToScene(background->boundingRect()).adjusted(-1, -1, 1, 1);
+          const QStringList required{QStringLiteral("preferencesPageHeader"), QStringLiteral("preferencesPageContent"),
+              QStringLiteral("preferencesFooter"), QStringLiteral("preferencesCloseButton"),
+              QStringLiteral("preferencesNavigationScroll"), nav->objectName()};
+          for (const auto& name : required) {
+            auto* item = qobject_cast<QQuickItem*>(find_named_object(root, name));
+            if (!item || !bounds.contains(item->mapRectToScene(item->boundingRect())))
+              return fail("Preferences navigation, settings viewport, and Close should stay inside the dialog at both UI scales");
+          }
+          if (!capture_visual_proof(root_window, root, dialog_proof_dir,
+                QStringLiteral("preferences-page-%1-scale-%2").arg(page).arg(scale),
+                scale == 1.0 ? 1280 : 1024, scale == 1.0 ? 800 : 760, required, &dialog_proof_manifest))
+            return fail("Preferences page review capture should save");
+        }
+      }
+      preferences->setProperty("currentPage", 0);
+      app_shell.setInterfaceScale(1.3);
+      app_shell.setHighContrast(true);
+      app_shell.setColorVisionMode(QStringLiteral("deuteranopia"));
+      root->setProperty("width", 1440);
+      root->setProperty("height", 900);
+      preferences_nav_item->forceActiveFocus(Qt::TabFocusReason);
+      process_layout_events(8);
+    }
+    if (!send_window_key(root_window, Qt::Key_Escape) ||
+        !wait_for_condition(
+            [preferences]() { return preferences != nullptr && !preferences->property("visible").toBool(); },
+            1000) ||
+        root_window->activeFocusItem() != library_tab_item) {
+      return fail("Escape should dismiss Preferences and restore focus to the invoking workspace control");
+    }
+
+    if (!QMetaObject::invokeMethod(root, "openKeyboardShortcutsDialog", Qt::DirectConnection) ||
+        !wait_for_condition(
+            [root]() { return named_object_visible_for_proof(root, QStringLiteral("keyboardShortcutsDialog")); },
+            3000)) {
+      return fail("the Keyboard Shortcuts dialog should open through the shell action");
+    }
+    auto* shortcuts_dialog = find_named_object(root, QStringLiteral("keyboardShortcutsDialog"));
+    auto* shortcuts_search = find_named_object(root, QStringLiteral("shortcutSearchField"));
+    auto* shortcuts_search_item = qobject_cast<QQuickItem*>(shortcuts_search);
+    if (!require_named_control(QStringLiteral("shortcutSearchField")) ||
+        shortcuts_search_item == nullptr || root_window->activeFocusItem() != shortcuts_search_item) {
+      return fail("Keyboard Shortcuts should open with its named search field focused");
+    }
+    shortcuts_search->setProperty("text", QStringLiteral("timeline"));
+    if (!QMetaObject::invokeMethod(shortcuts_search, "textEdited"))
+      return fail("Shortcut search should forward typed text to its filter");
+    process_layout_events(3);
+    if (!dialog_proof_dir.isEmpty()) {
+      app_shell.setHighContrast(false);
+      app_shell.setColorVisionMode(QStringLiteral("standard"));
+      for (const auto scale : {1.0, 2.0}) {
+        app_shell.setInterfaceScale(scale);
+        for (const auto& query : {QString(), QStringLiteral("timeline"), QStringLiteral("no-shortcut-matches-this-query")}) {
+          shortcuts_search->setProperty("text", query);
+          if (!QMetaObject::invokeMethod(shortcuts_search, "textEdited"))
+            return fail("Shortcut review search should forward its text to the filter");
+          process_layout_events(8);
+          auto* empty = find_named_object(root, QStringLiteral("keyboardShortcutsNoResults"));
+          if (query.startsWith("no-shortcut-") && (!empty || !empty->property("visible").toBool()))
+            return fail("A shortcut search with no matches should explain the empty state");
+          const QStringList required{QStringLiteral("shortcutSearchField"), QStringLiteral("keyboardShortcutsCloseButton")};
+          if (!capture_visual_proof(root_window, root, dialog_proof_dir,
+                QStringLiteral("shortcuts-%1-scale-%2").arg(query.isEmpty() ? "all" : query == "timeline" ? "timeline" : "empty").arg(scale),
+                scale == 1.0 ? 1280 : 1024, scale == 1.0 ? 800 : 760, required, &dialog_proof_manifest))
+            return fail("Shortcut default, filtered, and empty review captures should save");
+          auto* background = shortcuts_dialog->property("background").value<QQuickItem*>();
+          if (!background) return fail("Shortcuts should retain its dialog surface");
+          const auto bounds = background->mapRectToScene(background->boundingRect()).adjusted(-1, -1, 1, 1);
+          for (const auto& name : required) {
+            auto* item = qobject_cast<QQuickItem*>(find_named_object(root, name));
+            if (!item || !bounds.contains(item->mapRectToScene(item->boundingRect())))
+              return fail("Shortcut search and Close should remain inside the dialog at both UI scales");
+          }
+        }
+      }
+      QFile receipt(QDir(dialog_proof_dir).filePath(QStringLiteral("manifest.json")));
+      if (!receipt.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return fail("Dialog review manifest should save once");
+      receipt.write(QJsonDocument(QJsonObject{{"captures", dialog_proof_manifest},
+          {"scope", "Qt production-shell dialog layout and keyboard interactions; not native screen-reader proof"},
+          {"nativeEligible", false}}).toJson());
+      app_shell.setInterfaceScale(1.3);
+      app_shell.setHighContrast(true);
+      app_shell.setColorVisionMode(QStringLiteral("deuteranopia"));
+      root->setProperty("width", 1440);
+      root->setProperty("height", 900);
+      process_layout_events(8);
+    }
+    if (!send_window_key(root_window, Qt::Key_Escape) ||
+        !wait_for_condition(
+            [shortcuts_dialog]() {
+              return shortcuts_dialog != nullptr && !shortcuts_dialog->property("visible").toBool();
+            },
+            1000) ||
+        root_window->activeFocusItem() != library_tab_item) {
+      return fail("Escape should dismiss Keyboard Shortcuts and restore focus to its invoking workspace control");
+    }
+
+    auto* search_edit_dialog = find_named_object(root, QStringLiteral("searchEditDialog"));
+    auto* search_edit_instruction = find_named_object(root, QStringLiteral("searchEditInstruction"));
+    auto* search_edit_instruction_item = qobject_cast<QQuickItem*>(search_edit_instruction);
+    if (search_edit_dialog == nullptr || search_edit_instruction_item == nullptr ||
+        !QMetaObject::invokeMethod(search_edit_dialog, "open", Qt::DirectConnection) ||
+        !wait_for_condition(
+            [search_edit_dialog]() { return search_edit_dialog->property("visible").toBool(); }, 3000)) {
+      return fail("Search Edit should open from its workspace popup");
+    }
+    if (!wait_for_condition(
+            [root_window, search_edit_instruction_item]() {
+              return root_window->activeFocusItem() == search_edit_instruction_item;
+            },
+            1000) ||
+        accessible_name_for_object(search_edit_instruction) !=
+            QStringLiteral("Photos to find and edit instructions")) {
+      auto* focused_item = root_window->activeFocusItem();
+      std::cerr << "Search Edit focus: instruction=" << (search_edit_instruction_item != nullptr)
+                << " focused=" << (focused_item != nullptr)
+                << " focusedName=" << (focused_item == nullptr ? "" : focused_item->objectName().toStdString())
+                << " focusedType=" << (focused_item == nullptr ? "" : focused_item->metaObject()->className())
+                << " fieldName=" << accessible_name_for_object(search_edit_instruction).toStdString()
+                << " fieldActive=" << (search_edit_instruction_item != nullptr && search_edit_instruction_item->hasActiveFocus())
+                << " fieldEnabled=" << (search_edit_instruction != nullptr && search_edit_instruction->property("enabled").toBool())
+                << " fieldVisible=" << (search_edit_instruction != nullptr && search_edit_instruction->property("visible").toBool())
+                << " searching=" << search_edit_dialog->property("searching").toBool()
+                << " confirming=" << search_edit_dialog->property("confirming").toBool()
+                << '\n';
+      return fail("Search Edit should open with its named instruction field focused");
+    }
+    auto* search_edit_close = find_named_object(root, QStringLiteral("searchEditClose"));
+    if (search_edit_close == nullptr ||
+        !QMetaObject::invokeMethod(search_edit_close, "clicked", Qt::DirectConnection) ||
+        !wait_for_condition(
+            [search_edit_dialog]() { return !search_edit_dialog->property("visible").toBool(); }, 1000) ||
+        root_window->activeFocusItem() != library_tab_item) {
+      return fail("Closing Search Edit should restore focus to its invoking workspace control");
+    }
+
     if (!send_window_key(root_window, Qt::Key_1, primary_modifier) ||
         !wait_for_condition([root]() { return root->property("currentWorkspace").toInt() == 0; })) {
       return fail("Library should remain reachable through its keyboard workspace command");
@@ -539,19 +1085,136 @@
       return fail("Library culling should support pointer-free workspace, pick, and rating commands");
     }
 
-    if (!send_window_key(root_window, Qt::Key_2, primary_modifier) ||
-        !wait_for_condition([&editor_preview]() { return editor_preview.hasAsset(); }, 3000)) {
-      return fail("the selected keeper should open in Edit through the keyboard workspace shortcut");
+    if (!ensure_native_window_active()) {
+      return fail("native Edit workspace shortcut should activate the Cocoa window before dispatch");
     }
+    const auto edit_workspace_shortcut_sent = send_window_key(root_window, Qt::Key_2, primary_modifier);
+    const auto edit_workspace_shortcut_ready = edit_workspace_shortcut_sent && wait_for_condition(
+            [root]() {
+              if (root->property("currentWorkspace").toInt() !=
+                  root->property("editWorkspaceIndex").toInt()) {
+                return false;
+              }
+              auto* workspace = find_named_object(root, QStringLiteral("editStudioWorkspace"));
+              return workspace != nullptr && workspace->property("visible").toBool() &&
+                     workspace->property("pageContentReady").toBool() &&
+                     !root->property("workspaceTransitionActive").toBool();
+            },
+            5000);
+    if (!edit_workspace_shortcut_ready) {
+      auto* workspace = find_named_object(root, QStringLiteral("editStudioWorkspace"));
+      std::cerr << "Edit route context: keySent=" << edit_workspace_shortcut_sent
+                << " active=" << root_window->isActive()
+                << " focus=" << (root_window->activeFocusItem() == nullptr
+                                      ? "none"
+                                      : root_window->activeFocusItem()->objectName().toStdString())
+                << " currentWorkspace="
+                << root->property("currentWorkspace").toInt()
+                << " editWorkspaceIndex=" << root->property("editWorkspaceIndex").toInt()
+                << " transitionActive=" << root->property("workspaceTransitionActive").toBool()
+                << " editVisible=" << (workspace != nullptr && workspace->property("visible").toBool())
+                << " editPageReady=" << (workspace != nullptr && workspace->property("pageContentReady").toBool())
+                << " hasAsset=" << editor_preview.hasAsset() << '\n';
+      return fail("the selected keeper should reach a fully loaded Edit page through the keyboard workspace shortcut");
+    }
+    const auto log_exposure_accessibility_candidates = [root, &engine]() {
+      auto* edit_workspace = find_named_object(root, QStringLiteral("editStudioWorkspace"));
+      if (edit_workspace != nullptr) {
+        std::cerr << "Edit inspector state: visible="
+                  << edit_workspace->property("visible").toBool()
+                  << " tool=" << edit_workspace->property("editTool").toString().toStdString()
+                  << " inspectorTab=" << edit_workspace->property("editInspectorTab").toString().toStdString()
+                  << " inspectorPanelVisible=" << edit_workspace->property("editInspectorPanelVisible").toBool()
+                  << " inspectorPanelActive=" << edit_workspace->property("editInspectorPanelActive").toBool()
+                  << '\n';
+      } else {
+        std::cerr << "Edit inspector state: editStudioWorkspace is absent\n";
+      }
+
+      for (const auto& object_name : {QStringLiteral("lightInspectorGroup"),
+                                      QStringLiteral("lightBasicToneGroup"),
+                                      QStringLiteral("adjustInspectorTabButton"),
+                                      QStringLiteral("exposureSlider"),
+                                      QStringLiteral("exposureSliderValueField")}) {
+        const auto matches = root->findChildren<QObject*>(object_name, Qt::FindChildrenRecursively);
+        std::cerr << "Accessibility candidates for " << object_name.toStdString()
+                  << ": count=" << matches.size() << '\n';
+        for (auto* candidate : matches) {
+          if (candidate == nullptr) {
+            continue;
+          }
+          auto* item = qobject_cast<QQuickItem*>(candidate);
+          auto* accessible = QAccessible::queryAccessibleInterface(candidate);
+          const auto context = QQmlEngine::contextForObject(candidate);
+          const auto qml_accessible_name =
+              QQmlProperty(candidate, QStringLiteral("Accessible.name"), &engine);
+          QStringList ancestors;
+          for (auto* ancestor = candidate; ancestor != nullptr; ancestor = ancestor->parent()) {
+            auto* ancestor_item = qobject_cast<QQuickItem*>(ancestor);
+            ancestors.push_back(QStringLiteral("%1[%2]%3")
+                                    .arg(QString::fromLatin1(ancestor->metaObject()->className()),
+                                         ancestor->objectName(),
+                                         ancestor_item == nullptr
+                                             ? QString()
+                                             : QStringLiteral(" visible=%1").arg(ancestor_item->isVisible())));
+          }
+          std::cerr << "  class=" << candidate->metaObject()->className()
+                    << " visible=" << (item == nullptr ? candidate->property("visible").toBool() : item->isVisible())
+                    << " enabled=" << candidate->property("enabled").toBool()
+                    << " activeFocus=" << (item != nullptr && item->hasActiveFocus())
+                    << " page=" << candidate->property("page").toString().toStdString()
+                    << " expanded=" << candidate->property("expanded").toBool()
+                    << " active=" << candidate->property("active").toBool()
+                    << " accessibleLabel=" << candidate->property("accessibleLabel").toString().toStdString()
+                    << " resolvedAccessibleName=" << candidate->property("resolvedAccessibleName").toString().toStdString()
+                    << " qmlAttachedNameValid=" << qml_accessible_name.isValid()
+                    << " qmlAttachedName=" << qml_accessible_name.read().toString().toStdString()
+                    << " qAccessibleValid=" << (accessible != nullptr)
+                    << " qAccessibleName="
+                    << (accessible == nullptr ? std::string() : accessible->text(QAccessible::Name).toStdString())
+                    << " qAccessibleRole="
+                    << (accessible == nullptr ? -1 : static_cast<int>(accessible->role()))
+                    << " qmlContextUrl="
+                    << (context == nullptr ? std::string() : context->baseUrl().toString().toStdString())
+                    << " ancestors=" << ancestors.join(QStringLiteral(" <- ")).toStdString() << '\n';
+        }
+      }
+    };
     auto* exposure_value = find_named_object(root, QStringLiteral("exposureSliderValueField"));
+    auto* exposure_value_item = qobject_cast<QQuickItem*>(exposure_value);
+    if (exposure_value == nullptr ||
+        accessible_name_for_object(exposure_value) != QStringLiteral("Exposure value")) {
+      log_exposure_accessibility_candidates();
+    }
     if (!require_named_control(QStringLiteral("exposureSliderValueField")) ||
-        exposure_value == nullptr) {
+        exposure_value == nullptr || exposure_value_item == nullptr ||
+        accessible_name_for_object(exposure_value) != QStringLiteral("Exposure value")) {
       return fail("the primary edit value should expose a named keyboard entry field");
     }
-    exposure_value->setProperty("text", QStringLiteral("0.50"));
+    auto* exposure_slider = find_named_object(root, QStringLiteral("exposureSlider"));
+    if (exposure_slider == nullptr) {
+      return fail("the keyboard exposure field should belong to the named shared slider");
+    }
+    exposure_value_item->forceActiveFocus(Qt::TabFocusReason);
+    const auto select_all_shortcut = QKeySequence(QKeySequence::SelectAll)[0];
+    if (!send_window_key(root_window, select_all_shortcut.key(),
+                         select_all_shortcut.keyboardModifiers())) {
+      return fail("the exposure value field should select its current value from the keyboard");
+    }
+    for (const auto character : QStringLiteral("0.50")) {
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, QString(character));
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_unknown, Qt::NoModifier, QString(character));
+      QCoreApplication::sendEvent(root_window, &press);
+      QCoreApplication::sendEvent(root_window, &release);
+      process_layout_events(1);
+    }
+    if (exposure_value->property("text").toString() != QStringLiteral("0.50") ||
+        !exposure_slider->property("valueInputDirty").toBool()) {
+      return fail("typing should replace and dirty the exposure value before committing it");
+    }
     if (!send_activation_key(exposure_value, Qt::Key_Return) ||
         std::abs(editor_preview.exposure() - 0.5) > 0.001) {
-      return fail("basic exposure should commit through the focused keyboard entry");
+      return fail("basic exposure should commit the typed value through its named keyboard entry");
     }
 
     if (!send_window_key(root_window, Qt::Key_M, primary_modifier | Qt::AltModifier) ||
@@ -560,14 +1223,19 @@
             2000)) {
       return fail("local editing should open through its keyboard tool command");
     }
-    if (!send_window_key(root_window, Qt::Key_M, Qt::ControlModifier | Qt::ShiftModifier) ||
+    if (!ensure_native_window_active() ||
+        !send_window_key(root_window, Qt::Key_M, Qt::ControlModifier | Qt::ShiftModifier) ||
         !wait_for_condition([&editor_preview]() { return editor_preview.hasActiveMask(); }, 2000)) {
       return fail("local editing should create a selection through its keyboard command");
     }
 
     auto* edit_workspace = find_named_object(root, QStringLiteral("editStudioWorkspace"));
+    const auto mask_selection_action_name =
+        QStringLiteral("maskSelectionMenuButtonPrimaryAction");
+    auto* mask_selection_action = find_named_object(root, mask_selection_action_name);
     if (edit_workspace == nullptr ||
-        !require_named_control(QStringLiteral("maskSelectionMenuButton")) ||
+        !require_named_control(mask_selection_action_name) ||
+        accessible_name_for_object(mask_selection_action) != QStringLiteral("Smart selection tools") ||
         edit_workspace->property("selectionOutlineAnimationEnabled").toBool()) {
       return fail("reduced motion should stop the nonessential selection animation while retaining named controls");
     }
@@ -685,14 +1353,20 @@
     }
     app_shell.setColorVisionMode(QStringLiteral("deuteranopia"));
 
-    auto* mask_menu = find_named_object(root, QStringLiteral("maskSelectionMenuButton"));
-    auto* mask_menu_item = qobject_cast<QQuickItem*>(mask_menu);
-    if (mask_menu_item == nullptr || mask_menu_item->height() < 41.0 ||
-        !send_activation_key(mask_menu) ||
-        !capture_visual_proof(
-            root_window,
-            root,
-            visual_proof_dir,
+    auto* mask_menu_action = find_named_object(root, mask_selection_action_name);
+    auto* mask_menu_item = qobject_cast<QQuickItem*>(mask_menu_action);
+    auto* mask_menu_popup = find_named_object(root, QStringLiteral("maskSelectionMenuButtonPopup"));
+    const auto mask_menu_action_height = mask_menu_item == nullptr ? -1.0 : mask_menu_item->height();
+    const auto mask_menu_action_visible = mask_menu_item != nullptr && item_visible(mask_menu_item);
+    const auto mask_menu_action_activated =
+        mask_menu_action_visible && send_activation_key(mask_menu_action);
+    const auto keyboard_menu_opened = mask_menu_action_activated &&
+        wait_for_condition(
+            [mask_menu_popup]() {
+              return mask_menu_popup != nullptr && mask_menu_popup->property("visible").toBool();
+            },
+            1000);
+    const auto max_scale_capture_saved = capture_accessibility_proof(
             QStringLiteral("accessibility-max-scale-local-edit"),
             1440,
             900,
@@ -701,7 +1375,6 @@
                 QStringLiteral("maskSelectionMenuButton"),
                 QStringLiteral("maskToolRail"),
             },
-            &visual_proof_manifest,
             QJsonObject{
                 {QStringLiteral("interfaceScale"), 1.3},
                 {QStringLiteral("keyboardOnly"), true},
@@ -711,7 +1384,62 @@
                 {QStringLiteral("palettes"), palette_proof},
                 {QStringLiteral("colorVisionSimulations"), simulated_modes},
                 {QStringLiteral("grayscaleLuminanceVerified"), true},
-            })) {
+            });
+    if (keyboard_menu_opened) {
+      send_window_key(root_window, Qt::Key_Escape);
+      wait_for_condition(
+          [mask_menu_popup]() {
+            return mask_menu_popup == nullptr || !mask_menu_popup->property("visible").toBool();
+          },
+          1000);
+    }
+    const auto action_rect = scene_rect(mask_menu_item);
+    const auto pointer_point = action_rect.center();
+    if (mask_menu_action_visible) {
+      click_native_test_window(root_window, pointer_point.toPoint());
+      process_layout_events(5);
+    }
+    const auto pointer_menu_opened = mask_menu_action_visible &&
+        wait_for_condition(
+            [mask_menu_popup]() {
+              return mask_menu_popup != nullptr && mask_menu_popup->property("visible").toBool();
+            },
+            1000);
+    if (pointer_menu_opened) {
+      send_window_key(root_window, Qt::Key_Escape);
+      wait_for_condition(
+          [mask_menu_popup]() {
+            return mask_menu_popup == nullptr || !mask_menu_popup->property("visible").toBool();
+          },
+          1000);
+    }
+    auto* mask_menu_button = find_named_object(root, QStringLiteral("maskSelectionMenuButton"));
+    auto* mask_tool_rail = find_named_object(root, QStringLiteral("maskToolRail"));
+    auto* mask_menu_button_item = qobject_cast<QQuickItem*>(mask_menu_button);
+    auto* mask_tool_rail_item = qobject_cast<QQuickItem*>(mask_tool_rail);
+    const auto action_fits_menu = mask_menu_item != nullptr && mask_menu_button_item != nullptr &&
+        contains_with_tolerance(scene_rect(mask_menu_button_item), scene_rect(mask_menu_item));
+    const auto menu_fits_rail = mask_menu_button_item != nullptr && mask_tool_rail_item != nullptr &&
+        contains_with_tolerance(scene_rect(mask_tool_rail_item), scene_rect(mask_menu_button_item));
+    if (mask_menu_item == nullptr || mask_menu_action_height < 41.0 ||
+        !mask_menu_action_visible || !keyboard_menu_opened || !pointer_menu_opened ||
+        !action_fits_menu || !menu_fits_rail || !max_scale_capture_saved) {
+      std::cerr << "Maximum-scale selection control: actionExists=" << (mask_menu_item != nullptr)
+                << " actionHeight=" << mask_menu_action_height
+                << " actionVisible=" << mask_menu_action_visible
+                << " keyboardMenuOpened=" << keyboard_menu_opened
+                << " pointerMenuOpened=" << pointer_menu_opened
+                << " actionFitsMenu=" << action_fits_menu
+                << " menuFitsRail=" << menu_fits_rail
+                << " captureSaved=" << max_scale_capture_saved
+                << " actionEnabled=" << (mask_menu_action != nullptr && mask_menu_action->property("enabled").toBool())
+                << " menuHeight=" << (mask_menu_button_item == nullptr ? -1.0 : mask_menu_button_item->height())
+                << " menuVisible=" << (mask_menu_button_item != nullptr && item_visible(mask_menu_button_item))
+                << " railHeight=" << (mask_tool_rail_item == nullptr ? -1.0 : mask_tool_rail_item->height())
+                << " railVisible=" << (mask_tool_rail_item != nullptr && item_visible(mask_tool_rail_item))
+                << " interfaceScale=" << app_shell.interfaceScale()
+                << " density=" << edit_workspace->property("interfaceMode").toString().toStdString()
+                << '\n';
       return fail("maximum-scale local-edit accessibility state should remain visible and unclipped");
     }
 
@@ -743,15 +1471,11 @@
               1200)) {
         return false;
       }
-      return capture_visual_proof(
-          root_window,
-          root,
-          visual_proof_dir,
+      return capture_accessibility_proof(
           state,
           width,
           height,
           {QStringLiteral("editStudioWorkspace")},
-          &visual_proof_manifest,
           QJsonObject{
               {QStringLiteral("density"), density},
               {QStringLiteral("tool"), tool},
@@ -782,28 +1506,152 @@
     app_shell.setInterfaceScale(1.3);
     root->setProperty("width", 1440);
     root->setProperty("height", 900);
-    process_layout_events(8);
+    if (!wait_for_condition(
+            [root_window]() { return root_window->width() == 1440 && root_window->height() == 900; },
+            2000)) {
+      std::cerr << "First-run export viewport: window=" << root_window->width() << 'x'
+                << root_window->height() << '\n';
+      return fail("First-run Export should settle at the requested viewport before keyboard routing");
+    }
 
-    if (!send_window_key(root_window, Qt::Key_E, primary_modifier | Qt::AltModifier) ||
-        !wait_for_condition([root]() { return root->property("currentWorkspace").toInt() == 4; }, 2000)) {
+    // This shard's earlier accessibility checks use the explicit invalid URL
+    // from source_contract.inc to stay offline. The final keyboard export needs
+    // a real catalog, so let the isolated temporary app-data root provision its
+    // own managed PostgreSQL instance instead of sending admission to `example`.
+    // This disposable catalog does not need a rollback archive, and concurrent
+    // first-use admissions can otherwise race while creating the same
+    // second-resolution pre-migration backup name.
+    qunsetenv("PHOTO_EDITOR_DATABASE_URL");
+    qputenv("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP", QByteArray("0"));
+
+    if (!ensure_native_window_active()) {
+      return fail("native first-run Export shortcut should activate the Cocoa window before dispatch");
+    }
+    const auto export_shortcut_sent =
+        send_window_key(root_window, Qt::Key_E, primary_modifier | Qt::AltModifier);
+    const auto export_workspace_reached = export_shortcut_sent &&
+        wait_for_condition([root]() { return root->property("currentWorkspace").toInt() == 4; }, 2000);
+    if (!export_workspace_reached) {
+      auto* focus_item = root_window->activeFocusItem();
+      std::cerr << "First-run Export shortcut: keySent=" << export_shortcut_sent
+                << " workspaceReached=" << export_workspace_reached
+                << " active=" << root_window->isActive()
+                << " focus=" << (focus_item == nullptr ? "none" : focus_item->objectName().toStdString())
+                << " currentWorkspace=" << root->property("currentWorkspace").toInt()
+                << " transitionActive=" << root->property("workspaceTransitionActive").toBool()
+                << " primaryModifier=" << static_cast<int>(primary_modifier) << '\n';
       return fail("Export should remain keyboard reachable at maximum scale");
+    }
+    if (!wait_for_condition([root]() {
+          auto* workspace = find_named_object(root, QStringLiteral("exportStudioWorkspace"));
+          auto* content = find_named_object(root, QStringLiteral("exportStudioWorkspaceContent"));
+          return workspace != nullptr && content != nullptr &&
+                 named_object_visible_for_proof(root, QStringLiteral("exportStudioWorkspace")) &&
+                 named_object_visible_for_proof(root, QStringLiteral("exportStudioWorkspaceContent")) &&
+                 !root->property("workspaceTransitionActive").toBool();
+        }, 5000)) {
+      return fail("Keyboard Export routing should wait for its visible workspace content and settled transition");
     }
     auto* export_workspace = find_named_object(root, QStringLiteral("exportStudioWorkspaceContent"));
     auto* export_destination_field = find_named_object(root, QStringLiteral("exportDestinationField"));
     auto* export_current_button = find_named_object(root, QStringLiteral("exportCurrentSplitButton"));
+    auto* export_current_primary = find_named_object(root, QStringLiteral("exportCurrentSplitButtonPrimaryAction"));
+    auto* export_current_primary_item = qobject_cast<QQuickItem*>(export_current_primary);
+    auto* export_preflight_status = find_named_object(root, QStringLiteral("exportPreflightStatusLabel"));
     const auto first_run_delivery = runtime_root.filePath(QStringLiteral("first-run-delivery"));
     if (export_workspace == nullptr || !QDir().mkpath(first_run_delivery) ||
-        !export_workspace->setProperty("deliveryDestinationPath", first_run_delivery) ||
-        !require_named_control(QStringLiteral("exportDestinationField")) ||
-        !require_named_control(QStringLiteral("exportCurrentSplitButton")) ||
-        export_current_button == nullptr || !export_current_button->property("primaryEnabled").toBool() ||
-        qobject_cast<QQuickItem*>(export_current_button) == nullptr ||
-        qobject_cast<QQuickItem*>(export_current_button)->height() < 56.0) {
+        !export_workspace->setProperty("deliveryDestinationPath", first_run_delivery))
+      return fail("Keyboard export should prepare its isolated delivery destination");
+    // The primary action stays enabled while its fresh checks run, because
+    // submission repeats preflight before admitting a job. Wait for the visible
+    // output summary to reflect the completed report before calling this ready.
+    if (!wait_for_condition([&export_jobs, export_current_button, export_preflight_status]() {
+          const auto report = export_jobs.singlePreflight();
+          return export_current_button && export_current_button->property("primaryEnabled").toBool() &&
+                 !export_jobs.preflightBusy() && report.contains(QStringLiteral("ok")) &&
+                 report.value(QStringLiteral("ok")).toBool() &&
+                 report.value(QStringLiteral("errorCount")).toInt() == 0 &&
+                 export_preflight_status != nullptr &&
+                 export_preflight_status->property("text").toString() == QStringLiteral("Ready");
+        }, 10000)) {
+      const auto report = export_jobs.singlePreflight();
+      std::cerr << "Keyboard export readiness: "
+                << (export_current_button ? export_current_button->property("disabledReason").toString().toStdString() : "missing primary control") << '\n';
+      std::cerr << "Keyboard export preflight: busy=" << export_jobs.preflightBusy()
+                << " hasReport=" << report.contains(QStringLiteral("ok"))
+                << " ok=" << report.value(QStringLiteral("ok")).toBool()
+                << " errors=" << report.value(QStringLiteral("errorCount")).toInt()
+                << " status=" << (export_preflight_status ? export_preflight_status->property("text").toString().toStdString() : "missing status label")
+                << '\n';
+      return fail("First-run Export should show a completed successful preflight before its readiness capture");
+    }
+    if (!capture_accessibility_proof(
+            QStringLiteral("first-run-export-ready"),
+            1440,
+            900,
+            {
+                QStringLiteral("exportStudioWorkspace"),
+                QStringLiteral("exportStudioWorkspaceContent"),
+                QStringLiteral("exportDestinationField"),
+                QStringLiteral("exportCurrentSplitButton"),
+                QStringLiteral("exportCurrentSplitButtonPrimaryAction"),
+            },
+            QJsonObject{
+                {QStringLiteral("interfaceScale"), app_shell.interfaceScale()},
+                {QStringLiteral("workspaceTransitionSettled"), true},
+                {QStringLiteral("destinationPreflightReady"), true},
+                {QStringLiteral("primaryEnabled"), true},
+            })) {
+      return fail("First-run Export should preserve a capture after destination readiness");
+    }
+    const auto export_destination_named = require_named_control(QStringLiteral("exportDestinationField"));
+    const auto export_primary_named =
+        require_named_control(QStringLiteral("exportCurrentSplitButtonPrimaryAction"));
+    const auto export_primary_accessible_name = accessible_name_for_object(export_current_primary);
+    auto* export_current_button_item = qobject_cast<QQuickItem*>(export_current_button);
+    const auto export_button_height = export_current_button_item == nullptr
+                                          ? -1.0
+                                          : export_current_button_item->height();
+    const auto export_primary_minimum_height = export_current_primary == nullptr
+                                                   ? -1.0
+                                                   : export_current_primary->property("minimumPointerHeight").toDouble();
+    const auto export_primary_height = export_current_primary_item == nullptr
+                                           ? -1.0
+                                           : export_current_primary_item->height();
+    const auto export_primary_contained = export_current_button_item != nullptr &&
+        export_current_primary_item != nullptr &&
+        contains_with_tolerance(
+            scene_rect(export_current_button_item), scene_rect(export_current_primary_item));
+    const auto export_keyboard_ready = export_destination_named && export_primary_named &&
+        export_current_button != nullptr && export_current_button->property("primaryEnabled").toBool() &&
+        !export_current_button->property("activeFocusOnTab").toBool() &&
+        export_current_primary_item != nullptr && export_current_primary_item->activeFocusOnTab() &&
+        export_primary_accessible_name == QStringLiteral("Start Export") &&
+        export_current_button_item != nullptr && export_button_height >= 44.0 &&
+        export_primary_height >= 44.0 && export_primary_height >= export_primary_minimum_height &&
+        export_primary_contained;
+    if (!export_keyboard_ready) {
+      std::cerr << "Keyboard export control: destinationNamed=" << export_destination_named
+                << " primaryNamed=" << export_primary_named
+                << " primaryEnabled=" << (export_current_button != nullptr &&
+                    export_current_button->property("primaryEnabled").toBool())
+                << " splitButtonTabFocus=" << (export_current_button != nullptr &&
+                    export_current_button->property("activeFocusOnTab").toBool())
+                << " primaryItemExists=" << (export_current_primary_item != nullptr)
+                << " primaryTabFocus=" << (export_current_primary_item != nullptr &&
+                    export_current_primary_item->activeFocusOnTab())
+                << " primaryAccessibleName=" << export_primary_accessible_name.toStdString()
+                << " buttonHeight=" << export_button_height
+                << " primaryHeight=" << export_primary_height
+                << " primaryMinimumHeight=" << export_primary_minimum_height
+                << " primaryContained=" << export_primary_contained
+                << " currentWorkspace=" << root->property("currentWorkspace").toInt()
+                << '\n';
       return fail("Export should remain keyboard reachable with a named primary control at maximum scale");
     }
     export_destination_field->setProperty("focus", true);
     process_layout_events(2);
-    if (!send_activation_key(export_current_button)) {
+    if (!send_activation_key(export_current_primary)) {
       return fail("the first-run path should start its real export by keyboard");
     }
     job_runner.initializeFromStore();
@@ -813,6 +1661,23 @@
                      !QDir(first_run_delivery).entryList(QDir::Files | QDir::NoDotAndDotDot).isEmpty();
             },
             15000)) {
+      const auto export_records = export_jobs.jobs();
+      const auto latest_export = export_records.isEmpty()
+                                     ? QVariantMap{}
+                                     : export_records.constLast().toMap();
+      const auto delivered_file_count =
+          QDir(first_run_delivery).entryList(QDir::Files | QDir::NoDotAndDotDot).size();
+      std::cerr << "First-run export receipt: queue_jobs=" << job_queue.jobCount()
+                << " queue_completed=" << job_queue.completedJobCount()
+                << " queue_failed=" << job_queue.failedJobCount()
+                << " queue_status=" << job_queue.status().toStdString()
+                << " export_jobs=" << export_jobs.jobCount()
+                << " pending_admissions=" << export_jobs.pendingAdmissionCount()
+                << " submission_error=" << export_jobs.submissionError().toStdString()
+                << " admission_error=" << export_jobs.admissionError().toStdString()
+                << " latest_status=" << latest_export.value(QStringLiteral("status")).toString().toStdString()
+                << " latest_error=" << latest_export.value(QStringLiteral("errorMessage")).toString().toStdString()
+                << " delivered_files=" << delivered_file_count << '\n';
       return fail("the first-run path should finish with a real delivered file and completed job");
     }
     const auto delivered_files =
@@ -833,6 +1698,114 @@
         {QStringLiteral("completedJobCount"), job_queue.completedJobCount()},
         {QStringLiteral("artifactBytes"), QFileInfo(delivered_proof).size()},
     });
+    if (!persist_accessibility_manifest()) {
+      return fail("The first-run delivered image and export receipt should be recorded immediately");
+    }
+
+    const auto route_photo_path = runtime_root.filePath(QStringLiteral("photo-only-edit-route.png"));
+    if (!write_overlay_visual_fixture(route_photo_path, QStringLiteral("base"))) {
+      return fail("Photo-only Edit routing should create its isolated photo fixture");
+    }
+    auto route_video = make_asset(QStringLiteral("photo-only-route-video"), QStringLiteral("route-video.mp4"));
+    route_video.media_type = QStringLiteral("video");
+    auto route_timeline = make_asset(QStringLiteral("photo-only-route-timeline"), QStringLiteral("route-timeline.looksy"));
+    route_timeline.media_type = QStringLiteral("timeline");
+    auto route_photo = make_asset(
+        QStringLiteral("photo-only-route-photo"),
+        route_photo_path,
+        QUrl::fromLocalFile(route_photo_path).toString());
+    catalog_assets.clearFilters();
+    catalog_assets.setMediaCollectionFilter(QStringLiteral("all"));
+    catalog_assets.setMediaTypeFilter(QStringLiteral("all"));
+    catalog_assets.replaceAssetsForTesting({route_video, route_timeline, route_photo});
+    if (!wait_for_condition([&catalog_assets]() { return catalog_assets.assetCount() == 3; }, 2000)) {
+      QJsonArray visible_rows;
+      const auto visible_count = std::min(catalog_assets.assetCount(), 8);
+      for (int row = 0; row < visible_count; ++row) {
+        const auto asset = catalog_assets.assetAt(row);
+        visible_rows.append(QJsonObject{
+            {QStringLiteral("assetId"), asset.value(QStringLiteral("assetId")).toString()},
+            {QStringLiteral("mediaType"), asset.value(QStringLiteral("mediaType")).toString()},
+            {QStringLiteral("filePath"), asset.value(QStringLiteral("filePath")).toString()},
+        });
+      }
+      std::cerr << "Photo-only routing fixture: visible=" << catalog_assets.assetCount()
+                << " total=" << catalog_assets.totalAssetCount()
+                << " filter=" << catalog_assets.mediaTypeFilter().toStdString()
+                << " collection=" << catalog_assets.mediaCollectionFilter().toStdString()
+                << " project=" << catalog_assets.projectFilter().toStdString()
+                << " search=" << catalog_assets.searchFilter().toStdString()
+                << " review=" << catalog_assets.reviewFilter().toStdString()
+                << " availability=" << catalog_assets.availabilityFilter().toStdString()
+                << " minimumRating=" << catalog_assets.minimumRatingFilter()
+                << " loading=" << catalog_assets.loading()
+                << " status=" << catalog_assets.status().toStdString()
+                << " error=" << catalog_assets.errorMessage().toStdString()
+                << " rows=" << QJsonDocument(visible_rows).toJson(QJsonDocument::Compact).toStdString()
+                << " requestedIds=" << route_video.asset_id.toStdString() << ','
+                << route_timeline.asset_id.toStdString() << ','
+                << route_photo.asset_id.toStdString() << '\n';
+      return fail("Photo-only Edit routing should expose the isolated video, timeline, and photo rows");
+    }
+    auto* open_selected_photo_action = find_named_object(root, QStringLiteral("openSelectedInEditAction"));
+    auto* export_tab = qobject_cast<QQuickItem*>(find_named_object(root, QStringLiteral("workspaceTabExport")));
+    if (open_selected_photo_action == nullptr || export_tab == nullptr) {
+      return fail("Photo-only Edit routing should expose its named command and keyboard focus target");
+    }
+    const auto workspace_before_route = root->property("currentWorkspace").toInt();
+    if (!ensure_native_window_active()) {
+      return fail("native photo-only Edit routing should activate the Cocoa window before shortcut checks");
+    }
+    export_tab->forceActiveFocus(Qt::TabFocusReason);
+    process_layout_events(3);
+    catalog_assets.selectIndexWithModifiers(0, 0, false);
+    process_layout_events(3);
+    if (open_selected_photo_action->property("enabled").toBool() ||
+        !send_window_key(root_window, Qt::Key_E, primary_modifier) ||
+        root->property("currentWorkspace").toInt() != workspace_before_route ||
+        catalog_assets.selectedAssetId() != route_video.asset_id) {
+      return fail("Cmd/Ctrl+E should stay disabled for a selected video without changing its active target");
+    }
+    catalog_assets.selectIndexWithModifiers(1, 0, false);
+    process_layout_events(3);
+    if (open_selected_photo_action->property("enabled").toBool() ||
+        !send_window_key(root_window, Qt::Key_E, primary_modifier) ||
+        root->property("currentWorkspace").toInt() != workspace_before_route ||
+        catalog_assets.selectedAssetId() != route_timeline.asset_id) {
+      return fail("Cmd/Ctrl+E should stay disabled for a selected timeline without changing its active target");
+    }
+    catalog_assets.clearSelection();
+    process_layout_events(3);
+    const auto empty_selection_command_enabled = open_selected_photo_action->property("enabled").toBool();
+    const auto empty_selection_key_sent = send_window_key(root_window, Qt::Key_E, primary_modifier);
+    const auto empty_selection_route_completed = empty_selection_command_enabled && empty_selection_key_sent &&
+        wait_for_condition([&]() {
+          return catalog_assets.selectedAssetId() == route_photo.asset_id &&
+                 editor_preview.assetId() == route_photo.asset_id &&
+                 root->property("currentWorkspace").toInt() == 1;
+        }, 5000);
+    if (!empty_selection_route_completed) {
+      std::cerr << "Empty-selection Edit routing: actionEnabled=" << empty_selection_command_enabled
+                << " keySent=" << empty_selection_key_sent
+                << " windowActive=" << root_window->isActive()
+                << " focus=" << (root_window->activeFocusItem() == nullptr
+                                      ? "none"
+                                      : root_window->activeFocusItem()->objectName().toStdString())
+                << " firstVisiblePhotoIndex=" << catalog_assets.firstVisiblePhotoIndex()
+                << " selectedAssetId=" << catalog_assets.selectedAssetId().toStdString()
+                << " expectedAssetId=" << route_photo.asset_id.toStdString()
+                << " previewAssetId=" << editor_preview.assetId().toStdString()
+                << " currentWorkspace=" << root->property("currentWorkspace").toInt() << '\n';
+      return fail("With no selection, Cmd/Ctrl+E should choose the first visible photo and open that photo in Edit");
+    }
+    visual_proof_manifest.append(QJsonObject{
+        {QStringLiteral("state"), QStringLiteral("photo-only-edit-routing")},
+        {QStringLiteral("selectedVideoCommandDisabled"), true},
+        {QStringLiteral("selectedTimelineCommandDisabled"), true},
+        {QStringLiteral("emptySelectionOpenedFirstPhoto"), true},
+        {QStringLiteral("keyboardShortcut"), QStringLiteral("Cmd/Ctrl+E")},
+        {QStringLiteral("selectedAssetId"), catalog_assets.selectedAssetId()},
+    });
 
     QFile manifest_file(
         QDir(visual_proof_dir).filePath(QStringLiteral("accessibility-manifest.json")));
@@ -840,6 +1813,7 @@
         manifest_file.write(QJsonDocument(visual_proof_manifest).toJson(QJsonDocument::Indented)) <= 0) {
       return fail("accessibility proof should write its manifest");
     }
+    qunsetenv("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP");
     qunsetenv("PHOTO_EDITOR_DATABASE_URL");
     qunsetenv("PHOTO_EDITOR_CACHE_DIR");
     qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
@@ -938,6 +1912,7 @@ ApplicationWindow {
     height: 900
     visible: true
     color: "#111318"
+    property bool showFocusReturnProbe: true
     property bool showAgentWorkspaceReview: false
     property bool showSelectionConfirmation: false
     property bool showClarification: false
@@ -972,6 +1947,11 @@ ApplicationWindow {
     property int storyRoleRevisionCount: 0
     property bool comparisonPreparing: false
     property var directionComparison: ({})
+    Component.onCompleted: {
+        focusReturnProbe.forceActiveFocus(Qt.TabFocusReason)
+        dialog.open()
+        showFocusReturnProbe = false
+    }
     property string lastRequestedScope: ""
     property int setupRequestCount: 0
     property string lastSampleFeedback: ""
@@ -1089,6 +2069,7 @@ ApplicationWindow {
                                          harness.showDestructiveApproval ||
                                          harness.showProofRepairApproval
         property bool modelInstallRunning: false
+        function probeSelectedModelAsync(force) { }
         property string selectedStyleId: "natural-portrait"
         property string selectedModelId: "local-editor"
         property string editingFreedom: "balanced"
@@ -2647,7 +3628,6 @@ ApplicationWindow {
                 harness.setupRequestCount += 1
         }
         onEditApplied: function(assetIds) {}
-        Component.onCompleted: open()
     }
 
     AgentWorkspaceOverlay {
@@ -2682,6 +3662,16 @@ ApplicationWindow {
         repeat: false
         onTriggered: dialog.setPage(3)
     }
+
+    Button {
+        id: focusReturnProbe
+        objectName: "aiEditFocusReturnProbe"
+        x: 12
+        y: 12
+        visible: harness.showFocusReturnProbe
+        activeFocusOnTab: true
+        text: "Walkthrough opener"
+    }
 }
 )qml");
     ai_edit_component.setData(
@@ -2708,6 +3698,12 @@ ApplicationWindow {
     }
     auto* ai_edit_dialog =
         find_named_object(ai_edit_harness.data(), QStringLiteral("aiEditWalkthroughDialog"));
+    QAccessible::setActive(true);
+    auto* ai_edit_accessible = QAccessible::queryAccessibleInterface(ai_edit_dialog);
+    if (ai_edit_accessible == nullptr || ai_edit_accessible->role() != QAccessible::Dialog ||
+        accessible_name_for_object(ai_edit_dialog) != QStringLiteral("Looksy Agent Studio")) {
+      return fail("AI Edit walkthrough should expose a named dialog to assistive technology");
+    }
     auto* ai_edit_dialog_content =
         ai_edit_dialog == nullptr
             ? nullptr
@@ -2718,6 +3714,18 @@ ApplicationWindow {
             : (ai_edit_dialog_content != nullptr
                    ? ai_edit_dialog_content
                    : ai_edit_harness.data());
+    auto* return_to_editor = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("agentReturnToEditorButton"));
+    if (return_to_editor == nullptr ||
+        !wait_for_condition(
+            [ai_edit_window, return_to_editor]() {
+              return ai_edit_window->activeFocusItem() == qobject_cast<QQuickItem*>(return_to_editor) &&
+                     return_to_editor->property("visualFocus").toBool();
+            },
+            1000)) {
+      return fail("AI Edit review entry should put visible keyboard focus on its safe return action");
+    }
     const auto initial_selection_fingerprint =
         ai_edit_harness->property("librarySelectionFingerprint").toString();
     auto* initial_review_timer = find_named_object(
@@ -2734,11 +3742,14 @@ ApplicationWindow {
             Q_ARG(QVariant, 0))) {
       return fail("AI Edit visual proof should return to the prompt for scope selection");
     }
-    if (ai_edit_dialog_content == nullptr ||
+    auto* ai_edit_conversation_view = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("agentConversationView"));
+    if (ai_edit_conversation_view == nullptr ||
         !wait_for_condition(
-            [ai_edit_dialog_content]() {
-              return ai_edit_dialog_content->property("opacity").toDouble() >= 0.99 &&
-                     ai_edit_dialog_content->property("scale").toDouble() >= 0.99;
+            [ai_edit_conversation_view]() {
+              return ai_edit_conversation_view->property("opacity").toDouble() >= 0.99 &&
+                     ai_edit_conversation_view->property("scale").toDouble() >= 0.99;
             },
             1500)) {
       return fail("AI Edit compact entry should settle its page-replacement animation before visual proof");
@@ -2816,6 +3827,131 @@ ApplicationWindow {
         ai_edit_dialog->property("detailsExpanded").toBool() ||
         collapsed_details_panel->property("visible").toBool()) {
       return fail("AI Edit should open with one compact direction surface and three direct ways to establish the project look");
+    }
+    if (!wait_for_condition(
+            [ai_edit_window, compact_prompt]() {
+              const auto* prompt_item = qobject_cast<QQuickItem*>(compact_prompt);
+              return prompt_item != nullptr && ai_edit_window->activeFocusItem() == prompt_item &&
+                     prompt_item->hasActiveFocus();
+            },
+            1000) ||
+        accessible_name_for_object(compact_prompt) != QStringLiteral("AI edit instructions")) {
+      auto* active_focus = ai_edit_window->activeFocusItem();
+      std::cerr << "AI Edit prompt focus state: active="
+                << (active_focus ? active_focus->objectName().toStdString() : "<none>")
+                << " prompt=" << compact_prompt->objectName().toStdString()
+                << " visual=" << compact_prompt->property("visualFocus").toBool()
+                << " accessible-name=" << accessible_name_for_object(compact_prompt).toStdString()
+                << '\n';
+      return fail("AI Edit prompt entry should receive visible keyboard focus and a clear accessible name");
+    }
+    // The interactive area must sit on real alpha artwork, without outer chrome.
+    auto* robot_artwork = find_named_object(ai_edit_visual_root, QStringLiteral("agentRobotScreenArtwork"));
+    auto* robot_stage = qobject_cast<QQuickItem*>(
+        find_named_object(ai_edit_visual_root, QStringLiteral("agentRobotStage")));
+    auto* held_screen = qobject_cast<QQuickItem*>(
+        find_named_object(ai_edit_visual_root, QStringLiteral("agentHeldScreen")));
+    auto* held_scroll = find_named_object(ai_edit_visual_root, QStringLiteral("agentHeldScreenScroll"));
+    const QImage robot_image(QStringLiteral(":/photo-editor/agent/looksy-agent-screen-v2.png"));
+    if (robot_artwork == nullptr || robot_stage == nullptr || held_screen == nullptr ||
+        held_scroll == nullptr || robot_image.isNull() || !robot_image.hasAlphaChannel() ||
+        robot_image.width() < 1200 || robot_image.pixelColor(0, 0).alpha() != 0 ||
+        robot_image.pixelColor(robot_image.width() / 2, robot_image.height() / 2).alpha() < 240 ||
+        !robot_stage->boundingRect().contains(held_screen->mapRectToItem(robot_stage, held_screen->boundingRect()))) {
+      return fail("AI Edit should put live controls inside a high resolution robot's held screen with transparent outer artwork");
+    }
+    const auto prompt_on_screen = qobject_cast<QQuickItem*>(compact_prompt)->mapRectToItem(
+        held_screen, qobject_cast<QQuickItem*>(compact_prompt)->boundingRect());
+    if (!held_screen->boundingRect().contains(prompt_on_screen)) {
+      return fail("AI Edit should scroll its focused prompt fully into the held screen");
+    }
+
+    auto* change_prompt = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("agentChangePromptButton"));
+    if (change_prompt == nullptr ||
+        !ai_edit_dialog->property("inspirationSuggestions").toList().isEmpty()) {
+      return fail("AI Edit inspiration focus fixture should start with an empty suggestion list");
+    }
+    const QVariantList populated_inspiration_suggestions{
+        QVariantMap{{QStringLiteral("kind"), QStringLiteral("preset")},
+                    {QStringLiteral("id"), QStringLiteral("focus-proof")},
+                    {QStringLiteral("title"), QStringLiteral("Focus proof look")},
+                    {QStringLiteral("detail"), QStringLiteral("Visible suggestion used to verify focus.")}}};
+    ai_edit_dialog->setProperty("inspirationSuggestions", populated_inspiration_suggestions);
+    QObject* first_inspiration_card = nullptr;
+    if (!QMetaObject::invokeMethod(
+            ai_edit_dialog,
+            "setPage",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, 1)) ||
+        !wait_for_condition(
+            [&]() {
+              first_inspiration_card = find_named_object(
+                  ai_edit_visual_root,
+                  QStringLiteral("agentBuiltInLookCard-focus-proof"));
+              auto* card_item = qobject_cast<QQuickItem*>(first_inspiration_card);
+              return card_item != nullptr && item_visible(card_item) &&
+                     ai_edit_window->activeFocusItem() == card_item && card_item->hasActiveFocus();
+            },
+            1000) ||
+        accessible_name_for_object(first_inspiration_card) !=
+            QStringLiteral("Focus proof look")) {
+      auto* active_focus = ai_edit_window->activeFocusItem();
+      std::cerr << "AI Edit populated suggestion focus debug: active="
+                << (active_focus ? active_focus->objectName().toStdString() : "<none>")
+                << " card=" << (first_inspiration_card
+                                    ? first_inspiration_card->objectName().toStdString()
+                                    : "<missing>")
+                << " suggestions=" << ai_edit_dialog->property("inspirationSuggestions").toList().size()
+                << '\n';
+      return fail("AI Edit inspiration entry should focus the first visible suggestion card");
+    }
+    if (!QMetaObject::invokeMethod(
+            ai_edit_dialog,
+            "setPage",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, 0)) ||
+        !wait_for_condition(
+            [ai_edit_window, compact_prompt]() {
+              const auto* prompt_item = qobject_cast<QQuickItem*>(compact_prompt);
+              return prompt_item != nullptr && ai_edit_window->activeFocusItem() == prompt_item &&
+                     prompt_item->hasActiveFocus();
+            },
+            1000)) {
+      return fail("AI Edit prompt focus should return after leaving the populated inspiration page");
+    }
+    ai_edit_dialog->setProperty("inspirationSuggestions", QVariantList{});
+    if (!QMetaObject::invokeMethod(
+            ai_edit_dialog,
+            "setPage",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, 1)) ||
+        !wait_for_condition(
+            [ai_edit_window, change_prompt]() {
+              return ai_edit_window->activeFocusItem() == qobject_cast<QQuickItem*>(change_prompt) &&
+                     change_prompt->property("visualFocus").toBool();
+            },
+            1000) ||
+        !QMetaObject::invokeMethod(
+            ai_edit_dialog,
+            "setPage",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, 0)) ||
+        !wait_for_condition(
+            [ai_edit_window, compact_prompt]() {
+              const auto* prompt_item = qobject_cast<QQuickItem*>(compact_prompt);
+              return prompt_item != nullptr && ai_edit_window->activeFocusItem() == prompt_item &&
+                     prompt_item->hasActiveFocus();
+            },
+            1000)) {
+      auto* active_focus = ai_edit_window->activeFocusItem();
+      std::cerr << "AI Edit page-entry focus state: page="
+                << ai_edit_dialog->property("currentPage").toInt()
+                << " active=" << (active_focus ? active_focus->objectName().toStdString() : "<none>")
+                << " change-prompt=" << (change_prompt ? change_prompt->property("visualFocus").toBool() : false)
+                << " prompt=" << compact_prompt->property("visualFocus").toBool() << '\n';
+      return fail("AI Edit inspiration page should focus its prompt-return action when the gallery is empty");
     }
     process_layout_events(8);
     if (!capture_visual_proof(
@@ -3412,7 +4548,7 @@ ApplicationWindow {
         ai_edit_visual_root,
         QStringLiteral("aiEditAssignmentStoryRoleButton"));
     const auto expected_ai_edit_contract =
-        QStringLiteral("ai-edit:v8|entry:editor-native-agent-studio|sequence:direction-inspiration-live-work-review|surface:full-page-conversation|target-selection:workspace-context-first|style-start:three-path-project-sticky|scope-override:details|inspiration:visual-selection|activity:live-editor-journey|result:full-resolution-history-backed|details:progressive-disclosure");
+        QStringLiteral("ai-edit:v10|entry:left-rail-agent-terminal|sequence:direction-inspiration-live-work-review|surface:inset-retro-compute-panel|motion:scale-fade-slide|target-selection:workspace-context-first|style-start:three-path-project-sticky|scope-override:details|inspiration:visual-selection|activity:live-editor-journey|result:full-resolution-history-backed|details:progressive-disclosure|keyboard:page-entry-escape-focus-return");
     if (ai_edit_dialog == nullptr || sample_panel == nullptr || primary_review == nullptr ||
         story_map == nullptr || story_arc == nullptr || story_receipt == nullptr ||
         story_role_evidence == nullptr || story_role_evidence_title == nullptr ||
@@ -5152,7 +6288,7 @@ ApplicationWindow {
     QObject* calibrated_choose_direction_a = nullptr;
     QObject* calibrated_choose_direction_b = nullptr;
     if (!wait_for_condition(
-            [ai_edit_dialog, ai_edit_dialog_content, ai_edit_visual_root,
+            [ai_edit_dialog, ai_edit_conversation_view, ai_edit_visual_root,
              &calibrated_comparison_headline,
              &calibrated_direction_label_a,
              &calibrated_direction_label_b,
@@ -5174,9 +6310,9 @@ ApplicationWindow {
                   ai_edit_visual_root,
                   QStringLiteral("aiEditChooseDirectionB"));
               return ai_edit_dialog->property("visible").toBool() &&
-                     ai_edit_dialog_content != nullptr &&
-                     ai_edit_dialog_content->property("opacity").toDouble() >= 0.99 &&
-                     ai_edit_dialog_content->property("scale").toDouble() >= 0.99 &&
+                     ai_edit_conversation_view != nullptr &&
+                     ai_edit_conversation_view->property("opacity").toDouble() >= 0.99 &&
+                     ai_edit_conversation_view->property("scale").toDouble() >= 0.99 &&
                      calibrated_comparison_headline != nullptr &&
                      calibrated_comparison_headline->property("text").toString().contains(
                          QStringLiteral("you teach the choice")) &&
@@ -6974,6 +8110,117 @@ ApplicationWindow {
         manifest_file.write(QJsonDocument(visual_proof_manifest).toJson(QJsonDocument::Indented)) <= 0) {
       return fail("AI Edit visual proof should write its manifest");
     }
+    auto* focus_return_probe = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("aiEditFocusReturnProbe"));
+    auto* focus_return_item = qobject_cast<QQuickItem*>(focus_return_probe);
+    ai_edit_harness->setProperty("showFocusReturnProbe", true);
+    process_layout_events(4);
+    if (focus_return_item != nullptr) {
+      focus_return_item->forceActiveFocus(Qt::TabFocusReason);
+    }
+    if (!QMetaObject::invokeMethod(ai_edit_dialog, "open", Qt::DirectConnection) ||
+        !wait_for_condition(
+            [ai_edit_dialog]() { return ai_edit_dialog->property("visible").toBool(); },
+            1000)) {
+      return fail("AI Edit close proof should reopen the walkthrough from its visible workspace control");
+    }
+    const auto captured_focus_return_item =
+        qvariant_cast<QObject*>(ai_edit_dialog->property("focusReturnItem"));
+    if (focus_return_item == nullptr || !focus_return_item->isVisible() ||
+        captured_focus_return_item != focus_return_probe) {
+      std::cerr << "AI Edit focus capture debug: visible="
+                << ai_edit_dialog->property("visible").toBool()
+                << " target=" << captured_focus_return_item
+                << " expected=" << focus_return_probe
+                << " probeVisible=" << (focus_return_item != nullptr && focus_return_item->isVisible())
+                << " active=" << ai_edit_window->activeFocusItem() << '\n';
+      return fail("AI Edit should capture the visible workspace control that opened it");
+    }
+    auto* run_cancel_button = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("agentCancelRunButton"));
+    auto* run_goal_label = find_named_item(
+        ai_edit_visual_root,
+        QStringLiteral("agentRunGoalLabel"));
+    if (run_cancel_button == nullptr || run_goal_label == nullptr) {
+      return fail("AI Edit run page should expose its Stop action and current goal label");
+    }
+    ai_edit_harness_object->setProperty("showProgressivePreview", true);
+    if (!wait_for_condition(
+            [ai_edit_window, ai_edit_dialog, run_cancel_button, run_goal_label]() {
+              auto* cancel_item = qobject_cast<QQuickItem*>(run_cancel_button);
+              return ai_edit_dialog->property("currentPage").toInt() == 2 &&
+                     run_cancel_button->property("visible").toBool() &&
+                     run_goal_label->property("visible").toBool() &&
+                     ai_edit_window->activeFocusItem() == cancel_item &&
+                     run_cancel_button->property("visualFocus").toBool();
+            },
+            1000)) {
+      auto* active_focus = ai_edit_window->activeFocusItem();
+      std::cerr << "AI Edit run-page focus debug: page="
+                << ai_edit_dialog->property("currentPage").toInt()
+                << " active=" << (active_focus ? active_focus->objectName().toStdString() : "<none>")
+                << " stopVisible=" << run_cancel_button->property("visible").toBool()
+                << " goalVisible=" << run_goal_label->property("visible").toBool()
+                << " stopVisualFocus=" << run_cancel_button->property("visualFocus").toBool()
+                << '\n';
+      return fail("AI Edit running state should focus its visible Stop action and expose the current goal");
+    }
+    if (!send_window_key(ai_edit_window, Qt::Key_Escape) ||
+        !wait_for_condition(
+            [ai_edit_dialog]() {
+              return ai_edit_dialog->property("visible").toBool() &&
+                     ai_edit_dialog->property("currentPage").toInt() == 2;
+            },
+            250)) {
+      return fail("Escape should remain contained while AI Edit is running");
+    }
+    ai_edit_harness_object->setProperty("showProgressivePreview", false);
+    auto* final_prompt = find_named_object(
+        ai_edit_visual_root,
+        QStringLiteral("agentPromptEditor"));
+    auto* final_prompt_item = qobject_cast<QQuickItem*>(final_prompt);
+    if (final_prompt == nullptr || final_prompt_item == nullptr ||
+        !QMetaObject::invokeMethod(
+            ai_edit_dialog,
+            "setPage",
+            Qt::DirectConnection,
+            Q_ARG(QVariant, 0))) {
+      return fail("AI Edit should return to its prompt page for Escape focus proof");
+    }
+    if (!wait_for_condition(
+            [ai_edit_window, final_prompt_item]() {
+              return ai_edit_window->activeFocusItem() == final_prompt_item &&
+                     final_prompt_item->hasActiveFocus();
+            },
+            1000)) {
+      std::cerr << "AI Edit final prompt focus debug: active="
+                << ai_edit_window->activeFocusItem()
+                << " prompt=" << final_prompt_item
+                << " hasFocus=" << final_prompt_item->hasActiveFocus()
+                << " visualFocus=" << final_prompt->property("visualFocus").toBool() << '\n';
+      return fail("AI Edit should show its prompt field focus before Escape closes the walkthrough");
+    }
+    if (!send_window_key(ai_edit_window, Qt::Key_Escape)) {
+      return fail("Escape should close AI Edit during the focus-return proof");
+    }
+    if (!wait_for_condition(
+            [ai_edit_window, ai_edit_dialog, focus_return_item]() {
+              return !ai_edit_dialog->property("visible").toBool() &&
+                     ai_edit_window->activeFocusItem() == focus_return_item &&
+                     focus_return_item->property("visualFocus").toBool();
+            },
+            1200)) {
+      std::cerr << "AI Edit focus return debug: visible="
+                << ai_edit_dialog->property("visible").toBool()
+                << " active=" << ai_edit_window->activeFocusItem()
+                << " target=" << focus_return_item
+                << " targetHasFocus=" << (focus_return_item != nullptr && focus_return_item->hasActiveFocus())
+                << " targetVisualFocus=" << (focus_return_item != nullptr && focus_return_item->property("visualFocus").toBool())
+                << '\n';
+      return fail("Closing AI Edit should restore visible keyboard focus to the control that opened it");
+    }
     qunsetenv("PHOTO_EDITOR_CACHE_DIR");
     qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
     return EXIT_SUCCESS;
@@ -7032,6 +8279,10 @@ ApplicationWindow {
     if (!QMetaObject::invokeMethod(import_workspace, "refreshImportPreflight")) {
       return fail("import safety visual proof should run the real controller preflight");
     }
+    QElapsedTimer import_review_timer;
+    import_review_timer.start();
+    while (catalog_assets.importPreflightBusy() && import_review_timer.elapsed() < 5000)
+      process_layout_events(1);
     process_layout_events(12);
     const auto preflight = import_workspace->property("importPreflight").toMap();
     if (import_workspace->property("importSafetyContract").toString() !=
@@ -7069,6 +8320,9 @@ ApplicationWindow {
     }
     import_workspace->setProperty("importMode", QStringLiteral("referenced"));
     process_layout_events(8);
+    import_review_timer.restart();
+    while (catalog_assets.importPreflightBusy() && import_review_timer.elapsed() < 5000)
+      process_layout_events(1);
     const auto referenced_preflight = import_workspace->property("importPreflight").toMap();
     if (referenced_preflight.value(QStringLiteral("importMode")).toString() != QStringLiteral("referenced") ||
         referenced_preflight.value(QStringLiteral("estimatedDiskBytes")).toLongLong() != 0 ||
@@ -7307,6 +8561,7 @@ ApplicationWindow {
     (void)wait_for_condition(
         [&delivery_preflight_settle]() { return delivery_preflight_settle.elapsed() >= 220; },
         650);
+    (void)wait_for_condition([&export_jobs]() { return !export_jobs.preflightBusy(); }, 10000);
     QVariant delivery_preflight_value;
     if (!QMetaObject::invokeMethod(
             export_workspace,
@@ -7518,7 +8773,7 @@ ApplicationWindow {
             "adjustmentControlDisabledReason",
             Q_RETURN_ARG(QVariant, photo_layer_write_reason),
             Q_ARG(QVariant, QVariant(QStringLiteral("base-image,adjustment-layer")))) ||
-        !photo_layer_write_reason.toString().contains(QStringLiteral("pixel layers"), Qt::CaseInsensitive) ||
+        photo_layer_write_reason.toString().isEmpty() ||
         !QMetaObject::invokeMethod(
             edit_workspace,
             "setPrimaryAdjustmentValue",
@@ -7527,7 +8782,7 @@ ApplicationWindow {
             Q_ARG(QVariant, QVariant(1.25))) ||
         photo_layer_write_result.toBool() ||
         std::abs(editor_preview.exposure() - base_exposure_before_photo_layer_write) > 0.0001) {
-      return fail("unsupported photo-layer adjustments should be disabled with a reason and never fall back to Base Image");
+      return fail("unsupported fill-layer adjustments should be disabled with a reason and never fall back to Base Image");
     }
     if (!QMetaObject::invokeMethod(
             edit_workspace,
@@ -8325,9 +9580,9 @@ ApplicationWindow {
 	      !edit_tool_model_signature.toString().contains(QStringLiteral("compare:")) ||
 	      !edit_tool_model_signature.toString().contains(QStringLiteral("export:")) ||
 	      !edit_tool_navigation_signature.toString().contains(
-	          QStringLiteral("tool-rail-navigation:v2|groups:Adjust>Selection>Paint>Text>Crop>View>Export")) ||
+	          QStringLiteral("tool-rail-navigation:v2|groups:Adjust>Selection>Paint>Shapes>Text>Crop>View>Export")) ||
 	      !edit_tool_navigation_signature.toString().contains(
-	          QStringLiteral("|primary:adjust,masks,paint,text,crop,compare")) ||
+	          QStringLiteral("|primary:adjust,masks,paint,shapes,text,crop,compare")) ||
 	      !edit_tool_navigation_signature.toString().contains(
 	          QStringLiteral("|stable-size:true|hover-layout-shift:false|tooltips:true|navigation:direct|variants:page-controls|layers:inspector-tab|info:subtle-inspector-action")) ||
 	      !edit_workflow_polish_signature.toString().contains(
@@ -8485,15 +9740,15 @@ ApplicationWindow {
   auto* active_tool_variant_chip =
       find_named_object(edit_workspace, QStringLiteral("activeToolVariantChip"));
   if (!edit_tool_rail_expansion_contract.contains(QStringLiteral("tool-rail:v1")) ||
-	      !edit_tool_rail_expansion_contract.contains(QStringLiteral("lifecycle:9")) ||
-	      !edit_tool_rail_lifecycle_contract.contains(QStringLiteral("tool-rail-lifecycle:v1|declared:9|tools:9")) ||
+	      !edit_tool_rail_expansion_contract.contains(QStringLiteral("lifecycle:8")) ||
+	      !edit_tool_rail_lifecycle_contract.contains(QStringLiteral("tool-rail-lifecycle:v1|declared:8|tools:8")) ||
 	      edit_tool_rail_discovery_contract !=
 	          QStringLiteral("tool-discovery:v1|families-visible:true|active-family:true|active-variant:true|variants-one-expansion:true|stale-menus-close:true|disabled-reasons:true") ||
 	      !edit_tool_rail_grouped_navigation_contract.contains(
-	          QStringLiteral("tool-rail-navigation:v2|groups:Adjust>Selection>Paint>Text>Crop>View>Export")) ||
+	          QStringLiteral("tool-rail-navigation:v2|groups:Adjust>Selection>Paint>Shapes>Text>Crop>Export")) ||
 	      !edit_tool_rail_grouped_navigation_contract.contains(QStringLiteral("|stable-size:true|hover-layout-shift:false|tooltips:explicit|variants:page-controls|one-expansion:false")) ||
 	      !edit_tool_rail_activation_coverage_contract.contains(
-	          QStringLiteral("tool-rail-activation:v1|primary-tools:adjust,masks,paint,text,crop,compare")) ||
+	          QStringLiteral("tool-rail-activation:v1|primary-tools:adjust,masks,paint,shapes,text,crop")) ||
 	      !edit_tool_rail_activation_coverage_contract.contains(
 	          QStringLiteral("|source:rail-model|buttons:present|trigger-by-id:true")) ||
 	      edit_tool_rail_stale_menu_cleanup_contract !=
@@ -8522,6 +9777,24 @@ ApplicationWindow {
 	      edit_rail_info_button != nullptr ||
 	      !edit_inspector_active_tool_header->property("toolDiscoveryContract").toString().contains(
 	          QStringLiteral("active-tool-discovery:v1|family:"))) {
+	    std::cerr << "Edit rail expansion: " << edit_tool_rail_expansion_contract.toStdString()
+	              << " lifecycle: " << edit_tool_rail_lifecycle_contract.toStdString()
+	              << " discovery: " << edit_tool_rail_discovery_contract.toStdString()
+	              << " navigation: " << edit_tool_rail_grouped_navigation_contract.toStdString()
+	              << " activation: " << edit_tool_rail_activation_coverage_contract.toStdString()
+	              << " direct: " << edit_tool_rail_direct_navigation_contract.toStdString()
+	              << " activeVariantVisible: "
+	              << studio_edit_tool_rail->property("activeVariantVisible").toBool()
+	              << " menuToolCount: " << studio_edit_tool_rail->property("menuToolCount").toInt()
+	              << " active header: "
+	              << (edit_inspector_active_tool_header != nullptr)
+	              << " adjust: " << (edit_rail_adjust_button != nullptr)
+	              << " selection: " << (edit_rail_selection_button != nullptr)
+	              << " crop: " << (edit_rail_crop_button != nullptr)
+	              << " text: " << (edit_rail_text_button != nullptr)
+	              << " layers: " << (edit_rail_layers_button != nullptr)
+	              << " compare: " << (edit_rail_compare_button != nullptr)
+	              << " info: " << (edit_rail_info_button != nullptr) << '\n';
 	    return fail("Studio edit rail should navigate directly without menus or hover overlays, with Layers and Info moved into the inspector");
 	  }
 	  auto* active_canvas_tool_chip_contract =
@@ -8565,10 +9838,8 @@ ApplicationWindow {
         QStringLiteral("zoomOutButton"),
         QStringLiteral("zoomInButton"),
         QStringLiteral("diagnosticsOverlayButton"),
-        QStringLiteral("resetViewButton"),
         QStringLiteral("referenceImageButton"),
         QStringLiteral("inspectorPanelToggleButton"),
-        QStringLiteral("interfaceDensityButton"),
         QStringLiteral("fullScreenEditButton"),
         QStringLiteral("diagnosticsPanelCloseButton"),
         QStringLiteral("loupeOverlayButton"),
@@ -9077,13 +10348,11 @@ ApplicationWindow {
         QStringLiteral("zoomOutButton"),
         QStringLiteral("zoomInButton"),
         QStringLiteral("diagnosticsOverlayButton"),
-        QStringLiteral("resetViewButton"),
     };
     const QStringList action_toolbar_items{
         QStringLiteral("referenceImageButton"),
         QStringLiteral("clearReferenceImageButton"),
         QStringLiteral("inspectorPanelToggleButton"),
-        QStringLiteral("interfaceDensityButton"),
         QStringLiteral("fullScreenEditButton"),
     };
     const QStringList diagnostics_panel_items{
@@ -9363,7 +10632,8 @@ ApplicationWindow {
   auto* photo_layer_add_split_contract =
       find_named_object(edit_workspace, QStringLiteral("photoLayerAddSplitButton"));
   if (photo_layer_add_split_contract == nullptr ||
-      photo_layer_add_split_contract->property("text").toString() != QStringLiteral("+") ||
+      photo_layer_add_split_contract->property("text").toString() != QStringLiteral("Add") ||
+      photo_layer_add_split_contract->property("accessibleName").toString() != QStringLiteral("Add layer") ||
       !photo_layer_add_split_contract->property("splitContract")
           .toString()
           .contains(QStringLiteral("split-button:v1")) ||
@@ -9380,7 +10650,7 @@ ApplicationWindow {
           .toString()
           .contains(QStringLiteral("no-elide:true")) ||
       photo_layer_add_split_contract->property("layerAddSplitContract").toString() !=
-          QStringLiteral("layer-add-split:v2|primary:adjustment|menu:adjustment,paint,fill,text,paragraph,source,group|descriptions:7|checked:1|disabled-reasons:0|one-primary:true|permanent-fill-text:false|readable-menu:true|stack-clutter:false|no-elide:true")) {
+          QStringLiteral("layer-add-split:v2|primary:adjustment|menu:adjustment,paint,shapes,fill,text,paragraph,source,group|descriptions:8|checked:1|disabled-reasons:0|one-primary:true|permanent-fill-text:false|readable-menu:true|stack-clutter:false|no-elide:true")) {
     std::cerr << "layer Add object=" << (photo_layer_add_split_contract != nullptr);
     if (photo_layer_add_split_contract != nullptr) {
       std::cerr << " text=" << photo_layer_add_split_contract->property("text").toString().toStdString()
@@ -9388,7 +10658,7 @@ ApplicationWindow {
                 << " layer=" << photo_layer_add_split_contract->property("layerAddSplitContract").toString().toStdString();
     }
     std::cerr << '\n';
-    return fail("Studio layer Add should use one shared SplitButton with Adjustment as primary and Paint/Fill/Text/Paragraph/Source/Group in the menu");
+    return fail("Studio layer Add should use one shared SplitButton with Adjustment as primary and Paint/Shapes/Fill/Text/Paragraph/Source/Group in the menu");
   }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_EDIT_RAIL")) {
     return EXIT_SUCCESS;
@@ -10326,9 +11596,13 @@ ApplicationWindow {
             return fail("onboarding must be closed before native mask pointer checks");
 
           const auto pointer_photo = runtime_root.filePath(QStringLiteral("mask-pointer-photo.png"));
+          const auto pointer_fixture_kind =
+              qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_REFINE_CANCEL")
+                  ? QStringLiteral("saturated")
+                  : QStringLiteral("saturated-small");
           edit_workspace->setProperty("agentFocusedMaskId", QStringLiteral("previous-photo-mask"));
           edit_workspace->setProperty("agentSpatialTargetMode", true);
-          if (!write_overlay_visual_fixture(pointer_photo, QStringLiteral("saturated-small")))
+          if (!write_overlay_visual_fixture(pointer_photo, pointer_fixture_kind))
             return fail("mask pointer proof must create a decodable image");
           editor_preview.loadAsset(QStringLiteral("mask-pointer-photo"), pointer_photo,
                                    QUrl::fromLocalFile(pointer_photo).toString(),
@@ -10383,13 +11657,53 @@ ApplicationWindow {
             editor_preview.beginCoalescedEdit();
             editor_preview.startSelectionEdgeBrush(false);
             editor_preview.beginActiveBrushStroke();
-            editor_preview.addBrushPoint(0.3, 0.4);
-            editor_preview.addBrushPoint(0.45, 0.5);
-            editor_preview.addBrushPoint(0.6, 0.6);
+            // Make the worker long enough for this test to cancel it reliably
+            // even while neighboring UI shards are loading the machine.
+            for (int sweep = 0; sweep < 16; ++sweep) {
+              const auto y = 0.12 + 0.76 * static_cast<double>(sweep) / 15.0;
+              for (int step = 0; step <= 32; ++step) {
+                const auto progress = static_cast<double>(step) / 32.0;
+                const auto x = sweep % 2 == 0
+                                   ? 0.1 + 0.8 * progress
+                                   : 0.9 - 0.8 * progress;
+                editor_preview.addBrushPoint(x, y);
+              }
+            }
             editor_preview.endActiveBrushStroke();
-            if (!wait_for_condition([&]() {
-                  return photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview);
-                }, 10000)) return fail("rollback race fixture must observe an active brush raster worker");
+            QElapsedTimer worker_start_wait;
+            worker_start_wait.start();
+            bool brush_worker_observed = false;
+            while (worker_start_wait.elapsed() < 10000) {
+              QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+              if (photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(
+                      editor_preview)) {
+                brush_worker_observed = true;
+                break;
+              }
+              QThread::msleep(1);
+            }
+            if (!brush_worker_observed) {
+              std::cerr << "brush-refine cancellation fixture: kind="
+                        << editor_preview.activeMaskKind().toStdString()
+                        << " active=" << editor_preview.hasActiveMask()
+                        << " stroke=" << editor_preview.brushStrokeActive()
+                        << " committed=" << editor_preview.activeMaskCommitted()
+                        << " processing=" << editor_preview.processing()
+                        << " worker_active="
+                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_active(
+                               editor_preview)
+                        << " worker_running="
+                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(
+                               editor_preview)
+                        << " commit_scheduled="
+                        << photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_scheduled(
+                               editor_preview)
+                        << " pending_commits="
+                        << photo_editor::desktop::EditorPreviewControllerTestAccess::pending_brush_commit_count(
+                               editor_preview)
+                        << " status=" << editor_preview.status().toStdString() << '\n';
+              return fail("rollback race fixture must observe an active brush raster worker");
+            }
             if (!editor_preview.cancelCoalescedEdit()) return fail("refinement transaction must cancel");
             if (!wait_for_condition([&]() {
                   return !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview) &&
@@ -10503,6 +11817,10 @@ ApplicationWindow {
             if (!click_item(find_named_item(edit_workspace, QStringLiteral("maskRefinementCancelButton"))) ||
                 editor_preview.maskStack() != before_refine || editor_preview.editHistoryEntries() != before_history)
               return fail("canceling edited edge refinement must restore the existing selection");
+            const auto canceled_edge_alpha = evaluate_refinement_alpha();
+            if (!canceled_edge_alpha.valid ||
+                canceled_edge_alpha.alpha_mask != original_alpha.alpha_mask)
+              return fail("Cancel must restore every evaluated alpha byte after editing the existing edge");
             edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
             process_layout_events();
             if (!click_item(find_thumbnail())) return fail("edge refinement must leave the selection reselectable");
@@ -10635,6 +11953,10 @@ ApplicationWindow {
                 edit_workspace->property("maskRefinementSessionActive").toBool() || editor_preview.maskStack() != before_refine ||
                 editor_preview.editHistoryEntries() != before_history)
               return fail("pointer Cancel must restore the original masks and history");
+            const auto canceled_pointer_alpha = evaluate_refinement_alpha();
+            if (!canceled_pointer_alpha.valid ||
+                canceled_pointer_alpha.alpha_mask != original_alpha.alpha_mask)
+              return fail("pointer Cancel must restore every evaluated alpha byte in the rendered mask");
             edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
             process_layout_events();
             if (!click_item(find_thumbnail())) return fail("canceled mask must remain reselectable");
@@ -10723,9 +12045,28 @@ ApplicationWindow {
               }
             }
             if (outside_change_count > 0) {
+              QVariantList brush_only_masks;
               for (const auto& value : finished_masks) {
                 const auto mask = value.toMap();
+                std::cerr << "mask kind=" << mask.value(QStringLiteral("kind")).toString().toStdString()
+                          << " operation=" << mask.value(QStringLiteral("operation")).toString().toStdString()
+                          << " parent=" << mask.value(QStringLiteral("parentId")).toString().toStdString()
+                          << " set=" << mask.value(QStringLiteral("maskSetId")).toString().toStdString()
+                          << " invert=" << mask.value(QStringLiteral("selectionInvert")).toBool()
+                          << " maskInvert=" << mask.value(QStringLiteral("invert")).toBool()
+                          << " blend=" << mask.value(QStringLiteral("blendMode")).toString().toStdString()
+                          << " opacity=" << mask.value(QStringLiteral("opacity")).toDouble()
+                          << " density=" << mask.value(QStringLiteral("density")).toDouble()
+                          << " expand=" << mask.value(QStringLiteral("selectionExpand")).toDouble()
+                          << " grow=" << mask.value(QStringLiteral("selectionGrow")).toDouble()
+                          << " shrink=" << mask.value(QStringLiteral("selectionShrink")).toDouble()
+                          << " feather=" << mask.value(QStringLiteral("selectionFeather")).toDouble()
+                          << " blur=" << mask.value(QStringLiteral("selectionBlur")).toDouble()
+                          << " fill=" << mask.value(QStringLiteral("selectionFillHoles")).toDouble()
+                          << " remove=" << mask.value(QStringLiteral("selectionRemoveIslands")).toDouble()
+                          << '\n';
                 if (mask.value(QStringLiteral("kind")).toString() != QStringLiteral("brush")) continue;
+                brush_only_masks.append(mask);
                 const auto data = mask.value(QStringLiteral("segmentationData")).toByteArray();
                 const auto width = mask.value(QStringLiteral("segmentationWidth")).toInt();
                 const auto height = mask.value(QStringLiteral("segmentationHeight")).toInt();
@@ -10739,9 +12080,42 @@ ApplicationWindow {
                           << " bounds=" << raster_bounds.x() << ',' << raster_bounds.y() << ',' << raster_bounds.width() << ',' << raster_bounds.height()
                           << " size=" << mask.value(QStringLiteral("brushSize")).toDouble() << '\n';
               }
+              const auto original_mask_id = before_refine.isEmpty()
+                  ? QString()
+                  : before_refine.constFirst().toMap().value(QStringLiteral("id")).toString();
+              for (const auto& value : finished_masks) {
+                const auto after_mask = value.toMap();
+                if (after_mask.value(QStringLiteral("id")).toString() != original_mask_id) continue;
+                const auto before_mask = before_refine.constFirst().toMap();
+                for (auto iterator = before_mask.cbegin(); iterator != before_mask.cend(); ++iterator) {
+                  if (after_mask.value(iterator.key()) != iterator.value()) {
+                    std::cerr << "parent field changed=" << iterator.key().toStdString()
+                              << " from=" << iterator.value().toString().toStdString()
+                              << " to=" << after_mask.value(iterator.key()).toString().toStdString()
+                              << '\n';
+                  }
+                }
+                break;
+              }
               std::cerr << "outside alpha pixels=" << outside_change_count << " bounds="
                         << outside_change_bounds.x() << ',' << outside_change_bounds.y() << ','
                         << outside_change_bounds.width() << ',' << outside_change_bounds.height() << '\n';
+              if (!outside_change_bounds.isNull()) {
+                const auto x = outside_change_bounds.x();
+                const auto y = outside_change_bounds.y();
+                const auto offset = y * original_alpha.size.width() + x;
+                const auto brush_only = photo_editor::desktop::evaluate_canonical_composite_mask_alpha(
+                    alpha_source, brush_only_masks, 1.0, {1.0, 1.0, 1.0});
+                const auto brush_only_offset = y * brush_only.size.width() + x;
+                std::cerr << "first outside pixel=" << x << ',' << y
+                          << " original=" << static_cast<int>(original_alpha.alpha_mask.at(offset))
+                          << " finished=" << static_cast<int>(finished_brush_alpha.alpha_mask.at(offset))
+                          << " brush-only="
+                          << (brush_only.valid && brush_only_offset < brush_only.alpha_mask.size()
+                                  ? static_cast<int>(brush_only.alpha_mask.at(brush_only_offset))
+                                  : -1)
+                          << '\n';
+              }
               return fail("local brush strokes must preserve alpha outside the conservative stroke region");
             }
             if (finished_masks == first_stroke_masks)
@@ -10821,10 +12195,24 @@ ApplicationWindow {
             thumbnail = find_thumbnail();
             QElapsedTimer selection_timer;
             selection_timer.start();
-            if (!click_item(thumbnail) || !editor_preview.hasActiveMask() ||
-                editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value(QStringLiteral("id")).toString() != selected_id) {
+            const auto click_dispatched = click_item(thumbnail);
+            const auto selection_restored = click_dispatched && wait_for_condition([&]() {
+              return editor_preview.hasActiveMask() &&
+                  editor_preview.activeMaskIndex() >= 0 &&
+                  editor_preview.activeMaskIndex() < editor_preview.maskStack().size() &&
+                  editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
+                      .value(QStringLiteral("id")).toString() == selected_id;
+            }, 1000);
+            if (!selection_restored) {
+              const auto actual_id = editor_preview.hasActiveMask()
+                  ? editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
+                        .value(QStringLiteral("id")).toString()
+                  : QString{};
               std::cerr << "cycle=" << cycle << " thumbnail=" << (thumbnail ? thumbnail->objectName().toStdString() : "destroyed")
-                        << " visible=" << (thumbnail && thumbnail->isVisible()) << " active=" << editor_preview.activeMaskIndex() << '\n';
+                        << " visible=" << (thumbnail && thumbnail->isVisible()) << " active=" << editor_preview.activeMaskIndex()
+                        << " click_dispatched=" << click_dispatched
+                        << " expected_id=" << selected_id.toStdString() << " actual_id=" << actual_id.toStdString()
+                        << " mask_count=" << editor_preview.maskStack().size() << '\n';
               const auto failure_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_CAPTURE_PATH");
               auto* workspace_item = qobject_cast<QQuickItem*>(edit_workspace);
               if (!failure_capture.isEmpty() && workspace_item != nullptr && workspace_item->window() != nullptr)
@@ -10848,6 +12236,171 @@ ApplicationWindow {
             return fail("reselecting a hidden mask must preserve its disabled effect and overlay preference");
           if (!editor_preview.previewFailureStage().isEmpty())
             return fail("mask pointer fixture must render without a preview failure");
+          if (qEnvironmentVariableIsSet("PHOTO_EDITOR_MASK_LASSO_SWITCH")) {
+            auto* viewport = find_named_item(edit_workspace, QStringLiteral("editImageViewport"));
+            if (!viewport || !viewport->window()) return fail("selection gestures need the actual Studio viewport");
+            const auto send_pointer = [&](QEvent::Type type, double nx, double ny) {
+              const QPointF local(viewport->property("paintedContentX").toDouble() + nx * viewport->property("paintedContentWidth").toDouble(),
+                  viewport->property("paintedContentY").toDouble() + ny * viewport->property("paintedContentHeight").toDouble());
+              const auto scene = viewport->mapToScene(local);
+              const auto global = QPointF(viewport->window()->mapToGlobal(scene.toPoint()));
+              QMouseEvent event(type, scene, global, type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                  type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+              QCoreApplication::sendEvent(viewport->window(), &event);
+              QCoreApplication::processEvents();
+            };
+            auto lasso_cycles = qEnvironmentVariableIntValue("PHOTO_EDITOR_MASK_LASSO_CYCLES");
+            if (lasso_cycles <= 0) lasso_cycles = 8;
+            if (lasso_cycles > 100) return fail("selection-switch stress cycles must be between 1 and 100");
+            for (int cycle = 0; cycle < lasso_cycles; ++cycle) {
+              QElapsedTimer cycle_timer;
+              cycle_timer.start();
+              if (!QMetaObject::invokeMethod(edit_workspace, "startMaskBrushSource", Q_ARG(QVariant, QVariant("add"))))
+                return fail("smart selection must accept brush extension");
+              const auto brush_id = editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("id").toString();
+              send_pointer(QEvent::MouseButtonPress, 0.3, 0.35);
+              send_pointer(QEvent::MouseMove, 0.45, 0.45);
+              send_pointer(QEvent::MouseButtonRelease, 0.5, 0.45);
+              if (editor_preview.brushStrokeActive()) return fail("released selection brush must finish");
+              if (!wait_for_condition([&]() {
+                    return !photo_editor::desktop::EditorPreviewControllerTestAccess::brush_commit_running(editor_preview) &&
+                           !editor_preview.processing();
+                  }, 10000))
+                return fail("brush refinement must settle before the selection can be reselected");
+              edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
+              process_layout_events();
+              if (!click_item(find_named_item(edit_workspace, QStringLiteral("baseImageLayerRowTargetArea"))))
+                return fail("extended selection must survive clicking away to the base image");
+              QPointer<QQuickItem> extension_thumbnail;
+              const auto extension_thumbnail_ready = wait_for_condition([&]() {
+                extension_thumbnail = find_thumbnail();
+                return !extension_thumbnail.isNull();
+              }, 1000);
+              if (!extension_thumbnail_ready)
+                return fail("committed brush selection must remain visible in the layer panel");
+              const auto extension_click_dispatched = click_item(extension_thumbnail);
+              const auto extension_reselected = extension_click_dispatched && wait_for_condition([&]() {
+                return editor_preview.hasActiveMask() &&
+                    editor_preview.activeMaskIndex() >= 0 &&
+                    editor_preview.activeMaskIndex() < editor_preview.maskStack().size() &&
+                    editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
+                        .value(QStringLiteral("id")).toString() == brush_id;
+              }, 1000);
+              if (!extension_reselected) {
+                const auto actual_id = editor_preview.hasActiveMask() &&
+                        editor_preview.activeMaskIndex() >= 0 &&
+                        editor_preview.activeMaskIndex() < editor_preview.maskStack().size()
+                    ? editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
+                          .value(QStringLiteral("id")).toString()
+                    : QString{};
+                std::cerr << "lasso-cycle=" << cycle << " extension-thumbnail="
+                          << (extension_thumbnail ? extension_thumbnail->objectName().toStdString() : "destroyed")
+                          << " click_dispatched=" << extension_click_dispatched
+                          << " active=" << editor_preview.activeMaskIndex()
+                          << " expected_id=" << selected_id.toStdString()
+                          << " actual_id=" << actual_id.toStdString()
+                          << " mask_count=" << editor_preview.maskStack().size() << '\n';
+                for (const auto* target_name : {"photoLayerMaskSetThumbnailTargetArea",
+                                                "photoLayerNestedMaskThumbnailTargetArea",
+                                                "activeLayerMaskChildThumbnailTargetArea"}) {
+                  const auto targets = find_named_items(edit_workspace, QString::fromLatin1(target_name));
+                  std::cerr << "target=" << target_name << " count=" << targets.size();
+                  for (auto* target : targets) {
+                    const auto rect = visible_rect(target);
+                    std::cerr << " [visible=" << target->isVisible() << " rect="
+                              << rect.x() << ',' << rect.y() << ',' << rect.width() << ',' << rect.height() << ']';
+                  }
+                  std::cerr << '\n';
+                }
+                for (const auto& mask_value : editor_preview.maskStack()) {
+                  const auto mask = mask_value.toMap();
+                  std::cerr << "mask id=" << mask.value(QStringLiteral("id")).toString().toStdString()
+                            << " kind=" << mask.value(QStringLiteral("kind")).toString().toStdString()
+                            << " set=" << mask.value(QStringLiteral("maskSetId")).toString().toStdString()
+                            << " name=" << mask.value(QStringLiteral("name")).toString().toStdString() << '\n';
+                }
+                const auto failure_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_POINTER_CAPTURE_PATH");
+                auto* workspace_item = qobject_cast<QQuickItem*>(edit_workspace);
+                if (!failure_capture.isEmpty() && workspace_item != nullptr && workspace_item->window() != nullptr)
+                  workspace_item->window()->grabWindow().save(failure_capture);
+                return fail("extended selection must survive clicking away and reselecting its stable component");
+              }
+              if (!QMetaObject::invokeMethod(edit_workspace, "startMaskLassoFromShortcut") ||
+                  !edit_workspace->property("lassoDrawArmed").toBool()) return fail("lasso must arm after brush reselection");
+              process_layout_events();
+              send_pointer(QEvent::MouseButtonPress, 0.65, 0.5);
+              for (int step = 1; step <= 48; ++step) {
+                const auto angle = step * 6.283185307179586 / 48;
+                send_pointer(QEvent::MouseMove, 0.5 + 0.15 * std::cos(angle), 0.5 + 0.15 * std::sin(angle));
+              }
+              send_pointer(QEvent::MouseButtonRelease, 0.65, 0.5);
+              if (!editor_preview.hasActiveMask() || editor_preview.activeMaskKind() != "lasso" ||
+                  editor_preview.activeMaskPolygonPointCount() < 24 ||
+                  !editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("lassoClosed").toBool() ||
+                  edit_workspace->property("lassoDrawArmed").toBool() ||
+                  edit_workspace->property("maskShapeEditTransactionActive").toBool())
+                return fail("native lasso drag must retain detail, close, and release its undo transaction");
+              if (!wait_for_condition([&]() {
+                    for (const auto& value : editor_preview.maskStack()) {
+                      const auto mask = value.toMap();
+                      if (mask.value("id").toString() == brush_id)
+                        return !mask.value("brushStrokes").toList().isEmpty();
+                    }
+                    return false;
+                  }, 10000)) return fail("switching to lasso must preserve the released brush extension");
+              const auto closed = editor_preview.maskStack();
+              send_pointer(QEvent::MouseButtonPress, 0.3, 0.5);
+              send_pointer(QEvent::MouseMove, 0.4, 0.6);
+              send_pointer(QEvent::MouseButtonRelease, 0.4, 0.6);
+              if (editor_preview.maskStack() != closed) return fail("completed lasso must ignore stray drags");
+              // Keep stress iterations independent: first prove the accepted
+              // brush/lasso edits, then undo both so contour complexity does
+              // not grow with the iteration count.
+              if (cycle + 1 < lasso_cycles) {
+                int undo_count = 0;
+                while (editor_preview.editHistoryCurrentIndex() > history_index_before_selection && undo_count < 10) {
+                  editor_preview.undo();
+                  ++undo_count;
+                }
+                process_layout_events();
+                if (undo_count == 0 || editor_preview.editHistoryCurrentIndex() != history_index_before_selection ||
+                    editor_preview.maskStack() != masks_before_selection ||
+                    !editor_preview.hasActiveMask() ||
+                    editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap()
+                        .value(QStringLiteral("id")).toString() != selected_id)
+                  return fail("stress iteration undo must restore the original selected mask exactly");
+              }
+              std::cout << "selection-switch-cycle=" << (cycle + 1)
+                        << " elapsed-ms=" << cycle_timer.elapsed() << std::endl;
+            }
+            const auto retained_lasso_index = editor_preview.activeMaskIndex();
+            editor_preview.setActiveMaskIndex(-1);
+            if (!QMetaObject::invokeMethod(edit_workspace, "createMaskSource", Q_ARG(QVariant, QVariant("object"))))
+              return fail("Smart Select must arm without an existing active mask");
+            send_pointer(QEvent::MouseButtonPress, 0.3, 0.4);
+            if (!editor_preview.smartSelectStrokeActive())
+              return fail("Smart Select must receive its first press without an active mask");
+            const auto initial_prompt = editor_preview.smartSelectStrokePromptPayload();
+            send_pointer(QEvent::MouseMove, 0.6, 0.6);
+            if (editor_preview.smartSelectStrokePromptPayload() == initial_prompt)
+              return fail("Smart Select must collect drag input before a mask exists");
+            editor_preview.resetSmartSelectStroke();
+            viewport->setProperty("maskGestureKind", QString());
+            send_pointer(QEvent::MouseButtonRelease, 0.6, 0.6);
+            QMetaObject::invokeMethod(edit_workspace, "clearTransientMaskTools");
+            editor_preview.setActiveMaskIndex(retained_lasso_index);
+            process_layout_events();
+            auto* lasso_hud = find_named_item(edit_workspace, QStringLiteral("polygonToolHud"));
+            auto* selection_chip = find_named_item(edit_workspace, QStringLiteral("activeCanvasToolChip"));
+            if (!lasso_hud || !selection_chip || scene_rect(lasso_hud).intersects(scene_rect(selection_chip)))
+              return fail("lasso actions and selection completion controls must not overlap");
+            const auto lasso_capture = qEnvironmentVariable("PHOTO_EDITOR_MASK_LASSO_CAPTURE_PATH");
+            if (!lasso_capture.isEmpty() && !viewport->window()->grabWindow().save(lasso_capture))
+              return fail("selection switch proof must save its visible canvas");
+            std::cout << "smart-selection-brush-reselection-lasso-pointer-cycles=" << lasso_cycles
+                      << "; lasso-detail=passed\n";
+            return 0;
+          }
           if (pointer_kind == QStringLiteral("compound")) {
             const auto reselect_at_index = [&](int expected_index) {
               process_layout_events();
@@ -11015,7 +12568,17 @@ ApplicationWindow {
                     return fail("mask toolbar controls must not overlap at narrow width");
                 occupied.append(bounds);
               }
-              if (occupied.size() < (QString::fromLatin1(flow_name) == QStringLiteral("maskRefineFlow") ? 14 : 7)) return fail("refinement layout proof must include its action controls");
+              const auto minimum_visible_controls =
+                  QString::fromLatin1(flow_name) == QStringLiteral("maskRefineFlow") ? 7 : 6;
+              if (occupied.size() < minimum_visible_controls) {
+                std::cerr << flow_name << " visible controls=" << occupied.size() << " names=";
+                for (auto* child : flow->childItems()) {
+                  if (child != nullptr && child->isVisible() && child->width() > 0 && child->height() > 0)
+                    std::cerr << child->objectName().toStdString() << ",";
+                }
+                std::cerr << '\n';
+                return fail("refinement layout proof must include its visible navigation and action controls");
+              }
               std::cout << flow_name << "-layout=passed; window=1280x900; controls=" << occupied.size() << '\n';
             }
           }
@@ -11168,7 +12731,7 @@ ApplicationWindow {
   auto* adjust_lens_group = find_named_object(edit_workspace, QStringLiteral("lensInspectorGroup"));
   auto* light_basic_tone_group = find_named_object(edit_workspace, QStringLiteral("lightBasicToneGroup"));
   auto* light_advanced_tone_group = find_named_object(edit_workspace, QStringLiteral("lightAdvancedToneGroup"));
-  auto* light_levels_group = find_named_object(edit_workspace, QStringLiteral("lightLevelsGroup"));
+  auto* levels_inspector_group = find_named_object(edit_workspace, QStringLiteral("levelsInspectorGroup"));
   auto* light_zone_mapping_group = find_named_object(edit_workspace, QStringLiteral("lightZoneMappingGroup"));
   auto* tone_curve_input_levels_group =
       find_named_object(edit_workspace, QStringLiteral("toneCurveInputLevelsGroup"));
@@ -11346,8 +12909,8 @@ ApplicationWindow {
       !presence_group->property("visible").toBool() ||
       !adjust_detail_group->property("visible").toBool() ||
       !adjust_lens_group->property("visible").toBool() ||
-      !(white_balance_group->property("y").toDouble() < light_group->property("y").toDouble() &&
-        light_group->property("y").toDouble() < color_group->property("y").toDouble() &&
+      !(light_group->property("y").toDouble() < white_balance_group->property("y").toDouble() &&
+        white_balance_group->property("y").toDouble() < color_group->property("y").toDouble() &&
         color_group->property("y").toDouble() < color_grading_group->property("y").toDouble() &&
         color_grading_group->property("y").toDouble() < tone_curve_group->property("y").toDouble() &&
         tone_curve_group->property("y").toDouble() < presence_group->property("y").toDouble())) {

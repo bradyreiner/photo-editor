@@ -522,7 +522,34 @@
     "updateSmartSelectPreviewPath": "edit",
     "updateSmartSelectStroke": "edit",
     "updateStaleGeneratedMasks": "edit",
-    "useAsShotRawWhiteBalance": "edit"
+    "useAsShotRawWhiteBalance": "edit",
+    "erasePixelsFromSelection": {
+      "mode": "edit",
+      "delegates": [
+        "beginPhotoPaintStroke"
+      ]
+    },
+    "setEditHistoryPreviewIndex": "read",
+    "exportPhotoFragmentBrushPreset": "read",
+    "savePhotoFragmentBrushPreset": "read",
+    "importPhotoFragmentBrushPreset": "read",
+    "selectColorMixerChannelAt": "read",
+    "addPhotoShape": "edit",
+    "clearPhotoLayerTextPath": "edit",
+    "copyPixelsFromSelection": "edit",
+    "deletePhotoFragmentBrushPreset": "edit",
+    "groupPhotoLayers": "edit",
+    "movePhotoLayerIntoGroup": "edit",
+    "movePhotoLayerOutOfGroup": "edit",
+    "photoCompositionCommand": "edit",
+    "setPhotoLayerDraggedShutter": "edit",
+    "setPhotoLayerGroupExpanded": "edit",
+    "setPhotoLayerImperfectPrint": "edit",
+    "setPhotoLayerOpticalDiffusion": "edit",
+    "setPhotoLayerPerspective": "edit",
+    "setPhotoLayerShapeStyle": "edit",
+    "setPhotoLayerTextPathFromActiveSelection": "edit",
+    "ungroupPhotoLayer": "edit"
   },
   "carousel_document_controller": {
     "addBrushStroke": "edit",
@@ -854,7 +881,12 @@
     "activateSourceTapeIndex": "read",
     "activateTimelineBackgroundJob": "read",
     "activateTimelineSearchResult": "read",
-    "addAdjustmentClip": "edit",
+    "addAdjustmentClip": {
+      "mode": "edit",
+      "delegates": [
+        "addAdjustmentClipAt"
+      ]
+    },
     "addClipFromGallery": "edit",
     "addReviewNote": "edit",
     "addSelectedClipEffect": "edit",
@@ -878,7 +910,12 @@
     "applyCaptionStyleTemplate": "edit",
     "applyEffectStackPreset": "edit",
     "applyOutputPreset": "read",
-    "applySelectedClipColorLut": "edit",
+    "applySelectedClipColorLut": {
+      "mode": "edit",
+      "delegates": [
+        "setClipColorLutForAutomation"
+      ]
+    },
     "applySelectedClipMotionPreset": "edit",
     "applySelectedClipRetimePreset": "edit",
     "applySelectedExternalAudioSync": "edit",
@@ -903,7 +940,12 @@
     "clearProgramScopeAnalysis": "read",
     "clearProgramSourceGangState": "read",
     "clearRenderCache": "read",
-    "clearSelectedClipColorLut": "edit",
+    "clearSelectedClipColorLut": {
+      "mode": "edit",
+      "delegates": [
+        "clearClipColorLutForAutomation"
+      ]
+    },
     "clearSelectedClipEffects": "edit",
     "clearSelectedClipKeyframes": "edit",
     "clearSelectedClipTransition": "edit",
@@ -1141,7 +1183,112 @@
     "updateSequenceVersionMetadata": "edit",
     "updateSmartCollection": "edit",
     "updateTrackAutomationKeyframe": "edit",
-    "updateTranscriptWord": "edit"
+    "updateTranscriptWord": "edit",
+    "acknowledgeProgramScopeCaptureRequest": "read",
+    "addAdjustmentClipForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "addAdjustmentClipAt"
+      ]
+    },
+    "addClipColorGradeAdjustmentLayerForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "editClipColorGradeLayerForAutomation"
+      ]
+    },
+    "addGraphicShape": "edit",
+    "addGraphicsTrack": "edit",
+    "addIndependentAudioTrack": "edit",
+    "addIndependentVideoTrack": "edit",
+    "addMusicTrack": {
+      "mode": "edit",
+      "delegates": [
+        "addIndependentAudioTrack"
+      ]
+    },
+    "applyTrackAutomationKeyframeOperation": "edit",
+    "clearClipColorGradeRecipeForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "setClipColorGradeRecipeForAutomation"
+      ]
+    },
+    "clearClipColorLutForAutomation": "edit",
+    "clearSelectedClipEffectMask": "edit",
+    "copyTrackAutomationKeyframes": "read",
+    "createTrackGroup": "edit",
+    "duplicateTrackRow": "edit",
+    "editClipColorGradeLayerForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "setClipColorGradeRecipeForAutomation"
+      ]
+    },
+    "editClipEffectStackForAutomation": "edit",
+    "editClipKeyframeForAutomation": "edit",
+    "moveSelectedClipsToTrackRowWithMode": "edit",
+    "openProgramComparisonForAutomation": "read",
+    "pasteTrackAutomationKeyframes": "edit",
+    "refreshProjectCacheSummary": "read",
+    "refreshRecentTimelines": "read",
+    "renameTrackGroup": "edit",
+    "renameTrackRow": "edit",
+    "saveTimelineAsync": "read",
+    "selectTrackGroupClips": "read",
+    "setClipColorGradeCurveForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "setClipColorGradeRecipeForAutomation"
+      ]
+    },
+    "setClipColorGradeParameterForAutomation": {
+      "mode": "edit",
+      "delegates": [
+        "setClipColorGradeRecipeForAutomation"
+      ]
+    },
+    "setClipColorGradeRecipeForAutomation": "edit",
+    "setClipColorLutForAutomation": "edit",
+    "setClipOpacityForAutomation": "edit",
+    "setClipShotMatchGainsForAutomation": "edit",
+    "setClipVideoInputTransformForAutomation": "edit",
+    "setProgramComparisonSurfaceAvailable": "read",
+    "setProjectCacheManagerVisible": "read",
+    "setSelectedClipEffectMask": "edit",
+    "setSelectedClipKeyframeSpeed": {
+      "mode": "edit",
+      "delegates": [
+        "setSelectedClipKeyframeSpeedForSide"
+      ]
+    },
+    "setSelectedClipKeyframeSpeedForSide": "edit",
+    "setSelectedClipVideoInputTransform": {
+      "mode": "edit",
+      "delegates": [
+        "setClipVideoInputTransformForAutomation"
+      ]
+    },
+    "setSelectedFramePerspectiveX": "edit",
+    "setSelectedFramePerspectiveY": "edit",
+    "setSelectedTitleFontSize": "edit",
+    "setSelectedTitlePositionX": "edit",
+    "setSelectedTitlePositionY": "edit",
+    "setTrackAutomationKeyframeBezierHandle": "edit",
+    "setTrackAutomationKeyframeBezierHandlesLinked": "edit",
+    "setTrackAutomationKeyframeSpeed": {
+      "mode": "edit",
+      "delegates": [
+        "setTrackAutomationKeyframeSpeedForSide"
+      ]
+    },
+    "setTrackAutomationKeyframeSpeedForSide": "edit",
+    "setTrackGroup": "edit",
+    "setTrackGroupCollapsed": "edit",
+    "setTrackGroupParent": "edit",
+    "setTrackGroupState": "edit",
+    "setTrackGroupTransform": "edit",
+    "splitSelectedClipsAtSequenceSeconds": "edit"
   },
   "gaussian_scene_controller": {
     "buildPartialScene": "edit",

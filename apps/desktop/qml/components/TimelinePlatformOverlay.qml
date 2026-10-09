@@ -258,10 +258,12 @@ Item {
 
         Item { Layout.fillWidth: true }
 
-        Label {
-            text: "▱"
+        AppIcon {
+            name: "polygon-tool"
             color: theme.alpha(theme.textStrong, 0.86)
-            font.pixelSize: Math.max(12, Math.min(theme.typeSection, root.height * 0.048))
+            Layout.preferredWidth: Math.max(14, Math.min(theme.typeSection, root.height * 0.048))
+            Layout.preferredHeight: Layout.preferredWidth
+            Accessible.ignored: true
         }
     }
 

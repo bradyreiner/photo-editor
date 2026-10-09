@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -16,13 +15,25 @@ Item {
     property bool allowLabelWrap: false
     property bool menuEnabled: (menuItems || []).length > 0
     property bool primaryOpensMenu: false
+    property bool showMenuIndicator: true
     property bool secondaryActionMenu: false
     property var menuItems: []
     property string tooltipText: ""
+    property string accessibleName: ""
     property string disabledReason: ""
     property string menuTooltipText: text.length > 0 ? "More options for " + text : "More options"
     readonly property string resolvedTooltipText: !enabled && disabledReason.length > 0
                                                    ? disabledReason : tooltipText
+    readonly property string resolvedAccessibleName: {
+        const explicitName = String(root.accessibleName || "").trim()
+        if (explicitName.length > 0)
+            return explicitName
+        const visibleText = String(root.text || "").trim()
+        if (visibleText.length > 0)
+            return visibleText
+        const helpText = String(root.tooltipText || "").trim()
+        return helpText.length > 0 ? helpText : "Options"
+    }
     property int menuWidth: theme.menuMinWidth
     property int menuItemMaxLines: 2
     readonly property int menuMinimumWidth: theme.menuMinWidth
@@ -34,15 +45,15 @@ Item {
     Theme { id: theme }
     MenuItemMetrics { id: menuMetrics; items: root.menuItems }
 
-    implicitHeight: compact ? Math.max(theme.controlHeightDense, theme.scaled(32))
-                            : Math.max(theme.controlHeight, theme.scaled(36))
-    implicitWidth: primaryButton.implicitWidth + (root.menuEnabled ? (root.primaryOpensMenu ? 16 : chevronButton.implicitWidth + 1) : 0)
+    implicitHeight: tone === "primary"
+                    ? theme.controlHeightPrimary
+                    : compact ? theme.controlHeightDense : theme.controlHeight
+    implicitWidth: primaryButton.implicitWidth + (root.menuEnabled
+                  ? (root.primaryOpensMenu ? (root.showMenuIndicator ? theme.scaled(16) : 0) : Math.max(root.implicitHeight, chevronButton.implicitWidth) + 1)
+                  : 0)
     opacity: root.enabled ? 1.0 : 0.76
-    activeFocusOnTab: true
-    Accessible.name: root.text
-    Accessible.description: root.resolvedTooltipText
-    Accessible.role: Accessible.Button
-    Accessible.checked: root.active
+    activeFocusOnTab: false
+    Accessible.ignored: true
 
     Keys.onSpacePressed: function(event) {
         if (root.menuEnabled)
@@ -80,7 +91,7 @@ Item {
                                                    String(root.menuMaximumWidth) +
                                                    "|padding:" +
                                                    String(root.menuPopoverPadding) +
-                                                   "|item-height:32-36|icon-column:true|shortcut-column:true|labels-wrap:true"
+                                                   "|item-height:menu-token|icon-column:true|shortcut-column:true|labels-wrap:true"
     readonly property string secondaryActionSemanticsContract: "secondary-action-menu:v1|secondary:" +
                                                                String(root.secondaryActionMenu) +
                                                                "|label:" +
@@ -130,7 +141,9 @@ Item {
 
         ActionButton {
             id: primaryButton
+            objectName: root.objectName.length > 0 ? root.objectName + "PrimaryAction" : ""
             Layout.fillWidth: true
+            Layout.fillHeight: true
             Layout.preferredHeight: root.implicitHeight
             text: root.text
             showText: root.showText
@@ -139,7 +152,8 @@ Item {
             accent: root.accent
             compact: root.compact
             allowLabelWrap: root.allowLabelWrap
-            rightPadding: root.primaryOpensMenu && root.menuEnabled ? 25 : (root.compact ? theme.space6 + 1 : theme.space8 + 1)
+            accessibleName: root.resolvedAccessibleName
+            rightPadding: root.primaryOpensMenu && root.menuEnabled && root.showMenuIndicator ? theme.scaled(24) : (root.compact ? theme.space6 : theme.space8)
             active: root.active
             enabled: root.enabled
             tooltipText: root.resolvedTooltipText
@@ -153,14 +167,17 @@ Item {
 
         ActionButton {
             id: chevronButton
+            objectName: root.objectName.length > 0 ? root.objectName + "MenuAction" : ""
             visible: root.menuEnabled && !root.primaryOpensMenu
-            Layout.preferredWidth: root.implicitHeight
+            Layout.preferredWidth: Math.max(theme.iconButtonSizeCompact, root.implicitHeight)
+            Layout.fillHeight: true
             Layout.preferredHeight: root.implicitHeight
             showText: false
             iconName: "chevron-right"
             tone: root.tone === "primary" ? "secondary" : root.tone
             accent: root.accent
             compact: root.compact
+            accessibleName: root.menuTooltipText
             active: menuPopup.visible
             enabled: root.enabled && root.menuEnabled
             tooltipText: !root.enabled && root.disabledReason.length > 0
@@ -180,7 +197,7 @@ Item {
         name: "chevron-right"
         rotation: 90
         color: theme.textMuted
-        visible: root.primaryOpensMenu && root.menuEnabled
+        visible: root.primaryOpensMenu && root.menuEnabled && root.showMenuIndicator
     }
 
     MenuPopover {

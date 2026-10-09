@@ -2,8 +2,8 @@
   "schema": "photo-editor-built-in-preset-inventory:v1",
   "registry_id": "photo-editor-built-in-presets-v1",
   "source_path": "apps/desktop/src/preset_registry.cpp",
-  "source_region_sha256": "6930bcf0fce2ff655df36edc1a81c8a2b3f4064cb136ed7e417b9cefa9e6dd0d",
-  "preset_count": 14,
+  "source_region_sha256": "75987534e3c2acb459589c67dfa434bd698389be09647bb7836262b40af481ae",
+  "preset_count": 82,
   "presets": [
     {
       "name": "Clean Portrait",
@@ -74,6 +74,346 @@
       "name": "Natural HDR Balance",
       "pack": "Dynamic Range",
       "category": "HDR"
+    },
+    {
+      "name": "Teal and Amber Cinema",
+      "pack": "Cinematic",
+      "category": "Cinematic"
+    },
+    {
+      "name": "Neon Afterglow",
+      "pack": "Cinematic",
+      "category": "Night"
+    },
+    {
+      "name": "Blue Hour Glow",
+      "pack": "Cinematic",
+      "category": "Night"
+    },
+    {
+      "name": "Tungsten Noir",
+      "pack": "Cinematic",
+      "category": "Night"
+    },
+    {
+      "name": "Cinema Fade",
+      "pack": "Cinematic",
+      "category": "Cinematic"
+    },
+    {
+      "name": "Copper Shadow Drama",
+      "pack": "Cinematic",
+      "category": "Cinematic"
+    },
+    {
+      "name": "Soft Spotlight",
+      "pack": "Cinematic",
+      "category": "Cinematic"
+    },
+    {
+      "name": "Night Market Lights",
+      "pack": "Cinematic",
+      "category": "Night"
+    },
+    {
+      "name": "Airy Linen",
+      "pack": "Soft Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Peach Window Light",
+      "pack": "Soft Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Lavender Haze",
+      "pack": "Soft Editorial",
+      "category": "Pastel"
+    },
+    {
+      "name": "Coastal Pastel",
+      "pack": "Soft Editorial",
+      "category": "Pastel"
+    },
+    {
+      "name": "Rose Tint Editorial",
+      "pack": "Soft Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Porcelain Bloom",
+      "pack": "Soft Editorial",
+      "category": "Portrait"
+    },
+    {
+      "name": "Buttercream Morning",
+      "pack": "Soft Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Muted Flower Market",
+      "pack": "Soft Editorial",
+      "category": "Pastel"
+    },
+    {
+      "name": "Warm Negative",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Faded Seventies",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Instant Cream",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Cross Process Color",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Dusty Rose Matte",
+      "pack": "Analog Color",
+      "category": "Matte"
+    },
+    {
+      "name": "Soft Chrome",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Expired Film Shift",
+      "pack": "Analog Color",
+      "category": "Analog"
+    },
+    {
+      "name": "Silver Gelatin",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "Foggy Monochrome",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "Noir Spotlight",
+      "pack": "Monochrome",
+      "category": "Black and White"
+    },
+    {
+      "name": "Alpine Clarity",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Tropical Jade",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Desert Amber",
+      "pack": "Travel and Nature",
+      "category": "Travel"
+    },
+    {
+      "name": "Ocean Depth",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Autumn Trail",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Wildflower Field",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Nordic Mist",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Rainforest Rich",
+      "pack": "Travel and Nature",
+      "category": "Nature"
+    },
+    {
+      "name": "Canyon Glow",
+      "pack": "Travel and Nature",
+      "category": "Travel"
+    },
+    {
+      "name": "Alpine Sunrise",
+      "pack": "Travel and Nature",
+      "category": "Travel"
+    },
+    {
+      "name": "City Walk",
+      "pack": "Travel and Nature",
+      "category": "Travel"
+    },
+    {
+      "name": "Coastal Sun",
+      "pack": "Travel and Nature",
+      "category": "Travel"
+    },
+    {
+      "name": "Fresh Table",
+      "pack": "Food and Product",
+      "category": "Food"
+    },
+    {
+      "name": "Citrus Menu",
+      "pack": "Food and Product",
+      "category": "Food"
+    },
+    {
+      "name": "Dark Chocolate",
+      "pack": "Food and Product",
+      "category": "Food"
+    },
+    {
+      "name": "Porcelain Product",
+      "pack": "Food and Product",
+      "category": "Product"
+    },
+    {
+      "name": "Glass and Chrome",
+      "pack": "Food and Product",
+      "category": "Product"
+    },
+    {
+      "name": "Artisan Bakery",
+      "pack": "Food and Product",
+      "category": "Food"
+    },
+    {
+      "name": "Concrete Geometry",
+      "pack": "Architecture and Urban",
+      "category": "Architecture"
+    },
+    {
+      "name": "Warm Facade",
+      "pack": "Architecture and Urban",
+      "category": "Architecture"
+    },
+    {
+      "name": "Blue Hour Architecture",
+      "pack": "Architecture and Urban",
+      "category": "Architecture"
+    },
+    {
+      "name": "Night Grid",
+      "pack": "Architecture and Urban",
+      "category": "Urban"
+    },
+    {
+      "name": "Urban Monochrome",
+      "pack": "Architecture and Urban",
+      "category": "Architecture"
+    },
+    {
+      "name": "Clean Interior",
+      "pack": "Architecture and Urban",
+      "category": "Architecture"
+    },
+    {
+      "name": "Rose and Teal Duotone",
+      "pack": "Dreamy Color",
+      "category": "Duotone"
+    },
+    {
+      "name": "Indigo and Amber Duotone",
+      "pack": "Dreamy Color",
+      "category": "Duotone"
+    },
+    {
+      "name": "Lilac Dream",
+      "pack": "Dreamy Color",
+      "category": "Dreamy"
+    },
+    {
+      "name": "Mint Reverie",
+      "pack": "Dreamy Color",
+      "category": "Dreamy"
+    },
+    {
+      "name": "Peach Highlights",
+      "pack": "Dreamy Color",
+      "category": "Dreamy"
+    },
+    {
+      "name": "Candy Neon",
+      "pack": "Dreamy Color",
+      "category": "Dreamy"
+    },
+    {
+      "name": "Glacier Editorial",
+      "pack": "Cool Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Slate Portrait",
+      "pack": "Cool Editorial",
+      "category": "Portrait"
+    },
+    {
+      "name": "Cyan Window",
+      "pack": "Cool Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Clean Steel",
+      "pack": "Cool Editorial",
+      "category": "Product"
+    },
+    {
+      "name": "Winter Linen",
+      "pack": "Cool Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Moonlit Editorial",
+      "pack": "Cool Editorial",
+      "category": "Editorial"
+    },
+    {
+      "name": "Quiet Canvas",
+      "pack": "Muted Minimal and Print",
+      "category": "Minimal"
+    },
+    {
+      "name": "Taupe Still Life",
+      "pack": "Muted Minimal and Print",
+      "category": "Minimal"
+    },
+    {
+      "name": "Stone Pastel",
+      "pack": "Muted Minimal and Print",
+      "category": "Minimal"
+    },
+    {
+      "name": "Faded Poster",
+      "pack": "Muted Minimal and Print",
+      "category": "Print"
+    },
+    {
+      "name": "Graphic Ink",
+      "pack": "Muted Minimal and Print",
+      "category": "Print"
+    },
+    {
+      "name": "Soft Letterpress",
+      "pack": "Muted Minimal and Print",
+      "category": "Print"
     }
   ]
 }

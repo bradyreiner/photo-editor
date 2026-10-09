@@ -6,6 +6,7 @@
 #include <QBuffer>
 #include <QColorSpace>
 #include <QCryptographicHash>
+#include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
 #include <QJsonArray>
@@ -21,6 +22,9 @@
 
 #include <algorithm>
 #include <cmath>
+#if defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#endif
 
 namespace photo_editor::desktop {
 namespace {
@@ -31,6 +35,42 @@ QString local_path(const QString& source) {
   const QUrl url(source);
   if (url.isLocalFile()) return url.toLocalFile();
   return url.scheme().isEmpty() && QFileInfo(source).isAbsolute() ? source : QString();
+}
+
+QString preparation_identity(const QVariantMap& asset, const QString& model_identity) {
+  // Catalog previews are authoritative only after completion for the current
+  // recipe. Unknown external callers still need strong file versions below.
+  if (asset.contains("searchPreviewCurrent") && !asset.value("searchPreviewCurrent").toBool()) return {};
+  QJsonArray versions;
+  for (const auto& field : {QStringLiteral("thumbnailSource"), QStringLiteral("filePath")}) {
+    const auto source = asset.value(field).toString();
+    const auto path = local_path(source);
+    if (path.isEmpty()) { versions.append(QJsonArray{field, source}); continue; }
+#if defined(Q_OS_UNIX)
+    struct stat version {};
+    if (::stat(QFile::encodeName(path).constData(), &version) != 0 || !S_ISREG(version.st_mode)) return {};
+#if defined(Q_OS_MACOS)
+    const auto modified = version.st_mtimespec, changed = version.st_ctimespec;
+#else
+    const auto modified = version.st_mtim, changed = version.st_ctim;
+#endif
+    // Coarse filesystems cannot establish that a same-size overwrite is new.
+    if (modified.tv_nsec == 0 && changed.tv_nsec == 0) return {};
+    versions.append(QJsonArray{field, path, QString::number(version.st_dev), QString::number(version.st_ino),
+        QString::number(version.st_size), QString::number(modified.tv_sec), QString::number(modified.tv_nsec),
+        QString::number(changed.tv_sec), QString::number(changed.tv_nsec)});
+#else
+    return {};  // Preserve image preparation when a strong version is unavailable.
+#endif
+  }
+  if (versions.isEmpty()) return {};
+  const auto identity = QJsonDocument(QJsonArray{
+      "visual-preparation-v1-autotransform-srgb-768-jpeg85", model_identity,
+      asset.value("assetId").toString(), versions,
+      QJsonValue::fromVariant(asset.value("adjustmentPatchJson")),
+      QJsonValue::fromVariant(asset.value("thumbnailStaleCurrentRecipeHash")),
+      QJsonValue::fromVariant(asset.value("thumbnailStaleDetectionSignature"))}).toJson(QJsonDocument::Compact);
+  return QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
 }
 
 QVariantMap prepare_image(const QVariantMap& asset) {
@@ -126,6 +166,7 @@ VisualSearchController::VisualSearchController(QObject* parent) : QObject(parent
     }
     if (use_index_) {
       description_key_ = prepared.value("descriptionKey").toString();
+      preparation_key_ = prepared.value("preparationKey").toString();
       const auto description = descriptions_.value(description_key_, prepared.value("description").toString());
       if (!description.isEmpty()) {
         ++reused_descriptions_;
@@ -248,8 +289,9 @@ void VisualSearchController::describe(const QVariantMap& prepared) {
     index_write_pending_ = true;
     const auto path = index_path_;
     const auto key = description_key_;
-    index_write_.setFuture(QtConcurrent::run([path, key, description] {
-      return VisualSearchIndex::save(path, key, description);
+    const auto preparation_key = preparation_key_;
+    index_write_.setFuture(QtConcurrent::run([path, key, description, preparation_key] {
+      return VisualSearchIndex::save(path, key, description, preparation_key);
     }));
   });
 }
@@ -637,13 +679,23 @@ void VisualSearchController::next() {
   const auto use_index = use_index_;
   const auto model_identity = modelCacheIdentity();
   preparation_.setFuture(QtConcurrent::run([asset, index_path, use_index, model_identity] {
+    const auto preparation_key = use_index ? preparation_identity(asset, model_identity) : QString{};
+    if (!preparation_key.isEmpty()) {
+      const auto cached = VisualSearchIndex::lookupPrepared(index_path, preparation_key);
+      if (!cached.isEmpty() && preparation_identity(asset, model_identity) == preparation_key) return cached;
+    }
     auto prepared = prepare_image(asset);
     if (use_index && !prepared.isEmpty()) {
       const auto identity = QJsonDocument(QJsonArray{"visual-description-v1", model_identity,
           QString::fromLatin1(prepared.value("hash").toByteArray())}).toJson(QJsonDocument::Compact);
       const auto key = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
       prepared.insert("descriptionKey", key);
-      prepared.insert("description", VisualSearchIndex::lookup(index_path, key));
+      const auto description = VisualSearchIndex::lookup(index_path, key);
+      prepared.insert("description", description);
+      if (!preparation_key.isEmpty() && preparation_identity(asset, model_identity) == preparation_key) {
+        prepared.insert("preparationKey", preparation_key);
+        if (!description.isEmpty()) (void)VisualSearchIndex::savePreparation(index_path, preparation_key, key);
+      }
     }
     return prepared;
   }));

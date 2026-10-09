@@ -3,6 +3,7 @@
 #include <QClipboard>
 #include <QMimeData>
 #include <QQmlComponent>
+#include <QPointer>
 #include "photo_recipe_clipboard.h"
 #include "native_window_test_input.h"
 
@@ -28,19 +29,50 @@ int run_photo_recipe_clipboard_proof(
     return serialize_adjustment_patch_json(state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
   };
   auto payload = [&](const QString& id) { return catalog.assetById(id).value("adjustmentPatchJson").toString(); };
+  auto report_slow_ui_call = [](const char* call, qint64 elapsed_ms) {
+    if (elapsed_ms < 50) return;
+    std::cerr << "UI_TIMING utc="
+              << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+              << " call=" << call << " elapsed_ms=" << elapsed_ms << std::endl;
+  };
   auto state_for = [&](const QString& id) {
     const auto parsed = parse_adjustment_payload_or_legacy_recipe(payload(id));
     return parsed.ok() ? *parsed.state : EditRecipeState{};
   };
-  auto select_single = [&](int index) { catalog.clearSelection(); catalog.selectIndex(index); };
+  auto select_single = [&](int index) {
+    QElapsedTimer timer;
+    timer.start();
+    catalog.clearSelection();
+    catalog.selectIndex(index);
+    report_slow_ui_call("select_single", timer.elapsed());
+  };
+  auto set_workspace = [&](const char* index_property) {
+    QElapsedTimer timer;
+    timer.start();
+    window->setProperty("currentWorkspace", window->property(index_property));
+    report_slow_ui_call("set_current_workspace", timer.elapsed());
+  };
   auto invoke = [&](const char* method) { return QMetaObject::invokeMethod(window, method); };
   auto focus_window = [&] {
     window->requestActivate();
-    window->contentItem()->forceActiveFocus();
+    auto* library_tab = find_named_item(window, QStringLiteral("workspaceTabLibrary"));
+    if (library_tab != nullptr) {
+      library_tab->forceActiveFocus(Qt::TabFocusReason);
+    } else {
+      window->contentItem()->forceActiveFocus();
+    }
     process_layout_events(4);
   };
   auto key = [&](int code, int modifiers) {
+    QElapsedTimer input_timer;
+    input_timer.start();
     key_native_test_window(window, code, modifiers);
+    if (input_timer.elapsed() >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=key_native_test_window elapsed_ms=" << input_timer.elapsed()
+                << std::endl;
+    }
     process_layout_events(4);
   };
   auto click = [&](const char* name) {
@@ -51,7 +83,15 @@ int run_photo_recipe_clipboard_proof(
       window->grabWindow().save(QDir(output_dir).filePath("failed-click.png"));
       return false;
     }
+    QElapsedTimer input_timer;
+    input_timer.start();
     click_native_test_window(window, item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+    if (input_timer.elapsed() >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=click_native_test_window target=" << name
+                << " elapsed_ms=" << input_timer.elapsed() << std::endl;
+    }
     process_layout_events(4);
     return true;
   };
@@ -88,7 +128,10 @@ int run_photo_recipe_clipboard_proof(
   QVector<CatalogAssetItem> fixtures{source_item, first, second, neutral, video};
   for (int index = 5; index < 200; ++index)
     fixtures.append(make_asset(QStringLiteral("range-photo-%1").arg(index), source_path));
+  QElapsedTimer fixture_timer;
+  fixture_timer.start();
   catalog.replaceAssetsForTesting(fixtures);
+  report_slow_ui_call("replace_clipboard_proof_fixtures", fixture_timer.elapsed());
   select_single(0);
   process_layout_events(8);
   for (const auto& item : {source_item, first, second, neutral}) {
@@ -108,7 +151,15 @@ int run_photo_recipe_clipboard_proof(
       return false;
     // A virtualized row may exist before its positioner has been polished.
     // Capture a frame before mapping the native pointer position.
+    QElapsedTimer frame_timer;
+    frame_timer.start();
     static_cast<void>(window->grabWindow());
+    if (frame_timer.elapsed() >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=grabWindow_before_gallery_click elapsed_ms=" << frame_timer.elapsed()
+                << std::endl;
+    }
     auto* viewport = find_named_item(window, "studioLibraryGalleryGrid");
     if (!viewport) return false;
     const auto visible_rect = QRectF(tile->mapToScene(QPointF()), tile->size()).intersected(
@@ -116,9 +167,17 @@ int run_photo_recipe_clipboard_proof(
     if (visible_rect.width() < 4 || visible_rect.height() < 4) return false;
     // Click the visible photo near its upper-left corner, clear of the floating
     // agent launcher that can cover the center of a bottom-right tile.
+    QElapsedTimer input_timer;
+    input_timer.start();
     modified_click_native_test_window(window,
         (visible_rect.topLeft() + QPointF(std::min(24.0, visible_rect.width() / 2),
             std::min(24.0, visible_rect.height() / 2))).toPoint(), modifiers);
+    if (input_timer.elapsed() >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=modified_gallery_click index=" << index
+                << " elapsed_ms=" << input_timer.elapsed() << std::endl;
+    }
     process_layout_events(4);
     return true;
   };
@@ -162,14 +221,53 @@ int run_photo_recipe_clipboard_proof(
       !editor.copyPhotoRecipe(source_item.adjustment_patch_json, {"unknown"}) &&
       !editor.copyPhotoRecipe("not a recipe", {"color"}), "Invalid/empty group copies preserve clipboard")) return EXIT_FAILURE;
   focus_window();
+  QPointer<QQuickItem> cancel_focus_target(window->activeFocusItem());
   key(Qt::Key_C, Qt::ControlModifier);
   if (!check(wait_for_condition([&] { return dialog->property("visible").toBool(); }), "Ctrl+C opens chooser")) return EXIT_FAILURE;
   escape_native_test_window(window);
   process_layout_events(4);
-  if (!check(!dialog->property("visible").toBool() && clipboard->text().startsWith("keep this"), "Cancel leaves clipboard untouched")) return EXIT_FAILURE;
+  const auto cancel_restored = wait_for_condition([&] {
+    const auto* active_focus = window->activeFocusItem();
+    const auto expected_focus = cancel_focus_target.isNull()
+        ? window->contentItem()
+        : cancel_focus_target.data();
+    return active_focus != nullptr && !dialog->property("visible").toBool() &&
+        active_focus == expected_focus;
+  }, 1000);
+  const auto clipboard_preserved = clipboard->text().startsWith("keep this");
+  if (!cancel_restored || !clipboard_preserved) {
+    const QPointer<QQuickItem> active_focus(window->activeFocusItem());
+    std::cerr << "Copy Edits cancel diagnostic: visible=" << dialog->property("visible").toBool()
+              << " clipboardPreserved=" << clipboard_preserved
+              << " expectedFocus=" << (cancel_focus_target ? cancel_focus_target->objectName().toStdString() : "<destroyed>")
+              << " activeFocus=" << (active_focus ? active_focus->objectName().toStdString() : "<null>")
+              << " fallbackFocus=" << (window->contentItem() ? window->contentItem()->objectName().toStdString() : "<null>")
+              << '\n';
+    return fail("Escape should cancel Copy Edits, preserve the clipboard, and restore focus within one second");
+  }
+  if (!check(true, "Escape cancels and restores focus without changing the clipboard")) return EXIT_FAILURE;
   focus_window();
   key(Qt::Key_C, Qt::MetaModifier);
   if (!check(wait_for_condition([&] { return dialog->property("visible").toBool(); }), "Cmd+C opens chooser")) return EXIT_FAILURE;
+  auto* first_group = find_named_item(window, "copyPhotoEditsGroup_tone");
+  const auto first_group_focused = wait_for_condition([&] {
+    first_group = find_named_item(window, "copyPhotoEditsGroup_tone");
+    return first_group != nullptr && window->activeFocusItem() == first_group;
+  }, 1000);
+  if (!first_group_focused) {
+    const QPointer<QQuickItem> active_focus(window->activeFocusItem());
+    const QPointer<QQuickItem> group_focus(first_group);
+    std::cerr << "Copy Edits open-focus diagnostic: visible=" << dialog->property("visible").toBool()
+              << " groupFound=" << !group_focus.isNull()
+              << " groupVisible=" << (group_focus && group_focus->isVisible())
+              << " groupActive=" << (group_focus && group_focus->hasActiveFocus())
+              << " groupFocus=" << (group_focus ? group_focus->hasFocus() : false)
+              << " active=" << (active_focus ? active_focus->objectName().toStdString() : "<null>")
+              << " group=" << (group_focus ? group_focus->objectName().toStdString() : "<null>")
+              << '\n';
+    save_capture_if_requested(window, output_dir, "copy-focus-failed", nullptr);
+    return fail("Copy Edits opens with the first named group focused");
+  }
   if (!click("copyPhotoEditsClear")) return EXIT_FAILURE;
   if (!check(!find_named_item(window, "copyPhotoEditsConfirm")->isEnabled(), "Copy is disabled when no groups are selected")) return EXIT_FAILURE;
   if (!click("copyPhotoEditsGroup_color")) return EXIT_FAILURE;
@@ -196,9 +294,12 @@ int run_photo_recipe_clipboard_proof(
       "Batch redo restores both pasted recipes")) return EXIT_FAILURE;
   catalog.undoBatchRecipe();
   select_single(1);
-  window->setProperty("currentWorkspace", window->property("editWorkspaceIndex"));
+  set_workspace("editWorkspaceIndex");
   if (!check(wait_for_condition([&] { return editor.assetId() == "paste-first"; }, 15000), "Single target opens in Edit")) return EXIT_FAILURE;
+  QElapsedTimer edit_timer;
+  edit_timer.start();
   editor.setExposure(0.85);
+  report_slow_ui_call("set_exposure", edit_timer.elapsed());
   focus_window();
   key(Qt::Key_V, Qt::MetaModifier);
   if (!check(editor.saturation() == 28 && editor.exposure() == 0.85 && state_for("paste-first").exposure == 0.85,
@@ -207,14 +308,14 @@ int run_photo_recipe_clipboard_proof(
   if (!check(editor.saturation() == -10 && editor.exposure() == 0.85, "Single-photo paste is one editor undo step")) return EXIT_FAILURE;
   select_single(2);
   editor.setSaturation(-15);
-  window->setProperty("currentWorkspace", window->property("libraryWorkspaceIndex"));
+  set_workspace("libraryWorkspaceIndex");
   select_single(1);
   catalog.toggleSelectionIndex(1);
   catalog.toggleSelectionIndex(2);
   focus_window();
   key(Qt::Key_V, Qt::ControlModifier);
   select_single(2);
-  window->setProperty("currentWorkspace", window->property("editWorkspaceIndex"));
+  set_workspace("editWorkspaceIndex");
   if (!check(wait_for_condition([&] { return editor.assetId() == "paste-second" && editor.saturation() == 28; }, 15000),
       "Reopening a cached photo keeps the pasted recipe")) return EXIT_FAILURE;
   invoke("undoPastedPhotoEdits");
@@ -223,7 +324,7 @@ int run_photo_recipe_clipboard_proof(
   catalog.redoBatchRecipe();
   if (!check(editor.saturation() == 28 && state_for("paste-second").saturation == 28,
       "Batch redo refreshes the active cached recipe")) return EXIT_FAILURE;
-  window->setProperty("currentWorkspace", window->property("libraryWorkspaceIndex"));
+  set_workspace("libraryWorkspaceIndex");
   const auto before_masks = state_for("paste-first");
   if (!editor.copyPhotoRecipe(source_item.adjustment_patch_json, {"masks"})) return EXIT_FAILURE;
   const auto masks_copy = parse_adjustment_patch_json(editor.copiedPhotoRecipePatchJson());
@@ -253,7 +354,7 @@ int run_photo_recipe_clipboard_proof(
           state_for("paste-first").input_color_profile == "sRGB", "RAW paste keeps target input profile and deduplicates targets")) return EXIT_FAILURE;
   // Copy in Edit must capture a live, not-yet-saved source revision.
   select_single(0);
-  window->setProperty("currentWorkspace", window->property("editWorkspaceIndex"));
+  set_workspace("editWorkspaceIndex");
   if (!wait_for_condition([&] { return editor.assetId() == "copy-source"; }, 15000)) return EXIT_FAILURE;
   editor.setSaturation(37);
   focus_window();
@@ -261,7 +362,7 @@ int run_photo_recipe_clipboard_proof(
   if (!click("copyPhotoEditsConfirm")) return EXIT_FAILURE;
   const auto live_copy = parse_adjustment_patch_json(editor.copiedPhotoRecipePatchJson());
   if (!check(live_copy.ok() && live_copy.state->saturation == 37, "Copy includes unsaved source edits")) return EXIT_FAILURE;
-  window->setProperty("currentWorkspace", window->property("libraryWorkspaceIndex"));
+  set_workspace("libraryWorkspaceIndex");
   QQmlComponent text_component(&engine);
   text_component.setData("import QtQuick\nTextInput { width: 280; height: 40; text: 'Normal text copy'; selectByMouse: true }", QUrl());
   std::unique_ptr<QObject> text_object(text_component.create());

@@ -11,30 +11,30 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: theme.iconButtonSizeCompact
-    implicitWidth: Math.max(88, textColumn.implicitWidth + theme.space20)
-    radius: 0
-    color: theme.alpha(theme.glassBase, 0.24)
+    implicitHeight: textColumn.implicitHeight + theme.space8
+    implicitWidth: Math.max(theme.scaled(76), textColumn.implicitWidth + theme.space20)
+    radius: theme.radiusControl
+    color: theme.ink850
     border.width: theme.hairlineWidth
-    border.color: theme.alpha(theme.glassEdge, 0.14)
+    border.color: theme.alpha(theme.lineSoft, 0.72)
 
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: theme.space10
         anchors.rightMargin: theme.space10
-        anchors.topMargin: theme.space6
-        anchors.bottomMargin: theme.space6
+        anchors.topMargin: theme.space4
+        anchors.bottomMargin: theme.space4
 
         ColumnLayout {
             id: textColumn
-            spacing: 0
+            spacing: theme.space2
 
             Label {
                 text: root.label
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                font.weight: Font.DemiBold
+                font.pixelSize: theme.typeMicro
+                font.weight: Font.Medium
                 font.letterSpacing: 0
             }
 
@@ -42,7 +42,7 @@ Rectangle {
                 text: root.value
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: theme.typeSection
+                font.pixelSize: theme.typeBody
                 font.weight: Font.DemiBold
             }
         }

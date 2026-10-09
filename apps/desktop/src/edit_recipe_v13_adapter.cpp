@@ -1,6 +1,7 @@
 #include "edit_recipe_v13_adapter.h"
 #include "linked_image_source.h"
 #include "photo_layer_effect_codec.h"
+#include "photo_editor/pipeline/photo_effect_registry.h"
 
 #include <QCryptographicHash>
 #include <QJsonDocument>
@@ -38,6 +39,16 @@ bool active(double value) {
 
 double signed_percent(double value) {
   return std::clamp(value / 100.0, -1.0, 1.0);
+}
+
+std::vector<std::string> available_photo_effect_algorithms() {
+  std::vector<std::string> algorithms;
+  algorithms.reserve(photo_editor::pipeline::photo_effect_registry.size());
+  for (const auto& descriptor : photo_editor::pipeline::photo_effect_registry) {
+    algorithms.push_back(std::string(descriptor.type_id) + ":" +
+        std::to_string(descriptor.algorithm_version));
+  }
+  return algorithms;
 }
 
 std::string utf8(const QString& value) {
@@ -147,7 +158,9 @@ std::optional<MaskSourceKind> mask_source_kind(const QString& value) {
   if (normalized == QStringLiteral("brush")) {
     return MaskSourceKind::BrushRaster;
   }
-  if (normalized == QStringLiteral("lasso") ||
+  // Closed rectangle geometry travels in the same immutable desktop payload
+  // as polygon/lasso geometry; the raster compiler retains its analytic edges.
+  if (normalized == QStringLiteral("lasso") || normalized == QStringLiteral("rectangle") ||
       normalized == QStringLiteral("polygon")) {
     return MaskSourceKind::Lasso;
   }
@@ -217,6 +230,7 @@ std::optional<photo_editor::pipeline::BlendMode> blend_mode(
     return photo_editor::pipeline::BlendMode::Overlay;
   }
   if (normalized == QStringLiteral("softlight") ||
+      normalized == QStringLiteral("soft-light") ||
       normalized == QStringLiteral("soft light")) {
     return photo_editor::pipeline::BlendMode::SoftLight;
   }
@@ -1809,7 +1823,7 @@ DesktopRenderPlanResult compile_desktop_render_plan_with_derived_assets(
   auto compile_context = photo_editor::pipeline::RecipeCompileContext{
       .source_width = request.source_width,
       .source_height = request.source_height,
-      .available_photo_effect_algorithms = {"gaussian_blur:1", "invert_linear_rgb:1", "box_blur:1", "posterize_linear_rgb:1", "motion_blur:1", "unsharp_mask:1"},
+      .available_photo_effect_algorithms = available_photo_effect_algorithms(),
       .backend_requirement = request.backend_requirement,
       .purpose = request.purpose,
       .scope_domain = request.scope_domain,

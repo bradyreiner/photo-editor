@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -33,11 +34,15 @@ DEFAULT_BUDGETS = (
     StageBudget("open_photo_to_edit_preview_ready", 900.0, 1500.0),
     StageBudget("masks_page_to_tool_rail_ready", 100.0, 200.0),
     StageBudget("brush_page_to_hud_ready", 250.0, 400.0),
-    StageBudget("brush_pointer_down_to_qml_feedback", 50.0, 80.0),
+    StageBudget("brush_controller_point_to_qml_frame", 50.0, 80.0),
+    StageBudget("brush_controller_point_to_qml_frame_first_use", 50.0, 80.0),
+    StageBudget("brush_stroke_begin_to_qml_frame_first_use", 50.0, 80.0),
     StageBudget("brush_release_to_qml_commit_visible", 100.0, 175.0),
     StageBudget("tool_adjust_to_qml_draft_scheduled", 40.0, 80.0),
     StageBudget("carousel_route_to_visible", 350.0, 500.0),
+    StageBudget("carousel_input_event_dispatch_delay", 100.0, 200.0),
     StageBudget("timeline_route_to_visible", 200.0, 350.0),
+    StageBudget("timeline_input_event_dispatch_delay", 100.0, 200.0),
     StageBudget("export_route_to_visible", 100.0, 200.0),
 )
 
@@ -50,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--source", type=Path, help="Optional source image for the workflow.")
     parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--brush-only", action="store_true", help="Measure photo switching and brush feedback without routing to Carousel/Timeline/Export.")
+    parser.add_argument("--brush-auto-mask", action="store_true", help="Enable auto-mask before each measured stroke.")
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument(
         "--capture",
@@ -115,23 +122,28 @@ def collect_stage_summaries(desktop_log: Path) -> dict[str, dict[str, Any]]:
     return summaries
 
 
-def check_budgets(summaries: dict[str, dict[str, Any]]) -> list[str]:
+def check_budgets(
+    summaries: dict[str, dict[str, Any]], budgets: tuple[StageBudget, ...] = DEFAULT_BUDGETS
+) -> list[str]:
     failures: list[str] = []
-    for budget in DEFAULT_BUDGETS:
+    for budget in budgets:
         fields = summaries.get(budget.stage)
         if fields is None:
             failures.append(f"{budget.stage}: missing stage summary")
             continue
+        count = fields.get("iterations")
+        if type(count) is not int or count <= 0:
+            failures.append(f"{budget.stage}: missing positive sample count")
         p95 = fields.get("p95_ms")
         max_value = fields.get("max_ms")
-        if not isinstance(p95, (int, float)):
-            failures.append(f"{budget.stage}: missing p95_ms")
+        if type(p95) not in (int, float) or not math.isfinite(p95) or p95 < 0:
+            failures.append(f"{budget.stage}: invalid p95_ms")
         elif float(p95) > budget.p95_max_ms:
             failures.append(
                 f"{budget.stage}: p95 {float(p95):.1f} ms exceeds {budget.p95_max_ms:.1f} ms"
             )
-        if not isinstance(max_value, (int, float)):
-            failures.append(f"{budget.stage}: missing max_ms")
+        if type(max_value) not in (int, float) or not math.isfinite(max_value) or max_value < 0:
+            failures.append(f"{budget.stage}: invalid max_ms")
         elif float(max_value) > budget.max_ms:
             failures.append(
                 f"{budget.stage}: max {float(max_value):.1f} ms exceeds {budget.max_ms:.1f} ms"
@@ -145,12 +157,20 @@ def write_report(
     capture_dir: Path,
     summaries: dict[str, dict[str, Any]],
     failures: list[str],
+    budgets: tuple[StageBudget, ...] = DEFAULT_BUDGETS,
+    brush_only: bool = False,
+    auto_mask: bool = False,
 ) -> None:
     payload = {
+        "schema": "actual-app-workflow-gate:v2",
+        "feedback_contract": "controller_point_to_painted_canvas_sync_and_swap:v2",
         "artifact_dir": str(artifact_dir),
         "capture_dir": str(capture_dir),
         "status": "passed" if not failures else "failed",
-        "budgets": [budget.__dict__ for budget in DEFAULT_BUDGETS],
+        "budgets": [budget.__dict__ for budget in budgets],
+        "scenario": "brush_only" if brush_only else "full_workflow",
+        "brush_auto_mask": auto_mask,
+        "preview_backend_preference": "Auto" if brush_only else "CPU",
         "stage_summaries": summaries,
         "failures": failures,
         "frame_swaps_total": summaries.get("qml_frame_tick", {}).get("frame_swaps_total"),
@@ -160,8 +180,8 @@ def write_report(
 
 def main() -> int:
     args = parse_args()
-    if args.iterations <= 0:
-        raise SystemExit("--iterations must be positive")
+    if args.iterations < 2:
+        raise SystemExit("--iterations must be at least 2 to measure first-use and later strokes")
     if args.timeout <= 0:
         raise SystemExit("--timeout must be positive")
     app = args.app.expanduser().resolve()
@@ -196,6 +216,10 @@ def main() -> int:
         "--timeout-ms",
         str(max(args.timeout * 1000, 15000)),
     ]
+    if args.brush_only:
+        command.append("--brush-only")
+    if args.brush_auto_mask:
+        command.append("--brush-auto-mask")
     if capture_dir is not None:
         command.extend(["--capture-dir", str(capture_dir)])
     if args.source is not None:
@@ -222,19 +246,26 @@ def main() -> int:
     if manifest is None:
         print(f"Unable to read benchmark manifest: {artifact_dir / 'manifest.json'}", file=sys.stderr)
         return 1
+    if manifest.get("target_events_met") is not True or manifest.get("skipped"):
+        print("Workflow did not complete; no performance acceptance.", file=sys.stderr)
+        return 1
     desktop_log_value = manifest.get("desktop_log")
     if not isinstance(desktop_log_value, str) or not desktop_log_value:
         print("Benchmark manifest did not include desktop_log.", file=sys.stderr)
         return 1
 
     summaries = collect_stage_summaries(Path(desktop_log_value))
-    failures = check_budgets(summaries)
+    budgets = tuple(b for b in DEFAULT_BUDGETS if b.stage.startswith("brush_")) if args.brush_only else DEFAULT_BUDGETS
+    failures = check_budgets(summaries, budgets)
     write_report(
         artifact_dir / "actual-app-workflow-report.json",
         artifact_dir,
         capture_dir if capture_dir is not None else Path(),
         summaries,
         failures,
+        budgets,
+        args.brush_only,
+        args.brush_auto_mask,
     )
 
     print(f"actual_app_workflow_artifact={artifact_dir}")

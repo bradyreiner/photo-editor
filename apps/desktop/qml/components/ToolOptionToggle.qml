@@ -40,6 +40,8 @@ Rectangle {
     Accessible.description: disabledTooltipText
     Accessible.role: Accessible.CheckBox
     Accessible.checked: checked
+    Accessible.onPressAction: root.toggle()
+    Accessible.onToggleAction: root.toggle()
 
     function toggle() {
         if (!toggleEnabled)

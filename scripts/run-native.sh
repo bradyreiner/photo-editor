@@ -233,6 +233,21 @@ PHOTO_EDITOR_LOG_DIR="${PHOTO_EDITOR_LOG_DIR:-${PHOTO_EDITOR_APP_DATA_DIR}/logs}
 PHOTO_EDITOR_BACKUP_DIR="${PHOTO_EDITOR_BACKUP_DIR:-${PHOTO_EDITOR_APP_DATA_DIR}/backups}"
 export PHOTO_EDITOR_APP_DATA_DIR PHOTO_EDITOR_LOG_DIR PHOTO_EDITOR_BACKUP_DIR
 
+LOCAL_TIMELINE_SURFACE_ROOT="${REPO_ROOT}/.photo-editor/tracking/surface-runtime"
+if [ -x "${LOCAL_TIMELINE_SURFACE_ROOT}/venv/bin/python" ]; then
+  export PHOTO_EDITOR_SURFACE_PYTHON="${PHOTO_EDITOR_SURFACE_PYTHON:-${LOCAL_TIMELINE_SURFACE_ROOT}/venv/bin/python}"
+fi
+
+# An optional, isolated SAM2 runtime never changes the pinned photo model bundle.
+LOCAL_TIMELINE_SAM2_ROOT="${REPO_ROOT}/.photo-editor/tracking/sam2-runtime"
+if [ -x "${LOCAL_TIMELINE_SAM2_ROOT}/venv/bin/python" ] &&
+   [ -r "${LOCAL_TIMELINE_SAM2_ROOT}/sam2.1_hiera_tiny.pt" ]; then
+  export PHOTO_EDITOR_SAM2_PYTHON="${PHOTO_EDITOR_SAM2_PYTHON:-${LOCAL_TIMELINE_SAM2_ROOT}/venv/bin/python}"
+  export PHOTO_EDITOR_SAM2_CHECKPOINT="${PHOTO_EDITOR_SAM2_CHECKPOINT:-${LOCAL_TIMELINE_SAM2_ROOT}/sam2.1_hiera_tiny.pt}"
+  note "Local SAM2 timeline rotoscoping is configured (CPU by default)."
+fi
+
+
 if [ -n "${PHOTO_EDITOR_DATABASE_URL:-}" ]; then
   CATALOG_HELPER="${RUST_BIN_DIR}/catalog_migrate"
 else

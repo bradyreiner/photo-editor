@@ -46,7 +46,7 @@ int main() {
   if (service.undoStackValue(QStringLiteral("asset-a")).size() != 1 ||
       service.undoLabelValue(QStringLiteral("asset-a")).front() !=
           QStringLiteral("Exposure") ||
-      service.redoStackValue(QStringLiteral("asset-a")).front().exposure != 1.25) {
+      service.redoStackValue(QStringLiteral("asset-a")).front().residentState()->exposure != 1.25) {
     return fail("undo and redo state-label pairs must remain asset-scoped");
   }
   service.clearAssetHistory(QStringLiteral("asset-a"));

@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -26,6 +28,30 @@ void parallel_for(int count, Work&& work) {
       count, std::function<void(int)>(std::forward<Work>(work)));
 }
 
+template <typename Work>
+void parallel_for_pixel_chunks(std::size_t pixel_count, Work&& work) {
+  constexpr auto kPixelsPerChunk = std::size_t{8192U};
+  if (pixel_count == 0U) {
+    return;
+  }
+  const auto chunk_count = (pixel_count - 1U) / kPixelsPerChunk + 1U;
+  if (chunk_count >
+      static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    for (auto index = std::size_t{0U}; index < pixel_count; ++index) {
+      work(index);
+    }
+    return;
+  }
+  auto indexed_work = std::forward<Work>(work);
+  parallel_for(static_cast<int>(chunk_count), [&](int chunk_index) {
+    const auto begin = static_cast<std::size_t>(chunk_index) * kPixelsPerChunk;
+    const auto end = begin + std::min(kPixelsPerChunk, pixel_count - begin);
+    for (auto index = begin; index < end; ++index) {
+      indexed_work(index);
+    }
+  });
+}
+
 [[nodiscard]] double sanitized_black_point(
     double value,
     double output_headroom) {
@@ -37,6 +63,41 @@ void parallel_for(int count, Work&& work) {
 }
 
 }  // namespace
+
+bool color_surface_is_finite(std::span<const ColorPixel> pixels) {
+  const auto pixel_is_finite = [](const ColorPixel& pixel) {
+    return std::isfinite(pixel.red) &&
+           std::isfinite(pixel.green) &&
+           std::isfinite(pixel.blue) &&
+           std::isfinite(pixel.alpha);
+  };
+  constexpr auto kParallelThreshold = std::size_t{32768U};
+  constexpr auto kPixelsPerChunk = std::size_t{32768U};
+  if (pixels.size() < kParallelThreshold) {
+    return std::ranges::all_of(pixels, pixel_is_finite);
+  }
+
+  const auto chunk_count = (pixels.size() - 1U) / kPixelsPerChunk + 1U;
+  if (chunk_count >
+      static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return std::ranges::all_of(pixels, pixel_is_finite);
+  }
+  auto all_finite = std::atomic_bool{true};
+  parallel_for(static_cast<int>(chunk_count), [&](int chunk_index) {
+    if (!all_finite.load(std::memory_order_relaxed)) {
+      return;
+    }
+    const auto begin = static_cast<std::size_t>(chunk_index) * kPixelsPerChunk;
+    const auto end = begin + std::min(kPixelsPerChunk, pixels.size() - begin);
+    for (auto index = begin; index < end; ++index) {
+      if (!pixel_is_finite(pixels[index])) {
+        all_finite.store(false, std::memory_order_relaxed);
+        return;
+      }
+    }
+  });
+  return all_finite.load(std::memory_order_relaxed);
+}
 
 [[nodiscard]] bool black_point_compensation_affects_output(
     const ColorPipelineConfig& config) {
@@ -400,8 +461,8 @@ void apply_output_transform(
         aces2_output_implementation(config), config.renderer_transition_look);
     const auto headroom = display_target_linear_headroom(
         display_target_for_target(config, target));
-    parallel_for(static_cast<int>(pixels.size()), [&](int index) {
-      auto& pixel = pixels[static_cast<std::size_t>(index)];
+    parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
+      auto& pixel = pixels[index];
       const auto rendered = aces2_render_to_linear_display_rgb(
           {pixel.red, pixel.green, pixel.blue},
           processor->parameters);
@@ -437,8 +498,8 @@ void apply_output_transform(
       std::string(chromatic_adaptation_method);
   const auto output_context = make_pipeline_color_context(output_space_state);
 
-  parallel_for(static_cast<int>(pixels.size()), [&](int index) {
-    auto& pixel = pixels[static_cast<std::size_t>(index)];
+  parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
+    auto& pixel = pixels[index];
     auto transformed = apply_black_point_compensation(
         apply_rgb_matrix(pixel, output_matrix), config);
     if (should_clip) {
@@ -496,8 +557,8 @@ void apply_output_gamut_mapping_in_working_space(
                                        chromatic_adaptation_method)
                                        .matrix;
     const auto headroom = display_target_linear_headroom(display_target);
-    parallel_for(static_cast<int>(pixels.size()), [&](int index) {
-      auto& pixel = pixels[static_cast<std::size_t>(index)];
+    parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
+      auto& pixel = pixels[index];
       const auto rendered = aces2_render_to_linear_display_rgb(
           {pixel.red, pixel.green, pixel.blue},
           processor->parameters);
@@ -523,9 +584,9 @@ void apply_output_gamut_mapping_in_working_space(
       std::string(chromatic_adaptation_method);
   const auto output_context = make_pipeline_color_context(output_space_state);
 
-  parallel_for(static_cast<int>(pixels.size()), [&](int index) {
+  parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
     auto target_pixel = apply_rgb_matrix(
-        pixels[static_cast<std::size_t>(index)],
+        pixels[index],
         output_matrix);
     if (should_clip) {
       target_pixel = clip_pixel_to_output_headroom(target_pixel, headroom);
@@ -664,8 +725,8 @@ void apply_aces2_output_lut_application(
   if (!application.ready() || pixels.empty()) {
     return;
   }
-  parallel_for(static_cast<int>(pixels.size()), [&](int index) {
-    auto& pixel = pixels[static_cast<std::size_t>(index)];
+  parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
+    auto& pixel = pixels[index];
     pixel = apply_aces2_output_lut_application(application, pixel);
   });
 }
@@ -676,8 +737,8 @@ void apply_aces2_output_lut_target_application(
   if (!application.ready() || pixels.empty()) {
     return;
   }
-  parallel_for(static_cast<int>(pixels.size()), [&](int index) {
-    auto& pixel = pixels[static_cast<std::size_t>(index)];
+  parallel_for_pixel_chunks(pixels.size(), [&](std::size_t index) {
+    auto& pixel = pixels[index];
     pixel =
         apply_aces2_output_lut_target_application(
             application,

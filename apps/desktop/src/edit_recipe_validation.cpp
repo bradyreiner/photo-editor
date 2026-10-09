@@ -72,7 +72,12 @@ EditRecipeValidationResult validate_edit_recipe_json(
       }
       if (layer.contains("textTypography")) {
         const auto typography = layer.value("textTypography").toObject();
-        if (typography.value("version").toDouble(-1) != 1 && typography.value("version").toDouble(-1) != 2)
+        if (typography.value("version").toDouble(-1) != 1 && typography.value("version").toDouble(-1) != 2 &&
+            typography.value("version").toDouble(-1) != 3 && typography.value("version").toDouble(-1) != 4 &&
+            typography.value("version").toDouble(-1) != 5 && typography.value("version").toDouble(-1) != 6 &&
+            typography.value("version").toDouble(-1) != 7 &&
+            typography.value("version").toDouble(-1) != 8 &&
+            typography.value("version").toDouble(-1) != 9)
           result.errors.append(QStringLiteral("%1[%2].textTypography: Unsupported text style version.")
               .arg(QString::fromLatin1(collection)).arg(index));
       }

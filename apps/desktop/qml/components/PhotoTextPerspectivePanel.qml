@@ -12,12 +12,16 @@ ColumnLayout {
     required property var layerData
     property bool locked: false
 
+    Theme { id: theme }
     spacing: 4
 
     Label {
         Layout.fillWidth: true
         text: qsTr("Text Perspective")
         font.weight: Font.DemiBold
+        font.family: theme.fontUi
+        font.pixelSize: theme.typeCaption
+        color: theme.textMuted
     }
 
     Repeater {

@@ -48,12 +48,30 @@ struct EditRecipeState;
     qint64 observed_interval_ms,
     qint64 expected_interval_ms = 5);
 
+[[nodiscard]] QVariantList agent_planning_tool_schemas_for_approved_task(
+    const QVariantList& phase_schemas,
+    const QVariantMap& approved_snapshot);
+
+[[nodiscard]] bool agent_approved_task_has_explicit_photo_quality_scope(
+    const QVariantMap& approved_snapshot);
+
+namespace agent_detail {
+// Shared native completion verifier; independent evidence checks can exercise
+// the same admission path used by plan construction and draft application.
+[[nodiscard]] QVariantMap native_composition_completion_evidence(
+    const QVariantMap& prompt_audit, const QVariantMap& edit_intent,
+    const QVariantMap& recipe_patch, const QVariantMap& model_tool_plan,
+    const QString& asset_id, int asset_count);
+}  // namespace agent_detail
+
 class AgentEditController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorMessageChanged)
   Q_PROPERTY(bool running READ running NOTIFY runningChanged)
+  Q_PROPERTY(bool canRevertTask READ canRevertTask NOTIFY taskTransactionChanged)
   Q_PROPERTY(bool cancellationRequested READ cancellationRequested NOTIFY cancellationChanged)
+  Q_PROPERTY(QVariantMap taskTransaction READ taskTransaction NOTIFY taskTransactionChanged)
   Q_PROPERTY(bool manualEditingActive READ manualEditingActive WRITE setManualEditingActive NOTIFY manualEditingActiveChanged)
   Q_PROPERTY(int runTimeoutMs READ runTimeoutMs WRITE setRunTimeoutMs NOTIFY runTimeoutMsChanged)
   Q_PROPERTY(bool draftActive READ draftActive NOTIFY draftChanged)
@@ -86,6 +104,7 @@ class AgentEditController final : public QObject {
   Q_PROPERTY(QVariantMap lastRunReport READ lastRunReport NOTIFY lastRunReportChanged)
   Q_PROPERTY(QVariantMap progressivePreview READ progressivePreview NOTIFY progressivePreviewChanged)
   Q_PROPERTY(QString activeDraftRequestId READ activeDraftRequestId NOTIFY draftRequestChanged)
+  Q_PROPERTY(QString activeTaskId READ activeTaskId NOTIFY draftRequestChanged)
   Q_PROPERTY(bool draftRequestPending READ draftRequestPending NOTIFY draftRequestChanged)
   Q_PROPERTY(QVariantList runEvents READ runEvents NOTIFY runEventsChanged)
   Q_PROPERTY(QVariantList runHistory READ runHistory NOTIFY runHistoryChanged)
@@ -107,6 +126,7 @@ class AgentEditController final : public QObject {
   [[nodiscard]] QString status() const;
   [[nodiscard]] QString errorMessage() const;
   [[nodiscard]] bool running() const;
+  [[nodiscard]] bool canRevertTask() const;
   [[nodiscard]] bool cancellationRequested() const;
   [[nodiscard]] bool manualEditingActive() const;
   [[nodiscard]] int runTimeoutMs() const;
@@ -140,6 +160,7 @@ class AgentEditController final : public QObject {
   [[nodiscard]] QVariantMap lastRunReport() const;
   [[nodiscard]] QVariantMap progressivePreview() const;
   [[nodiscard]] QString activeDraftRequestId() const;
+  [[nodiscard]] QString activeTaskId() const;
   [[nodiscard]] bool draftRequestPending() const;
   [[nodiscard]] QVariantList runEvents() const;
   [[nodiscard]] QVariantList runHistory() const;
@@ -158,6 +179,22 @@ class AgentEditController final : public QObject {
   void setEditingFreedom(const QString& mode);
   void setRunTimeoutMs(int timeout_ms);
   void setManualEditingActive(bool active);
+  void setTaskTransactionHandler(std::function<QVariantMap(const QString&, const QString&, const QStringList&, const QVariantMap&)> handler) {
+    task_transaction_handler_ = std::move(handler);
+  }
+  [[nodiscard]] QVariantMap setApprovedTaskSnapshot(const QVariantMap& snapshot);
+  [[nodiscard]] QVariantMap approveTaskRevision(
+      const QVariantMap& snapshot,
+      const QString& expected_task_id);
+  void setPlanningSnapshotHandler(std::function<QVariantMap(const QString&)> handler) {
+    planning_snapshot_handler_ = std::move(handler);
+  }
+  [[nodiscard]] QVariantMap taskTransaction() const { return task_transaction_state_; }
+  [[nodiscard]] QVariantMap pendingTaskFinalization() const { return pending_task_finalization_; }
+  [[nodiscard]] QVariantMap settleTaskFinalization(
+      const QString& task_id,
+      const QVariantMap& receipt);
+  Q_INVOKABLE QVariantMap revertTask();
   void setMcpEndpoint(
       const QString& endpoint,
       const QString& endpoint_kind,
@@ -265,6 +302,7 @@ class AgentEditController final : public QObject {
   Q_INVOKABLE QVariantMap aiEditWorkflowState(
       const QString& scope = QString()) const;
   Q_INVOKABLE QVariantMap editingFreedomPolicy() const;
+  QVariantMap authorizeNativeEditingCommand(const QString& name, bool property) const;
   Q_INVOKABLE QVariantMap validateRecipePatch(const QVariantMap& patch) const;
   Q_INVOKABLE QVariantMap analyzeSelected();
   Q_INVOKABLE QVariantMap renderProofForSelected();
@@ -298,6 +336,10 @@ class AgentEditController final : public QObject {
   // Explicit targets remain independent of library focus/filter changes, including review.
   Q_INVOKABLE QVariantMap startDraftForConfirmedAssets(
       const QStringList& asset_ids, const QString& instructions);
+  [[nodiscard]] QVariantMap startDraftForPreparedTask(
+      const QStringList& asset_ids,
+      const QString& instructions,
+      const QString& prepared_task_id);
   Q_INVOKABLE QVariantMap startDraftForScope(
       const QString& scope,
       const QString& instructions = QString());
@@ -354,6 +396,7 @@ class AgentEditController final : public QObject {
   void errorMessageChanged();
   void runningChanged();
   void cancellationChanged();
+  void taskTransactionChanged();
   void manualEditingActiveChanged();
   void runTimeoutMsChanged();
   void draftChanged();
@@ -379,6 +422,11 @@ class AgentEditController final : public QObject {
  private:
   std::function<bool()> access_policy_;
   QVariantList scopedAssetMaps(const QString& scope) const;
+  [[nodiscard]] QVariantMap planningRecipeSnapshot(const QVariantMap& asset) const;
+  [[nodiscard]] bool takeOrStartPlanningProof(
+      const QString& stage, const QVariantMap& asset, const QVariantMap& style,
+      const QString& run_id, const QString& scope, bool validate_live, QVariantMap* report,
+      const QVariantMap& overlay_patch = {});
   QStringList confirmed_asset_ids_;
   QVariantMap finalizePhotographerCalibrationReviewPayload(
       const QByteArray& ratings_bytes,
@@ -413,7 +461,31 @@ class AgentEditController final : public QObject {
   [[nodiscard]] QVariantMap requestOwnedWorkerPendingReport(
       const QString& stage_name,
       const QString& scope) const;
+  [[nodiscard]] QVariantMap beginTaskTransaction(const QString& request_id, const QStringList& asset_ids);
+  [[nodiscard]] int applyTaskOwnedAdjustmentPatchJson(
+      const QStringList& asset_ids,
+      const QString& patch_json,
+      const QStringList& adjustment_groups = {});
+  [[nodiscard]] bool finalizeTaskTransaction(
+      const QString& request_id,
+      QVariantMap* report,
+      bool emit_completion = false);
+  [[nodiscard]] bool retainPendingTaskFinalization(
+      const QString& task_id,
+      const QVariantMap& receipt,
+      const QString& request_id,
+      const QString& action,
+      const QVariantMap& report,
+      bool emit_completion,
+      bool clear_draft_on_success = false);
+  void recordAcceptedCompositionPhotoRevision(const QVariantMap& report);
+  [[nodiscard]] QVariantMap enqueueDraftRequest(const QString& scope, const QString& instructions, const QString& request_id);
+  void attachRevisionOutcome(QVariantMap* report);
+  [[nodiscard]] QVariantMap executeDraftForScope(const QString& scope, const QString& instructions);
   void clearAsyncModelPlanningState();
+  void scheduleCompositionContinuation(
+      const QString& request_id, const QString& scope,
+      const QString& instructions, const QString& tool_plan_key);
   [[nodiscard]] QVariantMap finalizeDraftDirectionComparison(
       const QString& request_id,
       const QVariantMap& completed_report);
@@ -527,7 +599,7 @@ class AgentEditController final : public QObject {
   bool rollback_on_cancel_ = false;
   bool manual_editing_active_ = false;
   QString cancellation_reason_;
-  int run_timeout_ms_ = 600000;
+  int run_timeout_ms_ = -1;
   QString selected_style_id_;
   QString selected_model_id_;
   QString user_instructions_;
@@ -563,6 +635,20 @@ class AgentEditController final : public QObject {
   QVariantMap last_run_report_;
   QVariantMap progressive_preview_;
   QString active_draft_request_id_;
+  QString active_request_task_id_;
+  QVariantMap async_revision_context_;
+  QString task_transaction_id_;
+  QVariantMap task_transaction_state_;
+  // Host-owned no-text photographic baseline retained only for the active
+  // reversible task and its explicitly approved revisions.
+  QVariantMap task_composition_photo_baseline_;
+  QVariantMap pending_task_finalization_;
+  QVariantMap approved_task_snapshot_;
+  QVariantList approved_task_snapshot_history_;
+  QHash<QString, QString> task_original_adjustment_patches_;
+  QVariantMap task_expected_adjustment_patches_;
+  std::function<QVariantMap(const QString&, const QString&, const QStringList&, const QVariantMap&)> task_transaction_handler_;
+  std::function<QVariantMap(const QString&)> planning_snapshot_handler_;
   bool draft_request_pending_ = false;
   bool allow_queued_draft_entry_once_ = false;
   bool async_model_planning_enabled_ = false;
@@ -580,15 +666,25 @@ class AgentEditController final : public QObject {
   QString async_draft_scope_;
   QString async_draft_instructions_;
   QStringList async_draft_asset_ids_;
+  QString async_mcp_context_request_id_;
+  QString async_mcp_context_key_;
+  QVariantMap async_mcp_discovery_;
+  QVariantMap async_mcp_observation_;
   QHash<QString, std::shared_ptr<AgentLocalModelPlanResult>>
       async_model_stage_results_;
   QHash<QString, QVariantMap> async_model_tool_plan_results_;
+  QHash<QString, int> async_composition_repair_round_cursors_;
+  QHash<QString, QVariantMap> async_composition_repair_progress_snapshots_;
+  QHash<QString, QStringList> async_composition_repair_plan_signatures_;
+  QHash<QString, QVariantMap> async_composition_repair_accepted_recipe_results_;
+  bool async_composition_resume_scheduled_ = false;
   QHash<QString, std::shared_ptr<AgentLocalModelProofCritiqueResult>>
       async_model_proof_critique_results_;
   QStringList async_model_completed_stages_;
   QHash<QString, QVariantMap> async_request_worker_stage_results_;
   QStringList async_request_worker_completed_stages_;
   QHash<QString, QString> async_progressive_preview_originals_;
+  QHash<QString, QString> async_progressive_preview_authored_;
   bool async_fast_preview_validation_in_flight_ = false;
   QString async_fast_preview_validation_request_id_;
   QVariantMap async_fast_preview_validation_report_;

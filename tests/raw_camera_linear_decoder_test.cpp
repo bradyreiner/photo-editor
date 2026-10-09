@@ -30,173 +30,9 @@
 #include "raw_image_decoder.h"
 #include "raw_image_decoder_libraw.h"
 #include "working_image.h"
+#include "fixtures/synthetic_dng.h"
 
 namespace {
-
-struct TiffEntry final {
-  std::uint16_t tag = 0U;
-  std::uint16_t type = 0U;
-  std::uint32_t count = 0U;
-  std::vector<std::uint8_t> data;
-  std::uint32_t external_offset = 0U;
-};
-
-void append_u16(std::vector<std::uint8_t>* bytes, std::uint16_t value) {
-  bytes->push_back(static_cast<std::uint8_t>(value & 0xffU));
-  bytes->push_back(static_cast<std::uint8_t>((value >> 8U) & 0xffU));
-}
-
-void append_u32(std::vector<std::uint8_t>* bytes, std::uint32_t value) {
-  append_u16(bytes, static_cast<std::uint16_t>(value & 0xffffU));
-  append_u16(bytes, static_cast<std::uint16_t>((value >> 16U) & 0xffffU));
-}
-
-[[nodiscard]] std::vector<std::uint8_t> short_values(
-    std::initializer_list<std::uint16_t> values) {
-  auto bytes = std::vector<std::uint8_t>{};
-  for (const auto value : values) {
-    append_u16(&bytes, value);
-  }
-  return bytes;
-}
-
-[[nodiscard]] std::vector<std::uint8_t> long_values(
-    std::initializer_list<std::uint32_t> values) {
-  auto bytes = std::vector<std::uint8_t>{};
-  for (const auto value : values) {
-    append_u32(&bytes, value);
-  }
-  return bytes;
-}
-
-[[nodiscard]] std::vector<std::uint8_t> rational_values(
-    std::initializer_list<std::pair<std::uint32_t, std::uint32_t>> values) {
-  auto bytes = std::vector<std::uint8_t>{};
-  for (const auto& [numerator, denominator] : values) {
-    append_u32(&bytes, numerator);
-    append_u32(&bytes, denominator);
-  }
-  return bytes;
-}
-
-[[nodiscard]] std::vector<std::uint8_t> signed_rational_values(
-    std::initializer_list<std::pair<std::int32_t, std::int32_t>> values) {
-  auto bytes = std::vector<std::uint8_t>{};
-  for (const auto& [numerator, denominator] : values) {
-    append_u32(&bytes, static_cast<std::uint32_t>(numerator));
-    append_u32(&bytes, static_cast<std::uint32_t>(denominator));
-  }
-  return bytes;
-}
-
-[[nodiscard]] std::vector<std::uint8_t> ascii_value(const std::string& value) {
-  auto bytes = std::vector<std::uint8_t>(value.begin(), value.end());
-  bytes.push_back(0U);
-  return bytes;
-}
-
-[[nodiscard]] std::vector<std::uint8_t> synthetic_dng() {
-  constexpr auto kWidth = std::uint32_t{128U};
-  constexpr auto kHeight = std::uint32_t{128U};
-  constexpr auto kPixelBytes = kWidth * kHeight * 2U;
-  auto entries = std::vector<TiffEntry>{
-      {256U, 4U, 1U, long_values({kWidth})},
-      {257U, 4U, 1U, long_values({kHeight})},
-      {258U, 3U, 1U, short_values({16U})},
-      {259U, 3U, 1U, short_values({1U})},
-      {262U, 3U, 1U, short_values({32803U})},
-      {271U, 2U, 16U, ascii_value("OpenAI Fixtures")},
-      {272U, 2U, 19U, ascii_value("Synthetic Bayer v1")},
-      {273U, 4U, 1U, long_values({0U})},
-      {274U, 3U, 1U, short_values({1U})},
-      {277U, 3U, 1U, short_values({1U})},
-      {278U, 4U, 1U, long_values({kHeight})},
-      {279U, 4U, 1U, long_values({kPixelBytes})},
-      {284U, 3U, 1U, short_values({1U})},
-      {33421U, 3U, 2U, short_values({2U, 2U})},
-      {33422U, 1U, 4U, {0U, 1U, 1U, 2U}},
-      {50706U, 1U, 4U, {1U, 4U, 0U, 0U}},
-      {50707U, 1U, 4U, {1U, 1U, 0U, 0U}},
-      {50708U, 2U, 19U, ascii_value("Synthetic Bayer v1")},
-      {50710U, 1U, 3U, {0U, 1U, 2U}},
-      {50711U, 3U, 1U, short_values({1U})},
-      {50713U, 3U, 2U, short_values({1U, 1U})},
-      {50714U, 5U, 1U, rational_values({{64U, 1U}})},
-      {50717U, 4U, 1U, long_values({4095U})},
-      {50719U, 5U, 2U, rational_values({{0U, 1U}, {0U, 1U}})},
-      {50720U, 5U, 2U, rational_values({{kWidth, 1U}, {kHeight, 1U}})},
-      {50721U, 10U, 9U,
-       signed_rational_values({
-           {10000, 10000},
-           {0, 10000},
-           {0, 10000},
-           {0, 10000},
-           {10000, 10000},
-           {0, 10000},
-           {0, 10000},
-           {0, 10000},
-           {10000, 10000},
-       })},
-      {50728U, 5U, 3U, rational_values({{1U, 1U}, {1U, 1U}, {1U, 1U}})},
-      {50778U, 3U, 1U, short_values({21U})},
-      {50829U, 4U, 4U, long_values({0U, 0U, kHeight, kWidth})},
-  };
-  std::sort(entries.begin(), entries.end(),
-            [](const TiffEntry& left, const TiffEntry& right) {
-              return left.tag < right.tag;
-            });
-
-  const auto ifd_bytes =
-      std::uint32_t{2U + static_cast<std::uint32_t>(entries.size()) * 12U + 4U};
-  auto external_offset = std::uint32_t{8U} + ifd_bytes;
-  for (auto& entry : entries) {
-    if (entry.data.size() > 4U) {
-      entry.external_offset = external_offset;
-      external_offset += static_cast<std::uint32_t>(entry.data.size());
-      external_offset = (external_offset + 1U) & ~std::uint32_t{1U};
-    }
-  }
-  const auto pixel_offset = external_offset;
-  const auto strip =
-      std::find_if(entries.begin(), entries.end(),
-                   [](const TiffEntry& entry) { return entry.tag == 273U; });
-  strip->data = long_values({pixel_offset});
-
-  auto bytes = std::vector<std::uint8_t>{'I', 'I'};
-  append_u16(&bytes, 42U);
-  append_u32(&bytes, 8U);
-  append_u16(&bytes, static_cast<std::uint16_t>(entries.size()));
-  for (const auto& entry : entries) {
-    append_u16(&bytes, entry.tag);
-    append_u16(&bytes, entry.type);
-    append_u32(&bytes, entry.count);
-    if (entry.data.size() <= 4U) {
-      bytes.insert(bytes.end(), entry.data.begin(), entry.data.end());
-      bytes.resize(bytes.size() + 4U - entry.data.size(), 0U);
-    } else {
-      append_u32(&bytes, entry.external_offset);
-    }
-  }
-  append_u32(&bytes, 0U);
-  for (const auto& entry : entries) {
-    if (entry.data.size() <= 4U) {
-      continue;
-    }
-    bytes.resize(entry.external_offset, 0U);
-    bytes.insert(bytes.end(), entry.data.begin(), entry.data.end());
-  }
-  bytes.resize(pixel_offset, 0U);
-  for (std::uint32_t y = 0U; y < kHeight; ++y) {
-    for (std::uint32_t x = 0U; x < kWidth; ++x) {
-      const auto red = (y % 2U) == 0U && (x % 2U) == 0U;
-      const auto blue = (y % 2U) == 1U && (x % 2U) == 1U;
-      const auto sample =
-          static_cast<std::uint16_t>(red ? 3200U : (blue ? 1200U : 2200U));
-      append_u16(&bytes, sample);
-    }
-  }
-  return bytes;
-}
 
 int fail(const char* message) {
   std::cerr << message << '\n';
@@ -385,7 +221,7 @@ int main(int argc, char* argv[]) {
   const auto dng_path =
       temporary.filePath(QStringLiteral("synthetic-bayer.dng"));
   QFile dng(dng_path);
-  const auto payload = synthetic_dng();
+  const auto payload = photo_editor::test_fixtures::synthetic_dng();
   if (!dng.open(QIODevice::WriteOnly) ||
       dng.write(reinterpret_cast<const char*>(payload.data()),
                 static_cast<qint64>(payload.size())) !=
@@ -407,6 +243,56 @@ int main(int argc, char* argv[]) {
       .demosaic_quality = QStringLiteral("Full"),
       .highlight_recovery_enabled = false,
   };
+  photo_editor::desktop::clear_libraw_decode_cache();
+  auto cached_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+  if (!photo_editor::desktop::read_libraw_camera_linear_metadata(
+          dng_path, &cached_metadata, settings) || !cached_metadata.valid) {
+    return fail("RAW camera metadata should be readable for cache admission");
+  }
+  const auto metadata_after_miss = photo_editor::desktop::libraw_decode_cache_stats();
+  auto repeated_metadata = photo_editor::pipeline::DecodedImageMetadata{};
+  if (!photo_editor::desktop::read_libraw_camera_linear_metadata(
+          dng_path, &repeated_metadata, settings) ||
+      repeated_metadata.camera_profile_identity != cached_metadata.camera_profile_identity ||
+      photo_editor::desktop::libraw_decode_cache_stats().metadata_hits <=
+          metadata_after_miss.metadata_hits) {
+    return fail("unchanged RAW metadata requests should reuse the bounded cache");
+  }
+  auto metadata_settings_change = settings;
+  metadata_settings_change.input_color_profile = QStringLiteral("Embedded");
+  const auto before_metadata_settings_change =
+      photo_editor::desktop::libraw_decode_cache_stats();
+  if (!photo_editor::desktop::read_libraw_camera_linear_metadata(
+          dng_path, &repeated_metadata, metadata_settings_change) ||
+      photo_editor::desktop::libraw_decode_cache_stats().metadata_misses <=
+          before_metadata_settings_change.metadata_misses) {
+    return fail("RAW metadata cache identity should include the selected input profile");
+  }
+  const auto invalid_raw_path = temporary.filePath(QStringLiteral("refreshable.dng"));
+  QFile invalid_raw(invalid_raw_path);
+  if (!invalid_raw.open(QIODevice::WriteOnly) || invalid_raw.write("invalid", 7) != 7) {
+    return fail("invalid RAW fixture should be writable");
+  }
+  invalid_raw.close();
+  const auto before_failed_metadata = photo_editor::desktop::libraw_decode_cache_stats();
+  if (photo_editor::desktop::read_libraw_camera_linear_metadata(
+          invalid_raw_path, &repeated_metadata, settings) ||
+      photo_editor::desktop::libraw_decode_cache_stats().metadata_entries !=
+          before_failed_metadata.metadata_entries) {
+    return fail("failed RAW metadata reads should remain refreshable and uncached");
+  }
+  QFile repaired_raw(invalid_raw_path);
+  if (!repaired_raw.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      repaired_raw.write(reinterpret_cast<const char*>(payload.data()),
+                         static_cast<qint64>(payload.size())) !=
+          static_cast<qint64>(payload.size())) {
+    return fail("repaired RAW fixture should replace the invalid bytes");
+  }
+  repaired_raw.close();
+  if (!photo_editor::desktop::read_libraw_camera_linear_metadata(
+          invalid_raw_path, &repeated_metadata, settings) || !repeated_metadata.valid) {
+    return fail("repaired RAW metadata should retry after a previous failure");
+  }
   if (!photo_editor::desktop::decode_libraw_camera_linear_image(
           dng_path, &decoded, 0, settings, &metadata) ||
       decoded.size() != QSize(128, 128) ||

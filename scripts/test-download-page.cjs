@@ -49,7 +49,7 @@ test('configured purchase and recovery links are enabled with the agreed rights'
 
 test('both purchase models have separate checkout choices and expiry terms', () => {
   const config = { ...paid, accessMode: 'paid-both', subscriptionPriceLabel: 'Fixture per month',
-    subscriptionPurchaseUrl: 'https://fixture.lemonsqueezy.com/buy/monthly' };
+    subscriptionPurchaseUrl: 'https://fixture.lemonsqueezy.com/buy/monthly', billingPortalUrl: 'https://fixture.lemonsqueezy.com/billing' };
   const page = render(config);
   assert.equal(page('subscription-button').hidden, false);
   assert.equal(page('subscription-button').href, config.subscriptionPurchaseUrl);

@@ -15,7 +15,7 @@
   const purchaseReady = paid && config.commercialTermsApproved === true
     && config.priceLabel && config.licenseSummary && httpsUrl(config.purchaseUrl)
     && httpsUrl(config.purchaseRecoveryUrl)
-    && (!both || (config.subscriptionPriceLabel && httpsUrl(config.subscriptionPurchaseUrl)));
+    && (!both || (config.subscriptionPriceLabel && httpsUrl(config.subscriptionPurchaseUrl) && httpsUrl(config.billingPortalUrl)));
   const state = {
     version: config.fallbackVersion || "0.1.0",
     updatedAt: config.updatedAt || "",

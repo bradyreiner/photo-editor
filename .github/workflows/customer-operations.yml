@@ -1,0 +1,26 @@
+name: Customer operations monitor
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: customer-operations-monitor
+  cancel-in-progress: false
+jobs:
+  operations:
+    if: ${{ vars.LOOKSY_OPERATIONS_ORIGIN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check staff-authorized operational signals
+        env:
+          LOOKSY_OPERATIONS_ORIGIN: ${{ vars.LOOKSY_OPERATIONS_ORIGIN }}
+          LOOKSY_ACCESS_CLIENT_ID: ${{ secrets.LOOKSY_MONITOR_ACCESS_CLIENT_ID }}
+          LOOKSY_ACCESS_CLIENT_SECRET: ${{ secrets.LOOKSY_MONITOR_ACCESS_CLIENT_SECRET }}
+        run: node services/customer-platform/scripts/monitor-operations.mjs

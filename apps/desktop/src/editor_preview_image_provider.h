@@ -21,11 +21,12 @@ class EditorPreviewImageProvider final : public QQuickImageProvider, public Edit
 
   void setImage(const QString& key, const QImage& image) override;
   void clearImage(const QString& key) override;
+  [[nodiscard]] QImage image(const QString& key) const override;
 
  private:
   [[nodiscard]] static QString normalized_key(const QString& id);
 
-  QMutex mutex_;
+  mutable QMutex mutex_;
   QHash<QString, QImage> images_;
 };
 

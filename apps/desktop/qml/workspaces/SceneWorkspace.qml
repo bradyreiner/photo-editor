@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtCore
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Dialogs
@@ -31,7 +32,20 @@ Item {
     property string actionError: ""
     property bool showDetails: false
     property bool showCaptureSetup: false
-    property bool immersive: true
+    property alias immersive: sceneWorkspaceSettings.immersive
+    property alias previewStatusVisible: sceneWorkspaceSettings.previewStatusVisible
+    Settings {
+        id: sceneWorkspaceSettings
+        objectName: "sceneWorkspaceSettings"
+        category: "SceneWorkspace"
+        property bool immersive: true
+        property bool previewStatusVisible: true
+    }
+    function handleLayoutMenuAction(key: string): void {
+        if (key === "navigation") immersive = !immersive
+        else if (key === "status") previewStatusVisible = !previewStatusVisible
+        else if (key === "photo-settings") photoControls.visible ? photoControls.close() : photoControls.open()
+    }
     property bool focusPickArmed: false
     Keys.onEscapePressed: event => { event.accepted = focusPickArmed; if (focusPickArmed) { focusPickArmed = false; actionError = "" } }
     onVisibleChanged: { if (!visible) { focusPickArmed = false; if (photoControls) photoControls.close() } }
@@ -47,10 +61,10 @@ Item {
     readonly property bool timedInput: captureMode.currentIndex === 1
     readonly property bool videoInput: captureMode.currentIndex === 2
     property bool advancedCapture: false
-    readonly property string stageLabel: ({"idle": "Create a scene you can step into", "extracting-video": "Preparing your video",
+    readonly property string stageLabel: ({"idle": "Create a 3D scene", "extracting-video": "Preparing your video",
         "preparing": "Preparing photographs", "extracting-features": "Finding image details", "matching-views": "Connecting viewpoints",
         "reconstructing-cameras": "Reconstructing the camera path", "undistorting": "Preparing the aligned scene",
-        "training-gaussians": "Building your splat", "validating-artifact": "Checking the finished scene",
+        "training-gaussians": "Building the scene", "validating-artifact": "Checking the finished scene",
         "canceling": "Stopping safely…", "canceled": "Scene creation stopped", "failed": "Scene needs attention"})[String(scene.state || "idle")] || String(scene.state || "")
     function prepareVideoInput(path: string): void {
         captureMode.currentIndex = 2
@@ -135,10 +149,10 @@ Item {
         id: timedFilmPopup
         objectName: "sceneTimedFilmPopup"
         anchors.centerIn: Overlay.overlay
-        width: 520
+        width: Math.min(theme.scaled(520), root.width - theme.space24)
         modal: true
-        padding: 24
-        background: Rectangle { color: theme.ink950; radius: 16; border.color: theme.lineSoft }
+        padding: theme.space16
+        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
         onOpened: {
             filmSceneStart.text = "0"
             filmSceneEnd.text = String(viewport.status.timeDurationSeconds || 0)
@@ -148,26 +162,27 @@ Item {
         }
         contentItem: ColumnLayout {
             spacing: 16
-            Label { text: "Export 4D film"; font.pixelSize: 22; color: theme.textStrong }
+            Label { text: "Export 4D film"; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold; color: theme.textStrong }
             Label { Layout.fillWidth: true; text: "Scene time range (seconds from capture start)"; wrapMode: Text.WordWrap; color: theme.textMain }
             RowLayout {
                 Layout.fillWidth: true
-                TextField { id: filmSceneStart; objectName: "sceneFilmTimeStart"; Layout.fillWidth: true; placeholderText: "Start"; validator: DoubleValidator { bottom: 0; top: Number(viewport.status.timeDurationSeconds || 0); locale: "C" } }
+                ToneTextField { id: filmSceneStart; objectName: "sceneFilmTimeStart"; Layout.fillWidth: true; placeholderText: "Start"; validator: DoubleValidator { bottom: 0; top: Number(viewport.status.timeDurationSeconds || 0); locale: "C" } }
                 Label { text: "→"; color: theme.textMuted }
-                TextField { id: filmSceneEnd; objectName: "sceneFilmTimeEnd"; Layout.fillWidth: true; placeholderText: "End"; validator: DoubleValidator { bottom: 0; top: Number(viewport.status.timeDurationSeconds || 0); locale: "C" } }
+                ToneTextField { id: filmSceneEnd; objectName: "sceneFilmTimeEnd"; Layout.fillWidth: true; placeholderText: "End"; validator: DoubleValidator { bottom: 0; top: Number(viewport.status.timeDurationSeconds || 0); locale: "C" } }
             }
             Label { Layout.fillWidth: true; text: "Reverse the range to reverse motion. Equal times freeze the scene."; wrapMode: Text.WordWrap; color: theme.textMuted }
             RowLayout {
                 Layout.fillWidth: true
                 Label { text: "Film length"; color: theme.textMain }
-                TextField { id: timedFilmDuration; objectName: "sceneTimedFilmDuration"; Layout.preferredWidth: 90; validator: DoubleValidator { bottom: 0.5; top: 600; locale: "C" } }
+                ToneTextField { id: timedFilmDuration; objectName: "sceneTimedFilmDuration"; Layout.preferredWidth: 90; validator: DoubleValidator { bottom: 0.5; top: 600; locale: "C" } }
                 Label { text: "s"; color: theme.textMuted }
                 Item { Layout.fillWidth: true }
-                ComboBox { id: timedFilmFps; model: ["24", "25", "30", "60"] }
+                ToneComboBox { id: timedFilmFps; accessibleLabel: "Timed film frame rate"; model: ["24", "25", "30", "60"] }
                 Label { text: "fps"; color: theme.textMuted }
             }
-            ComboBox {
+            ToneComboBox {
                 id: timedFilmCamera
+                accessibleLabel: "Timed film camera option"
                 Layout.fillWidth: true
                 model: Number(viewport.status.pathDuration || 0) > 0
                     ? ["Hold current camera", "Fit saved camera path to film length"] : ["Hold current camera"]
@@ -178,6 +193,8 @@ Item {
                 ActionButton { text: "Cancel"; onClicked: timedFilmPopup.close() }
                 ActionButton {
                     text: "Choose destination…"
+                    tone: "primary"
+                    disabledReason: "Enter valid scene times and film duration."
                     enabled: filmSceneStart.acceptableInput && filmSceneEnd.acceptableInput && timedFilmDuration.acceptableInput
                     onClicked: filmDestination.open()
                 }
@@ -188,10 +205,10 @@ Item {
         id: pathPopup
         objectName: "sceneCameraPathPopup"
         anchors.centerIn: Overlay.overlay
-        width: 520
+        width: Math.min(theme.scaled(520), root.width - theme.space24)
         modal: true
-        padding: 24
-        background: Rectangle { color: theme.ink950; radius: 16; border.color: theme.lineSoft }
+        padding: theme.space16
+        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
         onOpened: {
             const settings = viewport.status.cameraPath || {}
             root.pathDraft = (settings.viewIds || []).slice()
@@ -201,11 +218,11 @@ Item {
         }
         contentItem: ColumnLayout {
             spacing: 14
-            Label { text: "Camera path"; font.pixelSize: 22; color: theme.textStrong }
+            Label { text: "Camera path"; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold; color: theme.textStrong }
             Label { Layout.fillWidth: true; text: "Order saved shots. The camera eases to a stop at each shot."; wrapMode: Text.WordWrap; color: theme.textMuted }
             RowLayout {
                 Layout.fillWidth: true
-                ComboBox { id: pathShot; Layout.fillWidth: true; model: viewport.status.savedViews || []; textRole: "name"; valueRole: "id" }
+                ToneComboBox { id: pathShot; accessibleLabel: "Saved camera shot"; Layout.fillWidth: true; model: viewport.status.savedViews || []; textRole: "name"; valueRole: "id" }
                 ActionButton { text: "Add shot"; enabled: pathShot.count > 0 && root.pathDraft.length < 128; onClicked: root.pathDraft = root.pathDraft.concat([String(pathShot.currentValue)]) }
             }
             ScrollView {
@@ -245,8 +262,18 @@ Item {
             }
             RowLayout {
                 Label { text: "Seconds per transition"; color: theme.textMain }
-                SpinBox { id: pathSeconds; from: 1; to: 60; value: 3; editable: true }
-                ComboBox { id: pathFps; model: ["24", "25", "30", "60"] }
+                ToneSpinBox {
+                    id: pathSeconds
+                    objectName: "scenePathTransitionSeconds"
+                    accessibleLabel: "Seconds per camera transition"
+                    accessibleDescription: "Duration of each segment when moving between saved camera views."
+                    valueUnit: "seconds"
+                    from: 1
+                    to: 60
+                    value: 3
+                    editable: true
+                }
+                ToneComboBox { id: pathFps; accessibleLabel: "Camera path frame rate"; model: ["24", "25", "30", "60"] }
                 Label { text: "fps"; color: theme.textMain }
             }
             Label { Layout.fillWidth: true; visible: root.actionError.length > 0; text: root.actionError; color: theme.textMain; wrapMode: Text.WordWrap }
@@ -254,7 +281,8 @@ Item {
                 Item { Layout.fillWidth: true }
                 ActionButton { text: "Cancel"; onClicked: pathPopup.close() }
                 ActionButton {
-                    text: "Save path"; enabled: root.pathDraft.length >= 2
+                    text: "Save path"; tone: "primary"; enabled: root.pathDraft.length >= 2
+                    disabledReason: "Add at least two saved views to create a camera path."
                     onClicked: {
                         const result = viewport.saveCameraPath({viewIds: root.pathDraft, segmentSeconds: pathSeconds.value, fps: Number(pathFps.currentText)})
                         root.actionError = String(result.error || "")
@@ -281,15 +309,15 @@ Item {
         id: saveViewPopup
         objectName: "sceneSaveViewPopup"
         anchors.centerIn: Overlay.overlay
-        width: 360
+        width: Math.min(theme.scaled(360), root.width - theme.space24)
         modal: true
-        padding: 24
+        padding: theme.space16
         onOpened: { viewName.clear(); viewName.forceActiveFocus() }
-        background: Rectangle { color: theme.ink950; radius: 16; border.color: theme.lineSoft }
+        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
         contentItem: ColumnLayout {
             spacing: 16
-            Label { text: "Save this camera view"; color: theme.textStrong; font.pixelSize: 20 }
-            TextField {
+            Label { text: "Save this camera view"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold }
+            ToneTextField {
                 id: viewName
                 objectName: "sceneViewName"
                 Layout.fillWidth: true
@@ -311,6 +339,8 @@ Item {
                 ActionButton {
                     id: saveShot
                     text: "Save view"
+                    tone: "primary"
+                    disabledReason: "Enter a name for this camera view."
                     enabled: viewName.text.trim().length > 0
                     onClicked: {
                         const result = viewport.saveView(viewName.text)
@@ -426,7 +456,9 @@ Item {
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
                     text: root.renderable ? String(viewport.status.state).replace(/-/g, " ") : root.stageLabel
-                    font.pixelSize: 25
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.scaled(20)
+                    font.weight: Font.DemiBold
                     color: theme.textStrong
                 }
                 Label {
@@ -512,12 +544,12 @@ Item {
         id: sceneControls
         objectName: "sceneControlsPopup"
         anchors.centerIn: Overlay.overlay
-        width: Math.min(960, root.width - 48)
+        width: Math.min(880, root.width - 48)
         height: Math.min(sceneControlContents.implicitHeight + padding * 2, root.height - 48)
-        padding: 24
+        padding: theme.space16
         modal: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: theme.ink950; radius: 16; border.color: theme.lineSoft }
+        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
         contentItem: Flickable {
             clip: true
             contentWidth: width
@@ -530,15 +562,16 @@ Item {
         objectName: "scenePhotoControlsPopup"
         property int page: 0
         property bool halationPage: false
+        property bool renderDetailsExpanded: false
         onPageChanged: { if (contentItem) contentItem.contentY = 0 }
         x: Math.max(12, root.width - width - 20)
         y: 72
         width: Math.min(370, root.width - 24)
         height: Math.min(photoControlContents.implicitHeight + topPadding + bottomPadding, Math.max(100, root.height - y - 20))
-        padding: 20
+        padding: theme.space16
         modal: false
         closePolicy: Popup.CloseOnEscape
-        background: Rectangle { color: theme.alpha(theme.ink950, 0.96); radius: 16; border.color: theme.lineSoft }
+        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
         contentItem: Flickable {
             objectName: "scenePhotoControlsScroll"
             clip: true
@@ -551,29 +584,27 @@ Item {
                 spacing: 12
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: "Photo settings"; color: theme.textStrong; font.pixelSize: 20 }
+                    Label { text: "Photo settings"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold }
                     Item { Layout.fillWidth: true }
                     ActionButton { text: "Done"; onClicked: photoControls.close() }
                 }
-                TabBar {
+                ToneComboBox {
+                    objectName: "scenePhotoSettingsSectionCombo"
+                    accessibleLabel: "Photo settings section"
                     Layout.fillWidth: true
                     currentIndex: photoControls.page
-                    onCurrentIndexChanged: photoControls.page = currentIndex
-                    TabButton { text: "Tone" }
-                    TabButton { text: "Focus" }
-                    TabButton { text: "Aperture" }
-                    TabButton { text: "Film" }
-                    TabButton { text: "Camera" }
+                    model: ["Tone", "Focus", "Aperture", "Film", "Camera"]
+                    onActivated: photoControls.page = currentIndex
                 }
                 Label {
                     visible: photoControls.page === 4
                     Layout.fillWidth: true; wrapMode: Text.WordWrap; color: theme.textMain
-                    text: "Full-frame thin lens needs a known scene scale. Enter metres per reconstruction unit; the app cannot infer this from your photos. Set focal length, f-stop and focus on the Focus page after applying."
+                    text: "Full-frame thin lens needs a measured scene scale in metres per reconstruction unit. After applying, set focal length and focus in Focus, and f-stop in Aperture."
                 }
                 RowLayout {
                     visible: photoControls.page === 4; Layout.fillWidth: true
                     Label { text: "Metres / scene unit"; color: theme.textMain }
-                    TextField {
+                    ToneTextField {
                         id: physicalScale; objectName: "scenePhysicalScaleField"; Layout.fillWidth: true
                         text: root.physicalCameraActive ? Number(root.physicalCamera.metresPerSceneUnit).toPrecision(8) : ""
                         placeholderText: "Measured scale"
@@ -581,12 +612,12 @@ Item {
                         Accessible.name: "User-supplied metres per scene unit"
                     }
                 }
-                ComboBox {
+                ToneComboBox {
                     id: physicalGate; objectName: "scenePhysicalGateCombo"
+                    accessibleLabel: "Virtual film gate orientation"
                     visible: photoControls.page === 4; Layout.fillWidth: true
                     model: ["Full frame · 36 × 24 mm", "Full frame portrait · 24 × 36 mm"]
                     currentIndex: root.physicalCameraActive && Number(root.physicalCamera.sensorWidthMm) < Number(root.physicalCamera.sensorHeightMm) ? 1 : 0
-                    Accessible.name: "Virtual film gate orientation"
                 }
                 ActionButton {
                     objectName: "sceneApplyPhysicalCameraButton"
@@ -610,7 +641,7 @@ Item {
                 RowLayout {
                     visible: photoControls.page === 1 && root.physicalCameraActive; Layout.fillWidth: true
                     Label { text: "Focal length (mm)"; color: theme.textMain }
-                    TextField {
+                    ToneTextField {
                         objectName: "scenePhysicalFocalField"; Layout.fillWidth: true
                         property bool userEdited: false
                         text: Number(root.physicalCamera.focalLengthMm || 50).toPrecision(6)
@@ -626,9 +657,9 @@ Item {
                     }
                 }
                 RowLayout {
-                    visible: photoControls.page === 1 && root.physicalCameraActive; Layout.fillWidth: true
+                    visible: photoControls.page === 2 && root.physicalCameraActive; Layout.fillWidth: true
                     Label { text: "Aperture (f-number)"; color: theme.textMain }
-                    TextField {
+                    ToneTextField {
                         objectName: "scenePhysicalFNumberField"; Layout.fillWidth: true
                         property bool userEdited: false
                         text: Number(root.physicalCamera.fNumber || 2.8).toPrecision(4)
@@ -649,8 +680,10 @@ Item {
                     text: "Lens framing  " + Number(root.photoSettings.focalScale).toFixed(2) + "×"
                     color: theme.textMain
                 }
-                Slider {
+                ToolValueSlider {
                     id: photoFocal
+                    label: "Lens framing relative to the current camera"
+                    valueText: Number(value).toFixed(2) + "×"
                     visible: photoControls.page === 1 && !root.physicalCameraActive
                     objectName: "scenePhotoFocalSlider"
                     Layout.fillWidth: true
@@ -658,7 +691,6 @@ Item {
                     value: Number(root.photoSettings.focalScale)
                     onPressedChanged: pressed ? viewport.beginNavigation() : viewport.endNavigation()
                     onMoved: root.updatePhotoSetting("focalScale", value)
-                    Accessible.name: "Lens framing relative to the current camera"
                 }
                 Label {
                     Layout.fillWidth: true
@@ -667,32 +699,32 @@ Item {
                     visible: photoControls.page === 0
                     color: theme.textMain
                 }
-                Slider {
+                ToolValueSlider {
                     id: photoExposure
+                    label: "Photographic exposure compensation"
+                    valueText: Number(value).toFixed(2) + " EV"
                     visible: photoControls.page === 0
                     objectName: "scenePhotoExposureSlider"
                     Layout.fillWidth: true
                     from: -6; to: 6; stepSize: 0.25
                     value: Number(root.photoSettings.exposureEv)
                     onMoved: root.updatePhotoSetting("exposureEv", value)
-                    Accessible.name: "Photographic exposure compensation"
                 }
-                ComboBox {
+                ToneComboBox {
                     id: photoLook
                     visible: photoControls.page === 0
                     objectName: "scenePhotoLookCombo"
+                    accessibleLabel: "Photographic tone look"
                     Layout.fillWidth: true
                     model: ["Neutral", "Soft highlights", "Monochrome"]
                     currentIndex: root.photoSettings.look === "soft-highlight" ? 1 : root.photoSettings.look === "monochrome" ? 2 : 0
                     onActivated: index => root.updatePhotoSetting("look", ["neutral", "soft-highlight", "monochrome"][index])
-                    Accessible.name: "Photographic tone look"
                 }
-                Label { visible: photoControls.page === 1; text: "Depth of field · thin lens"; color: theme.textStrong; font.pixelSize: 16 }
                 RowLayout {
                     visible: photoControls.page === 1
                     Layout.fillWidth: true
-                    Label { text: root.physicalCameraActive ? "Focus distance (m)" : "Focus distance"; color: theme.textMain }
-                    TextField {
+                    Label { text: root.physicalCameraActive ? "Focus distance (m)" : "Focus distance (scene units)"; color: theme.textMain }
+                    ToneTextField {
                         objectName: "sceneLensFocusField"
                         property bool userEdited: false
                         onTextEdited: userEdited = true
@@ -718,57 +750,63 @@ Item {
                     onClicked: { root.focusPickArmed = true; root.actionError = ""; photoControls.close(); root.forceActiveFocus() }
                 }
                 ActionButton {
+                    objectName: "sceneUseCaptureFocusButton"
                     text: "Use capture depth estimate"
                     visible: photoControls.page === 1 && !root.physicalCameraActive
+                    enabled: Boolean(viewport.status.frameAvailable)
                     onClicked: root.updateLensSetting("focusDistance", Math.max(0.01, Math.min(100000000, Number(viewport.status.sceneFocusDistance || 1))))
                 }
                 Label {
                     Layout.fillWidth: true
                     text: "Aperture radius  " + Number(root.lensSettings.apertureRadius).toPrecision(3)
                         + (Number(root.lensSettings.apertureRadius) === 0 ? " · Pinhole" : " scene units")
-                    visible: photoControls.page === 1 && !root.physicalCameraActive
+                    visible: photoControls.page === 2 && !root.physicalCameraActive
                     color: theme.textMain
                 }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneLensApertureSlider"
-                    visible: photoControls.page === 1 && !root.physicalCameraActive
+                    label: "Aperture radius in scene units, zero disables depth of field"
+                    valueText: value === 0 ? "Pinhole" : Number(value).toPrecision(3) + " scene units"
+                    visible: photoControls.page === 2 && !root.physicalCameraActive
                     Layout.fillWidth: true
                     from: 0
                     to: Math.min(Number(root.lensSettings.focusDistance) * 0.25, Number(viewport.status.sceneFocusDistance || 1) * 0.1)
                     value: Number(root.lensSettings.apertureRadius)
                     onPressedChanged: pressed ? viewport.beginNavigation() : viewport.endNavigation()
                     onMoved: root.updateLensSetting("apertureRadius", value)
-                    Accessible.name: "Aperture radius in scene units, zero disables depth of field"
                 }
-                ComboBox {
+                ToneComboBox {
                     objectName: "sceneLensShapeCombo"
+                    accessibleLabel: "Aperture blade shape"
                     visible: photoControls.page === 2
                     Layout.fillWidth: true
                     model: ["Circular aperture", "6 blades", "7 blades", "8 blades", "9 blades"]
                     currentIndex: Number(root.lensSettings.blades) === 0 ? 0 : Number(root.lensSettings.blades) - 5
                     onActivated: index => root.updateLensSetting("blades", index === 0 ? 0 : index + 5)
-                    Accessible.name: "Aperture blade shape"
                 }
-                Label { visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0; text: "Blade roundness"; color: theme.textMain }
-                Slider {
+                Label { visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0; text: "Blade roundness  " + Math.round(Number(root.lensSettings.roundness) * 100) + "%"; color: theme.textMain }
+                ToolValueSlider {
+                    label: "Aperture blade roundness"
+                    valueText: Math.round(value * 100) + "%"
                     Layout.fillWidth: true
                     visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0
                     from: 0; to: 1; value: Number(root.lensSettings.roundness)
                     onPressedChanged: pressed ? viewport.beginNavigation() : viewport.endNavigation()
                     onMoved: root.updateLensSetting("roundness", value)
-                    Accessible.name: "Aperture blade roundness"
                 }
-                Label { visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0; text: "Aperture rotation"; color: theme.textMain }
-                Slider {
+                Label { visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0; text: "Aperture rotation  " + Number(root.lensSettings.rotationDegrees).toFixed(1) + "°"; color: theme.textMain }
+                ToolValueSlider {
+                    label: "Aperture rotation in degrees"
+                    valueText: Number(value).toFixed(1) + "°"
                     Layout.fillWidth: true
                     visible: photoControls.page === 2 && Number(root.lensSettings.blades) > 0
                     from: 0; to: 360; value: Number(root.lensSettings.rotationDegrees)
                     onPressedChanged: pressed ? viewport.beginNavigation() : viewport.endNavigation()
                     onMoved: root.updateLensSetting("rotationDegrees", value)
-                    Accessible.name: "Aperture rotation in degrees"
                 }
-                ComboBox {
+                ToneComboBox {
                     objectName: "sceneLensQualityCombo"
+                    accessibleLabel: "Settled photo aperture sampling quality"
                     visible: photoControls.page === 2
                     Layout.fillWidth: true
                     model: ["Draft photo · 16 samples", "Standard · 32 samples", "Fine · 64 samples", "High · 128 samples",
@@ -776,7 +814,6 @@ Item {
                         "Ultra bokeh · 2048 samples", "Final bokeh · 4096 samples"]
                     currentIndex: [16, 32, 64, 128, 256, 512, 1024, 2048, 4096].indexOf(Number(root.lensSettings.samples))
                     onActivated: index => root.updateLensSetting("samples", [16, 32, 64, 128, 256, 512, 1024, 2048, 4096][index])
-                    Accessible.name: "Settled photo aperture sampling quality"
                 }
                 Label {
                     objectName: "sceneLensHighQualityHint"
@@ -786,61 +823,74 @@ Item {
                     text: "Higher sampling smooths defocused highlights, but takes longer. Move to interrupt refinement. Photos and films use the selected quality."
                     color: theme.textMuted
                 }
-                ComboBox {
+                ToneComboBox {
                     objectName: "sceneFilmSectionCombo"
+                    accessibleLabel: "Film effect controls"
                     visible: photoControls.page === 3; Layout.fillWidth: true
                     model: ["Grain", "Halation"]
                     currentIndex: photoControls.halationPage ? 1 : 0
                     onActivated: index => photoControls.halationPage = index === 1
-                    Accessible.name: "Film effect controls"
                 }
                 Label { visible: photoControls.page === 3 && !photoControls.halationPage; text: "Grain  " + Number(root.filmSettings.grainAmount).toFixed(2); color: theme.textMain }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneFilmGrainSlider"
+                    label: "Film grain amount"
+                    valueText: Number(value).toFixed(2)
                     visible: photoControls.page === 3 && !photoControls.halationPage; Layout.fillWidth: true
                     from: 0; to: 1; value: Number(root.filmSettings.grainAmount)
                     onMoved: root.updateFilmSetting("grainAmount", value)
-                    Accessible.name: "Film grain amount"
                 }
                 Label { visible: photoControls.page === 3 && !photoControls.halationPage; text: "Grain size  " + Number(root.filmSettings.grainSize).toFixed(1); color: theme.textMain }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneFilmGrainSizeSlider"
+                    label: "Grain size at 2048 pixel long edge"
+                    valueText: Number(value).toFixed(1) + " px"
                     visible: photoControls.page === 3 && !photoControls.halationPage; Layout.fillWidth: true
                     from: 0.5; to: 6; stepSize: 0.1; value: Number(root.filmSettings.grainSize)
                     onMoved: root.updateFilmSetting("grainSize", value)
-                    Accessible.name: "Grain size at 2048 pixel long edge"
                 }
                 Label { visible: photoControls.page === 3 && photoControls.halationPage; text: "Halation  " + Number(root.filmSettings.halationAmount).toFixed(2); color: theme.textMain }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneFilmHalationSlider"
+                    label: "Red orange highlight halation amount"
+                    valueText: Number(value).toFixed(2)
                     visible: photoControls.page === 3 && photoControls.halationPage; Layout.fillWidth: true
                     from: 0; to: 1; value: Number(root.filmSettings.halationAmount)
                     onMoved: root.updateFilmSetting("halationAmount", value)
-                    Accessible.name: "Red orange highlight halation amount"
                 }
                 Label { visible: photoControls.page === 3 && photoControls.halationPage; text: "Halation spread  " + Number(root.filmSettings.halationRadius).toFixed(1); color: theme.textMain }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneFilmRadiusSlider"
+                    label: "Halation spread at 2048 pixel long edge"
+                    valueText: Number(value).toFixed(1) + " px"
                     visible: photoControls.page === 3 && photoControls.halationPage; Layout.fillWidth: true
                     from: 0.5; to: 16; stepSize: 0.5; value: Number(root.filmSettings.halationRadius)
                     onMoved: root.updateFilmSetting("halationRadius", value)
-                    Accessible.name: "Halation spread at 2048 pixel long edge"
                 }
                 Label { visible: photoControls.page === 3 && photoControls.halationPage; text: "Highlight threshold  " + Number(root.filmSettings.halationThreshold).toFixed(2); color: theme.textMain }
-                Slider {
+                ToolValueSlider {
                     objectName: "sceneFilmThresholdSlider"
+                    label: "Halation threshold in linearized luminance"
+                    valueText: Number(value).toFixed(2)
                     visible: photoControls.page === 3 && photoControls.halationPage; Layout.fillWidth: true
                     from: 0.1; to: 4; stepSize: 0.05; value: Number(root.filmSettings.halationThreshold)
                     onMoved: root.updateFilmSetting("halationThreshold", value)
-                    Accessible.name: "Halation threshold in linearized luminance"
+                }
+                ActionButton {
+                    objectName: "sceneRenderDetailsToggle"
+                    text: photoControls.renderDetailsExpanded ? "Hide render details" : "Render details"
+                    compact: true
+                    onClicked: photoControls.renderDetailsExpanded = !photoControls.renderDetailsExpanded
                 }
                 Label {
+                    visible: photoControls.renderDetailsExpanded
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     text: "Move freely with this panel open. Stop to resolve your photo. Saved views and exports keep these settings."
                     color: theme.textMuted
                 }
                 Label {
+                    visible: photoControls.renderDetailsExpanded
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     text: photoControls.page === 3
@@ -874,8 +924,8 @@ Item {
         anchors.top: parent.top
         anchors.margins: 20
         spacing: 12
-        ActionButton { text: "← Library"; onClicked: root.exitViewerRequested() }
-        Label { text: root.scene.partialScene ? "Partial scene · " + String(root.scene.registeredViews || 0) + " / " + String(root.scene.sourceCount || 0) + " views" : "Scene Lab"; color: theme.textStrong; font.pixelSize: 18 }
+        ActionButton { text: "Library"; iconName: "chevron-left"; compact: true; visible: root.immersive; onClicked: root.exitViewerRequested() }
+        Label { text: root.scene.partialScene ? "Partial scene · " + String(root.scene.registeredViews || 0) + " / " + String(root.scene.sourceCount || 0) + " views" : "Scene"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold }
         Item { Layout.fillWidth: true }
         ActionButton {
             objectName: "scenePhotoSettingsButton"
@@ -891,22 +941,44 @@ Item {
             enabled: viewport.status.previewPhase === "photo" && !viewport.status.exporting
             onClicked: { root.editPhotoAfterRender = false; photoDestination.open() }
         }
-        ActionButton { text: "Open scene"; enabled: root.controller && !root.scene.busy; onClicked: reopenPicker.open() }
-        ActionButton { objectName: "sceneOptionsButton"; text: "Scene options"; onClicked: sceneControls.open() }
+        ActionButton { text: "Open scene"; visible: !sceneControls.visible; enabled: root.controller && !root.scene.busy; onClicked: reopenPicker.open() }
+        ActionButton { objectName: "sceneOptionsButton"; text: "Scene options"; visible: !sceneControls.visible; onClicked: sceneControls.open() }
+        MenuButton {
+            objectName: "sceneWorkspaceLayoutButton"
+            text: "Layout"
+            iconName: "grid"
+            compact: true
+            primaryOpensMenu: true
+            tooltipText: "Choose Scene navigation and visible controls."
+            menuItems: [
+                {key: "navigation", label: "Workspace navigation", icon: "grid", checked: !root.immersive},
+                {key: "photo-settings", label: "Photo settings", icon: "adjust", checked: photoControls.visible,
+                    enabled: root.renderable, disabledReason: "Open a finished scene first."},
+                {key: "status", label: "Preview status", icon: "info", checked: root.previewStatusVisible}
+            ]
+            onMenuItemTriggered: key => root.handleLayoutMenuAction(key)
+        }
     }
     Rectangle {
+        id: scenePreviewStatusSurface
+        objectName: "scenePreviewStatusSurface"
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 20
-        width: liveStatus.implicitWidth + 32
-        height: liveStatus.implicitHeight + 20
-        radius: height / 2
+        width: Math.min(root.width - theme.space24, liveStatus.implicitWidth + theme.space24)
+        height: liveStatus.implicitHeight + theme.space16
+        radius: theme.radiusSurface
         color: theme.alpha(theme.ink950, 0.85)
-        visible: Boolean(viewport.status.frameAvailable)
+        visible: root.previewStatusVisible && Boolean(viewport.status.frameAvailable)
         Label {
             id: liveStatus
             objectName: "sceneLivePhotoStatus"
             anchors.centerIn: parent
+            width: parent.width - theme.space24
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeBody
             color: theme.textStrong
             text: viewport.status.error ? "Preview error · Open scene options"
                 : root.focusPickArmed ? (root.actionError || "PICK FOCUS · Click a solid surface · Esc to cancel")
@@ -916,23 +988,30 @@ Item {
                     && Number(viewport.status.exportTilesCompleted || 0) < Number(viewport.status.exportTilesTotal)
                     ? "RENDERING PHOTO · " + Number(viewport.status.exportTilesCompleted || 0) + "/" + Number(viewport.status.exportTilesTotal) + " tiles"
                     : "SAVING PHOTO…")
-                : viewport.status.previewPhase === "live" ? "LIVE · Drag to orbit · Right-drag to pan · Scroll to move"
+                : viewport.status.previewPhase === "live" ? "Live preview"
                 : viewport.status.previewPhase === "refining" ? (Number(viewport.status.refinementSamplesTotal || 1) > 1
                     ? "Resolving lens · " + Number(viewport.status.refinementSamplesCompleted || 0) + "/" + Number(viewport.status.refinementSamplesTotal) + " samples"
                     : "Resolving photo…")
-                : "PHOTO PREVIEW · Move to explore"
+                : "Photo preview"
+        }
+        HoverHandler { id: sceneStatusHover }
+        AppToolTip {
+            targetItem: scenePreviewStatusSurface
+            visible: sceneStatusHover.hovered
+            text: root.focusPickArmed ? "Click a solid surface to focus. Press Escape to cancel."
+                : "Drag to orbit. Right-drag to pan. Scroll to move. Double-click to reset the camera."
         }
     }
     ColumnLayout {
         id: sceneControlContents
         parent: sceneControls.contentItem.contentItem
         width: sceneControls.availableWidth
-        spacing: 22
+        spacing: 18
         RowLayout {
             Layout.fillWidth: true
             ColumnLayout {
-                Label { text: root.captureReady && !root.showCaptureSetup ? "Your scene" : "Create a 3D scene"; color: theme.textStrong; font.pixelSize: 28 }
-                Label { text: "Choose your capture. Build it locally. Step inside."; color: theme.textMuted }
+                Label { text: root.captureReady && !root.showCaptureSetup ? "Your scene" : "Create a 3D scene"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold }
+                Label { text: "Choose source media and a destination. Everything is built locally."; color: theme.textMuted; font.pixelSize: 13 }
             }
             Item { Layout.fillWidth: true }
             ActionButton {
@@ -946,10 +1025,11 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             visible: !root.captureReady || root.showCaptureSetup
-            Label { text: "Capture type"; color: theme.textMain }
-            ComboBox {
+            Label { text: "Capture type"; Layout.preferredWidth: 104; color: theme.textMain; font.pixelSize: 13 }
+            ToneComboBox {
                 id: captureMode
                 objectName: "sceneCaptureMode"
+                accessibleLabel: "Capture type"
                 model: ["Photos", "Timed 4D input", "Video"]
                 enabled: !root.scene.busy
                 onActivated: { capturePath.clear(); root.actionError = "" }
@@ -959,29 +1039,32 @@ Item {
                 text: root.timedInput ? "Calibrated multi-camera input; preparation only." : root.videoInput ? "One video of a static scene. Frames are sampled automatically." : "Overlapping photos of one unmoving subject."
                 wrapMode: Text.WordWrap
                 color: theme.textMuted
+                font.pixelSize: 12
             }
         }
         RowLayout {
             Layout.fillWidth: true
             spacing: 12
             visible: !root.captureReady || root.showCaptureSetup
-            TextField { id: capturePath; objectName: "sceneCapturePath"; Layout.fillWidth: true; placeholderText: root.timedInput ? "Calibrated capture-4d.json" : root.videoInput ? "Choose a MOV or MP4 video" : "Capture folder — JPG, PNG, TIFF or RAW"; enabled: !root.scene.busy; onEditingFinished: { if (!projectPath.text.length && root.controller) projectPath.text = root.controller.suggestedProjectPath(text) } }
+            Label { text: "Source media"; Layout.preferredWidth: 104; color: theme.textMain; font.pixelSize: 13 }
+            ToneTextField { id: capturePath; objectName: "sceneCapturePath"; Layout.fillWidth: true; placeholderText: root.timedInput ? "Calibrated capture-4d.json" : root.videoInput ? "Choose a MOV or MP4 video" : "Capture folder — JPG, PNG, TIFF or RAW"; enabled: !root.scene.busy; onEditingFinished: { if (!projectPath.text.length && root.controller) projectPath.text = root.controller.suggestedProjectPath(text) } }
             ActionButton { text: root.timedInput ? "Choose manifest" : root.videoInput ? "Choose video" : "Choose photos"; enabled: !root.scene.busy; onClicked: { if (root.timedInput) timedCapturePicker.open(); else if (root.videoInput) videoPicker.open(); else capturePicker.open() } }
         }
         RowLayout {
             Layout.fillWidth: true
             visible: !root.captureReady || root.showCaptureSetup
-            Label { text: "Save scene to"; color: theme.textMuted }
-            TextField { id: projectPath; objectName: "sceneProjectPath"; Layout.fillWidth: true; placeholderText: "New project folder (must not already exist)"; enabled: !root.scene.busy }
+            Label { text: "Destination"; Layout.preferredWidth: 104; color: theme.textMain; font.pixelSize: 13 }
+            ToneTextField { id: projectPath; objectName: "sceneProjectPath"; Layout.fillWidth: true; placeholderText: "New project folder (must not already exist)"; enabled: !root.scene.busy }
             ActionButton { text: "Choose location"; enabled: !root.scene.busy; onClicked: projectPicker.open() }
         }
         RowLayout {
             Layout.fillWidth: true
             visible: (!root.captureReady || root.showCaptureSetup) && !root.timedInput
-            Label { text: "Quality"; color: theme.textMain }
-            ComboBox {
+            Label { text: "Quality"; Layout.preferredWidth: 104; color: theme.textMain; font.pixelSize: 13 }
+            ToneComboBox {
                 id: captureQuality
                 objectName: "sceneCaptureQuality"
+                accessibleLabel: "Capture quality preset"
                 model: ["Explore · faster", "Detail · slower"]
                 currentIndex: 1
                 enabled: !root.scene.busy
@@ -992,21 +1075,51 @@ Item {
                 }
             }
             Label { visible: root.videoInput; text: "Sampled frames"; color: theme.textMain }
-            SpinBox { id: videoFrames; objectName: "sceneVideoFrameCount"; visible: root.videoInput; from: 16; to: 1920; value: 480; stepSize: 16; editable: true; enabled: !root.scene.busy }
+            ToneSpinBox {
+                id: videoFrames
+                objectName: "sceneVideoFrameCount"
+                accessibleLabel: "Sampled video frames"
+                accessibleDescription: "Number of video frames used to reconstruct the scene."
+                valueUnit: "frames"
+                visible: root.videoInput
+                from: 16
+                to: 1920
+                value: 480
+                stepSize: 16
+                editable: true
+                enabled: !root.scene.busy
+            }
             Item { Layout.fillWidth: true }
             ActionButton { text: root.advancedCapture ? "Hide advanced" : "Advanced"; onClicked: root.advancedCapture = !root.advancedCapture }
         }
-        RowLayout {
+        GridLayout {
             Layout.fillWidth: true
+            columns: sceneControls.availableWidth < 748 ? 2 : 6
+            columnSpacing: 8
+            rowSpacing: 8
             visible: (!root.captureReady || root.showCaptureSetup) && (root.advancedCapture || root.timedInput)
             Label { text: "Training steps"; color: theme.textMain; visible: !root.timedInput }
-            SpinBox { id: iterations; objectName: "sceneTrainingSteps"; visible: !root.timedInput; from: 200; to: 100000; value: 30000; stepSize: 200; editable: true; enabled: !root.scene.busy }
+            ToneSpinBox {
+                id: iterations
+                objectName: "sceneTrainingSteps"
+                accessibleLabel: "Training steps"
+                accessibleDescription: "Number of optimization steps used to reconstruct the scene."
+                valueUnit: "steps"
+                visible: !root.timedInput
+                from: 200
+                to: 100000
+                value: 30000
+                stepSize: 200
+                editable: true
+                enabled: !root.scene.busy
+            }
             Label { text: "Image edge"; color: theme.textMain }
-            ComboBox { id: resolution; objectName: "sceneTrainingResolution"; model: ["800", "1600", "2400", "3200", "4096"]; currentIndex: 3; enabled: !root.scene.busy }
+            ToneComboBox { id: resolution; objectName: "sceneTrainingResolution"; accessibleLabel: "Training image edge resolution"; model: ["800", "1600", "2400", "3200", "4096"]; currentIndex: 3; enabled: !root.scene.busy }
             Label { text: "Splat budget"; color: theme.textMain; visible: !root.timedInput }
-            ComboBox {
+            ToneComboBox {
                 id: splatBudget
                 objectName: "sceneTrainingSplatBudget"
+                accessibleLabel: "Training splat budget"
                 visible: !root.timedInput
                 model: ["500,000", "1 million", "2 million"]
                 currentIndex: 2
@@ -1017,12 +1130,27 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             visible: !root.captureReady || root.showCaptureSetup
-            Item { Layout.fillWidth: true }
+            Label {
+                id: sceneCaptureActionGuidance
+                objectName: "sceneCaptureActionGuidance"
+                Layout.fillWidth: true
+                visible: !root.scene.busy && (capturePath.text.length === 0 || projectPath.text.length === 0)
+                text: capturePath.text.length === 0
+                      ? (root.videoInput ? "Choose a video to begin." : root.timedInput ? "Choose a capture manifest to begin." : "Choose overlapping photos to begin.")
+                      : "Choose where to save the new scene."
+                color: theme.textMuted
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
+            Item { Layout.fillWidth: true; visible: !sceneCaptureActionGuidance.visible }
             ActionButton {
                 objectName: "sceneStartCapture"
                 tone: root.scene.busy ? "secondary" : "primary"
-                text: root.scene.busy ? "Cancel operation" : (root.timedInput ? "Prepare timed capture" : "Build splat & open viewer")
+                text: root.scene.busy ? "Cancel operation" : (root.timedInput ? "Prepare timed capture" : "Create scene")
                 enabled: root.controller && (root.scene.busy || (capturePath.text.length > 0 && projectPath.text.length > 0))
+                disabledReason: capturePath.text.length === 0 ? "Choose source media to begin."
+                                : projectPath.text.length === 0 ? "Choose a destination for the new scene."
+                                : "Scene creation is unavailable."
                 onClicked: {
                     if (root.scene.busy) { root.controller.cancel(); return }
                     const result = root.timedInput
@@ -1061,7 +1189,8 @@ Item {
             Layout.fillWidth: true
             visible: root.renderable
             Label { text: "Capture camera"; color: theme.textMain }
-            ComboBox {
+            ToneComboBox {
+                accessibleLabel: "Capture camera"
                 Layout.preferredWidth: 230
                 model: viewport.status.cameras || []
                 currentIndex: Number(viewport.status.cameraIndex || 0)
@@ -1070,7 +1199,7 @@ Item {
             ActionButton { text: "Reset camera"; onClicked: viewport.resetCamera() }
             Item { Layout.fillWidth: true }
             Label { text: "Export edge"; color: theme.textMain }
-            ComboBox { id: exportEdge; objectName: "sceneExportEdge"; model: ["800", "1600", "4096", "6000", "8192"]; currentIndex: 2 }
+            ToneComboBox { id: exportEdge; objectName: "sceneExportEdge"; accessibleLabel: "Scene export image edge"; model: ["800", "1600", "4096", "6000", "8192"]; currentIndex: 2 }
             ActionButton {
                 text: viewport.status.exporting ? "Exporting…" : "Export photo"
                 enabled: viewport.status.frameAvailable && !viewport.status.exporting
@@ -1089,8 +1218,9 @@ Item {
             Layout.fillWidth: true
             visible: root.renderable
             Label { text: "Saved views"; color: theme.textMain }
-            ComboBox {
+            ToneComboBox {
                 objectName: "sceneSavedViews"
+                accessibleLabel: "Recall saved camera view"
                 Layout.preferredWidth: 280
                 model: viewport.status.savedViews || []
                 textRole: "name"
@@ -1125,7 +1255,9 @@ Item {
                 enabled: Number(viewport.status.pathDuration || 0) > 0
                 onClicked: viewport.playCameraPath(!viewport.status.pathPlaying)
             }
-            Slider {
+            ToolValueSlider {
+                label: "Camera path position"
+                valueText: Number(value).toFixed(1) + " s"
                 Layout.fillWidth: true
                 from: 0; to: Number(viewport.status.pathDuration || 0)
                 value: Number(viewport.status.pathSeconds || 0)
@@ -1156,8 +1288,10 @@ Item {
                 text: viewport.status.timePlaying ? "Pause time" : "Play time"
                 onClicked: viewport.playSceneTime(!viewport.status.timePlaying)
             }
-            Slider {
+            ToolValueSlider {
                 objectName: "sceneTimeSlider"
+                label: "Scene time position"
+                valueText: Number(value).toFixed(3) + " s"
                 Layout.fillWidth: true
                 from: 0
                 to: Number(viewport.status.timeDurationSeconds || 0)
@@ -1208,7 +1342,11 @@ Item {
             text: String(root.scene.focalPriorFrames || 0) + " views with EXIF focal priors · "
                 + String(root.scene.estimatedIntrinsicsFrames || 0) + " with heuristic focal estimates. Refined during reconstruction."
         }
-        ActionButton { text: root.showDetails ? "Hide details" : "Show details"; onClicked: root.showDetails = !root.showDetails }
+        ActionButton {
+            visible: root.scene.busy || root.captureReady || String(root.scene.logTail || "").length > 0
+            text: root.showDetails ? "Hide details" : "Show details"
+            onClicked: root.showDetails = !root.showDetails
+        }
         Label {
             objectName: "sceneTrainingScheduleStatus"
             Layout.fillWidth: true
@@ -1224,7 +1362,14 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 140
             visible: root.showDetails
-            TextArea { readOnly: true; text: String(root.scene.logTail || "No backend output yet."); wrapMode: TextEdit.Wrap; selectByMouse: true }
+            ToneTextArea {
+                objectName: "sceneProcessingOutput"
+                accessibleLabel: "Scene processing output"
+                readOnly: true
+                text: String(root.scene.logTail || "No backend output yet.")
+                wrapMode: TextEdit.Wrap
+                selectByMouse: true
+            }
         }
     }
 }

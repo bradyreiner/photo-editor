@@ -39,8 +39,9 @@ window.LooksyDownloads = {
   "paymentProvider": "lemonsqueezy",
   "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",
   "priceLabel": "",
-  "licenseSummary": "Choose a subscription or a one-time license for one user, including personal and client work. One-time licenses include maintenance updates for the purchased major version. Plan prices, activation requirements and renewal terms are shown before checkout.",
-  "commercialTermsApproved": false,
   "subscriptionPurchaseUrl": "",
-  "subscriptionPriceLabel": ""
+  "subscriptionPriceLabel": "",
+  "billingPortalUrl": "",
+  "licenseSummary": "Choose a subscription or a one-time license for one user, including personal and client work. One-time licenses include maintenance updates for the purchased major version. Plan prices, activation requirements and renewal terms are shown before checkout.",
+  "commercialTermsApproved": false
 };

@@ -1021,8 +1021,9 @@ Column {
             width: parent.width
             spacing: 8
 
-            TextField {
+            ToneTextField {
                 objectName: "maskSearchField"
+                accessibleLabel: "Search masks and controls"
                 width: parent.width
                 text: root.maskSearchQuery
                 placeholderText: "Search masks, tools, controls"
@@ -1919,9 +1920,21 @@ Column {
                       editorPreview.activeMaskRetouchMode === "heal" ||
                       editorPreview.activeMaskRetouchMode === "patch")
             text: editorPreview.inpaintPrompt
-            placeholderText: "Optional inpaint prompt"
+            placeholderText: "Texture hint, e.g. smooth or textured"
             enabled: !editorPreview.activeMaskCommitted
             onEditingFinished: editorPreview.inpaintPrompt = text
+        }
+
+        Label {
+            width: parent.width
+            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                      editorPreview.activeMaskRetouchMode === "heal" ||
+                      editorPreview.activeMaskRetouchMode === "patch")
+            text: "Fill reconstructs nearby pixels. Text hints adjust texture; they cannot generate new objects."
+            wrapMode: Text.WordWrap
+            color: theme.textMuted
+            font.pixelSize: theme.typeCaption
         }
 
         RowLayout {

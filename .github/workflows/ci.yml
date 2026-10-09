@@ -49,7 +49,9 @@ jobs:
         run: bash -n scripts/*.sh
 
       - name: Validate Looksy brand surface
-        run: python3 -B scripts/verify-brand-surface.py
+        run: |
+          python3 -B scripts/test-brand-surface.py
+          python3 -B scripts/verify-brand-surface.py
 
       - name: Validate commercial release configuration
         run: |

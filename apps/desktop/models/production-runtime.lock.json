@@ -23,6 +23,36 @@
           "name": "Apache-2.0",
           "url": "https://huggingface.co/opencv/inpainting_lama/blob/aee6d22f0a13e5e35af1c9a1c3afd62841fc6f3f/LICENSE"
         }
+      },
+      {
+        "id": "sharpai-sam2-hiera-tiny-encoder-onnx-2025nov",
+        "role": "selection",
+        "contract": "sam2-hiera-tiny-image-encoder-fp32-1024-v1",
+        "path": "selection/sam2_hiera_tiny_image_encoder.onnx",
+        "bytes": 134261315,
+        "sha256": "df265cb552475e1b3a6cb57c939e57c95ed849bfc2f985c06efab85d8bca6db9",
+        "downloadUrl": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/resolve/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/encoder.onnx",
+        "sourceUrl": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/blob/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/encoder.onnx",
+        "upstreamArchitectureUrl": "https://github.com/facebookresearch/segment-anything-2",
+        "license": {
+          "name": "Apache-2.0",
+          "url": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/blob/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/README.md"
+        }
+      },
+      {
+        "id": "sharpai-sam2-hiera-tiny-decoder-onnx-2025nov",
+        "role": "selection",
+        "contract": "sam2-hiera-tiny-image-decoder-fp32-1024-v1",
+        "path": "selection/sam2_hiera_tiny_image_decoder.onnx",
+        "bytes": 20639854,
+        "sha256": "63198f1f1e273d8f2f4a9d1baf926e53a01d78dc50e0674640e1513dc00d9927",
+        "downloadUrl": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/resolve/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/decoder.onnx",
+        "sourceUrl": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/blob/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/decoder.onnx",
+        "upstreamArchitectureUrl": "https://github.com/facebookresearch/segment-anything-2",
+        "license": {
+          "name": "Apache-2.0",
+          "url": "https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/blob/2b467a10bfd7d49ba5fe6a00fbee4351f0b1a739/README.md"
+        }
       }
     ]
   },

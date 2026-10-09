@@ -7,7 +7,7 @@
 
 namespace photo_editor::desktop {
 
-inline constexpr double kMaskOutlineSimplificationTolerancePixels = 1.5;
+inline constexpr double kMaskOutlineSimplificationTolerancePixels = 0.5;
 
 struct OutlineSimplificationStats final {
   int input_point_count = 0;
@@ -18,6 +18,10 @@ struct OutlineSimplificationStats final {
 };
 
 [[nodiscard]] double normalized_outline_display_scale(double scale);
+[[nodiscard]] double outline_tolerance_for_sampled_raster(
+    double reference_tolerance_pixels,
+    const QSize& reference_size,
+    const QSize& sampled_size);
 [[nodiscard]] bool variant_value_is_outline_point(const QVariant& value);
 [[nodiscard]] QVector<QPointF> outline_path_to_pixel_points(
     const QVariantList& path, const QSize& raster_size);

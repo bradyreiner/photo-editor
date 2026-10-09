@@ -4,6 +4,7 @@
 #include "edit_recipe_state.h"
 #include "job_runner.h"
 #include "job_store.h"
+#include "linked_image_source.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 
@@ -21,6 +22,9 @@
 #include <QFile>
 #include <QImage>
 #include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QPersistentModelIndex>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -76,6 +80,157 @@ photo_editor::desktop::CatalogAssetItem make_asset(const QString& asset_id, cons
   item.media_type = QStringLiteral("photo");
   item.online = true;
   return item;
+}
+
+int run_incremental_timeline_model_contract() {
+  photo_editor::desktop::CatalogAssetModel model;
+  model.replaceAssetsForTesting({make_asset(QStringLiteral("stable-photo"))});
+  const QPersistentModelIndex photo_index(model.index(0, 0));
+  auto model_reset_count = 0;
+  auto rows_inserted_count = 0;
+  auto rows_removed_count = 0;
+  QObject::connect(&model, &QAbstractItemModel::modelReset, [&model_reset_count]() {
+    ++model_reset_count;
+  });
+  QObject::connect(&model, &QAbstractItemModel::rowsInserted, [&rows_inserted_count]() {
+    ++rows_inserted_count;
+  });
+  QObject::connect(&model, &QAbstractItemModel::rowsRemoved, [&rows_removed_count]() {
+    ++rows_removed_count;
+  });
+
+  auto timeline = make_asset(QStringLiteral("timeline:saved-1"));
+  timeline.media_type = QStringLiteral("timeline");
+  timeline.camera_label = QStringLiteral("Saved timeline");
+  timeline.timeline_document_path = QStringLiteral("/tmp/saved-timeline.json");
+  model.replaceTimelineAssetsForTesting({timeline});
+  if (model.rowCount() != 2 || !photo_index.isValid() || photo_index.row() != 0 ||
+      model.data(photo_index, photo_editor::desktop::CatalogAssetModel::AssetIdRole).toString() !=
+          QStringLiteral("stable-photo") || rows_inserted_count != 1) {
+    return fail("late timeline records should insert without resetting or displacing photo rows");
+  }
+
+  timeline.camera_label = QStringLiteral("Renamed timeline");
+  model.replaceTimelineAssetsForTesting({timeline});
+  if (model.rowCount() != 2 ||
+      model.data(model.index(1, 0), photo_editor::desktop::CatalogAssetModel::CameraLabelRole).toString() !=
+          QStringLiteral("Renamed timeline")) {
+    return fail("timeline metadata refresh should update its row in place");
+  }
+
+  model.replaceTimelineAssetsForTesting({});
+  if (model.rowCount() != 1 || !photo_index.isValid() || photo_index.row() != 0 ||
+      rows_removed_count != 1 || model_reset_count != 0) {
+    return fail("removed timelines should emit row removal while preserving photo delegates");
+  }
+
+  std::cout << "Incremental Timeline row reconciliation passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_first_visible_photo_contract() {
+  using photo_editor::desktop::CatalogAssetModel;
+  auto video = make_asset(QStringLiteral("first-photo-video"), QStringLiteral("a-video.mp4"));
+  video.media_type = QStringLiteral("video");
+  auto timeline = make_asset(QStringLiteral("first-photo-timeline"), QStringLiteral("b-timeline.looksy"));
+  timeline.media_type = QStringLiteral("timeline");
+  auto photo = make_asset(QStringLiteral("first-photo-photo"), QStringLiteral("z-photo.jpg"));
+
+  CatalogAssetModel model;
+  model.setMediaCollectionFilter(QStringLiteral("all"));
+  model.setMediaTypeFilter(QStringLiteral("all"));
+  model.replaceAssetsForTesting({video, timeline, photo});
+  if (model.assetCount() != 3 || model.firstVisiblePhotoIndex() != 2) {
+    return fail("the cached photo target should skip visible video and timeline rows");
+  }
+
+  auto notification_count = 0;
+  QObject::connect(&model, &CatalogAssetModel::firstVisiblePhotoIndexChanged,
+                   [&notification_count]() { ++notification_count; });
+  model.setMediaTypeFilter(QStringLiteral("videos"));
+  if (model.assetCount() != 1 || model.firstVisiblePhotoIndex() != -1 || notification_count != 1) {
+    return fail("photo-target availability should update when a filter removes every photo");
+  }
+  model.setMediaTypeFilter(QStringLiteral("all"));
+  if (model.assetCount() != 3 || model.firstVisiblePhotoIndex() != 2 || notification_count != 2) {
+    return fail("photo-target availability should recover when the visible collection includes photos again");
+  }
+
+  model.setSortOrder(QStringLiteral("filename-asc"));
+  photo.file_path = QStringLiteral("/tmp/0-photo.jpg");
+  video.file_path = QStringLiteral("/tmp/2-video.mp4");
+  timeline.file_path = QStringLiteral("/tmp/1-timeline.looksy");
+  model.replaceAssetsForTesting({video, timeline, photo});
+  if (model.assetCount() != 3 || model.firstVisiblePhotoIndex() != 0 || notification_count != 3) {
+    return fail("same-count sorting and source updates should notify the new first visible photo row");
+  }
+
+  model.replaceAssetsForTesting({photo});
+  if (model.assetCount() != 1 || model.firstVisiblePhotoIndex() != 0 || notification_count != 3) {
+    return fail("a single visible photo should become the current photo target");
+  }
+  model.replaceAssetsForTesting({video});
+  if (model.assetCount() != 1 || model.firstVisiblePhotoIndex() != -1 || notification_count != 4) {
+    return fail("same-count photo-to-video replacement should clear a stale photo target");
+  }
+  std::cout << "First visible photo target caching and notifications passed\n";
+  return EXIT_SUCCESS;
+}
+
+int run_library_collection_contract() {
+  const auto root = qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_DIR");
+  const auto owned_path = QDir(root).filePath(QStringLiteral("canvas-documents/owned/source.png"));
+  const auto unowned_path = QDir(root).filePath(QStringLiteral("canvas-documents/unowned/source.png"));
+  const auto id = QStringLiteral("688e0c78-a0d6-46a7-92ba-432a68464970");
+  const auto documents_root = QDir(root).filePath(QStringLiteral("carousels/documents"));
+  if (!QDir().mkpath(documents_root)) return fail("Collection ownership fixture must create its documents root");
+  const auto write_json = [](const QString& path, const QJsonObject& object) {
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(QJsonDocument(object).toJson()) > 0;
+  };
+  const QJsonArray sources{QJsonObject{{QStringLiteral("filePath"), owned_path}},
+                           QJsonObject{{QStringLiteral("filePath"), QStringLiteral("/tmp/collection-photo.jpg")}}};
+  if (!write_json(QDir(root).filePath(QStringLiteral("carousels/index.json")),
+                  {{QStringLiteral("documents"), QJsonArray{QJsonObject{{QStringLiteral("documentId"), id}}}}}) ||
+      !write_json(QDir(documents_root).filePath(id + QStringLiteral(".json")),
+                  {{QStringLiteral("document"), QJsonObject{{QStringLiteral("sources"), sources}}}}))
+    return fail("Collection ownership fixture must save its board references");
+  photo_editor::desktop::CatalogAssetModel model;
+  auto photo = make_asset(QStringLiteral("collection-photo"));
+  auto video = make_asset(QStringLiteral("collection-video"));
+  video.media_type = QStringLiteral("video");
+  auto board = make_asset(QStringLiteral("collection-board"));
+  board.media_type = QStringLiteral("carousel");
+  auto owned = make_asset(QStringLiteral("collection-owned-canvas"));
+  owned.file_path = owned_path;
+  auto unowned = make_asset(QStringLiteral("collection-unowned-canvas"));
+  unowned.file_path = unowned_path;
+  model.replaceAssetsForTesting({photo, video, board, owned, unowned});
+  model.setMediaCollectionFilter(QStringLiteral("images"));
+  model.selectIndex(0);
+  auto timeline = make_asset(QStringLiteral("timeline:collection"));
+  timeline.media_type = QStringLiteral("timeline");
+  timeline.timeline_document_path = QStringLiteral("/tmp/collection-timeline.json");
+  model.replaceTimelineAssetsForTesting({timeline});
+  QElapsedTimer timer;
+  timer.start();
+  while (model.rowCount() != 3 && timer.elapsed() < 3000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+  if (model.rowCount() != 3 || model.totalAssetCount() != 6 ||
+      model.selectedAssetId() != photo.asset_id || model.galleryAssets().size() != 3) {
+    return fail("Images must exclude board backing sources, preserve ordinary photos and unowned canvases, and retain every record");
+  }
+  model.setMediaTypeFilter(QStringLiteral("videos"));
+  if (model.rowCount() != 1 || model.selectedMediaType() != QStringLiteral("video"))
+    return fail("Images must still support its video filter");
+  model.clearFilters();
+  if (model.rowCount() != 3 || model.mediaCollectionFilter() != QStringLiteral("images"))
+    return fail("Clearing filters must not put document placeholders back into Images");
+  model.setMediaCollectionFilter(QStringLiteral("all"));
+  model.setMediaTypeFilter(QStringLiteral("timelines"));
+  if (model.rowCount() != 1 || model.selectedTimelineDocumentPath() != timeline.timeline_document_path)
+    return fail("Saved timeline records must remain available outside the Images collection");
+  return EXIT_SUCCESS;
 }
 
 bool write_file(const QString& file_path) {
@@ -137,10 +292,12 @@ QString test_thumbnail_cache_path(
               identity_bytes,
               QCryptographicHash::Sha256)
               .toHex());
-  const auto key =
-      QStringLiteral(
-          "photo-v5-canonical-adjustments:%1:%2")
-          .arg(file_path, adjustment_identity);
+  // These fixtures have only the original file as a mutable dependency.
+  const QJsonObject dependencies{{file_path, photo_editor::desktop::linked_image_file_revision(file_path)}};
+  const auto dependency_identity = QString::fromLatin1(QCryptographicHash::hash(
+      QJsonDocument(dependencies).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+  const auto key = QStringLiteral("photo-v7-display-text-color-policy:%1:%2:%3:768:1280")
+      .arg(file_path, adjustment_identity, dependency_identity);
   const auto hash = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex();
   return QDir(photo_editor::desktop::AppBootstrap::cacheLocation())
       .filePath(QStringLiteral("thumbnails/%1.jpg").arg(QString::fromLatin1(hash)));
@@ -211,18 +368,20 @@ bool wait_for_import_completion(
   timer.start();
 
   while (timer.elapsed() < timeout_ms) {
-    if (!model->importing()) {
+    if (!model->importing() && !model->importPreflightBusy()) {
       return true;
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
   }
 
-  return !model->importing();
+  return !model->importing() && !model->importPreflightBusy();
 }
 
 }  // namespace
 
 int run_catalog_similarity_search_contract();
+int run_agent_prepared_canvas_import_contract();
+int run_agent_prepared_canvas_ownership_contract();
 
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
@@ -234,6 +393,25 @@ int main(int argc, char** argv) {
     return fail("temporary runtime directory should be created");
   }
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  const bool catalog_database_was_configured = qEnvironmentVariableIsSet("PHOTO_EDITOR_DATABASE_URL");
+  const bool repository_root_was_configured = qEnvironmentVariableIsSet("PHOTO_EDITOR_REPOSITORY_ROOT");
+  const auto configured_repository_root = qgetenv("PHOTO_EDITOR_REPOSITORY_ROOT");
+  if (!catalog_database_was_configured) {
+    // Keep this smoke test offline without asking AppBootstrap to start the
+    // user's managed PostgreSQL service when a test database was not supplied.
+    qputenv(
+        "PHOTO_EDITOR_DATABASE_URL",
+        QByteArrayLiteral("postgresql://127.0.0.1:1/catalog_asset_model_fixture"));
+  }
+  if (app.arguments().contains(QStringLiteral("--prepared-canvas-import-contract")))
+    return run_agent_prepared_canvas_import_contract();
+  if (app.arguments().contains(QStringLiteral("--prepared-canvas-ownership-contract")))
+    return run_agent_prepared_canvas_ownership_contract();
+  if (app.arguments().contains(QStringLiteral("--incremental-timeline-model-contract"))) {
+    return run_incremental_timeline_model_contract();
+  }
+  if (app.arguments().contains(QStringLiteral("--library-collection-contract")))
+    return run_library_collection_contract();
   if (app.arguments().contains(QStringLiteral("--similarity-binding-contract")))
     return run_catalog_similarity_search_contract();
 
@@ -254,6 +432,13 @@ int main(int argc, char** argv) {
     if (!model.loading() || !model.errorMessage().isEmpty() || model.totalAssetCount() != 1) {
       return fail("retrying catalog startup must clear the old error and preserve existing assets");
     }
+  }
+
+  if (run_incremental_timeline_model_contract() != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+  if (run_first_visible_photo_contract() != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
   }
 
   {
@@ -278,6 +463,12 @@ int main(int argc, char** argv) {
     if (model.galleryAssetAt(0) != gallery[0].toMap() ||
         !model.galleryAssetAt(-1).isEmpty() || !model.galleryAssetAt(2).isEmpty())
       return fail("single-row gallery projection must match visible rows and reject invalid indices");
+    const auto survey = model.surveyAssets(0, 6);
+    if (survey.size() != 2 || survey[0].toMap().contains("adjustmentPatchJson") ||
+        survey[0].toMap().value("assetId") != gallery[0].toMap().value("assetId") ||
+        !survey[0].toMap().contains("cameraLabel") || !survey[0].toMap().contains("visibleIndex") ||
+        !model.assetAt(0).contains("adjustmentPatchJson"))
+      return fail("Survey must preserve preview metadata without preparing recipes; explicit asset access retains recipes");
     model.setSearchFilter(QStringLiteral("visual-a"));
     if (model.assetCount() != 1 || model.assetAt(0).value("assetId").toString() != a.asset_id) {
       return fail("visual search must intersect existing metadata filters");
@@ -1756,6 +1947,14 @@ int main(int argc, char** argv) {
         QString{},
         QStringLiteral("managed"),
         QStringLiteral("skip"));
+    QElapsedTimer import_admission_timer;
+    import_admission_timer.start();
+    while (preflight_model.importPreflightBusy() && import_admission_timer.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    }
+    if (preflight_model.importPreflightBusy()) {
+      return fail("import admission scan did not finish");
+    }
     auto persisted_review_found = false;
     for (const auto& record : photo_editor::desktop::loadPersistedJobRecords()) {
       if (record.job_kind != QStringLiteral("catalog_import") ||
@@ -1812,7 +2011,84 @@ int main(int argc, char** argv) {
     }
     qputenv("PHOTO_EDITOR_ORIGINALS_BACKUP_DIR", import_backup_root.toUtf8());
 
+    // The earlier culling stress fixture intentionally leaves its durable
+    // outbox available for restart coverage. Give this import smoke test its
+    // own app-data root so culling recovery cannot start unrelated work here.
+    const auto import_data_root = runtime_root.filePath(QStringLiteral("import-phase-data"));
+    qputenv("PHOTO_EDITOR_APP_DATA_DIR", import_data_root.toUtf8());
+
+    if (!catalog_database_was_configured) {
+      // A failed connection to a real helper still costs several seconds for
+      // each queue observation/update. Keep the offline job-runner lifecycle
+      // real while replacing only its catalog-backed job store and import
+      // worker with deterministic, isolated test helpers.
+      const auto helper_root = runtime_root.filePath(QStringLiteral("offline-import-helpers"));
+      const auto helper_directory = QDir(helper_root).filePath(QStringLiteral("rust/target/debug"));
+      const auto helper_store_path = QDir(helper_directory).filePath(QStringLiteral("catalog_export_jobs"));
+      const auto import_worker_path = QDir(helper_directory).filePath(QStringLiteral("import_catalog"));
+      if (!QDir().mkpath(helper_directory)) {
+        return fail("offline import helper directory should be created");
+      }
+      QFile cargo_manifest(QDir(helper_root).filePath(QStringLiteral("rust/Cargo.toml")));
+      if (!cargo_manifest.open(QIODevice::WriteOnly) || cargo_manifest.write("[workspace]\n") < 0) {
+        return fail("offline import helper root should be valid");
+      }
+      cargo_manifest.close();
+      const QByteArray job_store_script = QByteArrayLiteral(
+          "#!/bin/sh\n"
+          "set -eu\n"
+          "record=\"$PHOTO_EDITOR_APP_DATA_DIR/offline-job-record.json\"\n"
+          "if [ \"$1\" = --stdin-json-v1 ]; then\n"
+          "  envelope=\"$(cat)\"\n"
+          "  operation=\"$(printf '%s' \"$envelope\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"arguments\"][0])')\"\n"
+          "  case \"$operation\" in\n"
+          "    upsert)\n"
+          "      temporary=\"$(mktemp \"$record.XXXXXX\")\"\n"
+          "      printf '%s' \"$envelope\" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)[\"arguments\"][1])' > \"$temporary\"\n"
+          "      mv \"$temporary\" \"$record\"\n"
+          "      exit 0\n"
+          "      ;;\n"
+          "    import-legacy) printf '{\"accepted\":true}\\n'; exit 0 ;;\n"
+          "    *) set -- \"$operation\" ;;\n"
+          "  esac\n"
+          "fi\n"
+          "case \"$1\" in\n"
+          "  list)\n"
+          "    if [ -f \"$record\" ]; then printf '['; cat \"$record\"; printf ']\\n'; "
+          "else printf '[]\\n'; fi\n"
+          "    ;;\n"
+          "  upsert)\n"
+          "    temporary=\"$(mktemp \"$record.XXXXXX\")\"\n"
+          "    printf '%s' \"$2\" > \"$temporary\"\n"
+          "    mv \"$temporary\" \"$record\"\n"
+          "    ;;\n"
+          "  delete) rm -f \"$record\" ;;\n"
+          "  import-legacy) printf '{\"accepted\":true}\\n' ;;\n"
+          "  *) exit 2 ;;\n"
+          "esac\n");
+      QFile helper_store(helper_store_path);
+      if (!helper_store.open(QIODevice::WriteOnly) || helper_store.write(job_store_script) != job_store_script.size() ||
+          !QFile::setPermissions(helper_store_path,
+              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner)) {
+        return fail("offline import job-store helper should be executable");
+      }
+      helper_store.close();
+      QFile import_worker(import_worker_path);
+      const QByteArray import_worker_script = QByteArrayLiteral(
+          "#!/bin/sh\n"
+          "printf '%s\\n' 'offline fixture: catalog service unavailable'\n"
+          "exit 1\n");
+      if (!import_worker.open(QIODevice::WriteOnly) || import_worker.write(import_worker_script) != import_worker_script.size() ||
+          !QFile::setPermissions(import_worker_path,
+              QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner)) {
+        return fail("offline import worker should be executable");
+      }
+      import_worker.close();
+      qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", helper_root.toUtf8());
+    }
+
     photo_editor::desktop::JobRunner import_runner;
+    import_runner.initializeFromStore();
     photo_editor::desktop::CatalogAssetModel import_model;
     import_model.importFolderPath(import_root);
     if (!wait_for_import_completion(&import_model)) {
@@ -1840,8 +2116,11 @@ int main(int argc, char** argv) {
     if (import_job.status == QStringLiteral("Running") || import_job.status == QStringLiteral("Queued")) {
       return fail("persisted import jobs should be finalized by the shared job runner");
     }
-    if (import_job.metadata_json.value(QStringLiteral("selectionCount")).toInt() != 0) {
-      return fail("folder imports should persist a zero selection count");
+    const auto approved_import_paths = import_job.metadata_json.value(QStringLiteral("selectedPaths")).toArray();
+    if (import_job.metadata_json.value(QStringLiteral("selectionCount")).toInt() != 1 ||
+        approved_import_paths.size() != 1 ||
+        QDir::cleanPath(approved_import_paths.at(0).toString()) != QDir::cleanPath(import_file_path)) {
+      return fail("folder imports should persist only the single path approved by the reviewed preflight");
     }
     if (import_job.metadata_json.value(QStringLiteral("importMode")).toString() != QStringLiteral("managed")) {
       return fail("import jobs should persist the managed import mode");
@@ -1856,7 +2135,7 @@ int main(int argc, char** argv) {
         import_result.value(QStringLiteral("failureCount")).toInt() == 0 &&
         import_result.value(QStringLiteral("skippedCount")).toInt() == 0;
     if ((import_job.status == QStringLiteral("Completed") && !completed_summary_valid) ||
-        (qEnvironmentVariableIsSet("PHOTO_EDITOR_DATABASE_URL") && !completed_summary_valid)) {
+        (catalog_database_was_configured && !completed_summary_valid)) {
       std::cerr << "import status=" << import_job.status.toStdString()
                 << " error=" << import_job.error_message.toStdString()
                 << " metadata="
@@ -1880,5 +2159,10 @@ int main(int argc, char** argv) {
   }
 
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+  if (!catalog_database_was_configured) qunsetenv("PHOTO_EDITOR_DATABASE_URL");
+  if (!catalog_database_was_configured) {
+    if (repository_root_was_configured) qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", configured_repository_root);
+    else qunsetenv("PHOTO_EDITOR_REPOSITORY_ROOT");
+  }
   return EXIT_SUCCESS;
 }

@@ -1,8 +1,8 @@
 use std::env;
 
 use photo_catalog::{
-    run_catalog_helper, AppRuntimePaths, AssetReviewStateRecord, CatalogRepository, CatalogRuntime,
-    RecipeMigrationRecord,
+    run_catalog_helper, AgentAssetRecipeSnapshot, AgentCatalogRowSnapshot, AppRuntimePaths,
+    AssetReviewStateRecord, CatalogRepository, CatalogRuntime, RecipeMigrationRecord,
 };
 
 pub(crate) fn main() -> std::process::ExitCode {
@@ -16,6 +16,47 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
 
     match command {
+        "set-asset-metadata" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Changes { records: Vec<photo_catalog::AssetMetadataRecord> }
+            let path = required_arg(&arguments, 2, "missing metadata payload path")?;
+            let changes: Changes = serde_json::from_slice(&std::fs::read(path)?)?;
+            let result = catalog.upsert_asset_metadata(&changes.records).await?;
+            println!("{}", serde_json::to_string(&result)?);
+        }
+        "update-project-memberships" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct MembershipChanges {
+                project_name: String,
+                added: Vec<String>,
+                removed: Vec<String>,
+            }
+            let path = required_arg(&arguments, 2, "missing membership payload path")?;
+            let changes: MembershipChanges = serde_json::from_slice(&std::fs::read(path)?)?;
+            let removed: std::collections::HashSet<_> = changes.removed.iter().collect();
+            if changes.project_name.trim().is_empty()
+                || changes
+                    .added
+                    .iter()
+                    .chain(&changes.removed)
+                    .any(|id| id.trim().is_empty())
+                || changes.added.iter().any(|id| removed.contains(id))
+            {
+                return Err("invalid project membership payload".into());
+            }
+            let missing = catalog
+                .update_project_memberships(&changes.project_name, &changes.added, &changes.removed)
+                .await?;
+            if !missing.is_empty() {
+                return Err(format!(
+                    "{} project memberships remain local because their assets are not cataloged",
+                    missing.len()
+                )
+                .into());
+            }
+        }
         "create-project" => {
             let project_name = required_arg(&arguments, 2, "missing project_name argument")?;
             catalog.upsert_project(project_name).await?;
@@ -35,6 +76,55 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "delete-asset" => {
             let asset_id = required_arg(&arguments, 2, "missing asset_id argument")?;
             catalog.delete_asset(asset_id).await?;
+        }
+        "agent-asset-recipe-snapshot" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Request { asset_id: String, source_path: String }
+            let request_path = required_arg(&arguments, 2, "missing request payload path")?;
+            let result_path = required_arg(&arguments, 3, "missing snapshot result path")?;
+            let request: Request = serde_json::from_slice(&std::fs::read(request_path)?)?;
+            let snapshot = catalog
+                .agent_asset_recipe_snapshot(&request.asset_id, &request.source_path)
+                .await?;
+            std::fs::write(result_path, serde_json::to_vec(&snapshot)?)?;
+        }
+        "restore-agent-asset-recipe" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Request {
+                expected: AgentAssetRecipeSnapshot,
+                before: AgentAssetRecipeSnapshot,
+            }
+            let request_path = required_arg(&arguments, 2, "missing recipe restore payload path")?;
+            let request: Request = serde_json::from_slice(&std::fs::read(request_path)?)?;
+            catalog
+                .restore_agent_asset_recipe(&request.expected, &request.before)
+                .await?;
+        }
+        "agent-catalog-row-snapshot" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Request { source_path: String }
+            let request_path = required_arg(&arguments, 2, "missing request payload path")?;
+            let result_path = required_arg(&arguments, 3, "missing snapshot result path")?;
+            let request: Request = serde_json::from_slice(&std::fs::read(request_path)?)?;
+            let snapshot = catalog.agent_catalog_row_snapshot(&request.source_path).await?;
+            std::fs::write(result_path, serde_json::to_vec(&snapshot)?)?;
+        }
+        "remove-agent-catalog-row" => {
+            let request_path = required_arg(&arguments, 2, "missing catalog row receipt path")?;
+            let expected: AgentCatalogRowSnapshot = serde_json::from_slice(&std::fs::read(request_path)?)?;
+            catalog.remove_agent_catalog_row_if_unchanged(&expected).await?;
+        }
+        "set-review-states" => {
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ReviewChanges { states: Vec<AssetReviewStateRecord> }
+            let path = required_arg(&arguments, 2, "missing review payload path")?;
+            let changes: ReviewChanges = serde_json::from_slice(&std::fs::read(path)?)?;
+            let result = catalog.upsert_asset_review_states(&changes.states).await?;
+            println!("{}", serde_json::to_string(&result)?);
         }
         "set-review-state" => {
             let asset_id = required_arg(&arguments, 2, "missing asset_id argument")?;
@@ -117,7 +207,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             eprintln!(
-                "Usage: {} <create-project|add-asset-to-project|remove-asset-from-project|delete-asset|set-review-state|set-relink-path|set-edit-recipe-v13|set-recipe-migration> ...",
+                "Usage: {} <create-project|update-project-memberships|add-asset-to-project|remove-asset-from-project|delete-asset|set-review-state|set-review-states|set-relink-path|set-edit-recipe-v13|set-recipe-migration> ...",
                 arguments.first().map(String::as_str).unwrap_or("catalog_state")
             );
             std::process::exit(1);

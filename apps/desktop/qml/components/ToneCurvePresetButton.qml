@@ -15,7 +15,8 @@ Item {
     readonly property string toneCurvePresetButtonContract: "tone-curve-preset-button:v1|preview-hover:true|select:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
-    implicitHeight: 30
+    implicitWidth: Math.max(theme.scaled(76), root.presetName.length * theme.scaled(7) + theme.space12)
+    implicitHeight: theme.controlHeightDense
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.presetName.length > 0 ? root.presetName + " curve preset" : "Curve preset"
@@ -26,12 +27,12 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius8
+        radius: 3
         color: presetMouse.containsMouse || root.activeFocus
-               ? theme.alpha(theme.glassLift, 0.42)
-               : theme.alpha(theme.glassBase, 0.54)
-        border.width: root.activeFocus ? 2 : 0
-        border.color: root.activeFocus ? theme.focusRing : "transparent"
+               ? theme.alpha(theme.glassLift, 0.28)
+               : "transparent"
+        border.width: root.activeFocus ? 1 : 0
+        border.color: theme.focusRing
     }
 
     Text {
@@ -44,7 +45,7 @@ Item {
         color: presetMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted
         font.family: theme.fontUi
         font.pixelSize: theme.typeCaption
-        font.weight: Font.DemiBold
+        font.weight: Font.Medium
         font.letterSpacing: 0
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

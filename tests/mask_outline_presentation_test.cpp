@@ -1,9 +1,12 @@
 #include "mask_outline_presentation.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
+#include <QPointF>
 #include <QVariantMap>
 
 namespace {
@@ -30,6 +33,50 @@ QVariantList square(double left, double top, double size) {
       point(left + size, top + size), point(left, top + size)};
 }
 
+double point_to_segment_distance(
+    const QPointF& point,
+    const QPointF& start,
+    const QPointF& end) {
+  const auto delta = end - start;
+  const auto length_squared = QPointF::dotProduct(delta, delta);
+  const auto t = length_squared <= 0.0
+      ? 0.0
+      : std::clamp(QPointF::dotProduct(point - start, delta) / length_squared, 0.0, 1.0);
+  return std::hypot(point.x() - (start.x() + t * delta.x()),
+                    point.y() - (start.y() + t * delta.y()));
+}
+
+double ellipse_chord_error_pixels(
+    const QVariantList& path,
+    double center,
+    double radius,
+    double canvas_edge) {
+  auto maximum_error = 0.0;
+  const auto tau = 2.0 * std::acos(-1.0);
+  for (auto index = 0; index < path.size(); ++index) {
+    const auto first = path.at(index).toMap();
+    const auto second = path.at((index + 1) % path.size()).toMap();
+    auto first_angle = std::atan2(first.value(QStringLiteral("y")).toDouble() - center,
+                                  first.value(QStringLiteral("x")).toDouble() - center);
+    auto second_angle = std::atan2(second.value(QStringLiteral("y")).toDouble() - center,
+                                   second.value(QStringLiteral("x")).toDouble() - center);
+    if (first_angle < 0.0) first_angle += tau;
+    if (second_angle < 0.0) second_angle += tau;
+    if (second_angle <= first_angle) second_angle += tau;
+    const auto midpoint_angle = (first_angle + second_angle) * 0.5;
+    const QPointF exact_midpoint(
+        (center + radius * std::cos(midpoint_angle)) * canvas_edge,
+        (center + radius * std::sin(midpoint_angle)) * canvas_edge);
+    const QPointF start(first.value(QStringLiteral("x")).toDouble() * canvas_edge,
+                        first.value(QStringLiteral("y")).toDouble() * canvas_edge);
+    const QPointF end(second.value(QStringLiteral("x")).toDouble() * canvas_edge,
+                      second.value(QStringLiteral("y")).toDouble() * canvas_edge);
+    maximum_error = std::max(maximum_error,
+        point_to_segment_distance(exact_midpoint, start, end));
+  }
+  return maximum_error;
+}
+
 QVariantMap vector_mask(const QString& kind) {
   QVariantMap mask;
   mask.insert(QStringLiteral("kind"), kind);
@@ -53,8 +100,37 @@ int main() {
     return fail("rectangle masks must publish one exact four-corner path");
   }
   auto ellipse = vector_mask(QStringLiteral("ellipse"));
-  if (outline_paths_for_mask(ellipse).first().toList().size() != 72) {
-    return fail("ellipse masks must publish the bounded 72-point presentation path");
+  ellipse.insert(QStringLiteral("radiusX"), 0.45);
+  ellipse.insert(QStringLiteral("radiusY"), 0.45);
+  const auto ellipse_path = outline_paths_for_mask(ellipse).first().toList();
+  if (ellipse_path.size() < 3 ||
+      ellipse_chord_error_pixels(ellipse_path, 0.5, 0.45, 10000.0) >= 0.2) {
+    return fail("ellipse presentation should stay within a subpixel contour error at high zoom");
+  }
+
+  auto clipped_rectangle = vector_mask(QStringLiteral("rectangle"));
+  clipped_rectangle.insert(QStringLiteral("centerX"), 0.04);
+  clipped_rectangle.insert(QStringLiteral("centerY"), 0.5);
+  clipped_rectangle.insert(QStringLiteral("radiusX"), 0.2);
+  clipped_rectangle.insert(QStringLiteral("radiusY"), 0.1);
+  clipped_rectangle.insert(QStringLiteral("rotation"), 45.0);
+  const auto clipped_path = outline_paths_for_mask(clipped_rectangle).first().toList();
+  const auto expected_first_clip_y = 0.5 - (0.2 + 0.1) * std::sqrt(0.5) +
+      (0.0 - (0.04 - (0.2 - 0.1) * std::sqrt(0.5))) /
+          ((0.04 + (0.2 + 0.1) * std::sqrt(0.5)) -
+           (0.04 - (0.2 - 0.1) * std::sqrt(0.5))) *
+          (2.0 * 0.2 * std::sqrt(0.5));
+  const auto expected_second_clip_y = 0.5 + (0.2 + 0.1) * std::sqrt(0.5) -
+      ((0.04 + (0.2 - 0.1) * std::sqrt(0.5)) /
+       ((0.04 + (0.2 - 0.1) * std::sqrt(0.5)) -
+        (0.04 - (0.2 + 0.1) * std::sqrt(0.5)))) *
+          (2.0 * 0.2 * std::sqrt(0.5));
+  if (clipped_path.size() != 4 ||
+      std::abs(clipped_path.at(0).toMap().value(QStringLiteral("x")).toDouble()) > 1e-12 ||
+      std::abs(clipped_path.at(0).toMap().value(QStringLiteral("y")).toDouble() - expected_first_clip_y) > 1e-9 ||
+      std::abs(clipped_path.at(3).toMap().value(QStringLiteral("x")).toDouble()) > 1e-12 ||
+      std::abs(clipped_path.at(3).toMap().value(QStringLiteral("y")).toDouble() - expected_second_clip_y) > 1e-9) {
+    return fail("rotated rectangles crossing the image edge should use true polygon intersections");
   }
   auto polygon = vector_mask(QStringLiteral("polygon"));
   polygon.insert(QStringLiteral("polygonPoints"), square(0.1, 0.2, 0.4));
@@ -118,19 +194,25 @@ int main() {
   const auto large = square(0.1, 0.1, 0.8);
   const auto medium = square(0.1, 0.1, 0.2);
   const auto tiny = square(0.1, 0.1, 0.01);
+  auto degenerate = QVariantList{point(0.2, 0.2), point(0.5, 0.5), point(0.8, 0.8)};
+  auto invalid = square(0.1, 0.1, 0.2);
+  invalid[1] = QVariant::fromValue(QVariantMap{{QStringLiteral("x"), std::numeric_limits<double>::quiet_NaN()},
+                                               {QStringLiteral("y"), 0.1}});
   if (!close(normalized_outline_path_area(large), 0.64) ||
       !close(normalized_outline_path_area({}), 0.0)) {
     return fail("outline area must measure normalized closed geometry exactly");
   }
   const QVariantList nested_paths{
-      QVariant::fromValue(large), QVariant::fromValue(medium), QVariant::fromValue(tiny)};
+      QVariant::fromValue(large), QVariant::fromValue(medium), QVariant::fromValue(tiny),
+      QVariant::fromValue(degenerate), QVariant::fromValue(invalid)};
   OutlineNoiseFilterStats stats;
   const auto filtered = filter_minor_composite_outline_paths(nested_paths, &stats);
-  if (filtered.size() != 2 || stats.input_path_count != 3 ||
-      stats.output_path_count != 2 || !stats.applied ||
+  if (filtered.size() != 3 || stats.input_path_count != 5 ||
+      stats.output_path_count != 3 || !stats.applied ||
       !close(stats.largest_area, 0.64) ||
-      !close(stats.minimum_secondary_area, 0.0256)) {
-    return fail("composite filtering must retain material paths and report exact noise policy");
+      !close(stats.minimum_secondary_area, 0.0) ||
+      filtered.at(2).toList() != tiny) {
+    return fail("composite outlines must preserve every valid island and hole while reporting filtered invalid contours");
   }
   if (first_outline_path_only(nested_paths).size() != 1 ||
       first_outline_path_only(large) != large) {

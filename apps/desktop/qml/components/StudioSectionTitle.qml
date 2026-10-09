@@ -9,7 +9,7 @@ Label {
     text: label
     color: theme.textStrong
     font.family: theme.fontUi
-    font.pixelSize: 11
-    font.weight: Font.DemiBold
+    font.pixelSize: theme.typeLabel
+    font.weight: theme.weightSection
     font.letterSpacing: 0
 }

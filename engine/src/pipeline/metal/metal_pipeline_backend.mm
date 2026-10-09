@@ -51,6 +51,7 @@ static_assert(static_cast<std::uint32_t>(TransferFunction::Gamma22) == 4U);
 static_assert(static_cast<std::uint32_t>(TransferFunction::Gamma24) == 5U);
 static_assert(static_cast<std::uint32_t>(TransferFunction::Bt2020) == 6U);
 static_assert(static_cast<std::uint32_t>(TransferFunction::Acescct) == 7U);
+static_assert(static_cast<std::uint32_t>(TransferFunction::Bt709) == 8U);
 
 [[nodiscard]] const char* ocio_msl_texture_type(
     OcioProjectGpuTextureKind kind) {
@@ -301,6 +302,10 @@ struct UserLutStageUniforms final {
   std::uint32_t output_transfer = 0U;
   std::uint32_t lut_size = 0U;
   std::uint32_t pixel_count = 0U;
+  float shaper_input_min = 0.0F;
+  float shaper_input_max = 1.0F;
+  std::uint32_t shaper_size = 0U;
+  std::uint32_t shaper_offset = 0U;
 };
 
 [[nodiscard]] UserLutStageUniforms make_user_lut_stage_uniforms(
@@ -311,6 +316,10 @@ struct UserLutStageUniforms final {
       .output_transfer = static_cast<std::uint32_t>(user_lut.output_transfer),
       .lut_size = static_cast<std::uint32_t>(user_lut.lut.size),
       .pixel_count = pixel_count,
+      .shaper_input_min = static_cast<float>(user_lut.lut.shaper_input_range[0]),
+      .shaper_input_max = static_cast<float>(user_lut.lut.shaper_input_range[1]),
+      .shaper_size = static_cast<std::uint32_t>(user_lut.lut.shaper_size),
+      .shaper_offset = static_cast<std::uint32_t>(user_lut.lut.table.size()),
   };
   for (auto index = std::size_t{0U}; index < 9U; ++index) {
     uniforms.working_to_input[index] =
@@ -405,6 +414,7 @@ struct alignas(16) FillLayerUniform final {
   std::uint32_t has_downstream_look = 0U;
   float lens_vignette = 0.0F;
   float dehaze = 0.0F;
+  std::uint32_t erase_base_image = 0U;
 };
 
 struct FillLayerUniforms final {
@@ -1684,6 +1694,7 @@ struct UserLutStageUniforms {
   float working_to_input[9]; float output_to_working[9];
   float domain_min[3]; float domain_max[3]; float strength;
   uint input_transfer; uint output_transfer; uint lut_size; uint pixel_count;
+  float shaper_input_min; float shaper_input_max; uint shaper_size; uint shaper_offset;
 };
 
 struct GeometryStageUniforms {
@@ -1714,7 +1725,7 @@ struct CompiledFillLayerUniform {
   float hue_shift; float saturation_shift; float colorize_hue; float colorize_amount;
   uint advanced_tone_offset; uint has_advanced_tone; uint curve_offsets[6];
   uint curve_active_mask; uint has_curves; uint has_downstream_look;
-  float lens_vignette; float dehaze;
+  float lens_vignette; float dehaze; uint erase_base_image;
 };
 struct FillLayerUniforms {
   CompiledFillLayerUniform layers[16]; float blend_headroom; uint layer_count;
@@ -2040,7 +2051,9 @@ kernel void apply_retained_fill_layers(device float4* pixels [[buffer(0)]],
       mask_weight=clamp(min(mask_weight,layer.mask_density)*layer.mask_opacity,0.0f,1.0f);}
     float weight=clamp(layer.opacity*mask_weight*(layer.clipping_mask!=0u?previous_alpha:1.0f),0.0f,1.0f);
     float alpha=adjustment?weight:clamp(source.a*weight,0.0f,1.0f);
-    previous_alpha=alpha;float3 blended=retained_fill_blend_pixel(
+    previous_alpha=alpha;
+    if(layer.erase_base_image!=0u){if(alpha>1.0e-6f){pixel.a*=1.0f-alpha;if(pixel.a<=1.0e-6f)pixel=float4(0.0f);}previous_alpha=pixel.a;continue;}
+    float3 blended=retained_fill_blend_pixel(
       pixel.rgb,source.rgb,layer.blend_mode,u);
     if(adjustment)pixel=float4(mix(pixel.rgb,blended,alpha),pixel.a);
     else if(alpha>0.0f){
@@ -2259,14 +2272,21 @@ static float user_lut_decode_transfer(float v,uint t){float m=abs(v);if(t==2u)re
   if(t==5u)return user_lut_signed_power(v,2.4f);if(t==6u)return copysign(m<4.5f*0.018053968510807f?m/4.5f:
       pow((m+0.09929682680944f)/1.09929682680944f,1.0f/0.45f),v);if(t==7u){if(v<=0.155251141552511f)
       return(v-0.0729055341958355f)/10.5402377416545f;return v<1.4679963120447153f?exp2(v*17.52f-9.72f):65504.0f;}return v;}
+static float3 user_lut_apply_shaper(float3 v,device const float4* lut,uint size,float input_min,float input_max){
+  float3 position=clamp((v-input_min)*(float(size-1u)/(input_max-input_min)),0.0f,float(size-1u));
+  uint3 lower=min(uint3(position),uint3(size-2u));float3 fraction=position-float3(lower);
+  return float3(mix(lut[lower.r].r,lut[lower.r+1u].r,fraction.r),
+      mix(lut[lower.g].g,lut[lower.g+1u].g,fraction.g),mix(lut[lower.b].b,lut[lower.b+1u].b,fraction.b));}
 kernel void apply_user_lut_stage(device float4* pixels [[buffer(0)]],device const float4* lut [[buffer(1)]],
     constant UserLutStageUniforms& u [[buffer(2)]],uint gid [[thread_position_in_grid]]){if(gid>=u.pixel_count)return;
   float4 source=pixels[gid];float3 input=user_lut_multiply(u.working_to_input,source.rgb);input=float3(
       user_lut_encode_transfer(input.r,u.input_transfer),user_lut_encode_transfer(input.g,u.input_transfer),
-      user_lut_encode_transfer(input.b,u.input_transfer));float3 dmin=float3(u.domain_min[0],u.domain_min[1],u.domain_min[2]);
-  float3 dmax=float3(u.domain_max[0],u.domain_max[1],u.domain_max[2]);float3 normalized=clamp((input-dmin)/(dmax-dmin),0.0f,1.0f);
-  float3 output=apply_lut_3d(normalized,lut,int(u.lut_size)).rgb;float spread=max(abs(input.r-input.g),max(abs(input.g-input.b),abs(input.r-input.b)));
-  if(spread<1.0e-9f)output=float3((output.r+output.g+output.b)/3.0f);output=float3(user_lut_decode_transfer(output.r,u.output_transfer),
+      user_lut_encode_transfer(input.b,u.input_transfer));if(u.shaper_size>1u)input=user_lut_apply_shaper(
+      input,lut+u.shaper_offset,u.shaper_size,u.shaper_input_min,u.shaper_input_max);
+  float3 dmin=float3(u.domain_min[0],u.domain_min[1],u.domain_min[2]);float3 dmax=float3(u.domain_max[0],u.domain_max[1],u.domain_max[2]);
+  float3 output=input;if(u.lut_size>1u){float3 normalized=clamp((input-dmin)/(dmax-dmin),0.0f,1.0f);
+    output=apply_lut_3d(normalized,lut,int(u.lut_size)).rgb;float spread=max(abs(input.r-input.g),max(abs(input.g-input.b),abs(input.r-input.b)));
+    if(spread<1.0e-9f)output=float3((output.r+output.g+output.b)/3.0f);}output=float3(user_lut_decode_transfer(output.r,u.output_transfer),
       user_lut_decode_transfer(output.g,u.output_transfer),user_lut_decode_transfer(output.b,u.output_transfer));
   float3 graded=user_lut_multiply(u.output_to_working,output);pixels[gid]=float4(mix(source.rgb,graded,u.strength),source.a);}
 
@@ -2526,6 +2546,53 @@ bool MetalWorkingSurface::copy_pixels(
   return true;
 }
 
+bool MetalWorkingSurface::copy_pixels_validates_finite() const noexcept {
+  return true;
+}
+
+bool MetalWorkingSurface::copy_sampled_pixels(
+    int sampled_width, int sampled_height,
+    std::vector<ColorPixel>* destination,
+    CancellationToken cancellation) const {
+  if (destination == nullptr || impl_ == nullptr || !valid_for(impl_->descriptor) ||
+      sampled_width <= 0 || sampled_height <= 0 ||
+      impl_->descriptor.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+      impl_->descriptor.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+      static_cast<std::uint32_t>(sampled_width) > impl_->descriptor.width ||
+      static_cast<std::uint32_t>(sampled_height) > impl_->descriptor.height ||
+      cancellation.cancelled()) return false;
+  @autoreleasepool {
+    [impl_->producer_command_buffer waitUntilCompleted];
+    if (cancellation.cancelled() || !producer_completed_successfully()) return false;
+    const auto* source = static_cast<const ColorPixel*>([impl_->pixel_buffer contents]);
+    if (source == nullptr) return false;
+    auto sampled = std::vector<ColorPixel>(
+        static_cast<std::size_t>(sampled_width) * static_cast<std::size_t>(sampled_height));
+    const auto width = static_cast<int>(impl_->descriptor.width);
+    const auto height = static_cast<int>(impl_->descriptor.height);
+    const auto x_scale = static_cast<double>(width) / sampled_width;
+    const auto y_scale = static_cast<double>(height) / sampled_height;
+    // Match the existing CPU histogram sampler exactly. This shared Metal buffer
+    // is immutable after producer completion; only selected samples are copied.
+    for (int y = 0; y < sampled_height; ++y) {
+      if (cancellation.cancelled()) return false;
+      const auto source_y = std::clamp(static_cast<int>((y + 0.5) * y_scale), 0, height - 1);
+      for (int x = 0; x < sampled_width; ++x) {
+        const auto source_x = std::clamp(static_cast<int>((x + 0.5) * x_scale), 0, width - 1);
+        const auto pixel = source[static_cast<std::size_t>(source_y) * static_cast<std::size_t>(width) +
+                                  static_cast<std::size_t>(source_x)];
+        if (!std::isfinite(pixel.red) || !std::isfinite(pixel.green) ||
+            !std::isfinite(pixel.blue) || !std::isfinite(pixel.alpha)) return false;
+        sampled[static_cast<std::size_t>(y) * static_cast<std::size_t>(sampled_width) +
+                static_cast<std::size_t>(x)] = pixel;
+      }
+    }
+    if (cancellation.cancelled()) return false;
+    *destination = std::move(sampled);
+  }
+  return true;
+}
+
 RenderSurfaceDescriptor MetalWorkingSurface::descriptor() const {
   return impl_ != nullptr ? impl_->descriptor : RenderSurfaceDescriptor{};
 }
@@ -2620,6 +2687,11 @@ bool MetalOutputSurface::copy_pixels(
   return true;
 }
 
+bool MetalOutputSurface::copy_pixels_validates_finite() const noexcept {
+  // Output channels are decoded from finite 8-bit values.
+  return true;
+}
+
 int MetalOutputSurface::width() const {
   return impl_ != nullptr ? impl_->width : 0;
 }
@@ -2661,27 +2733,38 @@ bool MetalOutputSurface::producer_completed_successfully() const {
 
 bool MetalOutputSurface::copy_bgra8_pixels_for_testing(
     std::span<std::uint8_t> destination) const {
-  const auto required = static_cast<std::size_t>(width()) *
-                        static_cast<std::size_t>(height()) * 4U;
-  if (impl_ == nullptr || impl_->texture == nil || required == 0U ||
+  return copy_bgra8_region(0, 0, width(), height(), destination);
+}
+
+bool MetalOutputSurface::copy_bgra8_region(
+    int x, int y, int region_width, int region_height,
+    std::span<std::uint8_t> destination,
+    CancellationToken cancellation) const {
+  if (cancellation.cancelled() || x < 0 || y < 0 || region_width <= 0 || region_height <= 0 ||
+      x > width() || y > height() || region_width > width() - x || region_height > height() - y) {
+    return false;
+  }
+  const auto required = static_cast<std::size_t>(region_width) *
+                        static_cast<std::size_t>(region_height) * 4U;
+  if (impl_ == nullptr || impl_->texture == nil ||
       destination.size() != required) {
     return false;
   }
   @autoreleasepool {
     [impl_->producer_command_buffer waitUntilCompleted];
-    if (!producer_completed_successfully()) {
+    if (cancellation.cancelled() || !producer_completed_successfully()) {
       return false;
     }
     [impl_->texture getBytes:destination.data()
-                 bytesPerRow:static_cast<NSUInteger>(width()) * 4U
+                 bytesPerRow:static_cast<NSUInteger>(region_width) * 4U
                   fromRegion:MTLRegionMake2D(
-                                 0,
-                                 0,
-                                 static_cast<NSUInteger>(width()),
-                                 static_cast<NSUInteger>(height()))
+                                 static_cast<NSUInteger>(x),
+                                 static_cast<NSUInteger>(y),
+                                 static_cast<NSUInteger>(region_width),
+                                 static_cast<NSUInteger>(region_height))
                  mipmapLevel:0];
   }
-  return true;
+  return !cancellation.cancelled();
 }
 
 MetalPipelineBackend::MetalPipelineBackend() : impl_(std::make_unique<Impl>()) {}
@@ -4292,24 +4375,7 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
   }
 
   @autoreleasepool {
-    const std::scoped_lock color_lut_lock(
-        impl_->color_lut_mutex);
-    const auto buffer_size = pixel_count * sizeof(float) * 4;
-    id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:buffer_size
-                                                            options:MTLResourceStorageModeShared];
-    id<MTLBuffer> geometry_buffer =
-        (apply_geometry || apply_layer_geometry)
-            ? [impl_->device newBufferWithLength:buffer_size
-                                         options:MTLResourceStorageModeShared]
-            : nil;
-    id<MTLBuffer> layer_alpha_buffer = apply_fill_layers
-        ? [impl_->device newBufferWithLength:pixel_count * sizeof(float)
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> layer_intermediate_buffer = apply_fill_layers
-        ? [impl_->device newBufferWithLength:buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
+    std::unique_lock color_lut_lock(impl_->color_lut_mutex);
     auto fill_mask_upload_bytes = std::size_t{0U};
     id<MTLBuffer> fill_mask_buffer = nil;
     if (apply_fill_layers && fill_layer_program.mask_data.empty()) {
@@ -4602,72 +4668,12 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
         }
       }
     }
-    const auto scalar_buffer_size = pixel_count * sizeof(float);
-    id<MTLBuffer> hdr_local_log_buffer = apply_hdr_local_tone
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> hdr_local_scratch_buffer = apply_hdr_local_tone
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> hdr_local_blur_buffer = apply_hdr_local_tone
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    const auto need_spatial_buffers = apply_spatial_detail ||
-                                      apply_layer_spatial_detail ||
-                                      apply_layer_fine_detail;
-    const auto need_fine_buffers =
-        apply_fine_detail || apply_layer_fine_detail || apply_layer_spatial_detail;
-    id<MTLBuffer> spatial_luminance_buffer = need_spatial_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> spatial_scratch_buffer = need_spatial_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> spatial_texture_buffer = need_spatial_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> spatial_clarity_buffer = need_spatial_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> spatial_haze_buffer = need_spatial_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_lightness_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_chroma_a_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_chroma_b_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_scratch_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_blur_a_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
-    id<MTLBuffer> detail_blur_b_buffer = need_fine_buffers
-        ? [impl_->device newBufferWithLength:scalar_buffer_size
-                                     options:MTLResourceStorageModePrivate]
-        : nil;
     auto lut_upload_bytes = std::size_t{0U};
     const auto buffer_for_color_lut = [&](const ColorLut3D& active_lut) {
-      const auto active_lut_bytes =
-          active_lut.table.size() * sizeof(ColorPixel);
+      const auto table_bytes = active_lut.table.size() * sizeof(ColorPixel);
+      const auto shaper_bytes =
+          active_lut.shaper_table.size() * sizeof(ColorPixel);
+      const auto active_lut_bytes = table_bytes + shaper_bytes;
       const auto cached_lut = std::find_if(
           impl_->color_lut_buffers.begin(), impl_->color_lut_buffers.end(),
           [&](const Impl::ColorLutBufferEntry& entry) {
@@ -4682,8 +4688,16 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
           newBufferWithLength:active_lut_bytes
                       options:MTLResourceStorageModeShared];
       if (active_buffer == nil) return active_buffer;
-      copy_pixels_to_float_buffer(
-          static_cast<float*>([active_buffer contents]), active_lut.table);
+      auto* buffer_bytes = static_cast<std::byte*>([active_buffer contents]);
+      if (table_bytes > 0U) {
+        std::memcpy(buffer_bytes, active_lut.table.data(), table_bytes);
+      }
+      if (shaper_bytes > 0U) {
+        std::memcpy(
+            buffer_bytes + table_bytes,
+            active_lut.shaper_table.data(),
+            shaper_bytes);
+      }
       lut_upload_bytes += active_lut_bytes;
       if (active_lut.cache_identity == 0U ||
           active_lut_bytes > Impl::kMaximumColorLutBufferBytes) {
@@ -4860,6 +4874,88 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
         }
       }
     }
+    // Local ARC owners pin immutable cached buffers across eviction by another
+    // render. Per-flight allocations, source upload, and command encoding do not
+    // access mutable cache state and must not serialize on the cache mutex.
+    color_lut_lock.unlock();
+    const auto buffer_size = pixel_count * sizeof(float) * 4;
+    id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:buffer_size
+                                                            options:MTLResourceStorageModeShared];
+    id<MTLBuffer> geometry_buffer =
+        (apply_geometry || apply_layer_geometry)
+            ? [impl_->device newBufferWithLength:buffer_size
+                                         options:MTLResourceStorageModeShared]
+            : nil;
+    id<MTLBuffer> layer_alpha_buffer = apply_fill_layers
+        ? [impl_->device newBufferWithLength:pixel_count * sizeof(float)
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> layer_intermediate_buffer = apply_fill_layers
+        ? [impl_->device newBufferWithLength:buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    const auto scalar_buffer_size = pixel_count * sizeof(float);
+    id<MTLBuffer> hdr_local_log_buffer = apply_hdr_local_tone
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> hdr_local_scratch_buffer = apply_hdr_local_tone
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> hdr_local_blur_buffer = apply_hdr_local_tone
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    const auto need_spatial_buffers = apply_spatial_detail ||
+                                      apply_layer_spatial_detail ||
+                                      apply_layer_fine_detail;
+    const auto need_fine_buffers =
+        apply_fine_detail || apply_layer_fine_detail || apply_layer_spatial_detail;
+    id<MTLBuffer> spatial_luminance_buffer = need_spatial_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> spatial_scratch_buffer = need_spatial_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> spatial_texture_buffer = need_spatial_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> spatial_clarity_buffer = need_spatial_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> spatial_haze_buffer = need_spatial_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_lightness_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_chroma_a_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_chroma_b_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_scratch_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_blur_a_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
+    id<MTLBuffer> detail_blur_b_buffer = need_fine_buffers
+        ? [impl_->device newBufferWithLength:scalar_buffer_size
+                                     options:MTLResourceStorageModePrivate]
+        : nil;
     if (!pixel_buffer ||
         ((apply_geometry || apply_layer_geometry) && !geometry_buffer) ||
         (apply_fill_layers &&
@@ -5207,6 +5303,8 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
             fill_layer_program.layers[index].has_mask ? 1U : 0U;
         uniforms.layers[index].clipping_mask =
             fill_layer_program.layers[index].clipping_mask ? 1U : 0U;
+        uniforms.layers[index].erase_base_image =
+            fill_layer_program.layers[index].erase_base_image ? 1U : 0U;
         uniforms.layers[index].kind = fill_layer_program.layers[index].kind;
         uniforms.layers[index].pixel_offset =
             fill_layer_program.layers[index].pixel_offset;

@@ -1,14 +1,152 @@
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_fill_layer_program.h"
 #include "photo_editor/pipeline/photo_effects.h"
+#include "photo_editor/pipeline/cpu_work_scheduler.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <iostream>
+#include <cstring>
+#include <fstream>
+#include <limits>
 
 using namespace photo_editor::pipeline;
 
-int main() {
+int emit_stream_cases(const char* path) {
+  std::ofstream output(path);
+  if (!output) return 1;
+  constexpr int w = 529, h = 271;
+  std::vector<ColorPixel> source(static_cast<std::size_t>(w) * h);
+  std::vector<float> coverage(source.size());
+  for (std::size_t i = 0; i < source.size(); ++i) {
+    source[i] = {static_cast<float>(i % 19U) / 5 - .2F, .3F, 1.7F,
+        static_cast<float>(i % 7U) / 6};
+    coverage[i] = static_cast<float>(i % 9U) / 8;
+  }
+  for (const auto* type : {"gaussian_blur", "optical_diffusion"})
+    for (const auto* blend : {"normal", "multiply", "screen", "overlay"})
+      for (const bool masked : {false, true})
+        for (const bool clipped : {false, true}) {
+          PhotoEffectInstance effect;
+          effect.id = "matrix"; effect.type_id = type;
+          effect.input_scope = PhotoEffectInputScope::CompositeBelow;
+          effect.gaussian.sigma = 2;
+          effect.diffusion.radius = 8;
+          effect.amount = .73;
+          if (masked) effect.mask_ref = "coverage";
+          PhotoLayer adjustment;
+          adjustment.id = "matrix-layer";
+          adjustment.kind = "adjustment";
+          adjustment.opacity = .63;
+          adjustment.blend_mode = blend;
+          adjustment.clipping_mask = clipped;
+          adjustment.effects = {effect};
+          if (masked) {
+            adjustment.effect_masks = {{"coverage", coverage}};
+            adjustment.mask_width = w; adjustment.mask_height = h;
+            adjustment.mask_data.resize(source.size());
+            for (std::size_t i = 0; i < source.size(); ++i)
+              adjustment.mask_data[i] = static_cast<uint8_t>(i % 256U);
+          }
+          PhotoLayer backing;
+          backing.kind = "fill"; backing.fill_color = {.4F, .5F, .6F, .35F};
+          ColorAdjustmentState state;
+          state.photo_layers = clipped ? std::vector<PhotoLayer>{backing, adjustment}
+                                       : std::vector<PhotoLayer>{adjustment};
+          auto pixels = source;
+          if (!apply_color_layers_stage(&pixels, w, h, state)) return 1;
+          std::uint64_t hash = 14695981039346656037ULL;
+          for (const auto& pixel : pixels)
+            for (const auto channel : {pixel.red, pixel.green, pixel.blue, pixel.alpha}) {
+              std::uint32_t bits = 0;
+              std::memcpy(&bits, &channel, sizeof(bits));
+              for (int byte = 0; byte < 4; ++byte) {
+                hash ^= (bits >> (byte * 8)) & 255U;
+                hash *= 1099511628211ULL;
+              }
+            }
+          output << type << ' ' << blend << ' ' << masked << ' ' << clipped << ' ' << hash << '\n';
+        }
+  return output.good() ? 0 : 1;
+}
+
+int large_stream_contract() {
+  constexpr int width = 7500, height = 6000;
+  const ColorPixel value{.4F, .2F, .7F, .5F};
+  PhotoEffectInstance effect;
+  effect.id = "45mp-invert"; effect.type_id = "invert_linear_rgb";
+  effect.input_scope = PhotoEffectInputScope::CompositeBelow;
+  std::vector<ColorPixel> expected{value};
+  const auto oracle = apply_photo_effect(&expected, 1, 1, effect);
+  if (!oracle.ok()) {
+    std::cerr << "45 MP oracle effect failed: " << oracle.error << '\n';
+    return 1;
+  }
+  PhotoLayer layer;
+  layer.kind = "adjustment"; layer.effects = {effect};
+  ColorAdjustmentState state;
+  state.photo_layers = {layer};
+  std::vector<ColorPixel> pixels(static_cast<std::size_t>(width) * height, value);
+  if (!apply_color_layers_stage(&pixels, width, height, state) ||
+      !std::all_of(pixels.begin(), pixels.end(), [&](const auto& pixel) { return pixel == expected[0]; })) {
+    std::cerr << "45 MP adjustment effect did not preserve exact expected pixels\n";
+    return 1;
+  }
+  std::cout << "45 MP adjustment effect passed with default tile scratch budget\n";
+  return 0;
+}
+
+int parallel_content_contracts() {
+  constexpr int width = 384, height = 192; // Above the parallel content threshold.
+  std::vector<ColorPixel> source(static_cast<std::size_t>(width) * height);
+  for (std::size_t i = 0; i < source.size(); ++i)
+    source[i] = {static_cast<float>(i % 17U) / 5 - .2F, .4F, 1.3F,
+        static_cast<float>(i % 11U) / 10};
+  for (const auto* kind : {"pixel", "source", "text"}) {
+    for (const bool transformed : {false, true}) {
+      PhotoLayer content;
+      content.kind = kind; content.pixels = source;
+      content.pixel_width = width; content.pixel_height = height;
+      content.x = -7; content.y = 5;
+      content.opacity = .63; content.blend_mode = "screen";
+      content.clipping_mask = true;
+      content.mask_width = width; content.mask_height = height;
+      content.mask_data.resize(source.size());
+      for (std::size_t i = 0; i < source.size(); ++i)
+        content.mask_data[i] = static_cast<std::uint8_t>(i % 256U);
+      if (transformed) { content.transform_scale = .73; content.transform_rotation = 17; }
+      if (content.kind == "text") {
+        content.text_material = "frosted_glass";
+        content.text_material_blur = 3;
+      }
+      PhotoLayer lower;
+      lower.kind = "fill"; lower.fill_color = {.2F, .3F, .4F, .7F};
+      ColorAdjustmentState state;
+      state.photo_layers = {lower, content};
+      auto expected = source;
+      if (!apply_color_layers_stage(&expected, width, height, state)) return 1;
+      std::atomic_bool exact{true};
+      // Nested calls run rows inline on the shared worker, exercising the
+      // serial fallback concurrently against the ordinary parallel result.
+      run_cpu_parallel_for(16, [&](int) {
+        auto pixels = source;
+        if (!apply_color_layers_stage(&pixels, width, height, state) || pixels != expected)
+          exact.store(false);
+      });
+      if (!exact.load()) {
+        std::cerr << "Parallel content differs from nested serial composition\n";
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+int main(int argc, char** argv) {
+  if (argc == 2 && std::string(argv[1]) == "--large-stream") return large_stream_contract();
+  if (argc == 2) return emit_stream_cases(argv[1]);
+  if (parallel_content_contracts() != 0) return 1;
   constexpr int width = 19, height = 17;
   std::vector<ColorPixel> input(static_cast<std::size_t>(width * height), {0, 0, 0, 0});
   input[static_cast<std::size_t>(8 * width + 9)] = {2, 0.5F, -0.1F, 1};
@@ -135,6 +273,52 @@ int main() {
       actual[static_cast<std::size_t>(8 * width + 8)].alpha != 0) {
     std::cerr << "Box extend mode must retain constant cutout content without expanding bounds\n";
     return 1;
+  }
+  // A later tile fails after earlier tiles have written into the private
+  // compositor transaction. None of those writes may reach the caller.
+  {
+    constexpr int late_width = 769, late_height = 17;
+    std::vector<ColorPixel> original(static_cast<std::size_t>(late_width) * late_height,
+        {0.4F, 0.3F, 0.2F, 1});
+    original.back().red = std::numeric_limits<float>::max();
+    auto work = original;
+    PhotoEffectInstance diffusion;
+    diffusion.id = "late-failure";
+    diffusion.type_id = "optical_diffusion";
+    diffusion.input_scope = PhotoEffectInputScope::CompositeBelow;
+    diffusion.diffusion.radius = 4;
+    diffusion.diffusion.warmth = 1;
+    PhotoLayer adjustment;
+    adjustment.kind = "adjustment";
+    adjustment.effects = {diffusion};
+    ColorAdjustmentState failure_state;
+    failure_state.photo_layers = {adjustment};
+    if (apply_color_layers_stage(&work, late_width, late_height, failure_state) || work != original) {
+      std::cerr << "Late tile failure leaked partial layer output\n";
+      return 1;
+    }
+  }
+  // Content effects can modify their prepared private rows before a later
+  // band fails. Neither live content nor the composited caller may change.
+  {
+    constexpr int w = 17, h = 769;
+    std::vector<ColorPixel> original(static_cast<std::size_t>(w) * h, {.4F, .3F, .2F, 1});
+    PhotoLayer content;
+    content.kind = "pixel"; content.pixel_width = w; content.pixel_height = h;
+    content.pixels = original;
+    content.pixels.back().red = std::numeric_limits<float>::max();
+    PhotoEffectInstance diffusion;
+    diffusion.id = "late-content-failure"; diffusion.type_id = "optical_diffusion";
+    diffusion.diffusion.radius = 4; diffusion.diffusion.warmth = 1;
+    content.effects = {diffusion};
+    ColorAdjustmentState failure_state;
+    failure_state.photo_layers = {content};
+    auto work = original;
+    if (apply_color_layers_stage(&work, w, h, failure_state) || work != original ||
+        failure_state.photo_layers.front().pixels != content.pixels) {
+      std::cerr << "Late content failure leaked private effect rows\n";
+      return 1;
+    }
   }
   std::cout << "Composite and cutout blur, fast-path admission and rollback passed\n";
 }

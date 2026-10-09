@@ -10,6 +10,7 @@
 #include <QThread>
 
 #include "editor_preview_controller.h"
+#include "smart_selection_prompt_schema.h"
 
 namespace photo_editor::desktop {
 
@@ -51,6 +52,10 @@ struct EditorPreviewControllerTestAccess {
   static bool smart_select_preview_timer_active(
       const EditorPreviewController& controller) {
     return controller.smart_select_preview_timer_.isActive();
+  }
+
+  static QVariantList pending_smart_select_prompts(const EditorPreviewController& controller) {
+    return controller.mask_worker_coordinator_.pendingSmartSelectPreview().points;
   }
 
   static bool smart_select_commit_request_pending(
@@ -122,14 +127,14 @@ bool wait_for_preview_idle(
   auto elapsed_ms = 0;
   while (elapsed_ms < timeout_ms) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-    if (!controller.processing()) {
+    if (!controller.processing() && !controller.previewSource().isEmpty()) {
       return true;
     }
     QThread::msleep(25);
     elapsed_ms += 25;
   }
   QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-  return !controller.processing();
+  return !controller.processing() && !controller.previewSource().isEmpty();
 }
 
 bool wait_for_smart_cancel(
@@ -178,6 +183,8 @@ int main(int argc, char** argv) {
   if (!runtime_root.isValid()) {
     return fail("smart stale runtime directory should be available");
   }
+  qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+  qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
 
   const auto source_path =
       runtime_root.filePath(QStringLiteral("smart-stale-source.png"));
@@ -226,6 +233,12 @@ int main(int argc, char** argv) {
   if (!wait_for_smart_cancel(
           stale_preview_controller,
           stale_preview_cancelled_before)) {
+    std::cerr << "stale preview: active=" << stale_preview_controller.smartSelectPreviewActive()
+              << " pending=" << photo_editor::desktop::EditorPreviewControllerTestAccess::smart_select_preview_request_pending(stale_preview_controller)
+              << " generation=" << photo_editor::desktop::EditorPreviewControllerTestAccess::smart_select_preview_generation(stale_preview_controller)
+              << " requested=" << stale_preview_request_generation
+              << " exposure=" << stale_preview_controller.exposure()
+              << " status=" << stale_preview_controller.status().toStdString() << '\n';
     return fail("smart hover preview should cancel after edit state changes before publish");
   }
   const auto stale_preview_telemetry =
@@ -507,6 +520,40 @@ int main(int argc, char** argv) {
     return fail(detail.constData());
   }
 
+  prompt_parity_controller.clearSmartSelectPreview();
+  const QVariantList spatial_prompts{
+      QVariantMap{{QStringLiteral("type"), QStringLiteral("box")},
+                  {QStringLiteral("left"), 0.12}, {QStringLiteral("top"), 0.2},
+                  {QStringLiteral("right"), 0.4}, {QStringLiteral("bottom"), 0.8}},
+      QVariantMap{{QStringLiteral("type"), QStringLiteral("negative-point")},
+                  {QStringLiteral("x"), 0.3}, {QStringLiteral("y"), 0.6}}};
+  prompt_parity_controller.scheduleSmartSelectPreviewPath(spatial_prompts);
+  const auto queued_prompts = photo_editor::desktop::EditorPreviewControllerTestAccess::
+      pending_smart_select_prompts(prompt_parity_controller);
+  if (queued_prompts.size() != 2 ||
+      queued_prompts.at(0).toMap().value(QStringLiteral("type")).toString() != QStringLiteral("box") ||
+      queued_prompts.at(0).toMap().value(QStringLiteral("left")).toDouble() != 0.12 ||
+      queued_prompts.at(1).toMap().value(QStringLiteral("type")).toString() != QStringLiteral("negative-point")) {
+    return fail("async selection must preserve exact boxes and negative points instead of foreground path samples");
+  }
+  prompt_parity_controller.clearSmartSelectPreview();
+  const QVariantList removal_box{QVariantMap{
+      {QStringLiteral("type"), QStringLiteral("box")},
+      {QStringLiteral("left"), 0.10}, {QStringLiteral("top"), 0.35},
+      {QStringLiteral("right"), 0.27}, {QStringLiteral("bottom"), 0.65}}};
+  prompt_parity_controller.updateSmartSelectPreviewPath(removal_box);
+  if (!prompt_parity_controller.smartSelectPreviewActive() ||
+      prompt_parity_controller.acceptSmartSelectPreview(QStringLiteral("remove"), true) !=
+          QStringLiteral("remove-ai"))
+    return fail("an accepted object box should stage an editable removal target");
+  const auto removal_mask = prompt_parity_controller.maskStack()
+      .at(prompt_parity_controller.activeMaskIndex()).toMap();
+  const auto removal_prompts = removal_mask.value(QStringLiteral("generatedMaskMetadata"))
+      .toMap().value(QStringLiteral("smartSelectionPrompts")).toList();
+  if (removal_mask.value(QStringLiteral("committed")).toBool() ||
+      removal_mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+      removal_prompts != photo_editor::desktop::normalized_smart_select_prompt_maps(removal_box))
+    return fail("removal preview acceptance must preserve its box without applying a patch");
   qunsetenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION");
   return EXIT_SUCCESS;
 }

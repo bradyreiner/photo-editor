@@ -17,9 +17,10 @@ struct JobRunnerTestAccess {
     return runner.cancellation_reading_ || runner.queue_reading_;
   }
   static auto setActive(JobRunner& runner) {
-    runner.active_job_id_ = "active";
-    runner.active_job_cancellation_ = std::make_shared<std::atomic_bool>(false);
-    return runner.active_job_cancellation_;
+    PersistentJobRecord job;
+    job.job_id = QStringLiteral("active");
+    runner.active_attempts_.remove(job.job_id);
+    return runner.beginAttempt(job)->cancellation;
   }
 };
 }

@@ -13,6 +13,10 @@ Item {
 
     property var agentEditController: null
     property var catalogModel: null
+    property var sessionController: null
+    property var sessionContext: ({})
+    property Item focusReturnItem: null
+    property Item focusFallbackItem: null
     property var confirmedTargetIds: []
     property string initialScopeMode: "current-photo"
     property string scopeMode: initialScopeMode.length > 0 ? initialScopeMode : "current-photo"
@@ -46,10 +50,15 @@ Item {
     property string storyPreferenceActionMessage: ""
     property real presentationProgress: 0
     property bool closingAfterTransition: false
-    readonly property string aiEditUxContract: "ai-edit:v9|entry:left-rail-agent-terminal|sequence:direction-inspiration-live-work-review|surface:inset-retro-compute-panel|motion:scale-fade-slide|target-selection:workspace-context-first|style-start:three-path-project-sticky|scope-override:details|inspiration:visual-selection|activity:live-editor-journey|result:full-resolution-history-backed|details:progressive-disclosure"
+    property string terminalPrompt: ""
+    property string generatedTerminalInstructions: ""
+    readonly property string aiEditUxContract: "ai-edit:v13|entry:left-rail-agent-terminal|sequence:direction-inspiration-live-work-review|surface:crt-with-character|art:procedural-line|branding:none|motion:restrained-state-actions|target-selection:workspace-context-first|style-start:three-path-project-sticky|scope-override:details|inspiration:visual-selection|inspiration-source:saved-history|screen-scroll:none|prompt:optional-with-inspiration|interface:retro-modern-tui|activity:live-terminal-events|result:full-resolution-history-backed|details:progressive-disclosure|keyboard:page-entry-escape-focus-return"
+    readonly property string sessionUxContract: "agent-session:v1|flow:prompt-questions-plan-start-working-result-revise|approval:start-required|references:saved-looks-and-past-photos|targets:workspace-context|blank-canvas:allowed|questions:one-or-two|scroll:main-terminal-none|activity:structured-events-only|close:does-not-cancel|reduced-motion:supported"
 
     signal scopeModeRequested(string scopeMode)
     signal runRequested()
+    signal draftRequested(string scopeMode, string instructions)
+    signal modelSetupRequested()
     signal editApplied(var assetIds)
     signal targetSelectionRequested(string prompt, var inspirationAssetIds, string styleId)
     signal closed()
@@ -63,10 +72,27 @@ Item {
         onTriggered: root.runElapsedSeconds += 1
     }
 
+    Timer {
+        id: focusRestoreTimer
+        interval: 1
+        repeat: false
+        onTriggered: {
+            if (root.focusReturnItem && root.focusReturnItem.visible && root.focusReturnItem.enabled) {
+                root.focusReturnItem.forceActiveFocus(Qt.TabFocusReason)
+            } else if (root.focusFallbackItem && root.focusFallbackItem.visible &&
+                       root.focusFallbackItem.enabled) {
+                root.focusFallbackItem.forceActiveFocus(Qt.TabFocusReason)
+            }
+            root.focusReturnItem = null
+            root.focusFallbackItem = null
+        }
+    }
+
     onCurrentPageChanged: {
         bubbleReplyAnimation.restart()
         if (currentPage !== 3)
             root.revisionExpanded = false
+        Qt.callLater(function() { root.focusCurrentPageEntry() })
     }
     onScopeModeChanged: targetChangeAnimation.restart()
 
@@ -82,24 +108,32 @@ Item {
                 root.visible = false
                 root.closingAfterTransition = false
                 root.closed()
+                focusRestoreTimer.restart()
+            } else {
+                // Opening can race the first layout/visibility pass on native
+                // and offscreen windows. If focus is still at the invoking
+                // control when the presentation settles, retry the same
+                // production page-entry handler once the target is mapped.
+                const parentWindow = root.Window.window
+                if (root.visible && parentWindow &&
+                        (!parentWindow.activeFocusItem || parentWindow.activeFocusItem === root.focusReturnItem))
+                    Qt.callLater(function() { root.focusCurrentPageEntry() })
             }
         }
     }
 
     ParallelAnimation {
         id: bubbleReplyAnimation
-        NumberAnimation {
+        ScaleAnimator {
             target: conversationView
-            property: "scale"
             from: 0.975
             to: 1
             duration: theme.durationSlow
             easing.type: Easing.OutBack
             easing.overshoot: 0.55
         }
-        NumberAnimation {
+        OpacityAnimator {
             target: conversationView
-            property: "opacity"
             from: 0.72
             to: 1
             duration: theme.durationSlow
@@ -110,9 +144,8 @@ Item {
 
     SequentialAnimation {
         id: targetChangeAnimation
-        NumberAnimation {
+        ScaleAnimator {
             target: conversationView
-            property: "scale"
             from: 0.985
             to: 1
             duration: theme.durationMedium
@@ -122,22 +155,47 @@ Item {
 
     implicitWidth: 1120
     implicitHeight: 820
-    Accessible.role: Accessible.Pane
+    Accessible.role: Accessible.Dialog
     Accessible.name: "Looksy Agent Studio"
 
-    Keys.onPressed: function(event) {
-        if (event.key === Qt.Key_Escape && !root.agentRunning()) {
-            root.close()
-            event.accepted = true
-        }
+    Shortcut {
+        objectName: "agentWalkthroughEscapeShortcut"
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: root.visible && !root.agentRunning() && !conversationView.failureDetailsOpen &&
+                 !sessionConversationView.failureDetailsOpen
+        onActivated: root.close()
     }
 
     function open() {
+        const parentWindow = root.Window.window
+        if (!root.focusReturnItem && parentWindow)
+            root.focusReturnItem = parentWindow.activeFocusItem
+        if (!root.focusFallbackItem && parentWindow)
+            root.focusFallbackItem = parentWindow.contentItem
         root.closingAfterTransition = false
         root.presentationProgress = 0
         root.visible = true
         presentationAnimation.restart()
         root.detailsExpanded = false
+        const hasSession = root.hasSessionController()
+        const sessionStage = hasSession ? String(root.sessionController.stage || "idle") : "idle"
+        const activeSession = hasSession && sessionStage !== "idle"
+        const previousInstructions = root.hasController() ? String(root.agentEditController.userInstructions || "") : ""
+        if (hasSession) {
+            const sessionPrompt = String((root.sessionController.brief || ({})).prompt || "")
+            if (sessionPrompt.length > 0)
+                root.terminalPrompt = sessionPrompt
+            if (activeSession) {
+                root.inspirationSuggestions = root.savedInspirationSuggestions()
+                const inspirationIds = (root.sessionController.brief || ({})).inspirationIds || []
+                root.selectedSuggestionKeys = root.inspirationSuggestions.filter(function(item) {
+                    return inspirationIds.indexOf(String(item.id || "")) >= 0
+                }).map(function(item) { return root.suggestionKey(item) })
+            }
+        } else {
+            root.terminalPrompt = previousInstructions === root.generatedTerminalInstructions ? "" : previousInstructions
+        }
         root.directionError = ""
         root.applyError = ""
         root.sampleFeedback = ""
@@ -150,8 +208,10 @@ Item {
         root.preparedInspirationSignature = ""
         root.editCommitted = false
         root.committedAssetIds = []
-        root.inspirationSuggestions = []
-        root.selectedSuggestionKeys = []
+        if (!hasSession) {
+            root.inspirationSuggestions = []
+            root.selectedSuggestionKeys = []
+        }
         root.suggestionSummary = ""
         root.styleStartMode = "project"
         root.styleStartMessage = ""
@@ -159,16 +219,34 @@ Item {
         root.detailsActionMessage = ""
         root.storyPreferenceForgetArmed = false
         root.storyPreferenceActionMessage = ""
-        root.scopeMode = root.bestScope(root.initialScopeMode)
+        if (hasSession && String((root.sessionContext || ({})).scope || "").length > 0)
+            root.scopeMode = String(root.sessionContext.scope)
+        else if (!hasSession)
+            root.scopeMode = root.bestScope(root.initialScopeMode)
         root.scopeModeRequested(root.scopeMode)
-        root.setPage(root.agentRunning() ? 2 : (root.canReviewDraft() ? 3 : 0))
+        root.setPage(root.agentRunning() && !hasSession ? 2 :
+                     (root.canReviewDraft() && (!hasSession || sessionStage === "idle") ? 3 : 0))
         if (root.hasController())
             root.agentEditController.probeSelectedModelAsync()
-        root.forceActiveFocus()
+        Qt.callLater(function() { root.focusCurrentPageEntry() })
+    }
+
+    function focusCurrentPageEntry() {
+        if (!root.visible || root.closingAfterTransition)
+            return
+        if (root.currentPage === 3 ||
+            (root.currentPage === 2 && !root.agentRunning())) {
+            returnToEditorButton.forceActiveFocus(Qt.TabFocusReason)
+            return
+        }
+        if (root.hasSessionController())
+            sessionConversationView.focusPageEntry()
+        else
+            conversationView.focusPageEntry()
     }
 
     function close() {
-        if (!root.visible || root.agentRunning())
+        if (!root.visible)
             return
         root.closingAfterTransition = true
         presentationAnimation.restart()
@@ -177,13 +255,13 @@ Item {
     Connections {
         target: root.agentEditController
         function onRunningChanged() {
-            if (root.visible && root.agentRunning()) {
+            if (!root.hasSessionController() && root.visible && root.agentRunning()) {
                 root.runElapsedSeconds = 0
                 root.setPage(2)
             }
         }
         function onDraftChanged() {
-            if (root.visible && !root.agentRunning() && root.canReviewDraft())
+            if (!root.hasSessionController() && root.visible && !root.agentRunning() && root.canReviewDraft())
                 root.setPage(3)
         }
     }
@@ -194,6 +272,10 @@ Item {
 
     function hasCatalog() {
         return root.catalogModel !== null && root.catalogModel !== undefined
+    }
+
+    function hasSessionController() {
+        return root.sessionController !== null && root.sessionController !== undefined
     }
 
     function agentRunning() {
@@ -319,6 +401,10 @@ Item {
         const checkingModel = Boolean(root.agentEditController.modelProbeRunning)
         const state = root.agentEditController.aiEditWorkflowState(root.scopeMode) || ({})
         state.modelProbeRunning = checkingModel
+        state.selectedModelId = root.agentEditController.selectedModelId
+        state.availableModelCount = (root.agentEditController.availableModels || []).length
+        state.running = root.agentEditController.running
+        state.draftActive = root.agentEditController.draftActive
         return state
     }
 
@@ -806,6 +892,16 @@ Item {
         root.currentPage = Math.max(0, Math.min(3, page))
     }
 
+    function terminalStageIndex() {
+        if (!root.hasSessionController() || root.currentPage === 3)
+            return root.currentPage
+        const stage = String(root.sessionController.stage || "idle")
+        if (stage === "planning" || stage === "plan-ready") return 1
+        if (stage === "executing" || stage === "interrupted" || stage === "error") return 2
+        if (stage === "review") return 3
+        return 0
+    }
+
     function nextPage() {
         root.setPage(root.currentPage + 1)
     }
@@ -1086,6 +1182,83 @@ Item {
         root.styleStartMessage = "Saved “" + String(report.styleName || root.selectedStyleName()) +
                                  "” for this project."
         root.directionError = ""
+    }
+
+    function savedInspirationSuggestions() {
+        const result = []
+        const referenceIds = []
+        for (const style of root.availableStyles()) {
+            if (String(style.source || "") === "built-in")
+                continue
+            const profile = style.learnedProfile || style.learned_profile || ({})
+            result.push({kind: "preset", id: String(style.id || ""),
+                         title: String(style.name || "Saved look"),
+                         detail: String(profile.styleSummary || style.goal || "Saved inspiration"),
+                         goal: String(style.goal || ""), saved: true})
+            for (const example of (profile.reference_examples || [])) {
+                const id = String(example.assetId || "")
+                if (id.length > 0 && referenceIds.indexOf(id) < 0)
+                    referenceIds.push(id)
+            }
+        }
+        if (root.hasCatalog() && typeof root.catalogModel.assetById === "function") {
+            for (const id of referenceIds) {
+                const asset = root.catalogModel.assetById(id) || ({})
+                if (!String(asset.assetId || "").length || root.isTargetAsset(asset))
+                    continue
+                result.push({kind: "photo", id: id, title: root.assetDisplayTitle(asset),
+                             detail: "Used in a saved look", thumbnailSource: String(asset.thumbnailSource || ""),
+                             saved: true})
+            }
+        }
+        return result
+    }
+
+    function showSavedInspiration() {
+        root.inspirationSuggestions = root.savedInspirationSuggestions()
+        root.styleStartMode = "saved"
+        root.suggestionSummary = "Past inspiration"
+        root.directionError = ""
+        root.setPage(1)
+    }
+
+    function terminalDirectionReady() {
+        const key = root.workflowPrimaryKey()
+        if (key === "set_up_local_ai" || key === "check_local_model")
+            return root.runButtonEnabled()
+        return root.hasController() && root.scopeCount(root.scopeMode) > 0 &&
+               (root.terminalPrompt.trim().length > 0 || root.selectedSuggestionKeys.length > 0) &&
+               root.runButtonEnabled() && !root.agentRunning()
+    }
+
+    function runTerminalDirection() {
+        if (!root.terminalDirectionReady())
+            return
+        const key = root.workflowPrimaryKey()
+        if (key === "set_up_local_ai" || key === "check_local_model") {
+            conversationView.showModelConnection()
+            return
+        }
+        const prompt = root.terminalPrompt.trim()
+        if (prompt.length > 0) {
+            root.agentEditController.userInstructions = prompt
+            root.generatedTerminalInstructions = ""
+        } else {
+            const selected = root.inspirationSuggestions.filter(function(item) { return root.suggestionSelected(item) })
+            const look = selected.find(function(item) { return item.kind === "preset" }) || ({})
+            root.generatedTerminalInstructions = String(look.goal || "").trim() ||
+                    "Use the selected saved inspiration as the edit direction. Preserve the subject and composition."
+            root.agentEditController.userInstructions = root.generatedTerminalInstructions
+        }
+        root.inspirationAssetIds = root.selectedInspirationPhotoIds()
+        root.inspirationMode = root.inspirationAssetIds.length > 0 ? "references" : "preset"
+        if (root.inspirationMode === "references" && !root.learnSelectedInspiration()) {
+            root.setPage(0)
+            return
+        }
+        root.directionError = ""
+        root.setPage(2)
+        root.draftRequested(root.scopeMode, String(root.agentEditController.userInstructions))
     }
 
     function availableStyles() {
@@ -2396,138 +2569,233 @@ Item {
         return [status.length > 0 ? status : "Looksy is ready."]
     }
 
-    Rectangle {
-        id: terminalDimmer
+    // The overlay blocks editor input; only the robot artwork forms the popup.
+    MouseArea {
         anchors.fill: parent
-        color: theme.ink950
-        opacity: root.presentationProgress * 0.72
+        acceptedButtons: Qt.AllButtons
+        onWheel: function(wheel) { wheel.accepted = true }
     }
 
     Rectangle {
-        id: terminalFrame
         anchors.fill: parent
-        anchors.margins: 18
-        radius: 6
         color: theme.ink950
-        border.width: 1
-        border.color: theme.lineStrong
-        clip: true
+        opacity: root.presentationProgress * 0.46
+    }
+
+    Item {
+        id: robotStage
+        objectName: "agentRobotStage"
+        width: Math.min(root.width - 24, root.height - 24, 1120)
+        height: width
+        anchors.centerIn: parent
         opacity: root.presentationProgress
         scale: 0.965 + root.presentationProgress * 0.035
-        y: (1 - root.presentationProgress) * 18
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 1
-            spacing: 0
+        property real floatOffset: 0
+        property real servoAngle: 0
+        property real nodAngle: 0
+        property bool eyesClosed: false
+        property real antennaSignal: 0.35
+        readonly property bool motionActive: root.visible && root.presentationProgress === 1 && !theme.reducedMotion
+
+        // The character perches on the CRT bezel and reacts to actual run stages.
+        transform: Translate {
+            y: (1 - root.presentationProgress) * 18 + robotStage.floatOffset
+        }
+        function reactToActivity() {
+            if (!motionActive) return
+            const events = root.runEvents()
+            const event = events.length > 0 ? events[events.length - 1] : ({})
+            const sessionStage = root.hasSessionController() ? String(root.sessionController.stage || "") : ""
+            servoAngle = event.uiAnchor === "inspector" ? 3
+                         : event.uiAnchor === "compare" ? -3
+                         : sessionStage === "planning" ? -2
+                         : sessionStage === "executing" ? 2 : 0
+            if (String(event.status || "") === "complete" || sessionStage === "review" || root.currentPage === 3)
+                completionNod.restart()
+            blinkSequence.restart()
+        }
+        Connections {
+            target: root.agentEditController
+            function onRunEventsChanged() { robotStage.reactToActivity() }
+        }
+        Connections {
+            target: root
+            function onCurrentPageChanged() { robotStage.reactToActivity() }
+        }
+        Connections {
+            target: root.sessionController
+            function onStateChanged() { robotStage.reactToActivity() }
+            function onActivityReceived() { robotStage.reactToActivity() }
+        }
+        onMotionActiveChanged: {
+            if (!motionActive) {
+                completionNod.stop()
+                blinkSequence.stop()
+                servoAngle = 0
+                nodAngle = 0
+                eyesClosed = false
+                antennaSignal = 0.35
+            }
+        }
+        Timer {
+            interval: 2700
+            repeat: true
+            running: robotStage.motionActive && root.agentRunning()
+            onTriggered: {
+                robotStage.servoAngle = robotStage.servoAngle > 0 ? -2 : 2
+                blinkSequence.restart()
+            }
+        }
+        Timer {
+            interval: 4800
+            repeat: true
+            running: robotStage.motionActive && !root.agentRunning()
+            onTriggered: blinkSequence.restart()
+        }
+        SequentialAnimation {
+            id: completionNod
+            objectName: "agentRobotCompletionNod"
+            RotationAnimator { target: presentationCharacter; from: 0; to: 3; duration: 130; easing.type: Easing.OutCubic }
+            RotationAnimator { target: presentationCharacter; to: -1; duration: 170; easing.type: Easing.OutCubic }
+            RotationAnimator { target: presentationCharacter; to: 0; duration: 120; easing.type: Easing.OutCubic }
+        }
+        SequentialAnimation {
+            id: blinkSequence
+            ScriptAction { script: presentationCharacter.blinkOnce() }
+        }
 
         Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 70
-            color: theme.ink900
-            border.width: 0
-
-            RowLayout {
+            id: robotArtwork
+            objectName: "agentRobotScreenArtwork"
+            x: heldScreen.x - 18
+            y: heldScreen.y - 18
+            width: heldScreen.width + 36
+            height: heldScreen.height + 36
+            radius: 16
+            color: "#11181b"
+            border.width: 1
+            border.color: "#485b60"
+            Accessible.ignored: true
+            Rectangle {
                 anchors.fill: parent
-                anchors.leftMargin: 24
-                anchors.rightMargin: 24
-                spacing: 18
+                anchors.margins: 5
+                radius: 12
+                color: "transparent"
+                border.width: 1
+                border.color: "#25363b"
+            }
+            Rectangle {
+                x: 22; y: 0
+                width: 34; height: 1
+                color: "#a5d9e0"
+                opacity: 0.7
+            }
+        }
+        LooksyAgentCharacter {
+            id: presentationCharacter
+            objectName: "agentPopupCharacter"
+            width: robotStage.width * 0.13
+            height: width * 1.15
+            x: robotArtwork.x + 14
+            y: robotArtwork.y - feetBaseline + 1
+            articulated: true
+            animated: robotStage.motionActive
+            lookAngle: robotStage.servoAngle
+            mode: root.hasSessionController() && String(root.sessionController.stage || "") === "review" ? "success"
+                  : root.hasSessionController() && String(root.sessionController.stage || "") === "error" ? "warning"
+                  : root.hasSessionController() && String(root.sessionController.stage || "") === "executing" ? "adjust"
+                  : root.agentRunning() || (root.hasSessionController() &&
+                    String(root.sessionController.stage || "") === "planning") ? "thinking"
+                  : root.currentPage === 3 ? "success" : "idle"
+            tool: "none"
+            Accessible.ignored: true
+        }
 
-                ColumnLayout {
-                    Layout.preferredWidth: 150
-                    spacing: 1
-                    BrandWordmark {
-                        Layout.preferredWidth: implicitWidth
-                        Layout.preferredHeight: implicitHeight
-                        compact: true
-                        showMark: true
-                        showDescriptor: false
-                    }
-                    Label {
-                        text: "AGENT TERMINAL  /  01"
-                        color: theme.brandGreen
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
-                        font.letterSpacing: 1.35
-                    }
-                }
+        // The interface and character share a drawn frame with no raster bezel.
+        Item {
+            id: heldScreen
+            objectName: "agentHeldScreen"
+            x: robotStage.width * 0.177
+            y: robotStage.height * 0.265
+            width: robotStage.width * 0.646
+            height: robotStage.height * 0.58
+            clip: true
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignCenter
+                    Layout.preferredHeight: 30
                     spacing: 8
 
+                    Label {
+                        Layout.fillWidth: true
+                        text: ["EDIT.EXE  /  REQUEST", "EDIT.EXE  /  PLAN", "EDIT.EXE  /  RUNNING", "EDIT.EXE  /  REVIEW"][root.terminalStageIndex()]
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        font.letterSpacing: 0.8
+                    }
                     Repeater {
-                        model: [
-                            { title: "Direction", page: 0 },
-                            { title: "Inspiration", page: 1 },
-                            { title: "Working", page: 2 },
-                            { title: "Review", page: 3 }
-                        ]
-
+                        model: 4
                         delegate: Rectangle {
-                            required property var modelData
-                            readonly property bool selected: root.currentPage === Number(modelData.page)
-                            readonly property bool completed: root.currentPage > Number(modelData.page)
-                            implicitWidth: stageLabel.implicitWidth + 24
-                            height: 34
-                            radius: 2
-                            color: selected ? theme.ink750 : "transparent"
-                            border.width: selected ? 1 : 0
-                            border.color: theme.lineSoft
-
-                            Label {
-                                id: stageLabel
-                                anchors.centerIn: parent
-                                text: modelData.title
-                                color: parent.selected ? theme.textStrong
-                                                       : parent.completed ? theme.textMain : theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                font.letterSpacing: 0.5
-                                font.weight: parent.selected ? Font.DemiBold : Font.Normal
-                            }
+                            required property int index
+                            implicitWidth: 5
+                            implicitHeight: 5
+                            radius: 2.5
+                            color: index === root.terminalStageIndex() ? theme.textStrong : theme.lineStrong
                         }
                     }
+                    ActionButton {
+                        objectName: "agentSessionReturnToConversationButton"
+                        visible: root.hasSessionController() && root.currentPage === 3
+                        text: "Conversation"
+                        tone: "quiet"
+                        compact: true
+                        implicitWidth: 82
+                        implicitHeight: 30
+                        accessibleName: "Return to agent conversation"
+                        tooltipText: "Return to the task status and revision prompt."
+                        onClicked: root.setPage(0)
+                    }
+                    ActionButton {
+                        id: returnToEditorButton
+                        objectName: "agentReturnToEditorButton"
+                        text: root.agentRunning() ? "Editor" : "Close"
+                        tone: "quiet"
+                        compact: true
+                        implicitWidth: 62
+                        implicitHeight: 30
+                        accessibleName: "Back to editor"
+                        tooltipText: root.agentRunning() ? "View the editor while the agent continues working." : "Close the walkthrough and return to the editor."
+                        onClicked: root.close()
+                    }
                 }
 
-                Button {
-                    objectName: "agentReturnToEditorButton"
-                    text: "Back to editor"
-                    enabled: !root.agentRunning()
-                    implicitWidth: 142
-                    implicitHeight: 40
-                    onClicked: root.close()
-                    background: Rectangle {
-                        radius: 2
-                        color: parent.hovered ? theme.ink750 : theme.ink850
-                        border.width: 1
-                        border.color: theme.lineSoft
-                    }
-                    contentItem: Label {
-                        text: parent.text
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        font.weight: Font.DemiBold
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
+                AgentConversationView {
+                    id: sessionConversationView
+                    visible: root.hasSessionController() && root.currentPage !== 3
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 0
+                    dialog: root
+                    themeObject: theme
+                }
+
+                AgentTerminalScreen {
+                    id: conversationView
+                    visible: !root.hasSessionController() || root.currentPage === 3
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 0
+                    dialog: root
+                    themeObject: theme
                 }
             }
-        }
-
-        AgentConversationView {
-            id: conversationView
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.leftMargin: Math.max(24, (root.width - 1320) * 0.5)
-            Layout.rightMargin: Math.max(24, (root.width - 1320) * 0.5)
-            Layout.topMargin: 20
-            Layout.bottomMargin: 20
-        dialog: root
-        themeObject: theme
-        }
         }
     }
 }

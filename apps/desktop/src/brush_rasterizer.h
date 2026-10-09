@@ -8,6 +8,13 @@
 
 namespace photo_editor::desktop {
 
+// Version 2 uses a circular tip in image pixels. Hardness controls the solid
+// core; feather softens that core within the cursor's outer footprint.
+struct BrushRasterGeometry final {
+  bool circular = false;  // Legacy normalized-space tips remain unchanged.
+  double hardness = 1.0;
+};
+
 // In-place target for transient stroke buffers. Cancellation may leave partial writes;
 // callers discard a cancelled transient target. The recipe wrapper remains atomic.
 [[nodiscard]] QRect rasterize_brush_point_into_alpha(
@@ -19,7 +26,8 @@ namespace photo_editor::desktop {
     bool protect_edges = false,
     photo_editor::pipeline::CancellationToken cancellation = {},
     bool* cancelled = nullptr, qint64* auto_mask_candidate_pixels = nullptr,
-    qint64* auto_mask_edge_evaluation_pixels = nullptr);
+    qint64* auto_mask_edge_evaluation_pixels = nullptr,
+    BrushRasterGeometry geometry = {});
 
 [[nodiscard]] QRect rasterize_brush_point_into_mask(
     QVariantMap* mask, const QImage* source_image, double normalized_x,
@@ -30,6 +38,7 @@ namespace photo_editor::desktop {
     bool protect_edges = false,
     photo_editor::pipeline::CancellationToken cancellation = {},
     bool* cancelled = nullptr, qint64* auto_mask_candidate_pixels = nullptr,
-    qint64* auto_mask_edge_evaluation_pixels = nullptr);
+    qint64* auto_mask_edge_evaluation_pixels = nullptr,
+    BrushRasterGeometry geometry = {});
 
 }  // namespace photo_editor::desktop

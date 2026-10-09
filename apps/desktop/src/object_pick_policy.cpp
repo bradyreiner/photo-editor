@@ -203,4 +203,124 @@ bool single_point_prompt_result_is_plausible(
   return bounds.isValid() && bounds.width() > 1 && bounds.height() > 1;
 }
 
+bool smart_select_result_honors_prompts(
+    const SegmentationResult& result,
+    const QVector<SmartSelectPrompt>& prompts,
+    bool allow_multiple_prompt_components) {
+  if (!valid_segmentation_payload(
+          result.mask_data, result.width, result.height) || prompts.isEmpty()) {
+    return false;
+  }
+  auto has_positive_prompt = false;
+  auto has_box_prompt = false;
+  QVector<int> positive_prompt_indices;
+  positive_prompt_indices.reserve(prompts.size());
+  for (const auto& prompt : prompts) {
+    if (prompt.box.isValid()) {
+      // Box corners (and the center of hollow objects) can be background.
+      // Require a meaningful selected region inside the requested bounds.
+      const auto bounds = QRectF(
+          prompt.box.x() * result.width, prompt.box.y() * result.height,
+          prompt.box.width() * result.width, prompt.box.height() * result.height)
+                              .toAlignedRect().intersected(QRect(0, 0, result.width, result.height));
+      auto selected = 0;
+      for (int y = bounds.top(); y <= bounds.bottom() && selected < 2; ++y) {
+        for (int x = bounds.left(); x <= bounds.right() && selected < 2; ++x) {
+          if (static_cast<unsigned char>(result.mask_data.at(y * result.width + x)) >= 96) ++selected;
+        }
+      }
+      if (selected < 2) return false;
+      has_box_prompt = true;
+      has_positive_prompt = true;
+      continue;
+    }
+    const auto value = segmentation_mask_value_at_normalized(
+        result.mask_data, result.width, result.height, prompt.x, prompt.y);
+    if (prompt.negative) {
+      if (value >= 96) {
+        return false;
+      }
+    } else {
+      has_positive_prompt = true;
+      if (value < 96) {
+        return false;
+      }
+      const auto x = std::clamp(
+          static_cast<int>(std::lround(
+              std::clamp(prompt.x, 0.0, 1.0) *
+              static_cast<double>(result.width - 1))),
+          0,
+          result.width - 1);
+      const auto y = std::clamp(
+          static_cast<int>(std::lround(
+              std::clamp(prompt.y, 0.0, 1.0) *
+              static_cast<double>(result.height - 1))),
+          0,
+          result.height - 1);
+      positive_prompt_indices.append(y * result.width + x);
+    }
+  }
+  if (!has_positive_prompt) {
+    return false;
+  }
+  if (positive_prompt_indices.isEmpty()) return has_box_prompt;
+
+  // A dragged prompt path may intentionally cross several subjects. Accept
+  // multiple meaningful components while rejecting isolated mask specks.
+  QVector<int> component_ids(result.mask_data.size(), -1);
+  QVector<int> component_sizes;
+  QVector<int> pending;
+  for (auto index = 0; index < result.mask_data.size(); ++index) {
+    if (static_cast<unsigned char>(result.mask_data.at(index)) < 96 ||
+        component_ids.at(index) >= 0) {
+      continue;
+    }
+    const auto component_id = static_cast<int>(component_sizes.size());
+    component_sizes.append(0);
+    pending.clear();
+    pending.append(index);
+    component_ids[index] = component_id;
+    while (!pending.isEmpty()) {
+      const auto current = pending.takeLast();
+      ++component_sizes[component_id];
+      const auto x = current % result.width;
+      const auto y = current / result.width;
+      for (auto offset_y = -1; offset_y <= 1; ++offset_y) {
+        for (auto offset_x = -1; offset_x <= 1; ++offset_x) {
+          if (offset_x == 0 && offset_y == 0) {
+            continue;
+          }
+          const auto neighbor_x = x + offset_x;
+          const auto neighbor_y = y + offset_y;
+          if (neighbor_x < 0 || neighbor_x >= result.width || neighbor_y < 0 ||
+              neighbor_y >= result.height) {
+            continue;
+          }
+          const auto neighbor = neighbor_y * result.width + neighbor_x;
+          if (component_ids.at(neighbor) >= 0 ||
+              static_cast<unsigned char>(result.mask_data.at(neighbor)) < 96) {
+            continue;
+          }
+          component_ids[neighbor] = component_id;
+          pending.append(neighbor);
+        }
+      }
+    }
+  }
+  auto first_positive_component_id = -1;
+  for (const auto index : positive_prompt_indices) {
+    const auto component_id = component_ids.at(index);
+    if (component_id < 0 || component_sizes.at(component_id) < 2) {
+      return false;
+    }
+    if (first_positive_component_id < 0) {
+      first_positive_component_id = component_id;
+    } else if (!allow_multiple_prompt_components &&
+               component_id != first_positive_component_id) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace photo_editor::desktop

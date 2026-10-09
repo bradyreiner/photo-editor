@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <tuple>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -16,16 +17,39 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QSaveFile>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include "photo_editor/pipeline/color_adjustments.h"
 #include "job_runner.h"
 #include "job_store.h"
 #include "app_bootstrap.h"
 #include "decoded_image_cache.h"
 #include "timeline_asset_store.h"
 #include "timeline_document_controller.h"
+
+namespace photo_editor::desktop {
+
+struct TimelineHistoryTestAccess {
+  static void requestVideoPoster(
+      TimelineDocumentController& controller,
+      const QString& file_path) {
+    controller.requestVideoPoster(file_path);
+  }
+
+  static bool mediaAnalysisProcessActive(const TimelineDocumentController& controller) {
+    return controller.active_media_analysis_process_ != nullptr;
+  }
+
+  static bool videoPosterProcessActive(const TimelineDocumentController& controller) {
+    return controller.active_poster_process_ != nullptr;
+  }
+};
+
+}  // namespace photo_editor::desktop
 
 namespace {
 
@@ -40,9 +64,40 @@ using photo_editor::desktop::set_decoded_image_cache_budget_bytes;
 using photo_editor::desktop::TimelineDocumentController;
 using photo_editor::desktop::AppBootstrap;
 
+QVariantMap await_cache_summary(TimelineDocumentController& controller) {
+  controller.refreshProjectCacheSummary();
+  QElapsedTimer timer; timer.start();
+  auto result = controller.projectCacheSummary();
+  while (result.value(QStringLiteral("loading")).toBool() && timer.elapsed() < 30000) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    result = controller.projectCacheSummary();
+  }
+  return result;
+}
+
+QVariantMap await_cache_cleanup(TimelineDocumentController& controller, const QStringList& categories) {
+  QVariantMap result;
+  bool finished = false;
+  const auto connection = QObject::connect(&controller, &TimelineDocumentController::projectCacheCleanupFinished,
+      &controller, [&](const QVariantMap& value) { result = value; finished = true; });
+  const auto admission = controller.cleanupProjectCaches(categories);
+  if (!admission.value(QStringLiteral("pending")).toBool()) { QObject::disconnect(connection); return admission; }
+  QElapsedTimer timer; timer.start();
+  while (!finished && timer.elapsed() < 30000) QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+  QObject::disconnect(connection);
+  if (!finished) return {{QStringLiteral("ok"), false}, {QStringLiteral("message"), QStringLiteral("Cleanup timed out")}};
+  result.insert(QStringLiteral("summary"), await_cache_summary(controller));
+  return result;
+}
+
 int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
+}
+
+bool fail_timeline_queue_path(const char* message) {
+  std::cerr << message << '\n';
+  return false;
 }
 
 bool nearly_equal(double left, double right, double tolerance = 0.0001) {
@@ -67,6 +122,17 @@ bool wait_for_persisted_job(const QString& job_id, int timeout_ms = 120000) {
       }
     }
   }
+  for (const auto& job : loadPersistedJobRecords()) {
+    if (job.job_id == job_id) {
+      std::cerr << "timeline render job timed out: id=" << job.job_id.toStdString()
+                << " status=" << job.status.toStdString()
+                << " progress=" << job.progress
+                << " error=" << job.error_message.toStdString() << '\n';
+      return false;
+    }
+  }
+  std::cerr << "timeline render job timed out without a matching persisted record: "
+            << job_id.toStdString() << '\n';
   return false;
 }
 
@@ -84,6 +150,16 @@ bool wait_for_waveform(TimelineDocumentController* controller, int timeout_ms = 
     }
   }
   return false;
+}
+
+bool wait_for_recovery_open(TimelineDocumentController* controller, int timeout_ms = 10000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (controller != nullptr && controller->recoveryOpenInProgress() &&
+         timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  return controller != nullptr && !controller->recoveryOpenInProgress();
 }
 
 bool wait_for_program_scope(
@@ -323,6 +399,253 @@ QString touch_file(const QString& path) {
   return path;
 }
 
+bool write_invalid_shebang_executable(
+    const QString& directory,
+    const QString& name,
+    QString* executable_path) {
+  if (!QDir().mkpath(directory)) {
+    return false;
+  }
+  const auto path = QDir(directory).filePath(name);
+  QFile executable(path);
+  if (!executable.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return false;
+  }
+  const auto missing_interpreter =
+      QStringLiteral("/__looksy_missing_test_interpreter___%1")
+          .arg(QCoreApplication::applicationPid());
+  if (QFileInfo::exists(missing_interpreter) ||
+      executable.write((QStringLiteral("#!") + missing_interpreter +
+                        QStringLiteral("\nexit 0\n"))
+                           .toLocal8Bit()) <= 0) {
+    return false;
+  }
+  executable.close();
+  if (!executable.setPermissions(
+          QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) {
+    return false;
+  }
+  *executable_path = path;
+  return true;
+}
+
+QString media_queue_diagnostic(const TimelineDocumentController& controller) {
+  const auto clip = controller.currentClip();
+  const auto cache = controller.cacheBudgetState();
+  const auto priority = controller.backgroundWorkPriorityState();
+  return QStringLiteral(
+             "busy=%1 pending=%2 incrementalPending=%3 incrementalStatus=%4 "
+             "clipStatus=%5 pressure=%6 availableMemory=%7 diskAvailable=%8 "
+             "yielding=%9 deferReason=%10 deferredCount=%11 status=%12")
+      .arg(controller.mediaAnalysisBusy())
+      .arg(controller.mediaAnalysisPendingCount())
+      .arg(controller.incrementalLoadPendingCount())
+      .arg(controller.incrementalLoadStatus())
+      .arg(clip.value(QStringLiteral("mediaAnalysisStatus")).toString())
+      .arg(cache.value(QStringLiteral("pressureLevel")).toString())
+      .arg(cache.value(QStringLiteral("availableMemoryBytes")).toLongLong())
+      .arg(cache.value(QStringLiteral("diskAvailableBytes")).toLongLong())
+      .arg(priority.value(QStringLiteral("yielding")).toBool())
+      .arg(priority.value(QStringLiteral("reason")).toString())
+      .arg(priority.value(QStringLiteral("deferredCount")).toInt())
+      .arg(controller.status());
+}
+
+bool wait_for_media_queue_idle(
+    TimelineDocumentController& controller,
+    const QString& label,
+    int timeout_ms = 5000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (!controller.mediaAnalysisBusy()) {
+      return true;
+    }
+  }
+  std::cerr << label.toStdString() << " timed out after " << timeout_ms
+            << "ms: " << media_queue_diagnostic(controller).toStdString() << '\n';
+  return false;
+}
+
+bool run_timeline_media_queue_terminal_paths(const QString& workspace_path) {
+  const auto isolated_cache_root = QDir(workspace_path).filePath(QStringLiteral("cache"));
+  if (!QDir().mkpath(isolated_cache_root)) {
+    return fail_timeline_queue_path("isolated cache directory should be ready before pressure sampling");
+  }
+  qputenv("PHOTO_EDITOR_CACHE_DIR", isolated_cache_root.toLocal8Bit());
+
+  const auto original_path = qgetenv("PATH");
+  const auto invalid_probe_directory =
+      QDir(workspace_path).filePath(QStringLiteral("invalid-ffprobe"));
+  QString invalid_probe;
+  if (!write_invalid_shebang_executable(
+          invalid_probe_directory, QStringLiteral("ffprobe"), &invalid_probe)) {
+    return fail_timeline_queue_path("invalid ffprobe fixture should be created and executable");
+  }
+  qputenv(
+      "PATH",
+      (invalid_probe_directory + QDir::listSeparator() +
+       QString::fromLocal8Bit(original_path))
+          .toLocal8Bit());
+  if (QStandardPaths::findExecutable(QStringLiteral("ffprobe")) != invalid_probe) {
+    return fail_timeline_queue_path("PATH lookup should select the invalid-shebang ffprobe fixture");
+  }
+  QProcess invalid_probe_check;
+  invalid_probe_check.start(invalid_probe, {});
+  if (invalid_probe_check.waitForStarted(1000) ||
+      invalid_probe_check.error() != QProcess::FailedToStart) {
+    return fail_timeline_queue_path("invalid-shebang ffprobe fixture should fail to start under QProcess");
+  }
+
+  TimelineDocumentController analysis_controller;
+  analysis_controller.createTimeline(QStringLiteral("Failed To Start Media Analysis"));
+  analysis_controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
+  const auto analysis_media =
+      touch_file(QDir(workspace_path).filePath(QStringLiteral("failed-probe-a.mp4")));
+  const auto second_analysis_media =
+      touch_file(QDir(workspace_path).filePath(QStringLiteral("failed-probe-b.mp4")));
+  if (analysis_media.isEmpty() || second_analysis_media.isEmpty()) {
+    return fail_timeline_queue_path("media-analysis failure fixtures should be readable");
+  }
+  analysis_controller.addClipFromGallery(
+      QStringLiteral("video:failed-probe-a"), analysis_media,
+      QStringLiteral("Failed Probe A"), 0.0, QStringLiteral("test://poster"));
+  analysis_controller.addClipFromGallery(
+      QStringLiteral("video:failed-probe-b"), second_analysis_media,
+      QStringLiteral("Failed Probe B"), 0.0, QStringLiteral("test://poster"));
+  const auto analysis_normal_pressure =
+      analysis_controller.cacheBudgetState()
+          .value(QStringLiteral("pressureLevel")).toString() == QStringLiteral("normal");
+  const auto analysis_process_started =
+      photo_editor::desktop::TimelineHistoryTestAccess::mediaAnalysisProcessActive(
+          analysis_controller);
+  if (!analysis_normal_pressure || !analysis_process_started ||
+      analysis_controller.mediaAnalysisPendingCount() < 1) {
+    std::cerr << "ffprobe dispatch precondition: "
+              << media_queue_diagnostic(analysis_controller).toStdString()
+              << " process_active=" << analysis_process_started << '\n';
+    return fail_timeline_queue_path("eligible normal-pressure fixture should dispatch ffprobe before FailedToStart is asserted");
+  }
+  const auto analysis_idle =
+      wait_for_media_queue_idle(analysis_controller, QStringLiteral("FailedToStart ffprobe"));
+  const auto analysis_clips = analysis_controller.clips();
+  if (!analysis_idle ||
+      analysis_controller.mediaAnalysisPendingCount() != 0 ||
+      analysis_clips.size() != 2 ||
+      analysis_clips.at(0).toMap()
+              .value(QStringLiteral("mediaAnalysisStatus")).toString() !=
+          QStringLiteral("failed") ||
+      analysis_clips.at(1).toMap()
+              .value(QStringLiteral("mediaAnalysisStatus")).toString() !=
+          QStringLiteral("failed")) {
+    std::cerr << "ffprobe terminal state: "
+              << media_queue_diagnostic(analysis_controller).toStdString() << '\n';
+    return fail_timeline_queue_path("FailedToStart should finish only the active metadata request and release queue busy state");
+  }
+
+  const auto invalid_ffmpeg_directory =
+      QDir(workspace_path).filePath(QStringLiteral("invalid-ffmpeg"));
+  QString invalid_ffmpeg;
+  if (!write_invalid_shebang_executable(
+          invalid_ffmpeg_directory, QStringLiteral("ffmpeg"), &invalid_ffmpeg)) {
+    return fail_timeline_queue_path("invalid ffmpeg fixture should be created and executable");
+  }
+  qputenv(
+      "PATH",
+      (invalid_ffmpeg_directory + QDir::listSeparator() +
+       QString::fromLocal8Bit(original_path))
+          .toLocal8Bit());
+  if (QStandardPaths::findExecutable(QStringLiteral("ffmpeg")) != invalid_ffmpeg) {
+    return fail_timeline_queue_path("PATH lookup should select the invalid-shebang ffmpeg fixture");
+  }
+  QProcess invalid_ffmpeg_check;
+  invalid_ffmpeg_check.start(invalid_ffmpeg, {});
+  if (invalid_ffmpeg_check.waitForStarted(1000) ||
+      invalid_ffmpeg_check.error() != QProcess::FailedToStart) {
+    return fail_timeline_queue_path("invalid-shebang ffmpeg fixture should fail to start under QProcess");
+  }
+
+  TimelineDocumentController poster_controller;
+  poster_controller.createTimeline(QStringLiteral("Failed To Start Video Poster"));
+  poster_controller.setCachePressureLevelForTesting(QStringLiteral("normal"));
+  const auto poster_media =
+      touch_file(QDir(workspace_path).filePath(QStringLiteral("failed-poster.mp4")));
+  if (poster_media.isEmpty()) {
+    return fail_timeline_queue_path("video-poster failure fixture should be readable");
+  }
+  poster_controller.addClipFromGallery(
+      QStringLiteral("video:failed-poster"), poster_media,
+      QStringLiteral("Failed Poster"), 0.0, QString{});
+  if (!wait_for_media_queue_idle(poster_controller, QStringLiteral("poster controller setup"))) {
+    return fail_timeline_queue_path("metadata setup should settle before directly requesting a poster");
+  }
+  photo_editor::desktop::TimelineHistoryTestAccess::requestVideoPoster(
+      poster_controller, poster_media);
+  const auto poster_normal_pressure =
+      poster_controller.cacheBudgetState()
+          .value(QStringLiteral("pressureLevel")).toString() == QStringLiteral("normal");
+  const auto poster_process_started =
+      photo_editor::desktop::TimelineHistoryTestAccess::videoPosterProcessActive(
+          poster_controller);
+  if (!poster_normal_pressure || !poster_process_started ||
+      poster_controller.mediaAnalysisPendingCount() < 1) {
+    std::cerr << "ffmpeg dispatch precondition: "
+              << media_queue_diagnostic(poster_controller).toStdString()
+              << " process_active=" << poster_process_started << '\n';
+    return fail_timeline_queue_path("eligible normal-pressure fixture should dispatch ffmpeg before FailedToStart is asserted");
+  }
+  if (!wait_for_media_queue_idle(poster_controller, QStringLiteral("FailedToStart ffmpeg")) ||
+      poster_controller.mediaAnalysisPendingCount() != 0) {
+    std::cerr << "ffmpeg terminal state: "
+              << media_queue_diagnostic(poster_controller).toStdString() << '\n';
+    return fail_timeline_queue_path("FailedToStart should finish only the active poster request and release queue busy state");
+  }
+
+  qputenv("PATH", original_path);
+  TimelineDocumentController pressure_controller;
+  pressure_controller.createTimeline(QStringLiteral("Critical Pressure Recovery"));
+  pressure_controller.setCachePressureLevelForTesting(QStringLiteral("critical"));
+  const auto pressure_media =
+      touch_file(QDir(workspace_path).filePath(QStringLiteral("pressure-resume.mp4")));
+  if (pressure_media.isEmpty()) {
+    return fail_timeline_queue_path("pressure-resume fixture should be readable");
+  }
+  pressure_controller.addClipFromGallery(
+      QStringLiteral("video:pressure-resume"), pressure_media,
+      QStringLiteral("Pressure Resume"), 0.0, QStringLiteral("test://poster"));
+  if (!pressure_controller.mediaAnalysisBusy() ||
+      pressure_controller.mediaAnalysisPendingCount() < 1 ||
+      pressure_controller.currentClip()
+              .value(QStringLiteral("mediaAnalysisStatus")).toString() !=
+          QStringLiteral("queued") ||
+      pressure_controller.cacheBudgetState()
+              .value(QStringLiteral("pressureLevel")).toString() !=
+          QStringLiteral("critical")) {
+    std::cerr << "critical-pressure admission state: "
+              << media_queue_diagnostic(pressure_controller).toStdString() << '\n';
+    return fail_timeline_queue_path("critical pressure should leave background metadata queued for an observable resume test");
+  }
+
+  pressure_controller.setCachePressureLevelForTesting(QStringLiteral("warning"));
+  if (!wait_for_media_queue_idle(
+          pressure_controller, QStringLiteral("critical to warning recovery")) ||
+      pressure_controller.mediaAnalysisPendingCount() != 0 ||
+      pressure_controller.cacheBudgetState()
+              .value(QStringLiteral("pressureLevel")).toString() !=
+          QStringLiteral("warning") ||
+      pressure_controller.currentClip()
+              .value(QStringLiteral("mediaAnalysisStatus")).toString() ==
+          QStringLiteral("queued")) {
+    std::cerr << "warning-pressure terminal state: "
+              << media_queue_diagnostic(pressure_controller).toStdString() << '\n';
+    return fail_timeline_queue_path("leaving critical pressure for warning should resume and drain deferred metadata work");
+  }
+
+  qputenv("PATH", original_path);
+  return true;
+}
+
 bool run_process(const QString& program, const QStringList& arguments, QString* error_output = nullptr) {
   QProcess process;
   process.start(program, arguments);
@@ -428,20 +751,24 @@ QString create_test_video(
     const QString& output_path,
     const QString& color_name,
     bool with_audio,
-    int audio_frequency_hz = 660) {
+    int audio_frequency_hz = 660,
+    double duration_seconds = 1.2) {
+  const auto duration_text = QString::number(duration_seconds, 'f', 3);
   QStringList arguments = {
       QStringLiteral("-y"),
       QStringLiteral("-f"),
       QStringLiteral("lavfi"),
       QStringLiteral("-i"),
-      QStringLiteral("color=c=%1:s=320x240:d=1.2:r=30").arg(color_name),
+      QStringLiteral("color=c=%1:s=320x240:d=%2:r=30").arg(color_name, duration_text),
   };
 
   if (with_audio) {
     arguments << QStringLiteral("-f")
               << QStringLiteral("lavfi")
               << QStringLiteral("-i")
-              << QStringLiteral("sine=frequency=%1:duration=1.2").arg(audio_frequency_hz);
+              << QStringLiteral("sine=frequency=%1:duration=%2")
+                     .arg(audio_frequency_hz)
+                     .arg(duration_text);
   }
 
   arguments << QStringLiteral("-shortest")
@@ -699,7 +1026,1360 @@ QString create_alpha_delivery_test_image(const QString& output_path) {
   return image.save(output_path) ? output_path : QString{};
 }
 
+bool run_timeline_color_grade_curve_workflow(const QString& workspace_path) {
+  const auto source_path = QDir(workspace_path).filePath(
+      QStringLiteral("timeline-curve-source.png"));
+  QImage source(64, 64, QImage::Format_RGB32);
+  source.fill(qRgb(70, 112, 168));
+  if (!source.save(source_path)) {
+    std::cerr << "the timeline curve source fixture should be writable\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Timeline Curve Editing")},
+      {QStringLiteral("width"), 64},
+      {QStringLiteral("height"), 64},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  controller.addClipFromGallery(
+      QStringLiteral("photo:curve-source"), source_path,
+      QStringLiteral("Curve Source"), 2.0, source_path);
+  const auto adjustment = controller.addAdjustmentClipForAutomation(0.0, 1.5);
+  const auto clip_id = adjustment.value(QStringLiteral("clipId")).toString();
+  const QVariantList base_points{
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.04}},
+      QVariantMap{{QStringLiteral("x"), 0.5}, {QStringLiteral("y"), 0.68}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 0.96}},
+  };
+  if (!adjustment.value(QStringLiteral("ok")).toBool() || clip_id.isEmpty() ||
+      !controller.setClipColorGradeCurveForAutomation(
+           clip_id, QString{}, QStringLiteral("RGB"), base_points)
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "a timeline adjustment clip should accept a validated base curve\n";
+    return false;
+  }
+  const auto base_summary = controller.currentClip()
+                                .value(QStringLiteral("colorGradeCurves"))
+                                .toMap().value(QStringLiteral("RGB")).toList();
+  if (base_summary.size() != 3 ||
+      !nearly_equal(base_summary.at(1).toMap()
+                        .value(QStringLiteral("y")).toDouble(), 0.68)) {
+    std::cerr << "clip state should expose the edited base curve points\n";
+    return false;
+  }
+
+  const auto layer_result = controller.addClipColorGradeAdjustmentLayerForAutomation(
+      clip_id, QStringLiteral("Curve Layer"));
+  const auto layer_id = layer_result.value(QStringLiteral("layerId")).toString();
+  const QVariantList green_points{
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.0}},
+      QVariantMap{{QStringLiteral("x"), 0.35}, {QStringLiteral("y"), 0.62}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 1.0}},
+  };
+  if (!layer_result.value(QStringLiteral("ok")).toBool() || layer_id.isEmpty() ||
+      !controller.setClipColorGradeCurveForAutomation(
+           clip_id, layer_id, QStringLiteral("Green"), green_points)
+           .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "an adjustment layer should accept an independent channel curve\n";
+    return false;
+  }
+  auto layer_summary = controller.currentClip()
+                           .value(QStringLiteral("colorGradeLayers"))
+                           .toList();
+  if (layer_summary.size() != 1 ||
+      layer_summary.constFirst().toMap()
+              .value(QStringLiteral("colorGradeCurves")).toMap()
+              .value(QStringLiteral("Green")).toList().size() != 3) {
+    std::cerr << "clip state should expose the selected layer curve points\n";
+    return false;
+  }
+
+  const QVariantList unordered_points{
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.0}},
+      QVariantMap{{QStringLiteral("x"), 0.8}, {QStringLiteral("y"), 0.7}},
+      QVariantMap{{QStringLiteral("x"), 0.7}, {QStringLiteral("y"), 0.8}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 1.0}},
+  };
+  if (controller.setClipColorGradeCurveForAutomation(
+          clip_id, layer_id, QStringLiteral("Green"), unordered_points)
+          .value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "unordered curve handles should be rejected\n";
+    return false;
+  }
+  controller.undo();
+  layer_summary = controller.currentClip()
+                      .value(QStringLiteral("colorGradeLayers"))
+                      .toList();
+  if (layer_summary.constFirst().toMap()
+          .value(QStringLiteral("colorGradeCurves")).toMap()
+          .value(QStringLiteral("Green")).toList().size() != 0) {
+    std::cerr << "one undo should remove the layer curve edit\n";
+    return false;
+  }
+  controller.redo();
+  layer_summary = controller.currentClip()
+                      .value(QStringLiteral("colorGradeLayers"))
+                      .toList();
+  if (layer_summary.constFirst().toMap()
+          .value(QStringLiteral("colorGradeCurves")).toMap()
+          .value(QStringLiteral("Green")).toList().size() != 3) {
+    std::cerr << "redo should restore the layer curve edit\n";
+    return false;
+  }
+  if (!controller.saveTimeline()) {
+    std::cerr << "timeline curves should save with their grade recipe\n";
+    return false;
+  }
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath())) {
+    std::cerr << "the curve timeline should reopen\n";
+    return false;
+  }
+  const auto grade = reopened.inspectClipColorGradeForAutomation(clip_id);
+  const auto recipe = grade.value(QStringLiteral("recipe")).toJsonObject();
+  const auto layers = recipe.value(QStringLiteral("photoLayers")).toArray();
+  if (!grade.value(QStringLiteral("ok")).toBool() ||
+      recipe.value(QStringLiteral("curves")).toObject()
+              .value(QStringLiteral("channels")).toArray().size() != 1 ||
+      layers.size() != 1 ||
+      layers.at(0).toObject()
+              .value(QStringLiteral("greenCurvePoints")).toArray().size() != 3) {
+    std::cerr << "base and layer curves should survive save and reopen\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_cube_lut_workflow(const QString& workspace_path) {
+  const auto source_path = QDir(workspace_path).filePath(
+      QStringLiteral("timeline-cube-source.png"));
+  QImage source(32, 32, QImage::Format_RGB32);
+  source.fill(qRgb(72, 118, 176));
+  if (!source.save(source_path)) {
+    std::cerr << "the timeline LUT source fixture should be writable\n";
+    return false;
+  }
+  const auto lut_path = QDir(workspace_path).filePath(
+      QStringLiteral("solid-blue.cube"));
+  QFile lut_file(lut_path);
+  if (!lut_file.open(QIODevice::WriteOnly) ||
+      lut_file.write(
+          "TITLE \"Solid Blue\"\nLUT_3D_SIZE 2\n"
+          "0 0 1\n0 0 1\n0 0 1\n0 0 1\n"
+          "0 0 1\n0 0 1\n0 0 1\n0 0 1\n") <= 0) {
+    std::cerr << "the timeline LUT fixture should be writable\n";
+    return false;
+  }
+  lut_file.close();
+  const auto parsed_fixture =
+      photo_editor::pipeline::load_cube_lut_file(lut_path.toStdString());
+  if (!parsed_fixture.ok()) {
+    std::cerr << "fixture CUBE parse error: "
+              << parsed_fixture.error_message << '\n';
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Timeline CUBE LUT"));
+  controller.addClipFromGallery(
+      QStringLiteral("photo:cube-source"), source_path,
+      QStringLiteral("CUBE Source"), 1.0, source_path);
+  const auto clip_id = controller.currentClip()
+                           .value(QStringLiteral("clipId")).toString();
+  const auto result =
+      controller.setClipColorLutForAutomation(clip_id, lut_path);
+  if (!result.value(QStringLiteral("ok")).toBool()) {
+    std::cerr << "timeline CUBE attachment failed: "
+              << result.value(QStringLiteral("error")).toString().toStdString()
+              << '\n';
+    return false;
+  }
+  if (controller.currentClip().value(QStringLiteral("colorLutName")).toString() !=
+      QStringLiteral("solid-blue")) {
+    std::cerr << "the attached CUBE LUT should appear in clip state\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_shared_keyframe_curve_workflow() {
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Shared Keyframe Curves"));
+  controller.addTitleClip();
+
+  controller.seekSequenceSeconds(0.0);
+  if (!controller.toggleSelectedClipKeyframe(QStringLiteral("opacity"))) {
+    std::cerr << "the clip curve should accept an opacity key at its start\n";
+    return false;
+  }
+  controller.setSelectedClipOpacity(0.1);
+  if (!controller.toggleTrackAutomationKeyframe(0, QStringLiteral("opacity"))) {
+    std::cerr << "the video track curve should accept an opacity key at its start\n";
+    return false;
+  }
+  controller.setTrackAutomationValue(0, QStringLiteral("opacity"), 0.1);
+
+  controller.seekSequenceSeconds(2.0);
+  controller.setSelectedClipOpacity(0.9);
+  controller.setTrackAutomationValue(0, QStringLiteral("opacity"), 0.9);
+  if (!controller.setSelectedClipKeyframeInterpolation(
+          QStringLiteral("opacity"), 0.0, QStringLiteral("bezier")) ||
+      !controller.setTrackAutomationKeyframeInterpolation(
+          0, QStringLiteral("opacity"), 0.0, QStringLiteral("bezier")) ||
+      !controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("opacity"), 0.0, QStringLiteral("out"), 0.55) ||
+      !controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("opacity"), 2.0, QStringLiteral("in"), -0.15) ||
+      !controller.setTrackAutomationKeyframeSpeedForSide(
+          0, QStringLiteral("opacity"), 0.0, QStringLiteral("out"), 0.55) ||
+      !controller.setTrackAutomationKeyframeSpeedForSide(
+          0, QStringLiteral("opacity"), 2.0, QStringLiteral("in"), -0.15) ||
+      !controller.setSelectedClipKeyframeBezierHandle(
+          QStringLiteral("opacity"), 0.0, QStringLiteral("out"), 0.48, 0.18) ||
+      !controller.setTrackAutomationKeyframeBezierHandle(
+          0, QStringLiteral("opacity"), 0.0, QStringLiteral("out"), 0.48, 0.18)) {
+    std::cerr << "clip and track curves should accept matching weighted Bezier handles\n";
+    return false;
+  }
+
+  const auto tracks_with_handles = controller.sequenceTracks();
+  const auto track_automation = tracks_with_handles.first().toMap()
+                                   .value(QStringLiteral("automationKeyframes")).toList();
+  auto found_weighted_outgoing_handle = false;
+  for (const auto& value : track_automation) {
+    const auto keyframe = value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() ==
+            QStringLiteral("opacity") &&
+        nearly_equal(keyframe.value(QStringLiteral("seconds")).toDouble(), 0.0) &&
+        keyframe.value(QStringLiteral("bezierOutCustom")).toBool() &&
+        nearly_equal(keyframe.value(QStringLiteral("bezierOutTimeSeconds")).toDouble(), 0.48) &&
+        nearly_equal(keyframe.value(QStringLiteral("bezierOutValue")).toDouble(), 0.18)) {
+      found_weighted_outgoing_handle = true;
+      break;
+    }
+  }
+  if (!found_weighted_outgoing_handle) {
+    std::cerr << "track automation should retain directly edited weighted Bezier handles\n";
+    return false;
+  }
+
+  const auto values_match = [&controller]() {
+    const auto clip_value = controller.currentClip()
+                                .value(QStringLiteral("opacity")).toDouble();
+    const auto tracks = controller.sequenceTracks();
+    if (tracks.isEmpty()) {
+      return false;
+    }
+    const auto track_value = tracks.first().toMap()
+                                 .value(QStringLiteral("opacity")).toDouble();
+    return nearly_equal(clip_value, track_value, 1.0e-7);
+  };
+  for (const auto seconds : {0.0, 0.15, 0.5, 0.85, 1.2, 1.65, 2.0}) {
+    controller.seekSequenceSeconds(seconds);
+    if (!values_match()) {
+      std::cerr << "clip and track Bezier curves diverged at " << seconds << " seconds\n";
+      return false;
+    }
+  }
+
+  if (controller.copyTrackAutomationKeyframes(0, QStringLiteral("opacity")) != 2 ||
+      controller.keyframeClipboardCount() != 2 ||
+      controller.pasteTrackAutomationKeyframes(
+          0, QStringLiteral("opacity"), 0.25) != 2) {
+    std::cerr << "track automation should copy and paste complete weighted curves\n";
+    return false;
+  }
+  const auto pasted_tracks = controller.sequenceTracks();
+  const auto pasted_automation = pasted_tracks.first().toMap()
+                                     .value(QStringLiteral("automationKeyframes")).toList();
+  auto pasted_first_key = false;
+  auto pasted_last_key = false;
+  auto opacity_keyframe_count = 0;
+  for (const auto& value : pasted_automation) {
+    const auto keyframe = value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() !=
+        QStringLiteral("opacity")) {
+      continue;
+    }
+    ++opacity_keyframe_count;
+    const auto seconds = keyframe.value(QStringLiteral("seconds")).toDouble();
+    pasted_first_key = pasted_first_key ||
+                       (nearly_equal(seconds, 0.25) &&
+                        nearly_equal(keyframe.value(QStringLiteral("value")).toDouble(), 0.1));
+    pasted_last_key = pasted_last_key ||
+                      (nearly_equal(seconds, 2.25) &&
+                       nearly_equal(keyframe.value(QStringLiteral("value")).toDouble(), 0.9));
+  }
+  if (opacity_keyframe_count != 4 || !pasted_first_key || !pasted_last_key) {
+    std::cerr << "pasted track curves should preserve point timing and values at the playhead offset\n";
+    return false;
+  }
+  controller.undo();
+  const auto restored_tracks = controller.sequenceTracks();
+  auto restored_opacity_keyframe_count = 0;
+  for (const auto& value : restored_tracks.first().toMap()
+                               .value(QStringLiteral("automationKeyframes")).toList()) {
+    restored_opacity_keyframe_count +=
+        value.toMap().value(QStringLiteral("parameter")).toString() ==
+                QStringLiteral("opacity")
+            ? 1
+            : 0;
+  }
+  if (restored_opacity_keyframe_count != 2) {
+    std::cerr << "pasting a track curve should undo as one edit\n";
+    return false;
+  }
+  const QVariantList selected_track_keyframes{0.0, 2.0};
+  if (controller.applyTrackAutomationKeyframeOperation(
+          0, QStringLiteral("opacity"), selected_track_keyframes,
+          QStringLiteral("selection-time-half")) != 2) {
+    std::cerr << "track curves should scale a selected keyframe group around its center\n";
+    return false;
+  }
+  auto scaled_times = QVector<double>{};
+  for (const auto& value : controller.sequenceTracks().first().toMap()
+                               .value(QStringLiteral("automationKeyframes")).toList()) {
+    const auto keyframe = value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() == QStringLiteral("opacity")) {
+      scaled_times.push_back(keyframe.value(QStringLiteral("seconds")).toDouble());
+    }
+  }
+  std::sort(scaled_times.begin(), scaled_times.end());
+  if (scaled_times.size() != 2 || !nearly_equal(scaled_times.at(0), 0.5) ||
+      !nearly_equal(scaled_times.at(1), 1.5)) {
+    std::cerr << "selected track timing scale should preserve the center and halve its span\n";
+    return false;
+  }
+  controller.undo();
+  if (controller.applyTrackAutomationKeyframeOperation(
+          0, QStringLiteral("opacity"), selected_track_keyframes,
+          QStringLiteral("align-average")) != 2) {
+    std::cerr << "track curves should align selected values with one batch operation\n";
+    return false;
+  }
+  for (const auto& value : controller.sequenceTracks().first().toMap()
+                               .value(QStringLiteral("automationKeyframes")).toList()) {
+    const auto keyframe = value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() == QStringLiteral("opacity") &&
+        !nearly_equal(keyframe.value(QStringLiteral("value")).toDouble(), 0.5)) {
+      std::cerr << "track alignment should set selected values to their mean\n";
+      return false;
+    }
+  }
+  controller.undo();
+  return true;
+}
+
+bool run_timeline_title_motion_keyframe_workflow() {
+  TimelineDocumentController controller;
+  controller.createTimeline(QStringLiteral("Timeline Title Motion Curves"));
+  controller.addTitleClip();
+  const auto title_id = controller.currentClip()
+                            .value(QStringLiteral("clipId")).toString();
+  controller.seekSequenceSeconds(0.7);
+  if (controller.currentClip().value(QStringLiteral("mediaType")).toString() !=
+          QStringLiteral("title") ||
+      controller.currentClip().value(QStringLiteral("clipId")).toString() != title_id ||
+      !controller.toggleSelectedClipKeyframe(QStringLiteral("titleFontSize"))) {
+    std::cerr << "seeking inside a selected title should retain its keyframe-edit target\n";
+    return false;
+  }
+  controller.setSelectedTitleFontSize(48.0);
+
+  const QStringList presets{
+      QStringLiteral("title-fade"),
+      QStringLiteral("title-pop"),
+      QStringLiteral("title-rise"),
+      QStringLiteral("title-slide-from-left"),
+      QStringLiteral("title-slide-from-right"),
+  };
+  for (const auto& preset : presets) {
+    const auto previous_points = controller.currentClip()
+                                     .value(QStringLiteral("keyframes")).toList();
+    if (!controller.applySelectedClipMotionPreset(preset)) {
+      std::cerr << "could not apply title motion preset " << preset.toStdString() << '\n';
+      return false;
+    }
+    const auto applied_points = controller.currentClip()
+                                    .value(QStringLiteral("keyframes")).toList();
+    auto opacity_points = 0;
+    auto font_size_points = 0;
+    for (const auto& value : applied_points) {
+      const auto parameter = value.toMap().value(QStringLiteral("parameter")).toString();
+      opacity_points += parameter == QStringLiteral("opacity") ? 1 : 0;
+      font_size_points += parameter == QStringLiteral("titleFontSize") ? 1 : 0;
+    }
+    if (opacity_points != 4 || font_size_points != 1) {
+      std::cerr << "title motion should author four opacity keys and preserve one font-size key\n";
+      return false;
+    }
+    const auto evaluated = [&controller](const QString& parameter, double seconds) {
+      controller.seekSequenceSeconds(seconds);
+      return controller.currentClip().value(parameter).toDouble();
+    };
+    const auto opacity_start = evaluated(QStringLiteral("opacity"), 0.0);
+    const auto opacity_midpoint = evaluated(QStringLiteral("opacity"), 1.5);
+    const auto opacity_end = evaluated(QStringLiteral("opacity"), 2.999);
+    if (!nearly_equal(opacity_start, 0.0) ||
+        !nearly_equal(opacity_midpoint, 1.0) ||
+        !nearly_equal(opacity_end, 0.0, 0.01)) {
+      std::cerr << "title motion opacity values were " << opacity_start << ", "
+                << opacity_midpoint << ", " << opacity_end << '\n';
+      return false;
+    }
+    if (preset == QStringLiteral("title-pop")) {
+      const auto scale_start = evaluated(QStringLiteral("frameScale"), 0.0);
+      const auto scale_midpoint = evaluated(QStringLiteral("frameScale"), 1.5);
+      const auto scale_end = evaluated(QStringLiteral("frameScale"), 2.999);
+      if (!nearly_equal(scale_start, 1.18) || !nearly_equal(scale_midpoint, 1.0) ||
+          !nearly_equal(scale_end, 1.08)) {
+        std::cerr << "title pop scale values were " << scale_start << ", "
+                  << scale_midpoint << ", " << scale_end << '\n';
+        return false;
+      }
+    }
+    if (preset == QStringLiteral("title-rise")) {
+      const auto offset_start = evaluated(QStringLiteral("frameOffsetY"), 0.0);
+      const auto offset_midpoint = evaluated(QStringLiteral("frameOffsetY"), 1.5);
+      const auto offset_end = evaluated(QStringLiteral("frameOffsetY"), 2.999);
+      if (!nearly_equal(offset_start, 0.20) || !nearly_equal(offset_midpoint, 0.0) ||
+          !nearly_equal(offset_end, -0.12, 0.01)) {
+        std::cerr << "title rise offsets were " << offset_start << ", "
+                  << offset_midpoint << ", " << offset_end << '\n';
+        return false;
+      }
+    }
+    if (preset == QStringLiteral("title-slide-from-left") ||
+        preset == QStringLiteral("title-slide-from-right")) {
+      const auto position_start = evaluated(QStringLiteral("titlePositionX"), 0.0);
+      const auto position_midpoint = evaluated(QStringLiteral("titlePositionX"), 1.5);
+      const auto position_end = evaluated(QStringLiteral("titlePositionX"), 2.999);
+      const auto direction = preset == QStringLiteral("title-slide-from-left") ? -1.0 : 1.0;
+      if (!nearly_equal(position_start, 0.5 + direction * 0.24) ||
+          !nearly_equal(position_midpoint, 0.5) ||
+          !nearly_equal(position_end, 0.5 - direction * 0.12, 0.01)) {
+        std::cerr << "title slide positions were " << position_start << ", "
+                  << position_midpoint << ", " << position_end << '\n';
+        return false;
+      }
+    }
+    controller.undo();
+    if (controller.currentClip().value(QStringLiteral("keyframes")).toList() != previous_points) {
+      std::cerr << "one undo should restore the previous title curves\n";
+      return false;
+    }
+    controller.redo();
+    if (controller.currentClip().value(QStringLiteral("keyframes")).toList() != applied_points) {
+      std::cerr << "one redo should restore the title motion curves\n";
+      return false;
+    }
+    if (!controller.applySelectedClipMotionPreset(QStringLiteral("title-static"))) {
+      std::cerr << "the explicit static title action should clear motion curves\n";
+      return false;
+    }
+    const auto cleared_points = controller.currentClip()
+                                   .value(QStringLiteral("keyframes")).toList();
+    if (cleared_points.size() != 1 ||
+        cleared_points.first().toMap().value(QStringLiteral("parameter")).toString() !=
+            QStringLiteral("titleFontSize")) {
+      std::cerr << "clear title motion should preserve unrelated typography automation\n";
+      return false;
+    }
+  }
+
+  TimelineDocumentController position_controller;
+  position_controller.createTimeline(QStringLiteral("Title Anchor Curves"));
+  position_controller.addTitleClip();
+  position_controller.updateSelectedTitle({
+      {QStringLiteral("positionX"), 0.20},
+      {QStringLiteral("positionY"), 0.40},
+  });
+  if (!position_controller.toggleSelectedClipKeyframe(QStringLiteral("titlePositionX")) ||
+      !position_controller.toggleSelectedClipKeyframe(QStringLiteral("titlePositionY"))) {
+    std::cerr << "title anchor properties should use the shared keyframe model\n";
+    return false;
+  }
+  position_controller.setSelectedTitlePositionX(0.20);
+  position_controller.setSelectedTitlePositionY(0.40);
+  position_controller.seekSequenceSeconds(1.5);
+  position_controller.setSelectedTitlePositionX(0.80);
+  position_controller.setSelectedTitlePositionY(0.70);
+  if (!position_controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("titlePositionX"), 0.0, QStringLiteral("out"), 0.10)) {
+    std::cerr << "title anchor keys should accept the shared Bezier speed controls\n";
+    return false;
+  }
+  const auto position_points = position_controller.currentClip()
+                                   .value(QStringLiteral("keyframes")).toList();
+  auto horizontal_points = 0;
+  auto vertical_points = 0;
+  auto has_horizontal_speed = false;
+  for (const auto& value : position_points) {
+    const auto point = value.toMap();
+    const auto parameter = point.value(QStringLiteral("parameter")).toString();
+    horizontal_points += parameter == QStringLiteral("titlePositionX") ? 1 : 0;
+    vertical_points += parameter == QStringLiteral("titlePositionY") ? 1 : 0;
+    has_horizontal_speed = has_horizontal_speed ||
+        (parameter == QStringLiteral("titlePositionX") &&
+         point.value(QStringLiteral("bezierOutCustom")).toBool());
+  }
+  if (horizontal_points != 2 || vertical_points != 2 || !has_horizontal_speed) {
+    std::cerr << "title anchor keyframes and per-key speed should persist in the clip model\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_title_motion_render_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    std::cerr << "FFmpeg is required for title motion export verification\n";
+    return false;
+  }
+  const auto source_path = create_test_video(
+      ffmpeg,
+      QDir(workspace_path).filePath(QStringLiteral("title-motion-render-source.mp4")),
+      QStringLiteral("red"), false, 660, 4.0);
+  if (source_path.isEmpty()) {
+    std::cerr << "the title motion video source fixture should be writable\n";
+    return false;
+  }
+  const QVector<QPair<QString, QSize>> position_formats{
+      {QStringLiteral("landscape"), QSize(320, 180)},
+      {QStringLiteral("vertical"), QSize(180, 320)},
+  };
+  for (const auto& [format_name, format_size] : position_formats) {
+    TimelineDocumentController position_controller;
+    position_controller.createTimelineWithSettings({
+        {QStringLiteral("timelineName"),
+         QStringLiteral("Animated Title Position %1").arg(format_name)},
+        {QStringLiteral("width"), format_size.width()},
+        {QStringLiteral("height"), format_size.height()},
+        {QStringLiteral("frameRate"), 30.0},
+    });
+    position_controller.addClipFromGallery(
+        QStringLiteral("video:title-position-render-base"), source_path,
+        QStringLiteral("Title Position Render Base"), 4.0, QString{});
+    position_controller.seekSequenceSeconds(0.0);
+    position_controller.addTitleClip();
+    position_controller.updateSelectedTitle({
+        {QStringLiteral("text"), QStringLiteral("MOVE")},
+        {QStringLiteral("fontSize"), 38.0},
+        {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+        {QStringLiteral("backgroundColor"), QStringLiteral("#00000000")},
+        {QStringLiteral("positionX"), 0.25},
+        {QStringLiteral("positionY"), 0.50},
+    });
+    if (!position_controller.toggleSelectedClipKeyframe(
+            QStringLiteral("titlePositionX"))) {
+      std::cerr << "title anchor position should create a keyframe for "
+                << format_name.toStdString() << '\n';
+      return false;
+    }
+    position_controller.setSelectedTitlePositionX(0.25);
+    position_controller.seekSequenceSeconds(2.0);
+    position_controller.setSelectedTitlePositionX(0.75);
+    const auto position_keyframes = position_controller.currentClip()
+                                        .value(QStringLiteral("keyframes")).toList();
+    auto position_keyframe_count = 0;
+    for (const auto& point_value : position_keyframes) {
+      if (point_value.toMap().value(QStringLiteral("parameter")).toString() ==
+          QStringLiteral("titlePositionX")) {
+        ++position_keyframe_count;
+      }
+    }
+    if (position_keyframe_count != 2) {
+      std::cerr << "title position should create two editable keys for "
+                << format_name.toStdString() << '\n';
+      return false;
+    }
+    const auto position_render_path = QDir(workspace_path).filePath(
+        QStringLiteral("title-position-%1.mp4").arg(format_name));
+    if (!position_controller.renderCurrentTimeline(position_render_path)) {
+      std::cerr << "could not export animated title position for "
+                << format_name.toStdString() << '\n';
+      return false;
+    }
+    const auto white_text_centroid_x = [&ffmpeg, &format_size](
+                                           const QString& media_path,
+                                           double seconds) {
+      const auto pixels = process_bytes(
+          ffmpeg,
+          {
+              QStringLiteral("-v"), QStringLiteral("error"),
+              QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+              QStringLiteral("-i"), media_path,
+              QStringLiteral("-frames:v"), QStringLiteral("1"),
+              QStringLiteral("-vf"),
+              QStringLiteral("scale=%1:%2").arg(format_size.width()).arg(format_size.height()),
+              QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+              QStringLiteral("-f"), QStringLiteral("rawvideo"),
+              QStringLiteral("pipe:1"),
+          });
+      const auto expected_bytes = format_size.width() * format_size.height() * 3;
+      if (pixels.size() < expected_bytes) {
+        return -1.0;
+      }
+      auto weighted_x = 0.0;
+      auto total_weight = 0.0;
+      for (auto pixel = 0; pixel < format_size.width() * format_size.height(); ++pixel) {
+        const auto green = static_cast<unsigned char>(pixels.at(pixel * 3 + 1));
+        const auto blue = static_cast<unsigned char>(pixels.at(pixel * 3 + 2));
+        const auto weight = qMin(green, blue);
+        if (weight < 24) {
+          continue;
+        }
+        weighted_x += static_cast<double>(pixel % format_size.width()) * weight;
+        total_weight += weight;
+      }
+      return total_weight > 0.0 ? weighted_x / total_weight : -1.0;
+    };
+    const auto early_x = white_text_centroid_x(position_render_path, 0.20);
+    const auto middle_x = white_text_centroid_x(position_render_path, 0.80);
+    const auto late_x = white_text_centroid_x(position_render_path, 1.80);
+    if (early_x < 0.0 || middle_x < 0.0 || late_x < 0.0 ||
+        late_x < early_x + format_size.width() * 0.25) {
+      std::cerr << "exported title position should move across the frame for "
+                << format_name.toStdString() << " (early=" << early_x
+                << ", middle=" << middle_x << ", late=" << late_x << ")\n";
+      return false;
+    }
+  }
+  const QVector<QPair<QString, QSize>> formats{
+      {QStringLiteral("landscape"), QSize(320, 180)},
+      {QStringLiteral("vertical"), QSize(180, 320)},
+  };
+  const QStringList presets{
+      QStringLiteral("title-fade"),
+      QStringLiteral("title-pop"),
+      QStringLiteral("title-rise"),
+  };
+  for (const auto& [format_name, format_size] : formats) {
+    for (const auto& preset : presets) {
+      TimelineDocumentController controller;
+      controller.createTimelineWithSettings({
+          {QStringLiteral("timelineName"),
+           QStringLiteral("Title Motion Render %1 %2").arg(format_name, preset)},
+          {QStringLiteral("width"), format_size.width()},
+          {QStringLiteral("height"), format_size.height()},
+          {QStringLiteral("frameRate"), 30.0},
+      });
+      controller.addClipFromGallery(
+          QStringLiteral("video:title-motion-render-base"), source_path,
+          QStringLiteral("Title Motion Render Base"), 4.0, QString{});
+      controller.seekSequenceSeconds(0.0);
+      controller.addTitleClip();
+      controller.updateSelectedTitle({
+          {QStringLiteral("text"), QStringLiteral("GO")},
+          {QStringLiteral("fontSize"), 56.0},
+          {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+          {QStringLiteral("backgroundColor"), QStringLiteral("#00000000")},
+          {QStringLiteral("positionX"), 0.5},
+          {QStringLiteral("positionY"), 0.5},
+      });
+      if (!controller.applySelectedClipMotionPreset(preset)) {
+        std::cerr << "could not apply " << preset.toStdString()
+                  << " for " << format_name.toStdString() << '\n';
+        return false;
+      }
+      const auto output_path = QDir(workspace_path).filePath(
+          QStringLiteral("title-motion-%1-%2.mp4").arg(format_name, preset));
+      if (!controller.renderCurrentTimeline(output_path)) {
+        std::cerr << "could not export " << preset.toStdString()
+                  << " for " << format_name.toStdString() << '\n';
+        return false;
+      }
+      const auto signal_at = [&ffmpeg, &format_size](
+                                 const QString& media_path,
+                                 double seconds) {
+        const auto crop_width = qMax(2, (format_size.width() * 3 / 4) & ~1);
+        const auto crop_height = qMax(2, (format_size.height() * 3 / 4) & ~1);
+        const auto crop_x = ((format_size.width() - crop_width) / 2) & ~1;
+        const auto crop_y = ((format_size.height() - crop_height) / 2) & ~1;
+        const auto pixels = process_bytes(
+            ffmpeg,
+            {
+                QStringLiteral("-v"), QStringLiteral("error"),
+                QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+                QStringLiteral("-i"), media_path,
+                QStringLiteral("-frames:v"), QStringLiteral("1"),
+                QStringLiteral("-vf"),
+                QStringLiteral("crop=%1:%2:%3:%4")
+                    .arg(crop_width).arg(crop_height).arg(crop_x).arg(crop_y),
+                QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+                QStringLiteral("-f"), QStringLiteral("rawvideo"),
+                QStringLiteral("pipe:1"),
+            });
+        if (pixels.size() < crop_width * crop_height * 3) {
+          return -1.0;
+        }
+        quint64 non_red_sum = 0;
+        for (qsizetype index = 0; index + 2 < pixels.size(); index += 3) {
+          non_red_sum += static_cast<unsigned char>(pixels.at(index + 1));
+          non_red_sum += static_cast<unsigned char>(pixels.at(index + 2));
+        }
+        return static_cast<double>(non_red_sum) /
+               static_cast<double>(crop_width * crop_height * 2);
+      };
+      const auto start_signal = signal_at(output_path, 0.12);
+      const auto midpoint_signal = signal_at(output_path, 1.50);
+      const auto end_signal = signal_at(output_path, 2.88);
+      if (start_signal < 0.0 || midpoint_signal < 0.0 || end_signal < 0.0 ||
+          midpoint_signal < start_signal + 1.0 || midpoint_signal < end_signal + 1.0) {
+        std::cerr << preset.toStdString() << " export signal for "
+                  << format_name.toStdString() << " was " << start_signal << ", "
+                  << midpoint_signal << ", " << end_signal
+                  << " clips=" << controller.clips().size() << '\n';
+        for (const auto& value : controller.clips()) {
+          const auto clip = value.toMap();
+          std::cerr << "  " << clip.value(QStringLiteral("mediaType")).toString().toStdString()
+                    << " start=" << clip.value(QStringLiteral("startSeconds")).toDouble()
+                    << " end=" << clip.value(QStringLiteral("endSeconds")).toDouble()
+                    << " track=" << clip.value(QStringLiteral("trackLabel")).toString().toStdString()
+                    << '\n';
+        }
+        return false;
+      }
+      if (!wait_for_media_analysis(&controller)) {
+        std::cerr << "the source media analysis should settle before rendering the title cache\n";
+        return false;
+      }
+      const auto cache_started = controller.generateRenderCache();
+      const auto cache_finished = cache_started && wait_for_render_cache(&controller);
+      if (!cache_finished || controller.renderCacheReadyRangeCount() == 0 ||
+          controller.renderCacheReadyRangeCount() != controller.renderCacheRangeCount()) {
+        std::cerr << "could not render the " << preset.toStdString()
+                  << " Program cache range for " << format_name.toStdString()
+                  << " started=" << cache_started
+                  << " status=" << controller.renderCacheStatus().toStdString()
+                  << " ready=" << controller.renderCacheReadyRangeCount()
+                  << " total=" << controller.renderCacheRangeCount()
+                  << " requested=" << controller.staleResultState()
+                                         .value(QStringLiteral("lastRequestedRevision"))
+                                         .toString().toStdString()
+                  << " current=" << controller.staleResultState()
+                                       .value(QStringLiteral("lastCurrentRevision"))
+                                       .toString().toStdString()
+                  << " message=" << controller.status().toStdString() << '\n';
+        return false;
+      }
+      QVector<double> cache_signals;
+      for (const auto seconds : {0.12, 1.50, 2.88}) {
+        controller.seekSequenceSeconds(seconds);
+        const auto cache_path = QUrl(controller.renderCachePlaybackSourceUrl()).toLocalFile();
+        if (cache_path.isEmpty()) {
+          std::cerr << "the ready title motion cache should be selected under the playhead\n";
+          return false;
+        }
+        cache_signals.push_back(signal_at(cache_path, seconds));
+      }
+      if (cache_signals.size() != 3 || cache_signals.at(0) < 0.0 ||
+          cache_signals.at(1) < 0.0 || cache_signals.at(2) < 0.0 ||
+          cache_signals.at(1) < cache_signals.at(0) + 1.0 ||
+          cache_signals.at(1) < cache_signals.at(2) + 1.0 ||
+          qAbs(cache_signals.at(0) - start_signal) > 4.0 ||
+          qAbs(cache_signals.at(1) - midpoint_signal) > 4.0 ||
+          qAbs(cache_signals.at(2) - end_signal) > 4.0) {
+        std::cerr << preset.toStdString() << " cache/export samples for "
+                  << format_name.toStdString() << " were cache="
+                  << cache_signals.value(0) << ',' << cache_signals.value(1) << ','
+                  << cache_signals.value(2) << " export=" << start_signal << ','
+                  << midpoint_signal << ',' << end_signal << '\n';
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool run_timeline_precision_trim_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffmpeg.isEmpty() || ffprobe.isEmpty()) {
+    std::cerr << "FFmpeg and ffprobe are required for precision trim verification\n";
+    return false;
+  }
+  const auto source_path = QDir(workspace_path).filePath(QStringLiteral("precision-trim-av.mp4"));
+  QString fixture_error;
+  if (!run_process(
+          ffmpeg,
+          {
+              QStringLiteral("-y"),
+              QStringLiteral("-f"), QStringLiteral("lavfi"),
+              QStringLiteral("-i"), QStringLiteral("color=c=blue:s=320x240:r=25:d=4"),
+              QStringLiteral("-f"), QStringLiteral("lavfi"),
+              QStringLiteral("-i"), QStringLiteral("anullsrc=channel_layout=stereo:sample_rate=48000"),
+              QStringLiteral("-t"), QStringLiteral("4"),
+              QStringLiteral("-shortest"),
+              QStringLiteral("-c:v"), QStringLiteral("libx264"),
+              QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+              QStringLiteral("-c:a"), QStringLiteral("aac"),
+              QStringLiteral("-threads"), QStringLiteral("1"),
+              source_path,
+          },
+          &fixture_error)) {
+    std::cerr << "could not create silent A/V trim fixture: " << fixture_error.toStdString() << '\n';
+    return false;
+  }
+  if (process_stdout(
+          ffprobe,
+          {QStringLiteral("-v"), QStringLiteral("error"),
+           QStringLiteral("-select_streams"), QStringLiteral("a:0"),
+           QStringLiteral("-show_entries"), QStringLiteral("stream=codec_type"),
+           QStringLiteral("-of"), QStringLiteral("csv=p=0"), source_path}) !=
+      QStringLiteral("audio")) {
+    std::cerr << "precision trim fixture should contain a silent audio stream\n";
+    return false;
+  }
+
+  const auto create_controller_with_linked_clip = [&source_path](
+                                                       TimelineDocumentController& controller,
+                                                       const QString& name) {
+    controller.createTimelineWithSettings({
+        {QStringLiteral("timelineName"), name},
+        {QStringLiteral("width"), 320},
+        {QStringLiteral("height"), 240},
+        {QStringLiteral("frameRate"), 25.0},
+    });
+    controller.addClipFromGallery(
+        QStringLiteral("video:precision-trim"), source_path,
+        QStringLiteral("Precision Trim Source"), 0.0, QString{});
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 15000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto clip = controller.currentClip();
+      if (clip.value(QStringLiteral("mediaAnalysisStatus")).toString() == QStringLiteral("ready")) {
+        return clip.value(QStringLiteral("audioLinked")).toBool();
+      }
+      if (clip.value(QStringLiteral("mediaAnalysisStatus")).toString() == QStringLiteral("failed")) {
+        return false;
+      }
+    }
+    return false;
+  };
+  const auto linked_audio = [](const TimelineDocumentController& controller) {
+    const auto group_id = controller.currentClip()
+                              .value(QStringLiteral("linkedGroupId")).toString();
+    for (const auto& track_value : controller.sequenceTracks()) {
+      const auto track = track_value.toMap();
+      if (track.value(QStringLiteral("trackKind")).toString() != QStringLiteral("audio")) {
+        continue;
+      }
+      for (const auto& clip_value : track.value(QStringLiteral("clips")).toList()) {
+        const auto clip = clip_value.toMap();
+        if (clip.value(QStringLiteral("linkedGroupId")).toString() == group_id) {
+          return clip;
+        }
+      }
+    }
+    return QVariantMap{};
+  };
+
+  TimelineDocumentController trim_controller;
+  if (!create_controller_with_linked_clip(trim_controller, QStringLiteral("Precision Trim")) ||
+      !trim_controller.currentClip().value(QStringLiteral("audioLinked")).toBool() ||
+      trim_controller.framesPerSecond() != 25.0 ||
+      linked_audio(trim_controller).isEmpty()) {
+    std::cerr << "the silent fixture should produce a ready linked video/audio clip pair\n";
+    return false;
+  }
+  if (!trim_controller.nudgeSelectedTrimEdge(QStringLiteral("start"), 1, false, false) ||
+      !nearly_equal(trim_controller.currentClip().value(QStringLiteral("startSeconds")).toDouble(), 0.04) ||
+      !nearly_equal(trim_controller.currentClip().value(QStringLiteral("trimStartSeconds")).toDouble(), 0.04)) {
+    std::cerr << "In +1 should move the linked clip by exactly one 25 fps frame\n";
+    return false;
+  }
+  auto audio = linked_audio(trim_controller);
+  if (audio.isEmpty() ||
+      !nearly_equal(audio.value(QStringLiteral("startSeconds")).toDouble(), 0.04) ||
+      !nearly_equal(audio.value(QStringLiteral("endSeconds")).toDouble(),
+                    trim_controller.currentClip().value(QStringLiteral("endSeconds")).toDouble())) {
+    std::cerr << "ordinary In trim should keep linked sound aligned with picture\n";
+    return false;
+  }
+  if (!trim_controller.nudgeSelectedTrimEdge(QStringLiteral("end"), -5, false, false) ||
+      !nearly_equal(trim_controller.currentClip().value(QStringLiteral("endSeconds")).toDouble(), 3.80) ||
+      !nearly_equal(trim_controller.currentClip().value(QStringLiteral("trimEndSeconds")).toDouble(), 3.80)) {
+    std::cerr << "Out -5 should move the linked clip by exactly five 25 fps frames\n";
+    return false;
+  }
+  audio = linked_audio(trim_controller);
+  if (audio.isEmpty() ||
+      !nearly_equal(audio.value(QStringLiteral("startSeconds")).toDouble(), 0.04) ||
+      !nearly_equal(audio.value(QStringLiteral("endSeconds")).toDouble(), 3.80)) {
+    std::cerr << "ordinary Out trim should keep linked audio endpoints aligned\n";
+    return false;
+  }
+
+  if (!trim_controller.nudgeSelectedTrimEdge(QStringLiteral("end"), -1, true, false) ||
+      !trim_controller.currentClip().value(QStringLiteral("audioDetached")).toBool() ||
+      !nearly_equal(trim_controller.currentClip().value(QStringLiteral("endSeconds")).toDouble(), 3.76)) {
+    std::cerr << "unlocked asymmetric trim should adjust picture independently\n";
+    return false;
+  }
+  const auto detached_audio = trim_controller.sequenceTracks().at(1).toMap()
+                                  .value(QStringLiteral("clips")).toList();
+  if (detached_audio.size() != 1 ||
+      !nearly_equal(detached_audio.first().toMap().value(QStringLiteral("startSeconds")).toDouble(), 0.04) ||
+      !nearly_equal(detached_audio.first().toMap().value(QStringLiteral("endSeconds")).toDouble(), 3.80)) {
+    std::cerr << "picture-only trim should preserve sound endpoints\n";
+    return false;
+  }
+
+  for (const auto lock_row : {0, 1}) {
+    TimelineDocumentController locked_controller;
+    if (!create_controller_with_linked_clip(
+            locked_controller, QStringLiteral("Locked Precision Trim %1").arg(lock_row))) {
+      std::cerr << "locked trim fixture should reach ready linked audio\n";
+      return false;
+    }
+    locked_controller.toggleTrackLocked(lock_row);
+    const auto before_hash = locked_controller.deterministicDocumentHash();
+    const auto before_selection = locked_controller.selectedClipIds();
+    const auto before_can_undo = locked_controller.canUndo();
+    const auto before_can_redo = locked_controller.canRedo();
+    if (!locked_controller.sequenceTracks().at(lock_row).toMap()
+             .value(QStringLiteral("locked")).toBool() ||
+        locked_controller.nudgeSelectedTrimEdge(QStringLiteral("start"), 1, false, false) ||
+        locked_controller.nudgeSelectedTrimEdge(QStringLiteral("end"), -1, true, false) ||
+        locked_controller.deterministicDocumentHash() != before_hash ||
+        locked_controller.selectedClipIds() != before_selection ||
+        locked_controller.canUndo() != before_can_undo ||
+        locked_controller.canRedo() != before_can_redo) {
+      std::cerr << "a locked selected or paired track should reject trim without changing state\n";
+      return false;
+    }
+    locked_controller.undo();
+    if (locked_controller.clipCount() != 0) {
+      std::cerr << "a rejected locked trim should leave insertion as the next undo action\n";
+      return false;
+    }
+  }
+
+  TimelineDocumentController ripple_controller;
+  if (!create_controller_with_linked_clip(ripple_controller, QStringLiteral("Locked Ripple In"))) {
+    std::cerr << "ripple fixture should reach ready linked audio\n";
+    return false;
+  }
+  ripple_controller.addVideoTrack();
+  ripple_controller.addClipFromGallery(
+      QStringLiteral("video:precision-trim-downstream"), source_path,
+      QStringLiteral("Downstream Clip"), 0.0, QString{});
+  ripple_controller.selectClip(1);
+  ripple_controller.moveSelectedClipToTrackRow(1, 4.0);
+  ripple_controller.toggleTrackLocked(1);
+  ripple_controller.selectClip(0);
+  const auto ripple_hash = ripple_controller.deterministicDocumentHash();
+  ripple_controller.trimSelectedClipStartToSequenceSeconds(0.04, true);
+  if (ripple_controller.deterministicDocumentHash() != ripple_hash) {
+    std::cerr << "locked downstream track should reject Ripple In without mutation\n";
+    return false;
+  }
+  ripple_controller.trimSelectedClipEndToSequenceSeconds(3.96, true);
+  if (ripple_controller.deterministicDocumentHash() != ripple_hash) {
+    std::cerr << "locked downstream track should reject Ripple Out without mutation\n";
+    return false;
+  }
+  ripple_controller.undo();
+  if (ripple_controller.sequenceTracks().at(1).toMap()
+          .value(QStringLiteral("clipCount")).toInt() != 0) {
+    std::cerr << "rejected ripple trims should leave the track move as the next undo action\n";
+    return false;
+  }
+
+  TimelineDocumentController tool_controller;
+  if (!create_controller_with_linked_clip(tool_controller, QStringLiteral("Trim Tool Persistence"))) {
+    std::cerr << "trim tool fixture should reach ready linked audio\n";
+    return false;
+  }
+  tool_controller.setActiveTool(QStringLiteral("trim"));
+  if (tool_controller.activeTool() != QStringLiteral("trim") ||
+      !tool_controller.saveTimeline()) {
+    std::cerr << "trim tool state should save through the timeline document\n";
+    return false;
+  }
+  TimelineDocumentController reopened_controller;
+  if (!reopened_controller.loadTimeline(tool_controller.savedDocumentPath()) ||
+      reopened_controller.activeTool() != QStringLiteral("trim")) {
+    std::cerr << "trim tool state should survive timeline save and reopen\n";
+    return false;
+  }
+  return true;
+}
+
+bool run_timeline_insertion_publication_workflow(const QString& directory) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto video = create_test_video(ffmpeg, QDir(directory).filePath("publication.mp4"), "red", true);
+  if (video.isEmpty()) return false;
+  TimelineDocumentController controller;
+  controller.createTimeline("Insertion publication");
+  int publications = 0;
+  bool complete_selection = true;
+  // Probe/cache and linked-audio work are asynchronous after the first publication.
+  controller.addClipFromGallery("cold", video, "Cold", 1.2, "poster://publication");
+  if (!wait_for_media_analysis(&controller)) return false;
+  int unrelated_publications = 0;
+  for (auto signal : {&TimelineDocumentController::timelineStateChanged,
+                     &TimelineDocumentController::timelineNameChanged,
+                     &TimelineDocumentController::savedPathsChanged,
+                     &TimelineDocumentController::mediaBinsChanged,
+                     &TimelineDocumentController::smartCollectionsChanged,
+                     &TimelineDocumentController::reviewRangesChanged,
+                     &TimelineDocumentController::mediaMetadataChanged,
+                     &TimelineDocumentController::sourceTapeChanged}) {
+    QObject::connect(&controller, signal, &controller, [&] { ++unrelated_publications; });
+  }
+  const auto verify = [&](auto insert, const QString& label) {
+    publications = 0;
+    unrelated_publications = 0;
+    complete_selection = true;
+    const auto observer = QObject::connect(&controller, &TimelineDocumentController::clipsChanged,
+        &controller, [&] {
+          ++publications;
+          complete_selection = complete_selection &&
+              controller.currentClip().value("displayLabel").toString() == label;
+        });
+    insert();
+    QObject::disconnect(observer);
+    if (publications != 1 || unrelated_publications != 0 || !complete_selection ||
+        controller.currentClip().value("mediaAnalysisStatus").toString() != "ready" ||
+        !controller.currentClip().value("hasAudio").toBool()) {
+      std::cerr << "Insertion should publish one complete selected clip: "
+                << label.toStdString() << " publications=" << publications << '\n';
+      return false;
+    }
+    return true;
+  };
+  if (!verify([&] { controller.addClipFromGallery("warm", video, "Warm", 1.2, "poster://publication"); }, "Warm") ||
+      !verify([&] { controller.insertClipFromGallery("insert", video, "Insert", 1.2, 0.0, 1.2, "poster://publication"); }, "Insert") ||
+      !verify([&] { controller.overwriteClipFromGallery("overwrite", video, "Overwrite", 1.2, 0.0, 1.2, "poster://publication"); }, "Overwrite")) return false;
+  controller.loadSourceClipFromGallery("source", video, "Source", 1.2, "poster://publication");
+  return verify([&] { controller.appendSourceClipToTimeline(); }, "Source");
+}
+
+bool run_timeline_save_render_workflow(const QString& root) {
+  qputenv("PHOTO_EDITOR_CACHE_DIR", QDir(root).filePath(QStringLiteral("cache")).toUtf8());
+  const auto check = [](bool condition, const char* message) {
+    if (!condition) std::cerr << message << '\n';
+    return condition;
+  };
+  QImage image(64, 64, QImage::Format_RGB32);
+  image.fill(Qt::red);
+  const auto source = QDir(root).filePath(QStringLiteral("render-source.png"));
+  if (!check(image.save(source), "Save/render fixture should create real media")) return false;
+  TimelineDocumentController document;
+  document.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Independent Save")},
+      {QStringLiteral("width"), 64}, {QStringLiteral("height"), 64},
+      {QStringLiteral("frameRate"), 24.0},
+  });
+  document.addClipFromGallery(QStringLiteral("photo:save-render"), source, QStringLiteral("Still"), 0.5, {});
+  if (!check(document.saveTimeline(), "Plain Save should succeed") ||
+      !check(photo_editor::desktop::loadPersistedJobRecords().isEmpty(), "Plain Save should not publish")) return false;
+  if (!check(document.saveTimeline(true), "Explicit Publish should enqueue rendering")) return false;
+  const auto queued = photo_editor::desktop::loadPersistedJobRecords();
+  if (!check(queued.size() == 1 && queued.first().source_path != document.savedDocumentPath(),
+             "Publish should create an immutable render input")) return false;
+  const auto read_bytes = [](const QString& path) {
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+  };
+  const auto snapshot_path = queued.first().source_path;
+  const auto snapshot_bytes = read_bytes(snapshot_path);
+  const auto marker = document.addSequenceMarker(QStringLiteral("Newer saved edit"));
+  if (!check(!marker.isEmpty() && document.saveTimeline(), "Newer edits should save while the render is queued")) return false;
+  const auto latest_bytes = read_bytes(document.savedDocumentPath());
+  photo_editor::desktop::JobRunner runner;
+  runner.initializeFromStore();
+  if (!check(wait_for_persisted_job(queued.first().job_id, 60000), "The immutable snapshot should render through JobRunner")) return false;
+  const auto records = photo_editor::desktop::loadTimelineAssetRecords();
+  const auto record = std::find_if(records.cbegin(), records.cend(), [&](const auto& row) {
+    return row.asset_id == document.timelineAssetId();
+  });
+  const auto backup = photo_editor::desktop::loadTimelineDocumentBackup(document.timelineAssetId().section(':', 1));
+  const auto latest = QJsonDocument::fromJson(latest_bytes).object();
+  return check(QFileInfo(document.savedRenderPath()).size() > 0, "Publishing should produce actual media") &&
+         check(read_bytes(snapshot_path) == snapshot_bytes, "Render input must remain immutable after completion") &&
+         check(read_bytes(document.savedDocumentPath()) == latest_bytes, "Render completion must preserve newer saved bytes") &&
+         check(record != records.cend() && record->document_path == document.savedDocumentPath(),
+               "Library navigation should retain the editable project") &&
+         check(backup == latest, "Render completion must preserve the latest catalog backup");
+}
+
 }  // namespace
+
+#include "timeline_keyframe_coverage_workflow.inc"
+#include "timeline_effect_keyframe_render_workflow.inc"
+
+bool run_timeline_creative_finishes_workflow(const QString& workspace_path) {
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffmpeg.isEmpty() || ffprobe.isEmpty()) {
+    std::cerr << "FFmpeg and ffprobe are required for timeline finish export verification\n";
+    return false;
+  }
+
+  const auto evidence_root = qEnvironmentVariable("PHOTO_EDITOR_TIMELINE_EFFECT_PROOF_DIR").trimmed();
+  const auto proof_parent = evidence_root.isEmpty()
+      ? QDir(workspace_path).filePath(QStringLiteral("creative-finish-proofs"))
+      : evidence_root;
+  const auto run_name = QStringLiteral("creative-look-proof-%1")
+      .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd'T'HHmmss'Z'")));
+  const auto proof_directory = QDir(proof_parent).filePath(run_name);
+  if (!QDir().mkpath(proof_directory)) {
+    std::cerr << "could not create creative finish evidence directory\n";
+    return false;
+  }
+
+  const auto preset_store_path = QDir(workspace_path).filePath(QStringLiteral("creative-look-presets.json"));
+  qputenv("PHOTO_EDITOR_TIMELINE_EFFECT_PRESET_PATH", preset_store_path.toUtf8());
+  const auto source_path = QDir(proof_directory).filePath(QStringLiteral("red-source.mp4"));
+  const auto source = create_test_video(ffmpeg, source_path, QStringLiteral("red"), false, 660, 1.2);
+  if (source.isEmpty()) {
+    std::cerr << "could not create the real video source for the creative finish proof\n";
+    return false;
+  }
+
+  const auto configure_timeline = [&source](TimelineDocumentController* controller,
+      const QString& name) {
+    controller->createTimelineWithSettings({
+        {QStringLiteral("timelineName"), name},
+        {QStringLiteral("width"), 320},
+        {QStringLiteral("height"), 240},
+        {QStringLiteral("frameRate"), 30.0},
+    });
+    controller->addClipFromGallery(QStringLiteral("video:creative-look-source"), source,
+        QStringLiteral("Creative Finish Source"), 1.2, QString{});
+    return wait_for_media_analysis(controller);
+  };
+
+  TimelineDocumentController inventory_controller;
+  if (!configure_timeline(&inventory_controller, QStringLiteral("Creative Finish Inventory"))) {
+    std::cerr << "the creative finish source was not ready in the timeline controller\n";
+    return false;
+  }
+  const auto preset_values = inventory_controller.effectStackPresets();
+  QStringList built_in_ids;
+  QJsonArray inventory;
+  for (const auto& preset_value : preset_values) {
+    const auto preset = preset_value.toMap();
+    if (!preset.value(QStringLiteral("builtIn")).toBool()) continue;
+    const auto preset_id = preset.value(QStringLiteral("presetId")).toString();
+    const auto preview = inventory_controller.effectStackPresetPreview(preset_id);
+    if (preset_id.isEmpty() || built_in_ids.contains(preset_id) ||
+        !preview.value(QStringLiteral("canApply")).toBool()) {
+      std::cerr << "a built-in timeline look is missing a stable ID or supported preview\n";
+      return false;
+    }
+    built_in_ids.push_back(preset_id);
+
+    QVariantList expected_stack;
+    const auto preview_effects = preview.value(QStringLiteral("effects")).toList();
+    for (const auto& effect_value : preview_effects)
+      expected_stack.push_back(effect_value.toMap().value(QStringLiteral("name")).toString());
+    if (expected_stack.isEmpty() ||
+        !inventory_controller.applyEffectStackPreset(preset_id, QStringList{}, true) ||
+        inventory_controller.currentClip().value(QStringLiteral("effectStack")).toList() != expected_stack) {
+      std::cerr << "a built-in timeline look did not materialize its previewed effect stack\n";
+      return false;
+    }
+    QJsonObject inventory_entry = QJsonObject::fromVariantMap(preset);
+    inventory_entry.insert(QStringLiteral("appliedStack"), QJsonArray::fromVariantList(expected_stack));
+    inventory.push_back(inventory_entry);
+    inventory_controller.undo();
+    if (!inventory_controller.currentClip().value(QStringLiteral("effectStack")).toList().isEmpty()) {
+      std::cerr << "one undo did not remove the just-applied built-in look\n";
+      return false;
+    }
+  }
+  if (built_in_ids.size() != 12 || QFileInfo::exists(preset_store_path)) {
+    std::cerr << "the twelve built-in timeline looks should apply without writing a user preset file\n";
+    return false;
+  }
+
+  TimelineDocumentController controller;
+  if (!configure_timeline(&controller, QStringLiteral("Silver Monochrome Export Proof"))) {
+    std::cerr << "the export proof source was not ready in the timeline controller\n";
+    return false;
+  }
+  const QString preset_id = QStringLiteral("looksy.timeline.look.silver-monochrome");
+  const auto preset_preview = controller.effectStackPresetPreview(preset_id);
+  QVariantList expected_stack;
+  for (const auto& effect_value : preset_preview.value(QStringLiteral("effects")).toList())
+    expected_stack.push_back(effect_value.toMap().value(QStringLiteral("name")).toString());
+  if (!preset_preview.value(QStringLiteral("canApply")).toBool() || expected_stack.isEmpty() ||
+      !controller.applyEffectStackPreset(preset_id, QStringList{}, true)) {
+    std::cerr << "Silver Monochrome could not be applied to the export proof timeline\n";
+    return false;
+  }
+  const auto applied_clip = controller.currentClip();
+  if (applied_clip.value(QStringLiteral("effectStack")).toList() != expected_stack) {
+    std::cerr << "Silver Monochrome did not materialize the exact preview stack\n";
+    return false;
+  }
+  controller.undo();
+  if (!controller.currentClip().value(QStringLiteral("effectStack")).toList().isEmpty()) {
+    std::cerr << "one undo should restore the empty pre-look effect stack\n";
+    return false;
+  }
+  controller.redo();
+  if (controller.currentClip().value(QStringLiteral("effectStack")).toList() != expected_stack ||
+      !controller.saveTimeline()) {
+    std::cerr << "redo or save failed to restore the exact Silver Monochrome look\n";
+    return false;
+  }
+
+  QFile saved_document(controller.savedDocumentPath());
+  if (!saved_document.open(QIODevice::ReadOnly)) {
+    std::cerr << "the saved creative finish timeline document could not be read\n";
+    return false;
+  }
+  const auto document_bytes = saved_document.readAll();
+  saved_document.close();
+  const auto document = QJsonDocument::fromJson(document_bytes).object();
+  const auto saved_clips = document.value(QStringLiteral("clips")).toArray();
+  if (saved_clips.isEmpty()) {
+    std::cerr << "the saved timeline document contains no primary clip\n";
+    return false;
+  }
+  const auto saved_clip = saved_clips.first().toObject();
+  if (saved_clip.value(QStringLiteral("effectStack")).toVariant().toList() != expected_stack) {
+    std::cerr << "the encoded timeline document did not retain the exact preset stack\n";
+    return false;
+  }
+
+  TimelineDocumentController reopened;
+  if (!reopened.loadTimeline(controller.savedDocumentPath()) ||
+      !wait_for_media_analysis(&reopened)) {
+    std::cerr << "the Silver Monochrome timeline did not reopen\n";
+    return false;
+  }
+  reopened.selectClip(0);
+  const auto reopened_clip = reopened.currentClip();
+  if (reopened_clip.value(QStringLiteral("effectStack")).toList() != expected_stack) {
+    std::cerr << "the reopened timeline did not retain the exact preset stack\n";
+    return false;
+  }
+  for (const auto& effect_value : preset_preview.value(QStringLiteral("effects")).toList()) {
+    const auto expected_effect = effect_value.toMap();
+    QVariantMap reopened_effect;
+    for (const auto& detail_value : reopened_clip.value(QStringLiteral("effectDetails")).toList()) {
+      const auto detail = detail_value.toMap();
+      if (detail.value(QStringLiteral("name")).toString() ==
+          expected_effect.value(QStringLiteral("name")).toString()) {
+        reopened_effect = detail;
+        break;
+      }
+    }
+    if (reopened_effect.isEmpty() ||
+        !nearly_equal(reopened_effect.value(QStringLiteral("amount")).toDouble(),
+                      expected_effect.value(QStringLiteral("amount")).toDouble(), 1e-9) ||
+        reopened_effect.value(QStringLiteral("enabled")).toBool() !=
+            expected_effect.value(QStringLiteral("enabled")).toBool()) {
+      std::cerr << "the reopened timeline changed a preset effect amount or bypass state\n";
+      return false;
+    }
+  }
+
+  const auto enabled_export = QDir(proof_directory).filePath(QStringLiteral("silver-monochrome-export.mp4"));
+  if (!reopened.renderCurrentTimeline(enabled_export) || !QFileInfo::exists(enabled_export)) {
+    std::cerr << "the reopened Silver Monochrome timeline did not export encoded video\n";
+    return false;
+  }
+  const auto sample_pixel = [&ffmpeg](const QString& path) {
+    return process_bytes(ffmpeg, {
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-ss"), QStringLiteral("0.20"),
+        QStringLiteral("-i"), path,
+        QStringLiteral("-frames:v"), QStringLiteral("1"),
+        QStringLiteral("-vf"), QStringLiteral("crop=2:2:80:120,scale=1:1,format=rgb24"),
+        QStringLiteral("-f"), QStringLiteral("rawvideo"), QStringLiteral("pipe:1"),
+    });
+  };
+  const auto enabled_sample = sample_pixel(enabled_export);
+  if (enabled_sample.size() < 3 ||
+      qAbs(static_cast<int>(static_cast<unsigned char>(enabled_sample.at(0))) -
+           static_cast<int>(static_cast<unsigned char>(enabled_sample.at(1)))) > 12 ||
+      qAbs(static_cast<int>(static_cast<unsigned char>(enabled_sample.at(1))) -
+           static_cast<int>(static_cast<unsigned char>(enabled_sample.at(2)))) > 12) {
+    std::cerr << "the encoded Silver Monochrome frame did not render as monochrome\n";
+    return false;
+  }
+  reopened.setSelectedClipEffectsEnabled(false);
+  const auto bypass_export = QDir(proof_directory).filePath(QStringLiteral("silver-monochrome-bypass.mp4"));
+  if (!reopened.renderCurrentTimeline(bypass_export) || !QFileInfo::exists(bypass_export)) {
+    std::cerr << "the bypassed Silver Monochrome comparison did not export\n";
+    return false;
+  }
+  const auto bypass_sample = sample_pixel(bypass_export);
+  if (bypass_sample.size() < 3 ||
+      static_cast<unsigned char>(bypass_sample.at(0)) <
+          static_cast<unsigned char>(bypass_sample.at(1)) + 50U ||
+      static_cast<unsigned char>(bypass_sample.at(0)) <
+          static_cast<unsigned char>(bypass_sample.at(2)) + 50U) {
+    std::cerr << "the bypass export did not restore the color source\n";
+    return false;
+  }
+
+  const auto project_copy = QDir(proof_directory).filePath(QStringLiteral("silver-monochrome-project.json"));
+  if (!QFile::copy(controller.savedDocumentPath(), project_copy)) {
+    std::cerr << "the encoded creative finish timeline could not be captured\n";
+    return false;
+  }
+  const auto enabled_bytes = [&enabled_export]() {
+    QFile file(enabled_export);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+  }();
+  const auto probe_report = process_stdout(ffprobe, {
+      QStringLiteral("-v"), QStringLiteral("error"),
+      QStringLiteral("-select_streams"), QStringLiteral("v:0"),
+      QStringLiteral("-show_entries"), QStringLiteral("stream=codec_name,width,height"),
+      QStringLiteral("-of"), QStringLiteral("json"), enabled_export,
+  });
+  if (enabled_bytes.isEmpty() || probe_report.isEmpty()) {
+    std::cerr << "ffprobe could not validate the encoded creative finish export\n";
+    return false;
+  }
+
+  QJsonArray enabled_rgb;
+  QJsonArray bypass_rgb;
+  for (int channel = 0; channel < 3; ++channel) {
+    enabled_rgb.push_back(static_cast<unsigned char>(enabled_sample.at(channel)));
+    bypass_rgb.push_back(static_cast<unsigned char>(bypass_sample.at(channel)));
+  }
+  const auto enabled_sha = QCryptographicHash::hash(enabled_bytes, QCryptographicHash::Sha256).toHex();
+  const auto document_sha = QCryptographicHash::hash(document_bytes, QCryptographicHash::Sha256).toHex();
+  QJsonObject proof{
+      {QStringLiteral("workflow"), QStringLiteral("timeline-creative-finishes")},
+      {QStringLiteral("builtInCount"), built_in_ids.size()},
+      {QStringLiteral("builtInInventory"), inventory},
+      {QStringLiteral("selectedPresetId"), preset_id},
+      {QStringLiteral("selectedPresetName"), preset_preview.value(QStringLiteral("name")).toString()},
+      {QStringLiteral("serializedEffectStack"), QJsonArray::fromVariantList(expected_stack)},
+      {QStringLiteral("undoRestoredEmptyStack"), true},
+      {QStringLiteral("redoRestoredPresetStack"), true},
+      {QStringLiteral("encodedProjectReopenedExactStack"), true},
+      {QStringLiteral("enabledExportPath"), QFileInfo(enabled_export).fileName()},
+      {QStringLiteral("enabledExportSha256"), QString::fromLatin1(enabled_sha)},
+      {QStringLiteral("enabledExportProbe"), QJsonDocument::fromJson(probe_report.toUtf8()).object()},
+      {QStringLiteral("enabledSampleRgb"), enabled_rgb},
+      {QStringLiteral("bypassExportPath"), QFileInfo(bypass_export).fileName()},
+      {QStringLiteral("bypassSampleRgb"), bypass_rgb},
+      {QStringLiteral("projectPath"), QFileInfo(project_copy).fileName()},
+      {QStringLiteral("projectSha256"), QString::fromLatin1(document_sha)},
+  };
+  QFile manifest(QDir(proof_directory).filePath(QStringLiteral("proof.json")));
+  if (!manifest.open(QIODevice::WriteOnly) ||
+      manifest.write(QJsonDocument(proof).toJson(QJsonDocument::Indented)) <= 0) {
+    std::cerr << "the creative finish proof manifest could not be written\n";
+    return false;
+  }
+  std::cout << "timeline_creative_finishes_proof=" << proof_directory.toStdString() << '\n';
+  return true;
+}
 
 int main(int argc, char** argv) {
   qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
@@ -708,16 +2388,83 @@ int main(int argc, char** argv) {
     return fail("temporary workspace should be created");
   }
 
-  qputenv("HOME", workspace.path().toUtf8());
   qputenv("XDG_DATA_HOME", workspace.filePath(QStringLiteral("data")).toUtf8());
   qputenv("XDG_CACHE_HOME", workspace.filePath(QStringLiteral("cache")).toUtf8());
   qputenv("PHOTO_EDITOR_APP_DATA_ROOT", workspace.filePath(QStringLiteral("app-data")).toUtf8());
+  qputenv("PHOTO_EDITOR_CACHE_DIR", workspace.filePath(QStringLiteral("cache")).toUtf8());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(
+      QSettings::IniFormat, QSettings::UserScope,
+      workspace.filePath(QStringLiteral("settings/user")));
+  QSettings::setPath(
+      QSettings::IniFormat, QSettings::SystemScope,
+      workspace.filePath(QStringLiteral("settings/system")));
   qputenv(
       "PHOTO_EDITOR_TIMELINE_CAPTION_TEMPLATE_PATH",
       workspace.filePath(QStringLiteral("caption-style-templates.json")).toUtf8());
 
   QApplication app(argc, argv);
   QStandardPaths::setTestModeEnabled(true);
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-media-queue-terminal-paths"))) {
+    return run_timeline_media_queue_terminal_paths(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-effect-keyframe-render-workflow"))) {
+    return run_timeline_effect_keyframe_render_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-creative-finishes-workflow"))) {
+    return run_timeline_creative_finishes_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-keyframe-coverage-workflow"))) {
+    return run_timeline_keyframe_coverage_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(QStringLiteral("--timeline-save-render-workflow")))
+    return run_timeline_save_render_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (QCoreApplication::arguments().contains("--timeline-insertion-publication-workflow")) {
+    qputenv("PHOTO_EDITOR_CACHE_DIR", workspace.filePath("cache").toUtf8());
+    return run_timeline_insertion_publication_workflow(workspace.path()) ? EXIT_SUCCESS : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-color-grade-curve-workflow"))) {
+    return run_timeline_color_grade_curve_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-cube-lut-workflow"))) {
+    return run_timeline_cube_lut_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-shared-keyframe-curve-workflow"))) {
+    return run_timeline_shared_keyframe_curve_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-motion-keyframe-workflow"))) {
+    return run_timeline_title_motion_keyframe_workflow()
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-title-motion-render-workflow"))) {
+    return run_timeline_title_motion_render_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
+  if (QCoreApplication::arguments().contains(
+          QStringLiteral("--timeline-precision-trim-workflow"))) {
+    qputenv(
+        "PHOTO_EDITOR_CACHE_DIR",
+        QDir(workspace.path()).filePath(QStringLiteral("cache")).toUtf8());
+    return run_timeline_precision_trim_workflow(workspace.path())
+               ? EXIT_SUCCESS
+               : EXIT_FAILURE;
+  }
 
   const auto first_video = touch_file(workspace.filePath(QStringLiteral("clip-01.mp4")));
   const auto second_video = touch_file(workspace.filePath(QStringLiteral("clip-02.mov")));
@@ -1206,6 +2953,7 @@ int main(int argc, char** argv) {
   const auto journal_candidate_id =
       journal_candidate.value(QStringLiteral("candidateId")).toString();
   if (!recovery_controller.openRecoveryCandidate(journal_candidate_id) ||
+      !wait_for_recovery_open(&recovery_controller) ||
       !recovery_controller.dirty() || recovery_controller.sequenceMarkers().size() != 1 ||
       recovery_controller.sequenceMarkers().first().toMap().value(QStringLiteral("label")).toString() !=
           QStringLiteral("Unsaved crash-safe note")) {
@@ -1232,6 +2980,12 @@ int main(int argc, char** argv) {
       copy_recovery_controller.sequenceMarkers().size() != 1) {
     return fail("Restore Copy should create a durable independent timeline from a journal even when the original is damaged");
   }
+  QFile damaged_after_copy(journal_saved_path);
+  if (!damaged_after_copy.open(QIODevice::ReadOnly) ||
+      damaged_after_copy.readAll() != QByteArrayLiteral("{damaged-project")) {
+    return fail("Restore Copy should leave the original damaged canonical bytes untouched");
+  }
+  damaged_after_copy.close();
   if (!copy_recovery_controller.discardRecoveryCandidate(journal_candidate_id)) {
     return fail("Discard should archive a journal recovery without touching either project document");
   }
@@ -1239,6 +2993,21 @@ int main(int argc, char** argv) {
     if (value.toMap().value(QStringLiteral("candidateId")).toString() == journal_candidate_id) {
       return fail("a discarded recovery should no longer be offered at startup");
     }
+  }
+  QFile damaged_after_discard(journal_saved_path);
+  if (!damaged_after_discard.open(QIODevice::ReadOnly) ||
+      damaged_after_discard.readAll() != QByteArrayLiteral("{damaged-project")) {
+    return fail("Discard should leave the original damaged canonical bytes untouched");
+  }
+  damaged_after_discard.close();
+
+  // Keep subsequent whole-index cache inspection meaningful after the damaged
+  // canonical-document fallback has been proven above.
+  QSaveFile restored_journal_document(journal_saved_path);
+  if (!restored_journal_document.open(QIODevice::WriteOnly) ||
+      restored_journal_document.write(saved_before_recovery) != saved_before_recovery.size() ||
+      !restored_journal_document.commit()) {
+    return fail("the Restore Copy fixture should restore its indexed canonical project");
   }
 
   controller.selectClip(0);
@@ -1298,6 +3067,105 @@ int main(int argc, char** argv) {
                         .toDouble(),
                     3.80)) {
     return fail("large keyboard trim should nudge the selected Out edge by exactly five sequence frames");
+  }
+
+  TimelineDocumentController locked_trim_controller;
+  locked_trim_controller.createTimeline(QStringLiteral("Locked Trim Guard"));
+  locked_trim_controller.addClipFromGallery(
+      QStringLiteral("video:locked-trim"), first_video,
+      QStringLiteral("Locked Trim Source"), 4.0,
+      QStringLiteral("poster://locked-trim"));
+  locked_trim_controller.selectClip(0);
+  locked_trim_controller.toggleTrackLocked(0);
+  if (!locked_trim_controller.sequenceTracks().at(0).toMap()
+           .value(QStringLiteral("locked")).toBool()) {
+    return fail("the locked-trim fixture should lock its selected track");
+  }
+  const auto locked_trim_hash = locked_trim_controller.deterministicDocumentHash();
+  const auto locked_trim_selection = locked_trim_controller.selectedClipIds();
+  const auto locked_trim_start = locked_trim_controller.currentClip()
+                                     .value(QStringLiteral("trimStartSeconds")).toDouble();
+  const auto locked_trim_end = locked_trim_controller.currentClip()
+                                   .value(QStringLiteral("trimEndSeconds")).toDouble();
+  const auto locked_trim_can_undo = locked_trim_controller.canUndo();
+  if (locked_trim_controller.nudgeSelectedTrimEdge(
+          QStringLiteral("start"), 1, false, false) ||
+      locked_trim_controller.applyTimecodeEntry(
+          QStringLiteral("trim-start"), QStringLiteral("+00:00:00:01")) ||
+      locked_trim_controller.applyTimecodeEntry(
+          QStringLiteral("trim-end"), QStringLiteral("-00:00:00:01"))) {
+    return fail("keyboard and timecode trim paths should reject edits on a locked track");
+  }
+  locked_trim_controller.trimSelectedClipStartToSequenceSeconds(0.04, false);
+  locked_trim_controller.trimSelectedClipEndToSequenceSeconds(3.96, false);
+  locked_trim_controller.setSelectedTrimStartSeconds(0.04);
+  locked_trim_controller.setSelectedTrimEndSeconds(3.96);
+  if (locked_trim_controller.deterministicDocumentHash() != locked_trim_hash ||
+      locked_trim_controller.selectedClipIds() != locked_trim_selection ||
+      !nearly_equal(locked_trim_controller.currentClip()
+                        .value(QStringLiteral("trimStartSeconds")).toDouble(),
+                    locked_trim_start) ||
+      !nearly_equal(locked_trim_controller.currentClip()
+                        .value(QStringLiteral("trimEndSeconds")).toDouble(),
+                    locked_trim_end) ||
+      locked_trim_controller.canUndo() != locked_trim_can_undo) {
+    return fail("rejected locked trims should preserve the document, selected clip, and undo state");
+  }
+  locked_trim_controller.undo();
+  if (locked_trim_controller.clipCount() != 0) {
+    return fail("a rejected locked trim should not insert an undo snapshot ahead of the prior clip insertion");
+  }
+
+  TimelineDocumentController locked_ripple_trim_controller;
+  locked_ripple_trim_controller.createTimeline(QStringLiteral("Locked Ripple Trim Guard"));
+  locked_ripple_trim_controller.addClipFromGallery(
+      QStringLiteral("video:ripple-trim-a"), first_video,
+      QStringLiteral("Ripple Trim A"), 4.0,
+      QStringLiteral("poster://ripple-trim-a"));
+  locked_ripple_trim_controller.addVideoTrack();
+  locked_ripple_trim_controller.addClipFromGallery(
+      QStringLiteral("video:ripple-trim-b"), second_video,
+      QStringLiteral("Ripple Trim B"), 4.0,
+      QStringLiteral("poster://ripple-trim-b"));
+  locked_ripple_trim_controller.selectClip(1);
+  locked_ripple_trim_controller.moveSelectedClipToTrackRow(1, 4.0);
+  locked_ripple_trim_controller.toggleTrackLocked(1);
+  locked_ripple_trim_controller.selectClip(0);
+  const auto locked_ripple_hash =
+      locked_ripple_trim_controller.deterministicDocumentHash();
+  if (!locked_ripple_trim_controller.sequenceTracks().at(1).toMap()
+           .value(QStringLiteral("locked")).toBool()) {
+    return fail("the ripple-trim fixture should lock its downstream video track");
+  }
+  locked_ripple_trim_controller.trimSelectedClipStartToSequenceSeconds(0.04, true);
+  if (locked_ripple_trim_controller.deterministicDocumentHash() != locked_ripple_hash) {
+    return fail("ripple In should reject before moving clips on a locked downstream track");
+  }
+  locked_ripple_trim_controller.trimSelectedClipEndToSequenceSeconds(3.96, true);
+  if (locked_ripple_trim_controller.deterministicDocumentHash() != locked_ripple_hash) {
+    return fail("ripple trim should reject before moving clips on a locked downstream track");
+  }
+  locked_ripple_trim_controller.undo();
+  if (locked_ripple_trim_controller.sequenceTracks().at(1).toMap()
+          .value(QStringLiteral("clipCount")).toInt() != 0) {
+    return fail("a rejected ripple trim should leave the prior move as the next undo operation");
+  }
+
+  TimelineDocumentController trim_tool_controller;
+  trim_tool_controller.createTimeline(QStringLiteral("Trim Tool Persistence"));
+  trim_tool_controller.addClipFromGallery(
+      QStringLiteral("video:trim-tool"), first_video,
+      QStringLiteral("Trim Tool Clip"), 4.0,
+      QStringLiteral("poster://trim-tool"));
+  trim_tool_controller.setActiveTool(QStringLiteral("trim"));
+  if (trim_tool_controller.activeTool() != QStringLiteral("trim") ||
+      !trim_tool_controller.saveTimeline()) {
+    return fail("the trim tool should be accepted and saved as the active timeline tool");
+  }
+  TimelineDocumentController reopened_trim_tool_controller;
+  if (!reopened_trim_tool_controller.loadTimeline(trim_tool_controller.savedDocumentPath()) ||
+      reopened_trim_tool_controller.activeTool() != QStringLiteral("trim")) {
+    return fail("the active trim tool should survive timeline save and reopen");
   }
 
   TimelineDocumentController timecode_controller;
@@ -1391,9 +3259,12 @@ int main(int argc, char** argv) {
 
   const auto sequence_tracks = controller.sequenceTracks();
   if (sequence_tracks.size() != 2 ||
+      sequence_tracks.at(0).toMap().value(QStringLiteral("trackKind")).toString() !=
+          QStringLiteral("video") ||
       sequence_tracks.at(0).toMap().value(QStringLiteral("clipCount")).toInt() != 3 ||
-      sequence_tracks.at(1).toMap().value(QStringLiteral("clipCount")).toInt() != 3) {
-    return fail("splitting should keep the derived audio lane aligned with the video track");
+      sequence_tracks.at(1).toMap().value(QStringLiteral("trackKind")).toString() !=
+          QStringLiteral("audio")) {
+    return fail("splitting placeholder video should preserve its video and paired audio track rows");
   }
 
   const auto clips_after_split = controller.clips();
@@ -1548,6 +3419,196 @@ int main(int argc, char** argv) {
       track_edit_rows.at(1).toMap().value(QStringLiteral("clipCount")).toInt() != 1 ||
       track_edit_rows.at(3).toMap().value(QStringLiteral("clipCount")).toInt() != 1) {
     return fail("undo should restore a deleted track pair and all of its linked clip content");
+  }
+
+  TimelineDocumentController independent_music_controller;
+  independent_music_controller.createTimeline(QStringLiteral("Independent Music Track"));
+  independent_music_controller.addMusicTrack();
+  auto independent_music_rows = independent_music_controller.sequenceTracks();
+  if (independent_music_controller.videoTrackCount() != 1 ||
+      independent_music_controller.audioTrackCount() != 2 ||
+      independent_music_controller.trackCount() != 3) {
+    return fail("adding a music track should add an audio lane without creating another video lane");
+  }
+  const auto find_track_row = [](const QVariantList& rows, const QString& track_id) {
+    for (int index = 0; index < rows.size(); ++index) {
+      if (rows.at(index).toMap().value(QStringLiteral("trackId")).toString() == track_id) {
+        return index;
+      }
+    }
+    return -1;
+  };
+  auto music_row = -1;
+  QString music_track_id;
+  int music_lane_index = -1;
+  for (const auto& row_value : independent_music_rows) {
+    const auto row = row_value.toMap();
+    if (row.value(QStringLiteral("displayLabel")).toString() == QStringLiteral("Music 1")) {
+      music_track_id = row.value(QStringLiteral("trackId")).toString();
+      music_lane_index = row.value(QStringLiteral("laneIndex")).toInt();
+      break;
+    }
+  }
+  music_row = find_track_row(independent_music_rows, music_track_id);
+  if (music_row < 0 || music_track_id.isEmpty() || music_lane_index < 1000000 ||
+      !independent_music_rows.at(music_row).toMap()
+           .value(QStringLiteral("isIndependent")).toBool() ||
+      !independent_music_rows.at(music_row).toMap()
+           .value(QStringLiteral("targeted")).toBool() ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("audioRole")).toString() != QStringLiteral("music") ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("audioBus")).toString() != QStringLiteral("music")) {
+    return fail("the new music lane should be independently targetable and routed to the music bus");
+  }
+  independent_music_controller.insertClipFromGalleryAtTrack(
+      QStringLiteral("audio:independent-music"), audio_clip,
+      QStringLiteral("Music Bed"), 4.0, 0.0, 4.0, QString{}, music_row, 0.0);
+  independent_music_rows = independent_music_controller.sequenceTracks();
+  music_row = find_track_row(independent_music_rows, music_track_id);
+  if (music_row < 0 ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("clipCount")).toInt() != 1 ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("clips")).toList().first().toMap()
+              .value(QStringLiteral("mediaType")).toString() != QStringLiteral("audio")) {
+    return fail("audio should be insertable directly onto the independent music lane");
+  }
+  independent_music_controller.addMusicTrack();
+  independent_music_controller.addVideoTrack();
+  independent_music_rows = independent_music_controller.sequenceTracks();
+  music_row = find_track_row(independent_music_rows, music_track_id);
+  if (independent_music_controller.videoTrackCount() != 2 ||
+      independent_music_controller.audioTrackCount() != 4 || music_row < 0 ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("laneIndex")).toInt() != music_lane_index ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("clipCount")).toInt() != 1 ||
+      independent_music_rows.at(1).toMap()
+              .value(QStringLiteral("displayLabel")).toString() != QStringLiteral("V2")) {
+    return fail("independent music lanes should survive later video-pair creation without taking its lane identity");
+  }
+  if (!independent_music_controller.moveTrackRow(music_row, 1)) {
+    return fail("independent music lanes should reorder within the audio stack");
+  }
+  independent_music_rows = independent_music_controller.sequenceTracks();
+  music_row = find_track_row(independent_music_rows, music_track_id);
+  if (music_row < 0 || independent_music_rows.at(music_row).toMap()
+                               .value(QStringLiteral("clipCount")).toInt() != 1 ||
+      independent_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("laneIndex")).toInt() == music_lane_index) {
+    return fail("reordering a music track should keep its identity and attached audio clips together");
+  }
+  if (!independent_music_controller.saveTimeline()) {
+    return fail("an independent music lane should save through the normal timeline path");
+  }
+  TimelineDocumentController reopened_independent_music_controller;
+  if (!reopened_independent_music_controller.loadTimeline(
+          independent_music_controller.savedDocumentPath())) {
+    return fail("an independent music lane should reopen");
+  }
+  auto reopened_music_rows = reopened_independent_music_controller.sequenceTracks();
+  music_row = find_track_row(reopened_music_rows, music_track_id);
+  if (music_row < 0 || reopened_independent_music_controller.videoTrackCount() != 2 ||
+      reopened_independent_music_controller.audioTrackCount() != 4 ||
+      !reopened_music_rows.at(music_row).toMap()
+           .value(QStringLiteral("isIndependent")).toBool() ||
+      reopened_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("audioRole")).toString() != QStringLiteral("music") ||
+      reopened_music_rows.at(music_row).toMap()
+              .value(QStringLiteral("clipCount")).toInt() != 1) {
+    return fail("music routing, track identity, and clip placement should survive save and reopen");
+  }
+  if (reopened_independent_music_controller.removeTrackRow(music_row, false) ||
+      !reopened_independent_music_controller.removeTrackRow(music_row, true)) {
+    return fail("deleting a populated music lane should require confirmation and then remove only that lane");
+  }
+  reopened_independent_music_controller.undo();
+  reopened_music_rows = reopened_independent_music_controller.sequenceTracks();
+  music_row = find_track_row(reopened_music_rows, music_track_id);
+  if (music_row < 0 || reopened_music_rows.at(music_row).toMap()
+                               .value(QStringLiteral("clipCount")).toInt() != 1) {
+    return fail("undo should restore an independent music lane and its audio clip");
+  }
+
+  TimelineDocumentController independent_audio_roles_controller;
+  independent_audio_roles_controller.createTimeline(QStringLiteral("Independent Audio Roles"));
+  const QList<QPair<QString, QString>> independent_audio_roles = {
+      {QStringLiteral("dialogue"), QStringLiteral("dialogue")},
+      {QStringLiteral("music"), QStringLiteral("music")},
+      {QStringLiteral("voiceover"), QStringLiteral("dialogue")},
+      {QStringLiteral("ambience"), QStringLiteral("sfx")},
+      {QStringLiteral("effects"), QStringLiteral("sfx")},
+      {QStringLiteral("commentary"), QStringLiteral("dialogue")},
+  };
+  for (const auto& [role, expected_bus] : independent_audio_roles) {
+    if (!independent_audio_roles_controller.addIndependentAudioTrack(role)) {
+      return fail("each supported audio role should create its own timeline lane");
+    }
+    const auto rows = independent_audio_roles_controller.sequenceTracks();
+    auto matching_role_lanes = 0;
+    for (const auto& row_value : rows) {
+      const auto row = row_value.toMap();
+      if (row.value(QStringLiteral("audioRole")).toString() != role ||
+          !row.value(QStringLiteral("isIndependent")).toBool()) {
+        continue;
+      }
+      ++matching_role_lanes;
+      if (row.value(QStringLiteral("audioBus")).toString() != expected_bus ||
+          !row.value(QStringLiteral("targeted")).toBool()) {
+        return fail("role-created audio lanes should inherit a useful bus and become the edit target");
+      }
+    }
+    if (matching_role_lanes != 1) {
+      return fail("role-created audio lanes should be independent from the paired audio rows");
+    }
+  }
+  if (independent_audio_roles_controller.videoTrackCount() != 1 ||
+      independent_audio_roles_controller.audioTrackCount() != 7 ||
+      independent_audio_roles_controller.trackCount() != 8) {
+    return fail("independent role tracks should not create video lanes and should save together");
+  }
+  auto role_music_track_row = -1;
+  const auto independent_audio_role_rows = independent_audio_roles_controller.sequenceTracks();
+  for (int row_index = 0; row_index < independent_audio_role_rows.size(); ++row_index) {
+    const auto row = independent_audio_role_rows.at(row_index).toMap();
+    if (row.value(QStringLiteral("audioRole")).toString() == QStringLiteral("music") &&
+        row.value(QStringLiteral("isIndependent")).toBool()) {
+      role_music_track_row = row_index;
+      break;
+    }
+  }
+  if (role_music_track_row < 0) {
+    return fail("the independent Music role lane should remain directly targetable");
+  }
+  independent_audio_roles_controller.insertClipFromGalleryAtTrack(
+      QStringLiteral("audio:role-music"), audio_clip,
+      QStringLiteral("Music Bed"), 4.0, 0.0, 4.0, QString{}, role_music_track_row, 0.0);
+  if (!independent_audio_roles_controller.saveTimeline()) {
+    return fail("independent role tracks should save through the normal timeline path");
+  }
+  TimelineDocumentController reopened_audio_roles_controller;
+  if (!reopened_audio_roles_controller.loadTimeline(
+          independent_audio_roles_controller.savedDocumentPath())) {
+    return fail("independent audio role tracks should reopen");
+  }
+  const auto reopened_audio_role_rows = reopened_audio_roles_controller.sequenceTracks();
+  for (const auto& [role, expected_bus] : independent_audio_roles) {
+    auto matching_role_lanes = 0;
+    for (const auto& row_value : reopened_audio_role_rows) {
+      const auto row = row_value.toMap();
+      if (row.value(QStringLiteral("audioRole")).toString() != role ||
+          !row.value(QStringLiteral("isIndependent")).toBool()) {
+        continue;
+      }
+      ++matching_role_lanes;
+      if (row.value(QStringLiteral("audioBus")).toString() != expected_bus) {
+        return fail("audio role routing should survive timeline save and reopen");
+      }
+    }
+    if (matching_role_lanes != 1) {
+      return fail("every independent audio role should survive timeline save and reopen");
+    }
   }
 
   TimelineDocumentController clip_feedback_controller;
@@ -1937,7 +3998,7 @@ int main(int argc, char** argv) {
   }
   imported_review_controller.redo();
   if (imported_review_controller.reviewNotes().size() != 1 ||
-      !imported_review_controller.saveTimeline()) {
+      !imported_review_controller.saveTimeline(true)) {
     return fail("imported review notes should redo and persist with the timeline");
   }
   if (!removePersistedJobRecord(
@@ -2012,6 +4073,8 @@ int main(int argc, char** argv) {
   if (!color_controller.applySelectedClipColorLut(blue_lut_path) ||
       color_controller.currentClip().value(QStringLiteral("colorLutName")).toString() !=
           QStringLiteral("solid-blue")) {
+    std::cerr << "color LUT attachment status: "
+              << color_controller.status().toStdString() << '\n';
     return fail("a validated CUBE LUT should attach to the selected clip");
   }
   const auto color_scopes = color_controller.analyzeSelectedClipColorScopes();
@@ -2025,6 +4088,8 @@ int main(int argc, char** argv) {
   }
   const auto color_render_path = workspace.filePath(QStringLiteral("color-finished.mp4"));
   if (!color_controller.renderCurrentTimeline(color_render_path)) {
+    std::cerr << "color render status: "
+              << color_controller.status().toStdString() << '\n';
     return fail("the LUT and shot-match filter chain should render through the ordinary timeline exporter");
   }
   const auto color_ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
@@ -2076,7 +4141,7 @@ int main(int argc, char** argv) {
       channel_difference(preview_cache_pixel.blue(), color_render_pixel.blue()) > 4) {
     return fail("the final-pixel Program preview and export should match within codec tolerance");
   }
-  if (!color_controller.saveTimeline()) {
+  if (!color_controller.saveTimeline(true)) {
     return fail("color finishing settings should save with the timeline");
   }
   if (!removePersistedJobRecord(
@@ -3057,15 +5122,63 @@ int main(int argc, char** argv) {
   }
   legacy_effect_preset_file.close();
 
+  const auto built_in_only_store_path = workspace.filePath(QStringLiteral("built-in-only-presets.json"));
+  qputenv("PHOTO_EDITOR_TIMELINE_EFFECT_PRESET_PATH", built_in_only_store_path.toUtf8());
+  TimelineDocumentController built_in_only_controller;
+  QString soft_matte_preset_id;
+  auto built_in_preset_count = 0;
+  QStringList built_in_preset_ids;
+  for (const auto& preset_value : built_in_only_controller.effectStackPresets()) {
+    const auto preset = preset_value.toMap();
+    if (!preset.value(QStringLiteral("builtIn")).toBool()) {
+      continue;
+    }
+    ++built_in_preset_count;
+    const auto preset_id = preset.value(QStringLiteral("presetId")).toString();
+    if (preset_id.isEmpty() || built_in_preset_ids.contains(preset_id) ||
+        !built_in_only_controller.effectStackPresetPreview(preset_id)
+             .value(QStringLiteral("canApply")).toBool()) {
+      return fail("built-in looks should expose unique stable IDs and supported preview stacks");
+    }
+    built_in_preset_ids.push_back(preset_id);
+    if (preset.value(QStringLiteral("name")).toString() == QStringLiteral("Soft Matte Print")) {
+      soft_matte_preset_id = preset_id;
+    }
+  }
+  if (built_in_preset_count != 12 || soft_matte_preset_id.isEmpty() ||
+      QFileInfo::exists(built_in_only_store_path)) {
+    return fail("twelve built-in effect looks should be available without writing into the user preset store");
+  }
+  if (built_in_only_controller.deleteEffectStackPreset(soft_matte_preset_id)) {
+    return fail("built-in effect looks should not be deletable as user preset revisions");
+  }
+  TimelineDocumentController built_in_only_reader;
+  if (built_in_only_reader.effectStackPresets().size() != 12 ||
+      built_in_only_reader.effectStackPresetPreview(soft_matte_preset_id)
+              .value(QStringLiteral("builtIn")).toBool() != true) {
+    return fail("built-in IDs and availability should stay stable across controller instances without stored preset data");
+  }
+  qputenv("PHOTO_EDITOR_TIMELINE_EFFECT_PRESET_PATH", effect_preset_store_path.toUtf8());
+
   TimelineDocumentController effects_controller;
-  if (effects_controller.effectStackPresets().size() != 1 ||
+  if (effects_controller.effectStackPresets().size() != 13 ||
       !effects_controller.effectStackPresetMigrationReport().contains(
           QStringLiteral("schema v2")) ||
       !effects_controller.effectStackPresetMigrationReport().contains(
           QStringLiteral("unavailable effect"))) {
-    return fail("legacy effect presets should migrate to schema v2 while reporting retained missing effects");
+    return fail("legacy effect presets should migrate beside the twelve built-in looks and report retained missing effects");
   }
-  const auto legacy_preset = effects_controller.effectStackPresets().constFirst().toMap();
+  QVariantMap legacy_preset;
+  for (const auto& preset_value : effects_controller.effectStackPresets()) {
+    const auto preset = preset_value.toMap();
+    if (preset.value(QStringLiteral("name")).toString() == QStringLiteral("Legacy Creator")) {
+      legacy_preset = preset;
+      break;
+    }
+  }
+  if (legacy_preset.isEmpty()) {
+    return fail("built-in presets should not displace migrated user presets");
+  }
   const auto legacy_preview = effects_controller.effectStackPresetPreview(
       legacy_preset.value(QStringLiteral("presetId")).toString());
   if (!legacy_preview.value(QStringLiteral("canApply")).toBool() ||
@@ -3077,6 +5190,67 @@ int main(int argc, char** argv) {
   effects_controller.createTimeline(QStringLiteral("Effects Timeline"));
   effects_controller.addClipFromGallery(
       QStringLiteral("video:effects"), first_video, QStringLiteral("Effects Source"), 4.0, QStringLiteral("poster://effects"));
+  const auto effect_detail_for = [](const QVariantMap& clip, const QString& name) {
+    for (const auto& value : clip.value(QStringLiteral("effectDetails")).toList()) {
+      const auto detail = value.toMap();
+      if (detail.value(QStringLiteral("name")).toString() == name) {
+        return detail;
+      }
+    }
+    return QVariantMap{};
+  };
+  QFile migrated_preset_store(effect_preset_store_path);
+  if (!migrated_preset_store.open(QIODevice::ReadOnly)) {
+    return fail("the migrated user preset store should remain readable");
+  }
+  const auto migrated_preset_store_bytes = migrated_preset_store.readAll();
+  migrated_preset_store.close();
+  if (!effects_controller.applyEffectStackPreset(
+          soft_matte_preset_id, QStringList{}, true)) {
+    return fail("a built-in look should apply as an ordinary editable effect stack");
+  }
+  const QVariantList soft_matte_stack{
+      QStringLiteral("Fade"), QStringLiteral("Contrast"), QStringLiteral("Saturation")};
+  const auto applied_soft_matte_clip = effects_controller.currentClip();
+  if (applied_soft_matte_clip.value(QStringLiteral("effectStack")).toList() != soft_matte_stack ||
+      !nearly_equal(
+          effect_detail_for(applied_soft_matte_clip, QStringLiteral("Fade"))
+              .value(QStringLiteral("amount")).toDouble(),
+          0.22) ||
+      !effects_controller.saveTimeline()) {
+    return fail("built-in looks should retain their exact editable amounts through timeline save");
+  }
+  TimelineDocumentController reopened_builtin_look;
+  if (!reopened_builtin_look.loadTimeline(effects_controller.savedDocumentPath())) {
+    return fail("a built-in effect stack should reopen through the ordinary timeline path");
+  }
+  reopened_builtin_look.selectClip(1);
+  const auto reopened_builtin_clip = reopened_builtin_look.currentClip();
+  if (reopened_builtin_clip.value(QStringLiteral("effectStack")).toList() != soft_matte_stack ||
+      !nearly_equal(
+          effect_detail_for(reopened_builtin_clip, QStringLiteral("Fade"))
+              .value(QStringLiteral("amount")).toDouble(),
+          0.22)) {
+    return fail("built-in look values should survive exact timeline save and reopen");
+  }
+  QFile unchanged_preset_store(effect_preset_store_path);
+  if (!unchanged_preset_store.open(QIODevice::ReadOnly) ||
+      unchanged_preset_store.readAll() != migrated_preset_store_bytes) {
+    return fail("applying built-in looks should leave all saved user presets unchanged");
+  }
+  effects_controller.undo();
+  if (!effects_controller.currentClip().value(QStringLiteral("effectStack")).toList().isEmpty()) {
+    return fail("applying a built-in look should use one ordinary undo step");
+  }
+  effects_controller.redo();
+  if (effects_controller.currentClip().value(QStringLiteral("effectStack")).toList() !=
+      soft_matte_stack) {
+    return fail("a built-in look should restore through ordinary redo");
+  }
+  effects_controller.undo();
+  if (!effects_controller.currentClip().value(QStringLiteral("effectStack")).toList().isEmpty()) {
+    return fail("applying a built-in look should use one ordinary undo and redo step");
+  }
   effects_controller.addSelectedClipEffect(QStringLiteral("exposure"));
   effects_controller.addSelectedClipEffect(QStringLiteral("Blur"));
   effects_controller.addSelectedClipEffect(QStringLiteral("Punch"));
@@ -3087,15 +5261,6 @@ int main(int argc, char** argv) {
   effects_controller.setSelectedClipEffectEnabled(QStringLiteral("Blur"), false);
   effects_controller.setSelectedClipEffectsEnabled(false);
 
-  const auto effect_detail_for = [](const QVariantMap& clip, const QString& name) {
-    for (const auto& value : clip.value(QStringLiteral("effectDetails")).toList()) {
-      const auto detail = value.toMap();
-      if (detail.value(QStringLiteral("name")).toString() == name) {
-        return detail;
-      }
-    }
-    return QVariantMap{};
-  };
   const auto effects_clip = effects_controller.currentClip();
   const auto exposure_detail = effect_detail_for(effects_clip, QStringLiteral("Exposure"));
   const auto blur_detail = effect_detail_for(effects_clip, QStringLiteral("Blur"));
@@ -3289,6 +5454,13 @@ int main(int argc, char** argv) {
   if (!nearly_equal(inspector_undo_controller.currentClip().value(QStringLiteral("opacity")).toDouble(), 0.4)) {
     return fail("redo should restore the inspector property edit");
   }
+  inspector_undo_controller.setSelectedFrameScale(0.45);
+  if (!nearly_equal(
+          inspector_undo_controller.currentClip().value(QStringLiteral("frameScale")).toDouble(),
+          0.45)) {
+    return fail("timeline transform scale should allow shrinking a shot below its fitted size");
+  }
+  inspector_undo_controller.setSelectedFrameScale(1.0);
   inspector_undo_controller.beginContinuousEdit();
   inspector_undo_controller.setSelectedFrameScale(1.2);
   inspector_undo_controller.setSelectedFrameScale(1.7);
@@ -3296,6 +5468,39 @@ int main(int argc, char** argv) {
   inspector_undo_controller.undo();
   if (!nearly_equal(inspector_undo_controller.currentClip().value(QStringLiteral("frameScale")).toDouble(), 1.0)) {
     return fail("continuous inspector drags should collapse into one undo step");
+  }
+
+  TimelineDocumentController pip_keyframe_controller;
+  pip_keyframe_controller.createTimeline(QStringLiteral("Picture-in-Picture Scale Keyframes"));
+  pip_keyframe_controller.addClipFromGallery(
+      QStringLiteral("video:pip-scale"),
+      first_video,
+      QStringLiteral("Picture-in-Picture Clip"),
+      4.0,
+      QStringLiteral("poster://pip-scale"));
+  if (!pip_keyframe_controller.toggleSelectedClipKeyframe(QStringLiteral("frameScale"))) {
+    return fail("scale keyframes should be available for a picture-in-picture transform");
+  }
+  pip_keyframe_controller.setSelectedFrameScale(0.25);
+  pip_keyframe_controller.seekSequenceSeconds(2.0);
+  pip_keyframe_controller.setSelectedFrameScale(0.5);
+  const auto pip_scale_keyframes = pip_keyframe_controller.currentClip()
+                                      .value(QStringLiteral("keyframes")).toList();
+  auto pip_scale_keyframe_count = 0;
+  auto has_quarter_scale_keyframe = false;
+  auto has_half_scale_keyframe = false;
+  for (const auto& keyframe_value : pip_scale_keyframes) {
+    const auto keyframe = keyframe_value.toMap();
+    if (keyframe.value(QStringLiteral("parameter")).toString() != QStringLiteral("frameScale")) {
+      continue;
+    }
+    ++pip_scale_keyframe_count;
+    const auto scale_value = keyframe.value(QStringLiteral("value")).toDouble();
+    has_quarter_scale_keyframe = has_quarter_scale_keyframe || nearly_equal(scale_value, 0.25);
+    has_half_scale_keyframe = has_half_scale_keyframe || nearly_equal(scale_value, 0.5);
+  }
+  if (pip_scale_keyframe_count != 2 || !has_quarter_scale_keyframe || !has_half_scale_keyframe) {
+    return fail("scale keyframes should retain sub-100-percent values at multiple times");
   }
 
   TimelineDocumentController keyframe_controller;
@@ -3404,6 +5609,151 @@ int main(int argc, char** argv) {
           .first().toMap().value(QStringLiteral("interpolation")).toString() !=
           QStringLiteral("hold")) {
     return fail("Bezier handle and linkage edits should each undo atomically");
+  }
+
+  TimelineDocumentController keyframe_speed_controller;
+  keyframe_speed_controller.createTimeline(QStringLiteral("Per-Keyframe Speed"));
+  keyframe_speed_controller.addClipFromGallery(
+      QStringLiteral("video:keyframe-speed"), first_video,
+      QStringLiteral("Per-Keyframe Speed Clip"), 5.0,
+      QStringLiteral("poster://keyframe-speed"));
+  const QVector<QPair<double, double>> keyframe_speed_values{
+      {0.0, 0.10}, {2.0, 0.80}, {4.0, 0.30}};
+  for (const auto& [seconds, value] : keyframe_speed_values) {
+    keyframe_speed_controller.seekSequenceSeconds(seconds);
+    if (seconds <= 1.0e-9 &&
+        !keyframe_speed_controller.toggleSelectedClipKeyframe(
+            QStringLiteral("opacity"))) {
+      return fail("the speed fixture should create its first opacity keyframe");
+    }
+    keyframe_speed_controller.setSelectedClipOpacity(value);
+  }
+  const QVector<QPair<double, double>> keyframe_speeds{
+      {0.0, 0.25}, {2.0, 0.50}, {4.0, -0.25}};
+  for (const auto& [seconds, speed] : keyframe_speeds) {
+    if (!keyframe_speed_controller.setSelectedClipKeyframeSpeed(
+            QStringLiteral("opacity"), seconds, speed)) {
+      return fail("every opacity keyframe, including endpoints, should accept an editable speed");
+    }
+  }
+  auto keyframe_speed_points = keyframe_speed_controller.currentClip()
+                                   .value(QStringLiteral("keyframes")).toList();
+  if (keyframe_speed_points.size() != keyframe_speeds.size()) {
+    return fail("per-keyframe speed editing should preserve every authored key");
+  }
+  const auto handle_speed = [](const QVariantMap& keyframe,
+                               const QString& time_key,
+                               const QString& value_key) {
+    const auto time = keyframe.value(time_key).toDouble();
+    return qAbs(time) > 1.0e-9
+               ? keyframe.value(value_key).toDouble() / time
+               : 0.0;
+  };
+  const auto first_speed_point = keyframe_speed_points.first().toMap();
+  const auto middle_speed_point = keyframe_speed_points.at(1).toMap();
+  const auto last_speed_point = keyframe_speed_points.last().toMap();
+  if (!first_speed_point.value(QStringLiteral("bezierOutCustom")).toBool() ||
+      !middle_speed_point.value(QStringLiteral("bezierInCustom")).toBool() ||
+      !middle_speed_point.value(QStringLiteral("bezierOutCustom")).toBool() ||
+      !last_speed_point.value(QStringLiteral("bezierInCustom")).toBool() ||
+      !nearly_equal(handle_speed(
+                        first_speed_point,
+                        QStringLiteral("bezierOutTimeSeconds"),
+                        QStringLiteral("bezierOutValue")),
+                    keyframe_speeds.first().second, 0.001) ||
+      !nearly_equal(handle_speed(
+                        middle_speed_point,
+                        QStringLiteral("bezierInTimeSeconds"),
+                        QStringLiteral("bezierInValue")),
+                    keyframe_speeds.at(1).second, 0.001) ||
+      !nearly_equal(handle_speed(
+                        middle_speed_point,
+                        QStringLiteral("bezierOutTimeSeconds"),
+                        QStringLiteral("bezierOutValue")),
+                    keyframe_speeds.at(1).second, 0.001) ||
+      !nearly_equal(handle_speed(
+                        last_speed_point,
+                        QStringLiteral("bezierInTimeSeconds"),
+                        QStringLiteral("bezierInValue")),
+                    keyframe_speeds.last().second, 0.001)) {
+    return fail("each keyframe speed should be stored as its incoming and outgoing curve tangent");
+  }
+  keyframe_speed_controller.seekSequenceSeconds(2.0 - 0.01);
+  const auto value_before_middle_speed =
+      keyframe_speed_controller.currentClip().value(QStringLiteral("opacity")).toDouble();
+  keyframe_speed_controller.seekSequenceSeconds(2.0 + 0.01);
+  const auto value_after_middle_speed =
+      keyframe_speed_controller.currentClip().value(QStringLiteral("opacity")).toDouble();
+  if (!nearly_equal(
+          (value_after_middle_speed - value_before_middle_speed) / 0.02,
+          keyframe_speeds.at(1).second, 0.06)) {
+    return fail("the edited keyframe speed should control the evaluated animation derivative");
+  }
+  if (!keyframe_speed_controller.saveTimeline()) {
+    return fail("per-keyframe speed handles should save through the ordinary document path");
+  }
+  TimelineDocumentController reopened_keyframe_speed_controller;
+  if (!reopened_keyframe_speed_controller.loadTimeline(
+          keyframe_speed_controller.savedDocumentPath())) {
+    return fail("a timeline with per-keyframe speed should reopen");
+  }
+  reopened_keyframe_speed_controller.selectClip(0);
+  keyframe_speed_points = reopened_keyframe_speed_controller.currentClip()
+                              .value(QStringLiteral("keyframes")).toList();
+  if (keyframe_speed_points.size() != keyframe_speeds.size() ||
+      !nearly_equal(
+          handle_speed(
+              keyframe_speed_points.first().toMap(),
+              QStringLiteral("bezierOutTimeSeconds"),
+              QStringLiteral("bezierOutValue")),
+          keyframe_speeds.first().second, 0.001) ||
+      !nearly_equal(
+          handle_speed(
+              keyframe_speed_points.at(1).toMap(),
+              QStringLiteral("bezierOutTimeSeconds"),
+              QStringLiteral("bezierOutValue")),
+          keyframe_speeds.at(1).second, 0.001) ||
+      !nearly_equal(
+          handle_speed(
+              keyframe_speed_points.last().toMap(),
+              QStringLiteral("bezierInTimeSeconds"),
+              QStringLiteral("bezierInValue")),
+          keyframe_speeds.last().second, 0.001)) {
+    return fail("per-keyframe speed tangents should survive save and reopen");
+  }
+
+  TimelineDocumentController selected_title_seek_controller;
+  selected_title_seek_controller.createTimeline(QStringLiteral("Selected Title Seek"));
+  selected_title_seek_controller.addClipFromGallery(
+      QStringLiteral("video:selected-title-seek"), first_video,
+      QStringLiteral("Selected Title Seek Base"), 5.0,
+      QStringLiteral("poster://selected-title-seek"));
+  selected_title_seek_controller.seekSequenceSeconds(0.0);
+  selected_title_seek_controller.addTitleClip();
+  const auto selected_title_id = selected_title_seek_controller.currentClip()
+                                     .value(QStringLiteral("clipId")).toString();
+  selected_title_seek_controller.seekSequenceSeconds(0.7);
+  if (selected_title_seek_controller.currentClip()
+              .value(QStringLiteral("mediaType")).toString() != QStringLiteral("title") ||
+      selected_title_seek_controller.currentClip()
+              .value(QStringLiteral("clipId")).toString() != selected_title_id ||
+      !selected_title_seek_controller.toggleSelectedClipKeyframe(
+          QStringLiteral("titleFontSize"))) {
+    return fail("seeking within a selected title should keep its inspector and keyframe target active");
+  }
+  selected_title_seek_controller.setSelectedTitleFontSize(48.0);
+  auto selected_title_size_keyframes = selected_title_seek_controller.currentClip()
+                                          .value(QStringLiteral("keyframes")).toList();
+  if (selected_title_size_keyframes.size() != 1 ||
+      selected_title_size_keyframes.first().toMap()
+              .value(QStringLiteral("parameter")).toString() !=
+          QStringLiteral("titleFontSize")) {
+    return fail("a title font-size keyframe should remain editable after scrubbing the playhead");
+  }
+  selected_title_seek_controller.seekSequenceSeconds(3.1);
+  if (selected_title_seek_controller.currentClip()
+          .value(QStringLiteral("mediaType")).toString() != QStringLiteral("video")) {
+    return fail("seeking beyond the selected title should return editing context to active picture");
   }
 
   TimelineDocumentController advanced_keyframe_controller;
@@ -3683,6 +6033,327 @@ int main(int argc, char** argv) {
               << '\n';
     return fail("clip and track automation should survive save and reopen");
   }
+  const QVector<QPair<double, double>> track_keyframe_speeds{
+      {0.0, 0.20}, {2.0, -0.15}};
+  for (const auto& [seconds, speed] : track_keyframe_speeds) {
+    if (!reopened_keyframe_controller.setTrackAutomationKeyframeSpeed(
+            0, QStringLiteral("opacity"), seconds, speed)) {
+      return fail("every video track automation keyframe, including endpoints, should accept speed");
+    }
+  }
+  auto edited_track_speed_points = reopened_keyframe_controller.sequenceTracks().at(0).toMap()
+                                      .value(QStringLiteral("automationKeyframes")).toList();
+  if (edited_track_speed_points.size() != track_keyframe_speeds.size() ||
+      !edited_track_speed_points.first().toMap()
+           .value(QStringLiteral("bezierOutCustom")).toBool() ||
+      !edited_track_speed_points.last().toMap()
+           .value(QStringLiteral("bezierInCustom")).toBool() ||
+      !nearly_equal(
+          handle_speed(edited_track_speed_points.first().toMap(),
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          track_keyframe_speeds.first().second, 0.001) ||
+      !nearly_equal(
+          handle_speed(edited_track_speed_points.last().toMap(),
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          track_keyframe_speeds.last().second, 0.001)) {
+    return fail("video track automation should retain an independent tangent speed at each key");
+  }
+  reopened_keyframe_controller.seekSequenceSeconds(1.0);
+  if (!reopened_keyframe_controller.toggleTrackAutomationKeyframe(
+          0, QStringLiteral("opacity")) ||
+      !reopened_keyframe_controller.setTrackAutomationValue(
+          0, QStringLiteral("opacity"), 0.5) ||
+      !reopened_keyframe_controller.setTrackAutomationKeyframeSpeedForSide(
+          0, QStringLiteral("opacity"), 1.0, QStringLiteral("in"), 0.33)) {
+    return fail("track automation should support a middle key with independently addressable sides");
+  }
+  auto middle_track_speed_point = reopened_keyframe_controller.sequenceTracks().at(0).toMap()
+                                     .value(QStringLiteral("automationKeyframes")).toList().at(1)
+                                     .toMap();
+  if (!middle_track_speed_point.value(QStringLiteral("bezierInCustom")).toBool() ||
+      !middle_track_speed_point.value(QStringLiteral("bezierOutCustom")).toBool() ||
+      !nearly_equal(
+          handle_speed(middle_track_speed_point,
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          0.33, 0.001) ||
+      !nearly_equal(
+          handle_speed(middle_track_speed_point,
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          0.33, 0.001)) {
+    return fail("linked track automation handles should share the edited side speed");
+  }
+  if (!reopened_keyframe_controller.setTrackAutomationKeyframeBezierHandlesLinked(
+          0, QStringLiteral("opacity"), 1.0, false) ||
+      !reopened_keyframe_controller.setTrackAutomationKeyframeSpeedForSide(
+          0, QStringLiteral("opacity"), 1.0, QStringLiteral("out"), -0.27)) {
+    return fail("track automation keyframes should allow breaking handles and editing one side");
+  }
+  middle_track_speed_point = reopened_keyframe_controller.sequenceTracks().at(0).toMap()
+                                .value(QStringLiteral("automationKeyframes")).toList().at(1)
+                                .toMap();
+  if (middle_track_speed_point.value(QStringLiteral("bezierHandlesLinked")).toBool() ||
+      !nearly_equal(
+          handle_speed(middle_track_speed_point,
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          0.33, 0.001) ||
+      !nearly_equal(
+          handle_speed(middle_track_speed_point,
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          -0.27, 0.001)) {
+    return fail("broken track automation handles should retain independent In and Out speeds");
+  }
+  if (!reopened_keyframe_controller.saveTimeline()) {
+    return fail("video track keyframe speeds should save through the ordinary document path");
+  }
+  TimelineDocumentController reopened_track_speed_controller;
+  if (!reopened_track_speed_controller.loadTimeline(
+          reopened_keyframe_controller.savedDocumentPath())) {
+    return fail("video track keyframe speeds should survive document reopen");
+  }
+  const auto persisted_track_speed_points = reopened_track_speed_controller.sequenceTracks()
+                                               .at(0).toMap()
+                                               .value(QStringLiteral("automationKeyframes"))
+                                               .toList();
+  if (persisted_track_speed_points.size() != track_keyframe_speeds.size() + 1 ||
+      !nearly_equal(
+          handle_speed(persisted_track_speed_points.first().toMap(),
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          track_keyframe_speeds.first().second, 0.001) ||
+      !nearly_equal(
+          handle_speed(persisted_track_speed_points.last().toMap(),
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          track_keyframe_speeds.last().second, 0.001) ||
+      persisted_track_speed_points.at(1).toMap()
+              .value(QStringLiteral("bezierHandlesLinked")).toBool() ||
+      !nearly_equal(
+          handle_speed(persisted_track_speed_points.at(1).toMap(),
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          0.33, 0.001) ||
+      !nearly_equal(
+          handle_speed(persisted_track_speed_points.at(1).toMap(),
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          -0.27, 0.001)) {
+    return fail("track automation handle linkage and side speeds should persist through reopen");
+  }
+  TimelineDocumentController universal_keyframe_speed_controller;
+  universal_keyframe_speed_controller.createTimeline(
+      QStringLiteral("Universal Keyframe Speed"));
+  universal_keyframe_speed_controller.addClipFromGallery(
+      QStringLiteral("video:universal-keyframe-speed"), first_video,
+      QStringLiteral("Perspective, Effect, and Grade"), 4.0,
+      QStringLiteral("poster://universal-keyframe-speed"));
+  universal_keyframe_speed_controller.addSelectedClipEffect(QStringLiteral("Exposure"));
+  const auto universal_speed_clip_id = universal_keyframe_speed_controller.currentClip()
+                                           .value(QStringLiteral("clipId")).toString();
+  const auto grade_initialized =
+      universal_keyframe_speed_controller.setClipColorGradeParameterForAutomation(
+          universal_speed_clip_id, QStringLiteral("exposure"), 0.0);
+  if (!grade_initialized.value(QStringLiteral("ok")).toBool()) {
+    return fail("shared grade controls should initialize before they receive universal keyframes");
+  }
+  for (const auto& [seconds, perspective, effect] :
+       QVector<std::tuple<double, double, double>>{
+           {0.0, 0.05, 0.20}, {2.0, 0.25, 0.80}}) {
+    universal_keyframe_speed_controller.seekSequenceSeconds(seconds);
+    if (seconds <= 1.0e-9 &&
+        (!universal_keyframe_speed_controller.toggleSelectedClipKeyframe(
+             QStringLiteral("framePerspectiveX")) ||
+         !universal_keyframe_speed_controller.toggleSelectedClipKeyframe(
+             QStringLiteral("effect:Exposure")))) {
+      return fail("transform and effect parameters should both author ordinary clip keyframes");
+    }
+    universal_keyframe_speed_controller.setSelectedFramePerspectiveX(perspective);
+    universal_keyframe_speed_controller.setSelectedClipEffectAmount(
+        QStringLiteral("Exposure"), effect);
+  }
+  for (const auto& [seconds, value] :
+       QVector<QPair<double, double>>{{0.0, -0.5}, {2.0, 1.0}}) {
+    const auto grade_keyframe =
+        universal_keyframe_speed_controller.editClipKeyframeForAutomation(
+            universal_speed_clip_id,
+            QStringLiteral("set"),
+            QStringLiteral("grade:exposure"),
+            seconds,
+            value,
+            QStringLiteral("linear"));
+    if (!grade_keyframe.value(QStringLiteral("ok")).toBool()) {
+      return fail("shared grade parameters should use the same clip keyframe document");
+    }
+  }
+  if (!universal_keyframe_speed_controller.editClipKeyframeForAutomation(
+          universal_speed_clip_id,
+          QStringLiteral("set"),
+          QStringLiteral("framePerspectiveX"),
+          1.0,
+          0.15,
+          QStringLiteral("linear"))
+           .value(QStringLiteral("ok")).toBool() ||
+      !universal_keyframe_speed_controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("framePerspectiveX"), 1.0, QStringLiteral("out"), 0.08)) {
+    return fail("a middle keyframe should accept its outgoing speed while handles are linked");
+  }
+  const auto middle_keyframe_for_speed = [&universal_keyframe_speed_controller]() {
+    for (const auto& point_value : universal_keyframe_speed_controller.currentClip()
+                                       .value(QStringLiteral("keyframes")).toList()) {
+      const auto point = point_value.toMap();
+      if (point.value(QStringLiteral("parameter")).toString() ==
+              QStringLiteral("framePerspectiveX") &&
+          nearly_equal(point.value(QStringLiteral("seconds")).toDouble(), 1.0, 0.001)) {
+        return point;
+      }
+    }
+    return QVariantMap{};
+  };
+  auto middle_perspective_speed_point = middle_keyframe_for_speed();
+  if (!middle_perspective_speed_point.value(QStringLiteral("bezierInCustom")).toBool() ||
+      !middle_perspective_speed_point.value(QStringLiteral("bezierOutCustom")).toBool() ||
+      !nearly_equal(
+          handle_speed(middle_perspective_speed_point,
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          0.08, 0.001) ||
+      !nearly_equal(
+          handle_speed(middle_perspective_speed_point,
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          0.08, 0.001)) {
+    return fail("linked keyframe speeds should keep matching incoming and outgoing tangents");
+  }
+  if (!universal_keyframe_speed_controller.setSelectedClipKeyframeBezierHandlesLinked(
+          QStringLiteral("framePerspectiveX"), 1.0, false) ||
+      !universal_keyframe_speed_controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("framePerspectiveX"), 1.0, QStringLiteral("in"), -0.03)) {
+    return fail("unlinked keyframe handles should accept different incoming and outgoing speeds");
+  }
+  middle_perspective_speed_point = middle_keyframe_for_speed();
+  if (!nearly_equal(
+          handle_speed(middle_perspective_speed_point,
+                       QStringLiteral("bezierInTimeSeconds"),
+                       QStringLiteral("bezierInValue")),
+          -0.03, 0.001) ||
+      !nearly_equal(
+          handle_speed(middle_perspective_speed_point,
+                       QStringLiteral("bezierOutTimeSeconds"),
+                       QStringLiteral("bezierOutValue")),
+          0.08, 0.001)) {
+    return fail("editing one unlinked keyframe speed should preserve the opposite side");
+  }
+  if (!universal_keyframe_speed_controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("framePerspectiveX"), 0.0, QStringLiteral("out"), 0.12) ||
+      !universal_keyframe_speed_controller.setSelectedClipKeyframeSpeedForSide(
+          QStringLiteral("framePerspectiveX"), 2.0, QStringLiteral("in"), -0.09)) {
+    return fail("each keyframe should allow its incoming or outgoing speed to be edited independently");
+  }
+  QVariantMap first_perspective_keyframe;
+  QVariantMap last_perspective_keyframe;
+  for (const auto& point_value : universal_keyframe_speed_controller.currentClip()
+                                     .value(QStringLiteral("keyframes")).toList()) {
+    const auto point = point_value.toMap();
+    if (point.value(QStringLiteral("parameter")).toString() !=
+        QStringLiteral("framePerspectiveX")) {
+      continue;
+    }
+    const auto seconds = point.value(QStringLiteral("seconds")).toDouble();
+    if (nearly_equal(seconds, 0.0, 0.001)) {
+      first_perspective_keyframe = point;
+    } else if (nearly_equal(seconds, 2.0, 0.001)) {
+      last_perspective_keyframe = point;
+    }
+  }
+  if (first_perspective_keyframe.isEmpty() || last_perspective_keyframe.isEmpty() ||
+      !first_perspective_keyframe.value(QStringLiteral("bezierOutCustom")).toBool() ||
+      first_perspective_keyframe.value(QStringLiteral("bezierInCustom")).toBool() ||
+      !last_perspective_keyframe.value(QStringLiteral("bezierInCustom")).toBool() ||
+      last_perspective_keyframe.value(QStringLiteral("bezierOutCustom")).toBool()) {
+    return fail("editing one speed side should leave the opposite tangent untouched");
+  }
+  struct UniversalSpeedExpectation {
+    QString parameter;
+    double seconds;
+    double speed;
+    QString time_field;
+    QString value_field;
+    QString custom_field;
+  };
+  const QVector<UniversalSpeedExpectation> universal_speed_expectations{
+      {QStringLiteral("framePerspectiveX"), 0.0, 0.04,
+       QStringLiteral("bezierOutTimeSeconds"), QStringLiteral("bezierOutValue"),
+       QStringLiteral("bezierOutCustom")},
+      {QStringLiteral("framePerspectiveX"), 2.0, -0.02,
+       QStringLiteral("bezierInTimeSeconds"), QStringLiteral("bezierInValue"),
+       QStringLiteral("bezierInCustom")},
+      {QStringLiteral("effect:Exposure"), 0.0, 0.15,
+       QStringLiteral("bezierOutTimeSeconds"), QStringLiteral("bezierOutValue"),
+       QStringLiteral("bezierOutCustom")},
+      {QStringLiteral("effect:Exposure"), 2.0, -0.10,
+       QStringLiteral("bezierInTimeSeconds"), QStringLiteral("bezierInValue"),
+       QStringLiteral("bezierInCustom")},
+      {QStringLiteral("grade:exposure"), 0.0, 0.20,
+       QStringLiteral("bezierOutTimeSeconds"), QStringLiteral("bezierOutValue"),
+       QStringLiteral("bezierOutCustom")},
+      {QStringLiteral("grade:exposure"), 2.0, -0.10,
+       QStringLiteral("bezierInTimeSeconds"), QStringLiteral("bezierInValue"),
+       QStringLiteral("bezierInCustom")},
+  };
+  for (const auto& expectation : universal_speed_expectations) {
+    if (!universal_keyframe_speed_controller.setSelectedClipKeyframeSpeed(
+            expectation.parameter, expectation.seconds, expectation.speed)) {
+      return fail("perspective, effect, and shared grade keyframes should all accept per-key speed");
+    }
+  }
+  const auto find_universal_keyframe = [](const QVariantList& points,
+                                          const QString& parameter,
+                                          double seconds) {
+    for (const auto& point_value : points) {
+      const auto point = point_value.toMap();
+      if (point.value(QStringLiteral("parameter")).toString() == parameter &&
+          nearly_equal(point.value(QStringLiteral("seconds")).toDouble(), seconds, 0.001)) {
+        return point;
+      }
+    }
+    return QVariantMap{};
+  };
+  auto universal_speed_points = universal_keyframe_speed_controller.currentClip()
+                                    .value(QStringLiteral("keyframes")).toList();
+  for (const auto& expectation : universal_speed_expectations) {
+    const auto point = find_universal_keyframe(
+        universal_speed_points, expectation.parameter, expectation.seconds);
+    if (point.isEmpty() || !point.value(expectation.custom_field).toBool() ||
+        !nearly_equal(handle_speed(point, expectation.time_field, expectation.value_field),
+                      expectation.speed, 0.001)) {
+      return fail("every transform, effect, and grade key should store its own tangent speed");
+    }
+  }
+  if (!universal_keyframe_speed_controller.saveTimeline()) {
+    return fail("universal parameter keyframe speeds should save through the normal timeline path");
+  }
+  TimelineDocumentController reopened_universal_keyframe_speed_controller;
+  if (!reopened_universal_keyframe_speed_controller.loadTimeline(
+          universal_keyframe_speed_controller.savedDocumentPath())) {
+    return fail("universal parameter keyframe speeds should reopen");
+  }
+  reopened_universal_keyframe_speed_controller.selectClip(0);
+  universal_speed_points = reopened_universal_keyframe_speed_controller.currentClip()
+                               .value(QStringLiteral("keyframes")).toList();
+  for (const auto& expectation : universal_speed_expectations) {
+    const auto point = find_universal_keyframe(
+        universal_speed_points, expectation.parameter, expectation.seconds);
+    if (point.isEmpty() ||
+        !nearly_equal(handle_speed(point, expectation.time_field, expectation.value_field),
+                      expectation.speed, 0.001)) {
+      return fail("per-key speed should persist for transform, effect, and shared grade curves");
+    }
+  }
   if (reopened_keyframe_controller.copySelectedClipKeyframes(QStringLiteral("opacity")) != 2 ||
       reopened_keyframe_controller.keyframeClipboardCount() != 2) {
     return fail("parameter keyframes should copy into the reusable keyframe clipboard");
@@ -3738,11 +6409,25 @@ int main(int argc, char** argv) {
       }
     }
     photo_editor::desktop::JobRunner runner;
+    auto runner_recovery_finished = false;
+    auto runner_recovery_error = QString{};
+    QObject::connect(
+        &runner,
+        &photo_editor::desktop::JobRunner::startupRecoveryFinished,
+        [&runner_recovery_finished, &runner_recovery_error](const QString& error) {
+          runner_recovery_finished = true;
+          runner_recovery_error = error;
+        });
+    runner.initializeFromStore();
     const auto render_video_one = create_test_video(
         ffmpeg,
         workspace.filePath(QStringLiteral("render-01.mp4")),
         QStringLiteral("red"),
         true);
+    const auto render_video_motion = create_test_video(
+        ffmpeg,
+        workspace.filePath(QStringLiteral("render-title-motion.mp4")),
+        QStringLiteral("red"), false, 660, 4.0);
     const auto render_video_two = create_test_video(
         ffmpeg,
         workspace.filePath(QStringLiteral("render-02.mp4")),
@@ -3786,7 +6471,8 @@ int main(int argc, char** argv) {
         create_position_test_image(workspace.filePath(QStringLiteral("position-source.png")));
     const auto alpha_delivery_image = create_alpha_delivery_test_image(
         workspace.filePath(QStringLiteral("alpha-delivery-source.png")));
-    if (render_video_one.isEmpty() || render_video_two.isEmpty() || render_video_overlay.isEmpty() ||
+    if (render_video_one.isEmpty() || render_video_motion.isEmpty() ||
+        render_video_two.isEmpty() || render_video_overlay.isEmpty() ||
         stereo_channel_video.isEmpty() || surround_channel_video.isEmpty() ||
         timecode_video_one.isEmpty() || timecode_video_two.isEmpty() ||
         silence_analysis_video.isEmpty() || beat_analysis_video.isEmpty() ||
@@ -3844,12 +6530,14 @@ int main(int argc, char** argv) {
         !nearly_equal(encoded_fit_program.value(QStringLiteral("effectivePlaybackRate")).toDouble(),
                       2.0, 0.05) ||
         !nearly_equal(encoded_fit_to_fill_controller.totalDurationSecondsValue(), 0.6, 0.03) ||
-        !encoded_fit_to_fill_controller.saveTimeline()) {
+        !encoded_fit_to_fill_controller.saveTimeline(true)) {
       return fail("Fit to Fill Program state should expose the retimed Source and exact edit duration");
     }
     const auto encoded_fit_job_id = QStringLiteral("timeline-render-%1").arg(
         encoded_fit_to_fill_controller.timelineAssetId().section(':', 1));
-    if (!wait_for_persisted_job(encoded_fit_job_id)) {
+    if (!wait_for_persisted_job(encoded_fit_job_id, 30000)) {
+      std::cerr << "job runner recovery: finished=" << runner_recovery_finished
+                << " error=" << runner_recovery_error.toStdString() << '\n';
       return fail("Fit to Fill should render through the ordinary timeline export path");
     }
     QString encoded_fit_probe_error;
@@ -4308,7 +6996,7 @@ int main(int argc, char** argv) {
       }
       return QVariantMap{};
     };
-    const auto shared_proxy_summary = reopened_proxy_controller.projectCacheSummary();
+    const auto shared_proxy_summary = await_cache_summary(reopened_proxy_controller);
     const auto shared_proxy_category =
         cache_category(shared_proxy_summary, QStringLiteral("proxy"));
     if (shared_proxy_summary.value(QStringLiteral("categories")).toList().size() != 6 ||
@@ -4317,13 +7005,36 @@ int main(int argc, char** argv) {
         shared_proxy_category.value(QStringLiteral("canClean")).toBool()) {
       return fail("the project cache manager should expose all six categories and retain a proxy referenced by another saved project");
     }
-    const auto shared_proxy_cleanup = reopened_proxy_controller.cleanupProjectCaches(
+    const auto shared_proxy_cleanup = await_cache_cleanup(reopened_proxy_controller,
         {QStringLiteral("proxy")});
     if (!shared_proxy_cleanup.value(QStringLiteral("ok")).toBool() ||
         shared_proxy_cleanup.value(QStringLiteral("removedFileCount")).toInt() != 0 ||
         shared_proxy_cleanup.value(QStringLiteral("retainedSharedFileCount")).toInt() < 1 ||
         !QFileInfo::exists(proxy_path) ||
         !QFileInfo::exists(render_video_two)) {
+      const auto indexed_timelines = loadTimelineAssetRecords();
+      std::cerr << "shared proxy cleanup diagnostic: result="
+                << QJsonDocument::fromVariant(shared_proxy_cleanup)
+                       .toJson(QJsonDocument::Compact).toStdString()
+                << " index_path="
+                << photo_editor::desktop::timelineIndexPath().toStdString()
+                << " indexed_timeline_count=" << indexed_timelines.size()
+                << " proxy_exists=" << QFileInfo::exists(proxy_path)
+                << " proxy_path=" << proxy_path.toStdString()
+                << " source_exists=" << QFileInfo::exists(render_video_two)
+                << " source_path=" << render_video_two.toStdString() << '\n';
+      for (const auto& record : indexed_timelines) {
+        if (!QFileInfo::exists(record.document_path)) {
+          std::cerr << "  unreadable indexed timeline: id="
+                    << record.timeline_id.toStdString()
+                    << " name=" << record.name.toStdString()
+                    << " document=" << record.document_path.toStdString()
+                    << " backup_exists="
+                    << !photo_editor::desktop::loadTimelineDocumentBackup(record.timeline_id)
+                            .isEmpty()
+                    << '\n';
+        }
+      }
       return fail("per-project cleanup should retain shared proxies and never touch their original source");
     }
     QFile broken_proxy(proxy_path);
@@ -4474,7 +7185,7 @@ int main(int argc, char** argv) {
             second_cache_url) {
       return fail("cache regeneration should preserve valid ranges and publish a new affected range");
     }
-    const auto render_cache_summary = cache_controller.projectCacheSummary();
+    const auto render_cache_summary = await_cache_summary(cache_controller);
     const auto render_cache_category =
         cache_category(render_cache_summary, QStringLiteral("render-cache"));
     if (render_cache_category.value(QStringLiteral("fileCount")).toInt() != 3 ||
@@ -4482,7 +7193,7 @@ int main(int argc, char** argv) {
         !render_cache_category.value(QStringLiteral("canClean")).toBool()) {
       return fail("the project cache manager should count current and invalidated render ranges owned by this project");
     }
-    const auto render_cache_cleanup = cache_controller.cleanupProjectCaches(
+    const auto render_cache_cleanup = await_cache_cleanup(cache_controller,
         {QStringLiteral("render-cache")});
     if (!render_cache_cleanup.value(QStringLiteral("ok")).toBool() ||
         render_cache_cleanup.value(QStringLiteral("removedFileCount")).toInt() != 3 ||
@@ -4517,6 +7228,7 @@ int main(int argc, char** argv) {
       return fail("render-cache signatures should include project identity so cleanup cannot evict an identical edit in another project");
     }
     cache_controller.clearRenderCache();
+    (void)await_cache_summary(cache_controller);
     if (cache_controller.renderCacheReadyRangeCount() != 0 ||
         !cache_controller.renderCachePlaybackSourceUrl().isEmpty()) {
       return fail("clearing the preview cache should remove only generated range media");
@@ -4540,6 +7252,7 @@ int main(int argc, char** argv) {
       return fail("cache cancellation should terminate the worker and publish a stable cancelled state");
     }
     cache_controller.clearRenderCache();
+    (void)await_cache_summary(cache_controller);
 
     const auto cache_manager_video = create_test_video(
         ffmpeg,
@@ -4568,7 +7281,7 @@ int main(int argc, char** argv) {
       return fail("the cache-manager fixture should generate and save thumbnail, waveform, proxy, and analysis artifacts");
     }
     const auto project_cache_document = project_cache_controller.savedDocumentPath();
-    const auto owned_cache_summary = project_cache_controller.projectCacheSummary();
+    const auto owned_cache_summary = await_cache_summary(project_cache_controller);
     for (const auto& category_key : {
              QStringLiteral("thumbnail"), QStringLiteral("waveform"),
              QStringLiteral("proxy"), QStringLiteral("analysis")}) {
@@ -4580,7 +7293,7 @@ int main(int argc, char** argv) {
       }
     }
     const auto source_size_before_cleanup = QFileInfo(cache_manager_video).size();
-    const auto owned_cache_cleanup = project_cache_controller.cleanupProjectCaches({
+    const auto owned_cache_cleanup = await_cache_cleanup(project_cache_controller, {
         QStringLiteral("thumbnail"), QStringLiteral("waveform"),
         QStringLiteral("proxy"), QStringLiteral("analysis")});
     if (!owned_cache_cleanup.value(QStringLiteral("ok")).toBool() ||
@@ -5185,6 +7898,47 @@ int main(int argc, char** argv) {
         QStringLiteral("Override Source"),
         0.0,
         QStringLiteral("poster://linked-override"));
+    auto locked_override_tracks = linked_override_controller.sequenceTracks();
+    auto locked_override_audio =
+        locked_override_tracks.at(1).toMap().value(QStringLiteral("clips")).toList();
+    if (!linked_override_controller.currentClip()
+             .value(QStringLiteral("audioLinked")).toBool() ||
+        locked_override_audio.size() != 1 ||
+        locked_override_audio.first().toMap().value(QStringLiteral("linkedGroupId")) !=
+            linked_override_controller.currentClip().value(QStringLiteral("linkedGroupId"))) {
+      return fail("the locked asymmetric-trim fixture should begin with a linked audio component");
+    }
+    linked_override_controller.toggleTrackLocked(1);
+    const auto locked_override_hash =
+        linked_override_controller.deterministicDocumentHash();
+    const auto locked_override_selection =
+        linked_override_controller.selectedClipIds();
+    const auto locked_override_can_undo = linked_override_controller.canUndo();
+    const auto locked_override_can_redo = linked_override_controller.canRedo();
+    if (!linked_override_controller.sequenceTracks().at(1).toMap()
+             .value(QStringLiteral("locked")).toBool() ||
+        linked_override_controller.nudgeSelectedTrimEdge(
+            QStringLiteral("end"), -12, false, false) ||
+        linked_override_controller.nudgeSelectedTrimEdge(
+            QStringLiteral("end"), -12, true, false)) {
+      return fail("locking linked audio should reject both linked and asymmetric trim nudges");
+    }
+    locked_override_tracks = linked_override_controller.sequenceTracks();
+    locked_override_audio =
+        locked_override_tracks.at(1).toMap().value(QStringLiteral("clips")).toList();
+    if (linked_override_controller.deterministicDocumentHash() != locked_override_hash ||
+        linked_override_controller.selectedClipIds() != locked_override_selection ||
+        !linked_override_controller.currentClip()
+             .value(QStringLiteral("audioLinked")).toBool() ||
+        locked_override_audio.size() != 1 ||
+        !nearly_equal(locked_override_audio.first().toMap()
+                          .value(QStringLiteral("endSeconds")).toDouble(),
+                      1.20) ||
+        linked_override_controller.canUndo() != locked_override_can_undo ||
+        linked_override_controller.canRedo() != locked_override_can_redo) {
+      return fail("rejected linked-track trims should preserve A/V links, document state, selection, and undo/redo availability");
+    }
+    linked_override_controller.toggleTrackLocked(1);
     if (!linked_override_controller.nudgeSelectedTrimEdge(
             QStringLiteral("end"), -12, true, false)) {
       return fail("Option keyboard trim should accept an asymmetric twelve-frame Out nudge");
@@ -5872,7 +8626,7 @@ int main(int argc, char** argv) {
         configured_delivery.value(QStringLiteral("packageArtifactCount")).toInt() != 4) {
       return fail("delivery state should resolve a two-pass software master plus isolated bus stems and frames");
     }
-    if (!mixer_controller.saveTimeline()) {
+    if (!mixer_controller.saveTimeline(true)) {
       return fail("the configured bus mixer should save");
     }
     QFile saved_mixer_file(mixer_controller.savedDocumentPath());
@@ -6391,7 +9145,7 @@ int main(int argc, char** argv) {
       return fail("final timeline export should render from the lossless stabilized source");
     }
     const auto stabilization_cache_summary =
-        reopened_stabilization_controller.projectCacheSummary();
+        await_cache_summary(reopened_stabilization_controller);
     const auto stabilization_analysis_category =
         cache_category(stabilization_cache_summary, QStringLiteral("analysis"));
     const auto stabilization_preview_category =
@@ -6403,7 +9157,7 @@ int main(int argc, char** argv) {
       return fail("the cache manager should separate reusable stabilization analysis from Program and delivery previews");
     }
     const auto stabilization_cache_cleanup =
-        reopened_stabilization_controller.cleanupProjectCaches({
+        await_cache_cleanup(reopened_stabilization_controller, {
             QStringLiteral("analysis"), QStringLiteral("preview")});
     const auto stabilization_after_cleanup =
         reopened_stabilization_controller.currentClip();
@@ -7114,7 +9868,9 @@ int main(int argc, char** argv) {
     const auto composite_red = static_cast<unsigned char>(composite_sample.at(0));
     const auto composite_green = static_cast<unsigned char>(composite_sample.at(1));
     const auto composite_blue = static_cast<unsigned char>(composite_sample.at(2));
-    if (composite_red < 80 || composite_red > 190 || composite_green > 45 ||
+    // The untagged SD fixtures default to SMPTE 170M before Rec.709 output,
+    // which contributes a small green component to otherwise pure primaries.
+    if (composite_red < 80 || composite_red > 190 || composite_green > 55 ||
         composite_blue < 80 || composite_blue > 190) {
       return fail("V2 opacity should blend the blue overlay over the red V1 base");
     }
@@ -7304,15 +10060,37 @@ int main(int argc, char** argv) {
         {QStringLiteral("frameRate"), 30.0},
     });
     effect_render_controller.addClipFromGallery(
-        QStringLiteral("photo:effect-source"),
-        rotation_image,
+        QStringLiteral("video:effect-source"),
+        render_video_one,
         QStringLiteral("Effect Source"),
         1.0,
         QString{});
-    effect_render_controller.addSelectedClipEffect(QStringLiteral("Black & White"));
+    QString silver_monochrome_preset_id;
+    for (const auto& preset_value : effect_render_controller.effectStackPresets()) {
+      const auto preset = preset_value.toMap();
+      if (preset.value(QStringLiteral("name")).toString() == QStringLiteral("Silver Monochrome")) {
+        silver_monochrome_preset_id = preset.value(QStringLiteral("presetId")).toString();
+        break;
+      }
+    }
+    if (silver_monochrome_preset_id.isEmpty() ||
+        !effect_render_controller.applyEffectStackPreset(
+            silver_monochrome_preset_id, QStringList{}, true)) {
+      return fail("the Silver Monochrome built-in should apply before the real timeline export fixture");
+    }
     const auto effect_render_path = workspace.filePath(QStringLiteral("effect-render-output.mp4"));
     if (!effect_render_controller.renderCurrentTimeline(effect_render_path)) {
       return fail("enabled effect fixture should render successfully");
+    }
+    const auto effect_proof_directory =
+        qEnvironmentVariable("PHOTO_EDITOR_TIMELINE_EFFECT_PROOF_DIR").trimmed();
+    if (!effect_proof_directory.isEmpty() &&
+        (!QDir().mkpath(effect_proof_directory) ||
+         !QFile::copy(
+             effect_render_path,
+             QDir(effect_proof_directory).filePath(
+                 QStringLiteral("silver-monochrome-timeline-export.mp4"))))) {
+      return fail("the opt-in Silver Monochrome timeline export capture should be saved");
     }
     const auto sample_effect_pixel = [&ffmpeg](const QString& path) {
       return process_bytes(
@@ -7648,7 +10426,7 @@ int main(int argc, char** argv) {
       return fail("undo should restore the complete custom title style in one step");
     }
     title_controller.redo();
-    if (!title_controller.saveTimeline()) {
+    if (!title_controller.saveTimeline(true)) {
       return fail("title fixture should save and enqueue a render");
     }
     const auto title_job_id =
@@ -7689,6 +10467,182 @@ int main(int argc, char** argv) {
         });
     if (title_sample.size() < 3 || static_cast<unsigned char>(title_sample.at(0)) > 225) {
       return fail("exported title pixels should visibly overlay the underlying red video");
+    }
+
+    const QVector<QPair<QString, QSize>> title_motion_formats{
+        {QStringLiteral("landscape"), QSize(320, 180)},
+        {QStringLiteral("vertical"), QSize(180, 320)},
+    };
+    const QStringList title_motion_presets{
+        QStringLiteral("title-fade"),
+        QStringLiteral("title-pop"),
+        QStringLiteral("title-rise"),
+        QStringLiteral("title-slide-from-left"),
+    };
+    const auto title_motion_sample_signal = [&ffmpeg](
+        const QString& render_path, double seconds, const QSize& size) {
+      const auto crop_width = qMax(2, (size.width() * 3 / 4) & ~1);
+      const auto crop_height = qMax(2, (size.height() * 3 / 4) & ~1);
+      const auto crop_x = ((size.width() - crop_width) / 2) & ~1;
+      const auto crop_y = ((size.height() - crop_height) / 2) & ~1;
+      const auto pixels = process_bytes(
+          ffmpeg,
+          {
+              QStringLiteral("-v"), QStringLiteral("error"),
+              QStringLiteral("-ss"), QString::number(seconds, 'f', 3),
+              QStringLiteral("-i"), render_path,
+              QStringLiteral("-frames:v"), QStringLiteral("1"),
+              QStringLiteral("-vf"),
+              QStringLiteral("crop=%1:%2:%3:%4")
+                  .arg(crop_width).arg(crop_height).arg(crop_x).arg(crop_y),
+              QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+              QStringLiteral("-f"), QStringLiteral("rawvideo"),
+              QStringLiteral("pipe:1"),
+          });
+      if (pixels.size() < crop_width * crop_height * 3) {
+        return -1.0;
+      }
+      quint64 non_red_sum = 0;
+      for (qsizetype index = 0; index + 2 < pixels.size(); index += 3) {
+        non_red_sum += static_cast<unsigned char>(pixels.at(index + 1));
+        non_red_sum += static_cast<unsigned char>(pixels.at(index + 2));
+      }
+      return static_cast<double>(non_red_sum) /
+             static_cast<double>(crop_width * crop_height * 2);
+    };
+
+    for (const auto& [format_name, format_size] : title_motion_formats) {
+      for (const auto& motion_preset : title_motion_presets) {
+        TimelineDocumentController motion_controller;
+        motion_controller.createTimelineWithSettings({
+            {QStringLiteral("timelineName"),
+             QStringLiteral("Title Motion %1 %2").arg(format_name, motion_preset)},
+            {QStringLiteral("width"), format_size.width()},
+            {QStringLiteral("height"), format_size.height()},
+            {QStringLiteral("frameRate"), 30.0},
+        });
+        motion_controller.addClipFromGallery(
+            QStringLiteral("video:title-motion-base"), render_video_motion,
+            QStringLiteral("Title Motion Base"), 4.0, QString{});
+        motion_controller.seekSequenceSeconds(0.0);
+        motion_controller.addTitleClip();
+        motion_controller.updateSelectedTitle({
+            {QStringLiteral("text"), QStringLiteral("GO")},
+            {QStringLiteral("fontSize"), 56.0},
+            {QStringLiteral("color"), QStringLiteral("#ffffffff")},
+            {QStringLiteral("backgroundColor"), QStringLiteral("#00000000")},
+            {QStringLiteral("positionX"), 0.5},
+            {QStringLiteral("positionY"), 0.5},
+        });
+        motion_controller.seekSequenceSeconds(0.7);
+        if (!motion_controller.toggleSelectedClipKeyframe(QStringLiteral("titleFontSize"))) {
+          return fail("title motion fixtures should create an unrelated editable typography track");
+        }
+        motion_controller.setSelectedTitleFontSize(48.0);
+        const auto keyframes_before_preset = motion_controller.currentClip()
+                                                 .value(QStringLiteral("keyframes")).toList();
+        if (!motion_controller.applySelectedClipMotionPreset(motion_preset)) {
+          return fail("fade, pop, and rise should apply to a selected title clip");
+        }
+        const auto preset_keyframes = motion_controller.currentClip()
+                                          .value(QStringLiteral("keyframes")).toList();
+        const auto parameter_points = [&preset_keyframes](const QString& parameter) {
+          QVariantList points;
+          for (const auto& value : preset_keyframes) {
+            const auto point = value.toMap();
+            if (point.value(QStringLiteral("parameter")).toString() == parameter) {
+              points.push_back(point);
+            }
+          }
+          return points;
+        };
+        if (parameter_points(QStringLiteral("opacity")).size() != 4 ||
+            parameter_points(QStringLiteral("titleFontSize")).size() != 1) {
+          return fail("title presets should author ordinary entrance and exit keys while preserving typography keys");
+        }
+        const auto animated_value_at = [&motion_controller](
+            const QString& parameter, double seconds) {
+          motion_controller.seekSequenceSeconds(seconds);
+          return motion_controller.currentClip().value(parameter).toDouble();
+        };
+        if (!nearly_equal(animated_value_at(QStringLiteral("opacity"), 0.0), 0.0) ||
+            !nearly_equal(animated_value_at(QStringLiteral("opacity"), 1.5), 1.0) ||
+            !nearly_equal(animated_value_at(QStringLiteral("opacity"), 2.999), 0.0, 0.01)) {
+          return fail("title motion opacity should evaluate at its entrance, midpoint, and exit");
+        }
+        if (motion_preset == QStringLiteral("title-pop") &&
+            (!nearly_equal(animated_value_at(QStringLiteral("frameScale"), 0.0), 1.18) ||
+             !nearly_equal(animated_value_at(QStringLiteral("frameScale"), 1.5), 1.0) ||
+             !nearly_equal(animated_value_at(QStringLiteral("frameScale"), 2.999), 1.08))) {
+          return fail("title pop should keep its editable scale overshoot through the full duration");
+        }
+        if (motion_preset == QStringLiteral("title-rise") &&
+            (!nearly_equal(animated_value_at(QStringLiteral("frameOffsetY"), 0.0), 0.20) ||
+             !nearly_equal(animated_value_at(QStringLiteral("frameOffsetY"), 1.5), 0.0) ||
+             !nearly_equal(animated_value_at(QStringLiteral("frameOffsetY"), 2.999), -0.12, 0.01))) {
+          return fail("title rise should keep its editable vertical motion through the full duration");
+        }
+        if (motion_preset == QStringLiteral("title-slide-from-left") &&
+            (!nearly_equal(animated_value_at(QStringLiteral("titlePositionX"), 0.0), 0.26) ||
+             !nearly_equal(animated_value_at(QStringLiteral("titlePositionX"), 1.5), 0.5) ||
+             !nearly_equal(animated_value_at(QStringLiteral("titlePositionX"), 2.999), 0.62, 0.01))) {
+          return fail("slide from left should animate the editable title anchor through its entrance and exit");
+        }
+        motion_controller.undo();
+        if (motion_controller.currentClip().value(QStringLiteral("keyframes")).toList() !=
+            keyframes_before_preset) {
+          return fail("a title motion preset should undo in one step without touching prior animation");
+        }
+        motion_controller.redo();
+        if (motion_controller.currentClip().value(QStringLiteral("keyframes")).toList() !=
+            preset_keyframes) {
+          return fail("redo should restore every generated title motion keyframe");
+        }
+
+        if (!motion_controller.saveTimeline(true)) {
+          return fail("each title motion preset should save through the normal document path");
+        }
+        const auto motion_job_id = QStringLiteral("timeline-render-%1")
+                                       .arg(motion_controller.timelineAssetId().section(':', 1));
+        if (!wait_for_persisted_job(motion_job_id)) {
+          return fail("title motion should render through the saved timeline render path");
+        }
+        TimelineDocumentController reopened_motion_controller;
+        if (!reopened_motion_controller.loadTimeline(motion_controller.savedDocumentPath())) {
+          return fail("a saved title motion should reopen");
+        }
+        auto reopened_motion_clip_index = -1;
+        const auto reopened_motion_clips = reopened_motion_controller.clips();
+        for (int index = 0; index < reopened_motion_clips.size(); ++index) {
+          const auto clip = reopened_motion_clips.at(index).toMap();
+          if (clip.value(QStringLiteral("mediaType")).toString() == QStringLiteral("title") &&
+              clip.value(QStringLiteral("titleText")).toString() == QStringLiteral("GO")) {
+            reopened_motion_clip_index = index;
+            break;
+          }
+        }
+        if (reopened_motion_clip_index < 0) {
+          return fail("the reopened motion fixture should contain its generated title");
+        }
+        reopened_motion_controller.selectClip(reopened_motion_clip_index);
+        reopened_motion_controller.seekSequenceSeconds(1.5);
+        const auto reopened_motion = reopened_motion_controller.currentClip();
+        if (!nearly_equal(reopened_motion.value(QStringLiteral("opacity")).toDouble(), 1.0) ||
+            reopened_motion.value(QStringLiteral("keyframes")).toList() != preset_keyframes) {
+          return fail("title motion curves and evaluated midpoint should survive save and reopen");
+        }
+        const auto title_start_signal = title_motion_sample_signal(
+            motion_controller.savedRenderPath(), 0.12, format_size);
+        const auto title_midpoint_signal = title_motion_sample_signal(
+            motion_controller.savedRenderPath(), 1.50, format_size);
+        const auto title_end_signal = title_motion_sample_signal(
+            motion_controller.savedRenderPath(), 2.88, format_size);
+        if (title_start_signal < 0.0 || title_midpoint_signal < 0.0 || title_end_signal < 0.0 ||
+            title_midpoint_signal < title_start_signal + 1.0 ||
+            title_midpoint_signal < title_end_signal + 1.0) {
+          return fail("rendered title motion should be visible at midpoint and recede at entrance and exit");
+        }
+      }
     }
 
     TimelineDocumentController caption_controller;
@@ -7952,7 +10906,7 @@ int main(int argc, char** argv) {
         !caption_controller.mergeSelectedCaptionWithNext() || caption_count() != 2) {
       return fail("caption clips should support split, merge, and undo timing edits");
     }
-    if (!caption_controller.saveTimeline()) {
+    if (!caption_controller.saveTimeline(true)) {
       return fail("caption fixture should save and enqueue a burn-in render");
     }
     if (!caption_controller.exportCaptionSidecar(QStringLiteral("srt")) ||
@@ -8951,7 +11905,7 @@ int main(int argc, char** argv) {
             .value(QStringLiteral("opacity")).toDouble() <= 0.80) {
       return fail("Program preview should evaluate the custom Bezier curve before export");
     }
-    if (!keyframe_render_controller.saveTimeline()) {
+    if (!keyframe_render_controller.saveTimeline(true)) {
       return fail("saving a keyframed render should succeed");
     }
     const auto keyframe_render_job_id = QStringLiteral("timeline-render-%1").arg(
@@ -9093,16 +12047,33 @@ int main(int argc, char** argv) {
     render_controller.setSequenceMarkerStatus(render_marker_id, QStringLiteral("exported"));
     render_controller.setSequenceMarkerCompleted(render_marker_id, true);
 
-    if (!render_controller.saveTimeline()) {
+    if (!render_controller.saveTimeline(true)) {
       return fail("saving a rendered timeline should succeed when ffmpeg is available");
     }
 
+    render_controller.setSequenceMarkerNote(render_marker_id, QStringLiteral("Saved while rendering"));
+    if (!render_controller.saveTimeline())
+      return fail("Newer project edits should save independently of the queued render");
+    QFile newer_document_file(render_controller.savedDocumentPath());
+    if (!newer_document_file.open(QIODevice::ReadOnly))
+      return fail("The newer saved project should be readable before render completion");
+    const auto newer_document_bytes = newer_document_file.readAll();
+    newer_document_file.close();
     const auto render_job_id =
         QStringLiteral("timeline-render-%1").arg(render_controller.timelineAssetId().section(':', 1));
     if (!wait_for_persisted_job(render_job_id)) {
       return fail("queued timeline renders should complete through the shared job runner");
     }
 
+    if (!newer_document_file.open(QIODevice::ReadOnly) || newer_document_file.readAll() != newer_document_bytes)
+      return fail("Render completion must leave newer canonical edits byte for byte intact");
+    newer_document_file.close();
+    const auto completed_records = photo_editor::desktop::loadTimelineAssetRecords();
+    const auto completed_record = std::find_if(completed_records.cbegin(), completed_records.cend(), [&](const auto& record) {
+      return record.asset_id == render_controller.timelineAssetId();
+    });
+    if (completed_record == completed_records.cend() || completed_record->document_path != render_controller.savedDocumentPath())
+      return fail("Render completion must keep the editable canonical project in the library index");
     if (!QFileInfo::exists(render_controller.savedDocumentPath()) ||
         !QFileInfo::exists(render_controller.savedRenderPath())) {
       return fail("saving a timeline should persist both the document and rendered video");
@@ -9177,7 +12148,8 @@ int main(int argc, char** argv) {
     if (!saved_document.open(QIODevice::ReadOnly)) {
       return fail("saved timeline documents should be readable");
     }
-    const auto saved_json = QJsonDocument::fromJson(saved_document.readAll()).object();
+    const auto saved_document_bytes = saved_document.readAll();
+    const auto saved_json = QJsonDocument::fromJson(saved_document_bytes).object();
     if (saved_json.value(QStringLiteral("tracks")).toArray().size() != 2) {
       return fail("saved timelines should persist their track-based sequence layout");
     }
@@ -9248,7 +12220,7 @@ int main(int argc, char** argv) {
       return fail("loading a saved timeline should preserve extended clip and marker state");
     }
     const auto loaded_marker = load_controller.sequenceMarkers().at(0).toMap();
-    if (loaded_marker.value(QStringLiteral("note")).toString() != QStringLiteral("Render-ready") ||
+    if (loaded_marker.value(QStringLiteral("note")).toString() != QStringLiteral("Saved while rendering") ||
         loaded_marker.value(QStringLiteral("status")).toString() != QStringLiteral("exported") ||
         !loaded_marker.value(QStringLiteral("completed")).toBool()) {
       return fail("loading a saved timeline should preserve marker review metadata");
@@ -9274,6 +12246,15 @@ int main(int argc, char** argv) {
         recovery_controller.clipCount() != 2 ||
         recovery_controller.sequenceMarkers().size() != 1) {
       return fail("timeline recovery should restore timeline state from the persisted backup");
+    }
+    // Later project-cache inspection reads every document referenced by the
+    // cumulative test index, so restore this deliberately missing document
+    // once its backup-recovery fallback has been verified.
+    QSaveFile restored_saved_document(render_controller.savedDocumentPath());
+    if (!restored_saved_document.open(QIODevice::WriteOnly) ||
+        restored_saved_document.write(saved_document_bytes) != saved_document_bytes.size() ||
+        !restored_saved_document.commit()) {
+      return fail("the backup-recovery fixture should restore its indexed canonical document");
     }
 
     TimelineDocumentController short_form_controller;

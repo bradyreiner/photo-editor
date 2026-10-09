@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "." as Components
 
 Item {
     id: root
@@ -18,6 +19,62 @@ Item {
     readonly property string displayFont: themeObject.fontDisplay
     readonly property string uiFont: themeObject.fontUi
     readonly property int page: dialog.currentPage
+    readonly property var sessionController: dialog.sessionController || null
+    readonly property bool sessionFlowAvailable: sessionController !== null && sessionController !== undefined
+    readonly property bool failureDetailsOpen: sessionFlowAvailable && sessionTerminal.failureDetailsOpen
+    property bool inspirationEntryFocusRetryScheduled: false
+
+    Timer {
+        id: inspirationEntryFocusRetryTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            root.inspirationEntryFocusRetryScheduled = false
+            if (root.page !== 1)
+                return
+            let firstCard = null
+            if (presetSuggestionList.visible && presetSuggestionList.count > 0)
+                firstCard = presetSuggestionList.itemAtIndex(0)
+            if (!firstCard && photoSuggestionList.visible && photoSuggestionList.count > 0)
+                firstCard = photoSuggestionList.itemAtIndex(0)
+            if (firstCard && firstCard.visible && firstCard.width > 0 && firstCard.height > 0)
+                firstCard.forceActiveFocus(Qt.TabFocusReason)
+        }
+    }
+
+    function focusPageEntry() {
+        if (sessionFlowAvailable) {
+            sessionTerminal.focusPageEntry()
+            return
+        }
+        if (page === 0) {
+            promptEditor.forceActiveFocus(Qt.TabFocusReason)
+            return
+        }
+        if (page === 1) {
+            let firstCard = null
+            if (presetSuggestionList.visible && presetSuggestionList.count > 0)
+                firstCard = presetSuggestionList.itemAtIndex(0)
+            if (!firstCard && photoSuggestionList.visible && photoSuggestionList.count > 0)
+                firstCard = photoSuggestionList.itemAtIndex(0)
+            if (firstCard && firstCard.visible && firstCard.width > 0 && firstCard.height > 0) {
+                root.inspirationEntryFocusRetryScheduled = false
+                firstCard.forceActiveFocus(Qt.TabFocusReason)
+                return
+            }
+            changePromptButton.forceActiveFocus(Qt.TabFocusReason)
+            const suggestionsAvailable =
+                (presetSuggestionList.visible && presetSuggestionList.count > 0) ||
+                (photoSuggestionList.visible && photoSuggestionList.count > 0)
+            if (suggestionsAvailable && !root.inspirationEntryFocusRetryScheduled) {
+                root.inspirationEntryFocusRetryScheduled = true
+                inspirationEntryFocusRetryTimer.restart()
+            }
+            return
+        }
+        if (page === 2 && cancelRunButton.visible)
+            cancelRunButton.forceActiveFocus(Qt.TabFocusReason)
+    }
 
     function presetSuggestions() {
         return (dialog.inspirationSuggestions || []).filter(function(item) {
@@ -65,10 +122,31 @@ Item {
         id: button
         property bool primary: false
         property bool selected: false
-        implicitHeight: 44
+        property bool compact: false
+        property string accessibleLabel: ""
+        property string tooltipText: ""
+        property string disabledReason: ""
+        readonly property string resolvedAccessibleName: String(button.accessibleLabel || button.text || "").trim()
+        readonly property string resolvedAccessibleDescription: !button.enabled && button.disabledReason.length > 0
+                                                                  ? button.disabledReason
+                                                                  : button.tooltipText
+        implicitHeight: compact ? 32 : 44
         implicitWidth: Math.max(118, buttonLabel.implicitWidth + 34)
-        leftPadding: 17
-        rightPadding: 17
+        leftPadding: compact ? 10 : 17
+        rightPadding: compact ? 10 : 17
+        activeFocusOnTab: true
+        hoverEnabled: true
+        Accessible.name: resolvedAccessibleName
+        Accessible.description: resolvedAccessibleDescription
+        Accessible.role: Accessible.Button
+
+        AppToolTip {
+            targetItem: button
+            followPointer: true
+            visible: button.hovered && button.resolvedAccessibleDescription.length > 0
+            delay: 250
+            text: button.resolvedAccessibleDescription
+        }
 
         background: Rectangle {
             radius: 12
@@ -78,8 +156,8 @@ Item {
                      ? root.themeObject.alpha(root.primaryAccent, button.hovered ? 0.30 : 0.22)
                    : (button.hovered ? root.themeObject.alpha(root.paper, 0.16)
                                      : root.themeObject.alpha(root.paper, 0.09))
-            border.width: button.selected ? 1 : 0
-            border.color: root.themeObject.alpha(root.primaryAccent, 0.72)
+            border.width: button.visualFocus ? 2 : button.selected ? 1 : 0
+            border.color: button.visualFocus ? root.paper : root.themeObject.alpha(root.primaryAccent, 0.72)
             opacity: button.enabled ? 1 : 0.42
             Behavior on color { ColorAnimation { duration: 120 } }
         }
@@ -211,27 +289,17 @@ Item {
     }
 
     ColumnLayout {
+        visible: !root.sessionFlowAvailable
         anchors.fill: parent
-        spacing: 16
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 212
-            Layout.minimumHeight: 212
-            Layout.maximumHeight: 212
+            Layout.preferredHeight: root.width < 480 ? 48 : 78
+            Layout.minimumHeight: root.width < 480 ? 48 : 78
+            Layout.maximumHeight: root.width < 480 ? 48 : 78
             spacing: 18
 
-            LooksyAgentCharacter {
-                objectName: "agentCharacterDirection"
-                Layout.preferredWidth: 204
-                Layout.preferredHeight: 204
-                Layout.alignment: Qt.AlignVCenter
-                mode: root.dialog.agentVisualMode()
-                tool: root.dialog.agentVisualTool()
-                talking: root.dialog.visible
-                celebrating: root.dialog.editCommitted
-                accentColor: root.primaryAccent
-            }
 
             Rectangle {
                 Layout.fillWidth: true
@@ -251,13 +319,14 @@ Item {
                         text: root.pageTitle()
                         color: root.paper
                         font.family: root.displayFont
-                        font.pixelSize: 25
+                        font.pixelSize: root.width < 480 ? 21 : 25
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
                     }
 
                     Label {
                         Layout.fillWidth: true
+                        visible: root.width >= 480
                         text: root.pageDetail()
                         color: root.themeObject.alpha(root.paper, 0.62)
                         font.family: root.uiFont
@@ -278,15 +347,15 @@ Item {
             Item {
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 204
+                    anchors.leftMargin: 4
                     anchors.rightMargin: 4
                     anchors.topMargin: 8
                     anchors.bottomMargin: 4
-                    spacing: 14
+                    spacing: 8
 
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 54
+                        Layout.preferredHeight: root.width < 480 ? 38 : 54
                         color: "transparent"
 
                         Rectangle {
@@ -344,20 +413,122 @@ Item {
                         }
                     }
 
+                    Label {
+                        text: "YOUR GOAL"
+                        color: root.themeObject.alpha(root.paper, 0.54)
+                        font.family: root.themeObject.fontMono
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.5
+                        font.weight: Font.DemiBold
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: root.width < 480 ? 96 : 120
+                        Layout.maximumHeight: root.width < 480 ? 96 : 120
+                        Layout.preferredHeight: root.width < 480 ? 96 : 120
+                        radius: 20
+                        color: root.themeObject.alpha(root.paper, 0.075)
+                        border.width: promptEditor.activeFocus || root.dialog.directionError.length > 0 ? 1 : 0
+                        border.color: root.dialog.directionError.length > 0 ? root.themeObject.error
+                                                                                : root.themeObject.alpha(root.paper, 0.36)
+
+                        ScrollView {
+                            id: promptScroll
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            clip: true
+                            contentWidth: availableWidth
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                        ToneTextArea {
+                            id: promptEditor
+                            objectName: "agentPromptEditor"
+                            accessibleLabel: "AI edit instructions"
+                            width: promptScroll.availableWidth
+                            height: Math.max(promptScroll.availableHeight, contentHeight + topPadding + bottomPadding)
+                            text: root.dialog.hasController()
+                                  ? String(root.dialog.agentEditController.userInstructions || "") : ""
+                            placeholderText: "Make the afternoon feel quiet and cinematic. Keep the skin natural, lift the shadows, and crop for a stronger portrait…"
+                            placeholderTextColor: root.themeObject.alpha(root.paper, 0.34)
+                            color: root.paper
+                            selectionColor: root.primaryAccent
+                            selectedTextColor: root.paper
+                            font.family: root.uiFont
+                            font.pixelSize: 17
+                            wrapMode: TextEdit.Wrap
+                            background: Item {}
+                            onTextChanged: {
+                                if (root.dialog.hasController())
+                                    root.dialog.agentEditController.userInstructions = text
+                                root.dialog.directionError = ""
+                            }
+                            Keys.priority: Keys.BeforeItem
+                            Keys.onPressed: function(event) {
+                                if (event.key === Qt.Key_Escape && !root.dialog.agentRunning()) {
+                                    root.dialog.close()
+                                    event.accepted = true
+                                }
+                            }
+                        }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Label {
+                            objectName: "agentScopeRiskMessage"
+                            Layout.fillWidth: true
+                            text: root.dialog.directionError.length > 0
+                                  ? root.dialog.directionError
+                                  : root.dialog.batchForecastLabel()
+                            color: root.dialog.directionError.length > 0 ? root.themeObject.error
+                                                                         : root.themeObject.alpha(root.paper, 0.50)
+                            font.family: root.uiFont
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            Accessible.description: root.dialog.batchForecastExplanation()
+                        }
+
+                        SoftButton {
+                            id: detailsButton
+                            objectName: "agentDetailsToggle"
+                            text: root.dialog.detailsExpanded ? "Hide Details" : "Details"
+                            onClicked: root.dialog.setDetailsExpanded(!root.dialog.detailsExpanded)
+                        }
+
+                        SoftButton {
+                            objectName: "agentAddInspirationButton"
+                            visible: root.dialog.detailsExpanded
+                            text: "Add inspiration"
+                            enabled: promptEditor.text.trim().length > 0
+                            onClicked: root.dialog.preparePromptSuggestions()
+                        }
+
+                        SoftButton {
+                            objectName: "agentPrimaryCreateDraftButton"
+                            text: root.dialog.runButtonLabel()
+                            primary: true
+                            enabled: root.dialog.directionReady()
+                            onClicked: root.dialog.triggerPrimaryDirectionAction()
+                        }
+                    }
+
                     Rectangle {
                         id: styleStartCard
                         objectName: "agentStyleStartCard"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 110
+                        Layout.preferredHeight: root.dialog.detailsExpanded ? 76 : 110
                         color: "transparent"
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 14
-                            anchors.rightMargin: 14
-                            anchors.topMargin: 10
-                            anchors.bottomMargin: 10
-                            spacing: 8
+                            anchors.leftMargin: root.dialog.detailsExpanded ? 10 : 14
+                            anchors.rightMargin: root.dialog.detailsExpanded ? 10 : 14
+                            anchors.topMargin: root.dialog.detailsExpanded ? 4 : 10
+                            anchors.bottomMargin: root.dialog.detailsExpanded ? 4 : 10
+                            spacing: root.dialog.detailsExpanded ? 4 : 8
 
                             RowLayout {
                                 Layout.fillWidth: true
@@ -409,6 +580,7 @@ Item {
                                 SoftButton {
                                     objectName: "agentLearnLookFromEditsButton"
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: root.dialog.detailsExpanded ? 36 : 44
                                     text: "Learn from edits"
                                     onClicked: root.dialog.showEditedLooks()
                                 }
@@ -416,6 +588,7 @@ Item {
                                 SoftButton {
                                     objectName: "agentDescribeLookButton"
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: root.dialog.detailsExpanded ? 36 : 44
                                     text: "Make this my look"
                                     enabled: promptEditor.text.trim().length >= 4
                                     onClicked: root.dialog.saveWordsAsLook()
@@ -424,6 +597,7 @@ Item {
                                 SoftButton {
                                     objectName: "agentBuiltInLooksButton"
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: root.dialog.detailsExpanded ? 36 : 44
                                     text: "Built-in looks"
                                     onClicked: root.dialog.showBuiltInLooks()
                                 }
@@ -518,7 +692,7 @@ Item {
                         id: detailsPanel
                         objectName: "agentDetailsPanel"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: root.dialog.detailsExpanded ? 210 : 0
+                        Layout.preferredHeight: root.dialog.detailsExpanded ? 180 : 0
                         visible: root.dialog.detailsExpanded
                         radius: 16
                         color: root.themeObject.alpha(root.paper, 0.065)
@@ -724,109 +898,15 @@ Item {
                         }
                     }
 
-                    Label {
-                        text: "YOUR GOAL"
-                        color: root.themeObject.alpha(root.paper, 0.54)
-                        font.family: root.themeObject.fontMono
-                        font.pixelSize: 10
-                        font.letterSpacing: 1.5
-                        font.weight: Font.DemiBold
-                    }
+                    Item { Layout.fillHeight: true }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        radius: 20
-                        color: root.themeObject.alpha(root.paper, 0.075)
-                        border.width: promptEditor.activeFocus || root.dialog.directionError.length > 0 ? 1 : 0
-                        border.color: root.dialog.directionError.length > 0 ? root.themeObject.error
-                                                                                : root.themeObject.alpha(root.paper, 0.36)
-
-                        Label {
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: 18
-                            visible: promptEditor.text.length === 0
-                            text: "Make the afternoon feel quiet and cinematic. Keep the skin natural, lift the shadows, and crop for a stronger portrait…"
-                            color: root.themeObject.alpha(root.paper, 0.34)
-                            font.family: root.uiFont
-                            font.pixelSize: 17
-                            lineHeight: 1.25
-                            wrapMode: Text.WordWrap
-                        }
-
-                        TextArea {
-                            id: promptEditor
-                            objectName: "agentPromptEditor"
-                            anchors.fill: parent
-                            anchors.margins: 18
-                            text: root.dialog.hasController()
-                                  ? String(root.dialog.agentEditController.userInstructions || "") : ""
-                            placeholderText: "Make the afternoon feel quiet and cinematic. Keep the skin natural, lift the shadows, and crop for a stronger portrait…"
-                            placeholderTextColor: root.themeObject.alpha(root.paper, 0.34)
-                            color: root.paper
-                            selectionColor: root.primaryAccent
-                            selectedTextColor: root.paper
-                            font.family: root.uiFont
-                            font.pixelSize: 17
-                            wrapMode: TextEdit.Wrap
-                            background: Item {}
-                            onTextChanged: {
-                                if (root.dialog.hasController())
-                                    root.dialog.agentEditController.userInstructions = text
-                                root.dialog.directionError = ""
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Label {
-                            objectName: "agentScopeRiskMessage"
-                            Layout.fillWidth: true
-                            text: root.dialog.directionError.length > 0
-                                  ? root.dialog.directionError
-                                  : root.dialog.batchForecastLabel()
-                            color: root.dialog.directionError.length > 0 ? root.themeObject.error
-                                                                         : root.themeObject.alpha(root.paper, 0.50)
-                            font.family: root.uiFont
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                            Accessible.description: root.dialog.batchForecastExplanation()
-                        }
-
-                        SoftButton {
-                            id: detailsButton
-                            objectName: "agentDetailsToggle"
-                            text: root.dialog.detailsExpanded ? "Hide Details" : "Details"
-                            onClicked: root.dialog.setDetailsExpanded(!root.dialog.detailsExpanded)
-                        }
-
-                        SoftButton {
-                            objectName: "agentAddInspirationButton"
-                            visible: root.dialog.detailsExpanded
-                            text: "Add inspiration"
-                            enabled: promptEditor.text.trim().length > 0
-                            onClicked: root.dialog.preparePromptSuggestions()
-                        }
-
-                        SoftButton {
-                            objectName: "agentPrimaryCreateDraftButton"
-                            text: root.dialog.runButtonLabel()
-                            primary: true
-                            enabled: root.dialog.directionReady()
-                            onClicked: root.dialog.triggerPrimaryDirectionAction()
-                        }
-                    }
                 }
             }
 
             Item {
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 32
+                    anchors.leftMargin: 4
                     anchors.rightMargin: 4
                     anchors.topMargin: 2
                     anchors.bottomMargin: 4
@@ -842,18 +922,15 @@ Item {
                             font.pixelSize: 10
                             font.letterSpacing: 0.8
                         }
-                        Button {
+                        SoftButton {
                             id: changePromptButton
+                            objectName: "agentChangePromptButton"
                             text: "Change prompt"
-                            flat: true
+                            accessibleLabel: "Change AI edit prompt"
+                            tooltipText: "Return to the prompt and change the edit instructions."
+                            compact: true
+                            implicitWidth: 126
                             onClicked: root.dialog.setPage(0)
-                            contentItem: Label {
-                                text: changePromptButton.text
-                                color: root.themeObject.alpha(root.paper, 0.74)
-                                font.family: root.uiFont
-                                font.pixelSize: 11
-                                horizontalAlignment: Text.AlignHCenter
-                            }
                         }
                     }
 
@@ -868,8 +945,9 @@ Item {
                     }
 
                     ListView {
+                        id: presetSuggestionList
                         Layout.fillWidth: true
-                        Layout.preferredHeight: visible ? 172 : 0
+                        Layout.preferredHeight: visible ? 140 : 0
                         visible: root.dialog.styleStartMode !== "learn"
                         orientation: ListView.Horizontal
                         spacing: 10
@@ -879,13 +957,13 @@ Item {
                             required property var modelData
                             suggestion: modelData
                             width: 228
-                            height: 172
+                            height: 140
                             onChosen: root.dialog.toggleSuggestion(suggestion)
                         }
                     }
 
                     Label {
-                        visible: root.dialog.styleStartMode !== "built-in"
+                        visible: root.dialog.styleStartMode !== "built-in" && root.photoSuggestions().length > 0
                         text: "OPTIONAL PHOTO REFERENCES"
                         color: root.themeObject.alpha(root.paper, 0.76)
                         font.family: root.themeObject.fontMono
@@ -895,10 +973,11 @@ Item {
                     }
 
                     ListView {
+                        id: photoSuggestionList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         Layout.minimumHeight: visible ? 148 : 0
-                        visible: root.dialog.styleStartMode !== "built-in"
+                        visible: root.dialog.styleStartMode !== "built-in" && root.photoSuggestions().length > 0
                         orientation: ListView.Horizontal
                         spacing: 10
                         clip: true
@@ -947,8 +1026,8 @@ Item {
             Item {
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 32
-                    anchors.rightMargin: 32
+                    anchors.leftMargin: 4
+                    anchors.rightMargin: 4
                     anchors.topMargin: 8
                     anchors.bottomMargin: 8
                     spacing: 16
@@ -957,16 +1036,6 @@ Item {
                         Layout.fillWidth: true
                         spacing: 18
 
-                        LooksyAgentCharacter {
-                            objectName: "agentCharacterWorking"
-                            Layout.preferredWidth: 176
-                            Layout.preferredHeight: 176
-                            mode: root.dialog.agentVisualMode()
-                            tool: root.dialog.agentVisualTool()
-                            talking: root.dialog.agentRunning()
-                            celebrating: root.dialog.editCommitted
-                            accentColor: root.primaryAccent
-                        }
 
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -1018,6 +1087,7 @@ Item {
                         }
 
                         SoftButton {
+                            id: cancelRunButton
                             objectName: "agentCancelRunButton"
                             text: "Stop"
                             visible: root.dialog.agentRunning()
@@ -1147,7 +1217,7 @@ Item {
                                 objectName: "agentLiveActivityTimeline"
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                Layout.minimumWidth: 310
+                                Layout.minimumWidth: 0
                                 clip: true
                                 spacing: 8
                                 model: root.dialog.runEvents().slice(-8).reverse()
@@ -1224,7 +1294,7 @@ Item {
                     id: reviewPage
                     objectName: "aiEditReviewPageColumn"
                     anchors.fill: parent
-                    anchors.leftMargin: 32
+                    anchors.leftMargin: 4
                     anchors.rightMargin: 4
                     anchors.topMargin: 4
                     anchors.bottomMargin: 4
@@ -1325,7 +1395,7 @@ Item {
                         readonly property string consistencyContract:
                             "agent-professional-consistency-map-v1|basis:within-lighting-group-relative-render-response|metrics:tone-contrast-color-skin|ordering:stable|thresholds:fixed|digest:sha256"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: visible ? 96 : 0
+                        Layout.preferredHeight: visible ? 188 : 0
                         visible: !root.dialog.sampleReviewWaiting() &&
                                  Boolean(root.dialog.consistencyMap().available)
                         radius: 16
@@ -1335,16 +1405,14 @@ Item {
                                       ? root.themeObject.alpha(root.primaryAccent, 0.52)
                                       : root.themeObject.alpha(root.themeObject.success, 0.44)
 
-                        RowLayout {
+                        ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 12
                             spacing: 14
 
                             ColumnLayout {
-                                Layout.preferredWidth: 285
-                                Layout.minimumWidth: 285
-                                Layout.maximumWidth: 285
-                                Layout.fillHeight: true
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 65
                                 spacing: 2
 
                                 Label {
@@ -1380,8 +1448,8 @@ Item {
                             }
 
                             Rectangle {
-                                Layout.preferredWidth: 1
-                                Layout.fillHeight: true
+                                Layout.preferredHeight: 1
+                                Layout.fillWidth: true
                                 color: root.themeObject.alpha(root.paper, 0.10)
                             }
 
@@ -1389,7 +1457,7 @@ Item {
                                 id: consistencyGroupList
                                 objectName: "aiEditConsistencyGroupList"
                                 Layout.fillWidth: true
-                                Layout.minimumWidth: 500
+                                Layout.minimumWidth: 0
                                 Layout.fillHeight: true
                                 orientation: ListView.Horizontal
                                 layoutDirection: Qt.LeftToRight
@@ -1907,8 +1975,8 @@ Item {
 
                                         Rectangle {
                                             objectName: "aiEditStorySampleNavigator"
-                                            Layout.preferredWidth: 94
-                                            Layout.preferredHeight: 29
+                                            Layout.preferredWidth: 104
+                                            Layout.preferredHeight: 32
                                             visible: root.dialog.sampleReviewWaiting() &&
                                                      root.dialog.reviewSamples().length > 1
                                             radius: 8
@@ -1920,32 +1988,18 @@ Item {
                                                 anchors.fill: parent
                                                 spacing: 0
 
-                                                Button {
+                                                Components.ToolButton {
                                                     id: previousStorySampleButton
                                                     objectName: "aiEditStoryPreviousSample"
-                                                    Layout.preferredWidth: 28
+                                                    Layout.preferredWidth: 32
                                                     Layout.fillHeight: true
                                                     enabled: root.dialog.canShowPreviousSample()
-                                                    text: "‹"
+                                                    label: "Previous sample"
+                                                    iconText: "‹"
+                                                    accent: root.primaryAccent
+                                                    compact: true
+                                                    showLabel: false
                                                     onClicked: root.dialog.showPreviousSample()
-
-                                                    background: Rectangle {
-                                                        radius: 7
-                                                        color: previousStorySampleButton.down
-                                                               ? root.themeObject.alpha(root.paper, 0.12)
-                                                               : "transparent"
-                                                    }
-
-                                                    contentItem: Label {
-                                                        text: previousStorySampleButton.text
-                                                        color: previousStorySampleButton.enabled
-                                                               ? root.paper
-                                                               : root.themeObject.alpha(root.paper, 0.24)
-                                                        font.family: root.uiFont
-                                                        font.pixelSize: 17
-                                                        horizontalAlignment: Text.AlignHCenter
-                                                        verticalAlignment: Text.AlignVCenter
-                                                    }
                                                 }
 
                                                 Label {
@@ -1960,65 +2014,35 @@ Item {
                                                     verticalAlignment: Text.AlignVCenter
                                                 }
 
-                                                Button {
+                                                Components.ToolButton {
                                                     id: nextStorySampleButton
                                                     objectName: "aiEditStoryNextSample"
-                                                    Layout.preferredWidth: 28
+                                                    Layout.preferredWidth: 32
                                                     Layout.fillHeight: true
                                                     enabled: root.dialog.canShowNextSample()
-                                                    text: "›"
+                                                    label: "Next sample"
+                                                    iconText: "›"
+                                                    accent: root.primaryAccent
+                                                    compact: true
+                                                    showLabel: false
                                                     onClicked: root.dialog.showNextSample()
-
-                                                    background: Rectangle {
-                                                        radius: 7
-                                                        color: nextStorySampleButton.down
-                                                               ? root.themeObject.alpha(root.paper, 0.12)
-                                                               : "transparent"
-                                                    }
-
-                                                    contentItem: Label {
-                                                        text: nextStorySampleButton.text
-                                                        color: nextStorySampleButton.enabled
-                                                               ? root.paper
-                                                               : root.themeObject.alpha(root.paper, 0.24)
-                                                        font.family: root.uiFont
-                                                        font.pixelSize: 17
-                                                        horizontalAlignment: Text.AlignHCenter
-                                                        verticalAlignment: Text.AlignVCenter
-                                                    }
                                                 }
                                             }
                                         }
 
-                                        Button {
+                                        SoftButton {
                                             id: storyRoleButton
                                             objectName: "aiEditAssignmentStoryRoleButton"
-                                            Layout.preferredHeight: 29
+                                            Layout.preferredHeight: 32
                                             Layout.preferredWidth: 152
                                             visible: root.dialog.canDirectShownStoryRole()
                                             text: "Shown · " + root.dialog.assignmentStoryRoleLabel(
                                                       root.dialog.shownStoryRole()) + "  ▾"
-                                            font.family: root.uiFont
-                                            font.pixelSize: 10
-                                            font.weight: Font.DemiBold
+                                            accessibleLabel: "Choose shown story role"
+                                            tooltipText: "Choose which reviewed image represents this story role."
+                                            compact: true
+                                            selected: storyRolePopup.visible
                                             onClicked: storyRolePopup.open()
-
-                                            background: Rectangle {
-                                                radius: 8
-                                                color: storyRoleButton.down || storyRolePopup.visible
-                                                       ? root.themeObject.alpha(root.primaryAccent, 0.38)
-                                                       : root.themeObject.alpha(root.primaryAccent, 0.22)
-                                                border.width: 1
-                                                border.color: root.themeObject.alpha(root.primaryAccent, 0.58)
-                                            }
-
-                                            contentItem: Label {
-                                                text: storyRoleButton.text
-                                                color: root.paper
-                                                font: storyRoleButton.font
-                                                horizontalAlignment: Text.AlignHCenter
-                                                verticalAlignment: Text.AlignVCenter
-                                            }
                                         }
 
                                         SoftButton {
@@ -2075,6 +2099,13 @@ Item {
                                                         objectName: "aiEditStoryRole" +
                                                                     String(modelData.label || "") +
                                                                     "Action"
+                                                        Accessible.role: Accessible.RadioButton
+                                                        Accessible.name: String(modelData.label || roleValue)
+                                                        Accessible.description: String(modelData.detail || "") +
+                                                                               (currentRole
+                                                                                ? " " + qsTr("Current selection.")
+                                                                                : "")
+                                                        Accessible.checked: currentRole
                                                         width: storyRoleMenuColumn.width
                                                         height: 43
                                                         enabled: root.dialog.canAssignShownStoryRole(
@@ -2183,13 +2214,12 @@ Item {
                                         radius: 15
                                         color: root.primaryAccent
 
-                                        Label {
+                                        AppIcon {
                                             anchors.centerIn: parent
-                                            text: "✓"
+                                            name: "check"
                                             color: root.paper
-                                            font.family: root.uiFont
-                                            font.pixelSize: 15
-                                            font.weight: Font.Bold
+                                            width: 15
+                                            height: width
                                         }
                                     }
 
@@ -2363,9 +2393,10 @@ Item {
                             anchors.margins: 12
                             spacing: 10
 
-                            TextArea {
+                            ToneTextArea {
                                 id: alternativeDirectionEditor
                                 objectName: "aiEditAlternativeDirectionEditor"
+                                accessibleLabel: "Alternative edit direction"
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 text: root.dialog.alternativeDirectionText
@@ -2407,9 +2438,10 @@ Item {
                             anchors.margins: 12
                             spacing: 10
 
-                            TextArea {
+                            ToneTextArea {
                                 id: sampleFeedbackEditor
                                 objectName: "aiEditSampleFeedbackEditor"
+                                accessibleLabel: "Feedback on reviewed samples"
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 text: root.dialog.sampleFeedback
@@ -2435,9 +2467,11 @@ Item {
                         }
                     }
 
-                    RowLayout {
+                    GridLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        columns: root.width < 700 ? 2 : 4
+                        columnSpacing: 10
+                        rowSpacing: 8
 
                         SoftButton {
                             objectName: "aiEditDiscardDraftButton"
@@ -2480,8 +2514,6 @@ Item {
                             }
                         }
 
-                        Item { Layout.fillWidth: true }
-
                         SoftButton {
                             objectName: "aiEditPrimaryReviewButton"
                             visible: !root.dialog.revisionExpanded &&
@@ -2509,5 +2541,14 @@ Item {
                 }
             }
         }
+    }
+
+    AgentSessionTerminal {
+        id: sessionTerminal
+        anchors.fill: parent
+        visible: root.sessionFlowAvailable
+        dialog: root.dialog
+        themeObject: root.themeObject
+        sessionController: root.sessionController
     }
 }

@@ -19,6 +19,7 @@ GlassSurface {
     signal toggleCollapseRequested()
     signal tabChangeRequested(string tab)
     signal mediaPickerRequested()
+    signal importWorkspaceRequested()
     signal batchRelinkRequested()
     signal mediaDragMoved(var payload, real sceneX, real sceneY)
     signal mediaDragDropped(var payload, real sceneX, real sceneY)
@@ -37,6 +38,7 @@ GlassSurface {
     property string mediaTagsDraft: ""
     property var takeComparisonAssets: []
     property bool takeComparisonPlaying: false
+    property bool sourceFrameAvailable: false
     property var mediaUsageAnalysis: ({"summary": ({}), "items": []})
     property string mediaUsageFilter: "all"
     property string mediaUsageCanonicalAssetId: ""
@@ -44,6 +46,7 @@ GlassSurface {
     property var mediaInspectorTechnical: ({})
     property string mediaInspectorNotesDraft: ""
     property string mediaInspectorCustomFieldsDraft: ""
+    property string mediaInspectorApplyStatus: ""
     property string smartCollectionEditingId: ""
     property string smartCollectionNameDraft: ""
     property string smartCollectionMediaTypeDraft: "any"
@@ -81,17 +84,25 @@ GlassSurface {
     readonly property real sourceOutSecondsValue: documentController !== null ? Number(documentController.sourceOutSeconds || 0) : 0
     readonly property real framesPerSecondValue: documentController !== null ? Number(documentController.framesPerSecond || 30) : 30
     readonly property int assetCountValue: assetCatalog !== null ? Number(assetCatalog.assetCount || 0) : 0
+    readonly property int totalAssetCountValue: assetCatalog !== null ? Number(assetCatalog.totalAssetCount || 0) : 0
+    readonly property var mediaBinsModel: documentController ? documentController.mediaBins : []
+    readonly property var selectedMediaAssetValue: selectedMediaAssetIds.length === 1
+                                                    ? catalogAssetForId(selectedMediaAssetIds[0]) : ({})
+    readonly property string selectedMediaTitleValue: String(
+        selectedMediaAssetValue.cameraLabel || selectedMediaAssetValue.displayLabel
+        || selectedMediaAssetValue.assetId || "Media")
+    readonly property bool selectedMediaOnlineValue: selectedMediaAssetValue.online === true
     readonly property int mediaFilmstripSampleCount: mediaFilmstripDensity === "compact" ? 5
                                                        : mediaFilmstripDensity === "detailed" ? 15 : 9
-    readonly property string timelineSourcePanelStyleContract: "timeline-source-panel-style:v1|surface:shared|tabs:filter-chip|media-well:semantic|type:shared|spacing:shared|transport:shared|states:empty-disabled-offline|layout:video-editor-preserved"
-    readonly property string timelineUnifiedMediaSearchContract: "timeline-unified-media-search:v1|one-field:filename-metadata-tags-transcript-captions-markers-on-screen-text|filters:all-and-composable-scopes|quoted-phrases:true|results:matched-scope|default-density:query-contextual"
+    readonly property string timelineSourcePanelStyleContract: "timeline-source-panel-style:v2|surface:shared|tabs:filter-chip|media-well:semantic|type:shared|spacing:shared|transport:shared|states:empty-disabled-offline|layout:video-editor-preserved|pool:search-filter-browse-selection-actions"
+    readonly property string timelineUnifiedMediaSearchContract: "timeline-unified-media-search:v2|one-field:filename-metadata-tags-transcript-captions-markers-on-screen-text|fields:search-menu-composable|filters:bin-plus-smart-collection|quoted-phrases:true|results:matched-scope|default-density:query-contextual"
     readonly property string timelineMediaHoverScrubContract: "timeline-media-hover-scrub:v1|pointer:debounced-80ms|density:compact-5-standard-9-detailed-15|decode:ffmpeg-384x216-single-frame|queue:latest-per-asset-bounded-24|cache:bounded-240-files-96mb|full-resolution-per-move:false|ui:hover-contextual"
     readonly property string timelineTakeComparisonContract: "timeline-take-comparison:v1|selection:2-to-8|view:contact-sheet|playback:synchronized-normalized-drift-correction|audio:leader-only|rating:controller-owned|choice:load-source|ui:modular-contextual"
     readonly property string timelineMediaUsageContract: "timeline-media-usage-ui:v1|categories:used-unused-duplicate-offline-derivative|reveal:timeline-or-catalog|remove:unused-confirmed|consolidate:explicit-canonical-verified-group-confirmed|state:controller-undo-redo-save-reopen|ui:view-menu-modular-filtered"
     readonly property string timelineSourceTapeContract: "timeline-source-tape:v1|scope:active-bin-and-search|reel:continuous-up-to-1000-online-media|identity:per-asset|marks:per-asset-preserved|navigation:previous-next-auto-advance|source:existing-monitor-and-edit-actions|exit:current-source-retained|sequence-mutation:none"
     readonly property string timelineProgramSourceGangContract: "timeline-source-program-gang:v1|direction:program-to-source-and-source-to-program|mapping:clip-trim-rate-and-retime-curve|playback:program-master-source-muted|gap:honest-retain-last-source|match-frame:exact-active-picture|ui:single-direct-link-toggle-and-monitor-disclosure|document-mutation:none"
     readonly property string timelineMediaMetadataInspectorContract: "timeline-media-metadata-inspector:v1|technical:codec-resolution-frame-rate-color-space-audio-channels-camera-date|editable:notes-custom-fields|probe:explicit-contextual|state:undo-redo-save-reopen|ui:single-selection-modular"
-    readonly property string timelineSmartCollectionsContract: "timeline-smart-collections:v1|rules:media-type-rating-label-tag-date-duration-orientation-offline-usage-custom-field|logic:all-rules-live|state:create-edit-delete-undo-redo-save-reopen|filter:bin-search-composable|ui:view-menu-modular"
+    readonly property string timelineSmartCollectionsContract: "timeline-smart-collections:v1|rules:media-type-rating-label-tag-date-duration-orientation-offline-usage-custom-field|logic:all-rules-live|state:create-edit-delete-undo-redo-save-reopen|filter:bin-search-composable|ui:direct-filter-plus-browse-manager"
 
     readonly property bool hasSource: hasSourceClipValue
                                       && sourceState.mediaType !== undefined
@@ -124,6 +135,8 @@ GlassSurface {
             return sourceState.posterSource || ""
         if (sourceState.mediaType === "audio")
             return (sourceState.waveformSource && sourceState.waveformSource.length > 0) ? sourceState.waveformSource : (sourceState.posterSource || "")
+        if (sourceState.mediaType === "video")
+            return sourceState.posterSource || ""
         return ""
     }
 
@@ -175,15 +188,166 @@ GlassSurface {
         tabChangeRequested("source")
     }
 
+    function insertSelectedMediaAtPlayhead() {
+        if (!documentController || selectedMediaAssetIds.length !== 1
+                || !selectedMediaOnlineValue)
+            return
+        const asset = selectedMediaAssetValue
+        const assetId = String(asset.assetId || "")
+        const filePath = String(asset.filePath || "")
+        if (assetId.length === 0 || filePath.length === 0)
+            return
+        documentController.insertClipFromGallery(
+                    assetId, filePath, selectedMediaTitleValue, 0, 0, 0,
+                    String(asset.thumbnailSource || asset.posterSource || ""))
+    }
+
+    function previewSelectedMediaInSource() {
+        if (!documentController || selectedMediaAssetIds.length !== 1
+                || !selectedMediaOnlineValue)
+            return
+        const asset = selectedMediaAssetValue
+        loadIntoSource(String(asset.assetId || ""), String(asset.filePath || ""),
+                       selectedMediaTitleValue,
+                       String(asset.thumbnailSource || asset.posterSource || ""))
+    }
+
     function mediaBinName(binId) {
         if (!binId || !documentController)
             return "All Media"
-        const bins = documentController.mediaBins || []
+        const bins = mediaBinsModel || []
         for (let index = 0; index < bins.length; ++index) {
             if (String(bins[index].binId) === String(binId))
                 return String(bins[index].name)
         }
         return "All Media"
+    }
+
+    function mediaPoolScopeLabel() {
+        if (!documentController)
+            return "All Media"
+        const binId = String(documentController.activeMediaBinId || "")
+        const collectionId = String(documentController.activeSmartCollectionId || "")
+        if (binId.length > 0 && collectionId.length > 0)
+            return mediaBinName(binId) + " · " + smartCollectionName(collectionId)
+        if (collectionId.length > 0)
+            return "Collection · " + smartCollectionName(collectionId)
+        return binId.length > 0 ? "Bin · " + mediaBinName(binId) : "All Media"
+    }
+
+    function mediaPoolFilterMenuItems() {
+        const items = [{
+            "key": "scope:all",
+            "label": "All Media",
+            "icon": "folder",
+            "checked": !documentController
+                       || (String(documentController.activeMediaBinId || "").length === 0
+                           && String(documentController.activeSmartCollectionId || "").length === 0),
+            "tooltip": "Clear both filters and show media across the whole library."
+        }]
+        const bins = mediaBinsModel || []
+        for (let index = 0; index < bins.length; ++index) {
+            const bin = bins[index] || ({})
+            const binId = String(bin.binId || "")
+            if (binId.length === 0)
+                continue
+            const depth = Math.max(0, Math.min(4, Number(bin.depth || 0)))
+            items.push({
+                "key": "scope:bin:" + binId,
+                "label": "Bin · " + "  ".repeat(depth) + String(bin.name || "Bin"),
+                "icon": "folder",
+                "separatorBefore": index === 0,
+                "checked": documentController
+                           && String(documentController.activeMediaBinId || "") === binId
+            })
+        }
+        const collections = documentController ? documentController.smartCollections : []
+        for (let index = 0; index < collections.length; ++index) {
+            const collection = collections[index] || ({})
+            const collectionId = String(collection.collectionId || "")
+            if (collectionId.length === 0)
+                continue
+            items.push({
+                "key": "scope:collection:" + collectionId,
+                "label": "Collection · " + String(collection.name || "Smart Collection"),
+                "icon": "filter",
+                "separatorBefore": index === 0,
+                "checked": String(documentController.activeSmartCollectionId || "") === collectionId
+            })
+        }
+        return items
+    }
+
+    function applyMediaPoolFilter(key) {
+        if (!documentController)
+            return
+        const normalized = String(key || "")
+        if (normalized === "scope:all") {
+            documentController.activeMediaBinId = ""
+            documentController.activeSmartCollectionId = ""
+        } else if (normalized.indexOf("scope:bin:") === 0) {
+            const binId = normalized.slice(10)
+            documentController.activeMediaBinId =
+                    String(documentController.activeMediaBinId || "") === binId ? "" : binId
+        } else if (normalized.indexOf("scope:collection:") === 0) {
+            const collectionId = normalized.slice(17)
+            documentController.activeSmartCollectionId =
+                    String(documentController.activeSmartCollectionId || "") === collectionId
+                    ? "" : collectionId
+        }
+    }
+
+    function mediaSearchScopeMenuItems() {
+        const scopes = [
+            { "key": "all", "label": "All fields", "icon": "search" },
+            { "key": "filename", "label": "Filename", "icon": "media" },
+            { "key": "metadata", "label": "Metadata", "icon": "info" },
+            { "key": "tags", "label": "Tags", "icon": "filter" },
+            { "key": "transcript", "label": "Transcript", "icon": "audio" },
+            { "key": "captions", "label": "Captions", "icon": "text" },
+            { "key": "markers", "label": "Markers", "icon": "mark-in" },
+            { "key": "text", "label": "On-screen text", "icon": "text" }
+        ]
+        for (let index = 0; index < scopes.length; ++index)
+            scopes[index].checked = mediaSearchScopes.indexOf(scopes[index].key) >= 0
+        return scopes
+    }
+
+    function mediaPoolBrowseMenuItems() {
+        return [
+            { "key": "density:compact", "label": "Compact previews · 5 frames",
+              "checked": mediaFilmstripDensity === "compact", "icon": "density" },
+            { "key": "density:standard", "label": "Standard previews · 9 frames",
+              "checked": mediaFilmstripDensity === "standard", "icon": "density" },
+            { "key": "density:detailed", "label": "Detailed previews · 15 frames",
+              "checked": mediaFilmstripDensity === "detailed", "icon": "density" },
+            { "key": "manage-bins", "label": "Manage Bins…", "icon": "folder",
+              "separatorBefore": true },
+            { "key": "smart-collections", "label": "Manage Smart Collections…", "icon": "filter" },
+            { "key": "source-tape", "label": "Review as Source Tape", "icon": "play",
+              "separatorBefore": true,
+              "enabled": assetCountValue > 0,
+              "disabledReason": "Import media before starting a source tape." },
+            { "key": "usage", "label": "Analyze Media Usage", "icon": "info",
+              "enabled": assetCountValue > 0,
+              "disabledReason": "Import media before analyzing usage." }
+        ]
+    }
+
+    function handleMediaPoolBrowseAction(key) {
+        const normalized = String(key || "")
+        if (normalized.indexOf("density:") === 0) {
+            mediaFilmstripDensity = normalized.slice(8)
+        } else if (normalized === "manage-bins") {
+            mediaBinsPopup.open()
+        } else if (normalized === "smart-collections") {
+            resetSmartCollectionDraft()
+            smartCollectionsPopup.open()
+        } else if (normalized === "source-tape") {
+            openSourceTape()
+        } else if (normalized === "usage") {
+            openMediaUsageAnalysis()
+        }
     }
 
     function createMediaBin(parentBinId) {
@@ -252,6 +416,7 @@ GlassSurface {
         mediaInspectorAsset = asset
         mediaInspectorNotesDraft = String(editorial.notes || "")
         mediaInspectorCustomFieldsDraft = customFieldsText(editorial.customFields || ({}))
+        mediaInspectorApplyStatus = ""
         mediaInspectorTechnical = documentController.inspectMediaAssetTechnicalMetadata(asset)
         mediaMetadataInspectorPopup.open()
     }
@@ -283,6 +448,53 @@ GlassSurface {
                 ? String(metadata.audioSampleRate) + " Hz" : "Sample rate not reported"
         return metadataDisplay(metadata.audioCodec, "Codec not reported").toUpperCase()
                 + "  ·  " + channels + "  ·  " + rate
+    }
+
+    function technicalColorMetadataTagSummary() {
+        const metadata = mediaInspectorTechnical || ({})
+        const streamTags = metadata.streamColorMetadataTags || ({})
+        const formatTags = metadata.formatColorMetadataTags || ({})
+        const values = []
+        const streamKeys = Object.keys(streamTags)
+        const formatKeys = Object.keys(formatTags)
+        for (let index = 0; index < streamKeys.length; ++index)
+            values.push("stream " + streamKeys[index] + "=" + String(streamTags[streamKeys[index]]))
+        for (let index = 0; index < formatKeys.length; ++index)
+            values.push("file " + formatKeys[index] + "=" + String(formatTags[formatKeys[index]]))
+        return values.join("  ·  ")
+    }
+
+    function hasTechnicalColorMetadataTags() {
+        const metadata = mediaInspectorTechnical || ({})
+        return Object.keys(metadata.streamColorMetadataTags || ({})).length > 0
+                || Object.keys(metadata.formatColorMetadataTags || ({})).length > 0
+    }
+
+    function sourceColorTransformName(transform) {
+        const profile = String(transform || "")
+        if (profile === "slog2-sgamut")
+            return "Sony S-Log2 / S-Gamut → Rec.709"
+        if (profile === "slog3-sgamut3")
+            return "Sony S-Log3 / S-Gamut3 → Rec.709"
+        if (profile === "slog3-sgamut3-cine")
+            return "Sony S-Log3 / S-Gamut3.Cine → Rec.709"
+        return ""
+    }
+
+    function canApplySourceColorSuggestion() {
+        const profile = String(mediaInspectorTechnical.suggestedVideoInputTransform || "")
+        const clip = documentController ? (documentController.currentClip || ({})) : ({})
+        return profile.length > 0 && clip.selected === true
+                && clip.mediaType === "video"
+                && String(clip.assetId || "") === String(mediaInspectorAsset.assetId || "")
+    }
+
+    function applySourceColorSuggestion() {
+        if (!canApplySourceColorSuggestion())
+            return
+        const profile = String(mediaInspectorTechnical.suggestedVideoInputTransform || "")
+        if (documentController.setSelectedClipVideoInputTransform(profile))
+            mediaInspectorApplyStatus = "Applied to the selected timeline clip. This edit supports Undo."
     }
 
     function smartCollectionName(collectionId) {
@@ -571,22 +783,41 @@ GlassSurface {
 
     MediaPlayer {
         id: sourcePreviewPlayer
+        objectName: "timelineSourcePreviewPlayer"
         audioOutput: sourcePreviewAudio
         videoOutput: sourceVideoMonitor
+        onSourceChanged: root.sourceFrameAvailable = false
 
-        onPositionChanged: root.previewSeconds = position / 1000
-        onPlaybackStateChanged: {
-            if (playbackState !== MediaPlayer.PlayingState && root.hasSourceClipValue)
-                root.previewSeconds = position / 1000
+        onPositionChanged: function(position) {
+            root.previewSeconds = position / 1000
         }
-        onMediaStatusChanged: {
+        onPlaybackStateChanged: function(playbackState) {
+            if (playbackState !== MediaPlayer.PlayingState && root.hasSourceClipValue)
+                root.previewSeconds = sourcePreviewPlayer.position / 1000
+        }
+        onMediaStatusChanged: function(mediaStatus) {
             if (mediaStatus === MediaPlayer.EndOfMedia && root.sourceTapeEnabledValue) {
                 const continuePlayback = root.sourceTapeAutoAdvance
                 if (root.documentController.stepSourceTape(1) && continuePlayback)
-                    Qt.callLater(function() { sourcePreviewPlayer.play() })
+                    Qt.callLater(function() { if (root.visible) sourcePreviewPlayer.play() })
                 else
                     root.sourceTapeAutoAdvance = false
             }
+        }
+    }
+
+    onVisibleChanged: {
+        if (!visible) {
+            sourceTapeAutoAdvance = false
+            sourcePreviewPlayer.pause()
+        }
+    }
+
+    Connections {
+        target: sourceVideoMonitor.videoSink
+        function onVideoFrameChanged() {
+            const size = sourceVideoMonitor.videoSink.videoSize
+            root.sourceFrameAvailable = size.width > 0 && size.height > 0
         }
     }
 
@@ -641,7 +872,7 @@ GlassSurface {
 
             Label {
                 visible: !collapsed
-                text: "Source"
+                text: "Source & Media"
                 color: theme.textStrong
                 font.family: theme.fontUi
                 font.pixelSize: theme.typeControl
@@ -724,519 +955,546 @@ GlassSurface {
 
             ActionButton {
                 objectName: "timelineImportMediaButton"
-                visible: activeTab === "media"
+                visible: activeTab === "media" && root.assetCountValue > 0
                 text: "Import"
                 iconName: "plus"
                 compact: true
                 tooltipText: "Import media into the library"
                 tone: "neutral"
-                onClicked: mediaPickerRequested()
+                onClicked: importWorkspaceRequested()
             }
         }
 
-        ScrollView {
-            id: sourceEditorScroll
-            objectName: "timelineSourceEditorScroll"
+        Item {
             visible: !collapsed && activeTab === "source"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            contentWidth: availableWidth
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            ScrollBar.vertical: ScrollBar {
-                id: sourceEditorVerticalBar
-                policy: ScrollBar.AsNeeded
-            }
+            Layout.minimumWidth: 0
+            Layout.minimumHeight: 0
+            implicitWidth: 1
+            implicitHeight: 1
 
-            Rectangle {
-                width: sourceEditorScroll.availableWidth
-                height: implicitHeight
-                radius: 0
-                color: "transparent"
-                border.width: 0
-                implicitHeight: sourceEditorBody.implicitHeight + theme.panelPaddingCompact * 2
+            ScrollView {
+                id: sourceEditorScroll
+                anchors.fill: parent
+                objectName: "timelineSourceEditorScroll"
+                clip: true
+                contentWidth: Math.max(0, availableWidth
+                                        - (sourceEditorVerticalBar.visible
+                                           ? sourceEditorVerticalBar.width : 0))
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical: ScrollBar {
+                    id: sourceEditorVerticalBar
+                    policy: ScrollBar.AlwaysOn
+                    visible: sourceEditorScroll.contentItem
+                             && sourceEditorScroll.contentItem.contentHeight
+                                > sourceEditorScroll.contentItem.height + 1
+                    interactive: true
+                    Accessible.name: "Scroll Source monitor controls"
+                }
 
-                ColumnLayout {
-                    id: sourceEditorBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: theme.panelPaddingCompact
-                    spacing: theme.gapDense
+                Rectangle {
+                    width: Math.max(0, sourceEditorScroll.availableWidth
+                                    - (sourceEditorVerticalBar.visible
+                                       ? sourceEditorVerticalBar.width : 0))
+                    height: implicitHeight
+                    radius: 0
+                    color: "transparent"
+                    border.width: 0
+                    implicitHeight: sourceEditorBody.implicitHeight + theme.panelPaddingCompact * 2
 
-                    RowLayout {
-                        visible: root.sourceTapeEnabledValue
-                        Layout.fillWidth: true
-                        spacing: theme.space4
+                    ColumnLayout {
+                        id: sourceEditorBody
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: theme.panelPaddingCompact
+                        spacing: theme.gapDense
 
-                        Rectangle {
-                            objectName: "timelineSourceTapeBar"
+                        RowLayout {
                             visible: root.sourceTapeEnabledValue
                             Layout.fillWidth: true
-                            implicitHeight: sourceTapeBarRow.implicitHeight + theme.space8
-                            radius: theme.radius6
-                            color: theme.alpha(theme.ink800, 0.72)
-                            border.width: 0
+                            spacing: theme.space4
 
-                            RowLayout {
-                                id: sourceTapeBarRow
-                                anchors.fill: parent
-                                anchors.margins: theme.space4
-                                spacing: theme.space4
-
-                                ActionButton {
-                                    objectName: "timelineSourceTapePreviousButton"
-                                    iconName: "step-back"
-                                    showText: false
-                                    compact: true
-                                    enabled: root.sourceTapeIndexValue > 0
-                                    tooltipText: "Previous Source Tape item"
-                                    onClicked: root.documentController.stepSourceTape(-1)
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "SOURCE TAPE  " + String(root.sourceTapeIndexValue + 1)
-                                          + " / " + String(root.sourceTapeItemsValue.length)
-                                    color: theme.textStrong
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeCaption
-                                    font.weight: Font.DemiBold
-                                }
-
-                                ActionButton {
-                                    objectName: "timelineSourceTapeNextButton"
-                                    iconName: "step-forward"
-                                    showText: false
-                                    compact: true
-                                    enabled: root.sourceTapeIndexValue + 1 < root.sourceTapeItemsValue.length
-                                    tooltipText: "Next Source Tape item"
-                                    onClicked: root.documentController.stepSourceTape(1)
-                                }
-
-                                ActionButton {
-                                    objectName: "timelineSourceTapeExitButton"
-                                    text: "Exit"
-                                    compact: true
-                                    onClicked: {
-                                        root.sourceTapeAutoAdvance = false
-                                        root.documentController.clearSourceTape()
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: theme.space4
-
-                        Label {
-                            objectName: "timelineSourceTitleLabel"
-                            text: root.hasSource && sourceState.displayLabel ? sourceState.displayLabel : "Source Monitor"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: theme.typeBody
-                            font.weight: Font.Medium
-                            maximumLineCount: 1
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
-                            ToolTip.visible: sourceTitleHover.hovered && truncated
-                            ToolTip.text: text
-
-                            HoverHandler {
-                                id: sourceTitleHover
-                                enabled: parent.truncated
-                            }
-                        }
-
-                        StatusChip {
-                            objectName: "timelineSourceAnalyzingState"
-                            visible: root.sourceAnalysisPending
-                            text: sourceState.mediaAnalysisStatus === "queued" ? "QUEUED" : "ANALYZING"
-                            tone: "neutral"
-                            minimumReadableWidth: 64
-                            maximumReadableWidth: 82
-                            tooltipText: "Duration, audio presence, dimensions, and poster are resolving in the background."
-                        }
-
-                        ActionButton {
-                            objectName: "timelineSourceProgramGangButton"
-                            iconName: "link"
-                            showText: false
-                            compact: true
-                            active: root.programGangEnabled
-                            enabled: root.documentController !== null
-                                     && Number(root.documentController.totalDurationSeconds || 0) > 0
-                            disabledReason: "Add picture media to Program before ganging the monitors."
-                            tooltipText: root.programGangEnabled
-                                         ? "Ungang Source and Program monitors"
-                                         : "Gang Source to the exact Program frame"
-                            onClicked: root.programGangToggleRequested(!root.programGangEnabled)
-                        }
-
-                        Label {
-                            text: timecodeText(previewSeconds)
-                            color: theme.accentWarm300
-                            font.family: theme.fontMono
-                            font.pixelSize: root.width < 320 ? theme.typeMicro : theme.typeCaption
-                            Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
-                            Layout.rightMargin: sourceEditorVerticalBar.visible
-                                                ? sourceEditorVerticalBar.width + theme.space4
-                                                : 0
-                            Layout.minimumWidth: theme.scaled(96)
-                            Layout.preferredWidth: theme.scaled(96)
-                            horizontalAlignment: Text.AlignRight
-                            Accessible.name: "Source timecode " + text
-                            Accessible.role: Accessible.StaticText
-                        }
-                    }
-
-                    Rectangle {
-                        objectName: "timelineSourceMonitor"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: root.hasSource
-                                                && Number(sourceState.sourceWidth || 0) > 0
-                                                && Number(sourceState.sourceHeight || 0) > 0
-                                                ? Math.max(140, Math.min(
-                                                    240,
-                                                    width * Number(sourceState.sourceHeight)
-                                                    / Number(sourceState.sourceWidth)))
-                                                : 166
-                        radius: theme.radiusSurface
-                        color: theme.mediaCanvas
-                        clip: true
-
-                        VideoOutput {
-                            id: sourceVideoMonitor
-                            objectName: "timelineSourceVideoOutput"
-                            anchors.fill: parent
-                            anchors.margins: theme.panelPaddingCompact
-                            visible: root.sourceUsesPlayer() && root.hasSource && sourceState.mediaType === "video"
-                            fillMode: VideoOutput.PreserveAspectFit
-                        }
-
-                        Image {
-                            objectName: "timelineSourcePosterImage"
-                            anchors.fill: parent
-                            anchors.margins: theme.panelPaddingCompact
-                            source: root.sourcePreviewImage()
-                            fillMode: Image.PreserveAspectFit
-                            visible: root.hasSource && source.length > 0 && !root.sourceUsesPlayer()
-                            cache: false
-                            asynchronous: true
-                        }
-
-                        ColumnLayout {
-                            anchors.centerIn: parent
-                            visible: !root.hasSourceClipValue
-                            width: Math.min(parent.width - theme.space24, theme.scaled(220))
-                            spacing: theme.space8
-
-                            Label {
+                            Rectangle {
+                                objectName: "timelineSourceTapeBar"
+                                visible: root.sourceTapeEnabledValue
                                 Layout.fillWidth: true
-                                text: "Choose media to preview and mark"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: theme.typeBody
-                                horizontalAlignment: Text.AlignHCenter
-                                wrapMode: Text.Wrap
-                            }
-
-                            ActionButton {
-                                objectName: "timelineSourceEmptyBrowseButton"
-                                Layout.alignment: Qt.AlignHCenter
-                                text: "Browse Media"
-                                iconName: "media"
-                                compact: true
-                                tooltipText: "Choose an existing library clip or import a new one."
-                                onClicked: root.tabChangeRequested("media")
-                            }
-                        }
-
-                        Rectangle {
-                            objectName: "timelineSourceProgramGangOverlay"
-                            visible: root.programGangEnabled
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.margins: theme.space8
-                            width: Math.min(parent.width - theme.space16, gangOverlayContent.implicitWidth + theme.space16)
-                            height: gangOverlayContent.implicitHeight + theme.space10
-                            radius: theme.radius4
-                            color: theme.alpha(theme.ink950, 0.86)
-                            border.width: 0
-
-                            ColumnLayout {
-                                id: gangOverlayContent
-                                anchors.fill: parent
-                                anchors.margins: theme.space6
-                                spacing: theme.space2
+                                implicitHeight: sourceTapeBarRow.implicitHeight + theme.space8
+                                radius: theme.radius6
+                                color: theme.alpha(theme.ink800, 0.72)
+                                border.width: 0
 
                                 RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: theme.space6
+                                    id: sourceTapeBarRow
+                                    anchors.fill: parent
+                                    anchors.margins: theme.space4
+                                    spacing: theme.space4
 
-                                    StatusChip {
-                                        objectName: "timelineSourceProgramGangStatus"
-                                        text: root.programGangState.matched === true ? "GANGED" : "NO MATCH"
-                                        tone: root.programGangState.matched === true ? "success" : "warning"
+                                    ActionButton {
+                                        objectName: "timelineSourceTapePreviousButton"
+                                        iconName: "step-back"
+                                        showText: false
                                         compact: true
-                                        tooltipText: String(root.programGangState.status || "Program frame is not matched")
+                                        enabled: root.sourceTapeIndexValue > 0
+                                        tooltipText: "Previous Source Tape item"
+                                        onClicked: root.documentController.stepSourceTape(-1)
                                     }
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: String(root.programGangState.status || "Waiting for Program")
+                                        text: "SOURCE TAPE  " + String(root.sourceTapeIndexValue + 1)
+                                              + " / " + String(root.sourceTapeItemsValue.length)
                                         color: theme.textStrong
-                                        font.family: theme.fontUi
+                                        font.family: theme.fontMono
+                                        font.pixelSize: theme.typeCaption
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineSourceTapeNextButton"
+                                        iconName: "step-forward"
+                                        showText: false
+                                        compact: true
+                                        enabled: root.sourceTapeIndexValue + 1 < root.sourceTapeItemsValue.length
+                                        tooltipText: "Next Source Tape item"
+                                        onClicked: root.documentController.stepSourceTape(1)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "timelineSourceTapeExitButton"
+                                        text: "Exit"
+                                        compact: true
+                                        onClicked: {
+                                            root.sourceTapeAutoAdvance = false
+                                            root.documentController.clearSourceTape()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space4
+
+                            Label {
+                                objectName: "timelineSourceTitleLabel"
+                                text: root.hasSource && sourceState.displayLabel ? sourceState.displayLabel : "Source Monitor"
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeBody
+                                font.weight: Font.Medium
+                                maximumLineCount: 1
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                                Layout.minimumWidth: 0
+                                Accessible.name: root.hasSource
+                                               ? "Source media: " + String(sourceState.displayLabel || "Media")
+                                               : "Source monitor"
+                                Accessible.role: Accessible.StaticText
+                                ToolTip.visible: sourceTitleHover.hovered && truncated
+                                ToolTip.text: text
+
+                                HoverHandler {
+                                    id: sourceTitleHover
+                                    enabled: parent.truncated
+                                }
+                            }
+
+                            StatusChip {
+                                objectName: "timelineSourceAnalyzingState"
+                                visible: root.sourceAnalysisPending
+                                text: sourceState.mediaAnalysisStatus === "queued" ? "QUEUED" : "ANALYZING"
+                                tone: "neutral"
+                                minimumReadableWidth: 64
+                                maximumReadableWidth: 82
+                                tooltipText: "Duration, audio presence, dimensions, and poster are resolving in the background."
+                            }
+
+                            ActionButton {
+                                objectName: "timelineSourceProgramGangButton"
+                                iconName: "link"
+                                showText: false
+                                compact: true
+                                active: root.programGangEnabled
+                                enabled: root.documentController !== null
+                                         && Number(root.documentController.totalDurationSeconds || 0) > 0
+                                disabledReason: "Add picture media to Program before ganging the monitors."
+                                tooltipText: root.programGangEnabled
+                                             ? "Ungang Source and Program monitors"
+                                             : "Gang Source to the exact Program frame"
+                                onClicked: root.programGangToggleRequested(!root.programGangEnabled)
+                            }
+
+                            Label {
+                                visible: root.hasSourceClipValue
+                                text: timecodeText(previewSeconds)
+                                color: theme.accentWarm300
+                                font.family: theme.fontMono
+                                font.pixelSize: root.width < 320 ? theme.typeMicro : theme.typeCaption
+                                Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                                Layout.rightMargin: 0
+                                Layout.minimumWidth: theme.scaled(96)
+                                Layout.preferredWidth: theme.scaled(96)
+                                horizontalAlignment: Text.AlignRight
+                                Accessible.name: "Source timecode " + text
+                                Accessible.role: Accessible.StaticText
+                            }
+                        }
+
+                        Rectangle {
+                            objectName: "timelineSourceMonitor"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: root.hasSource
+                                                    && Number(sourceState.sourceWidth || 0) > 0
+                                                    && Number(sourceState.sourceHeight || 0) > 0
+                                                    ? Math.max(140, Math.min(
+                                                        240,
+                                                        width * Number(sourceState.sourceHeight)
+                                                        / Number(sourceState.sourceWidth)))
+                                                    : theme.scaled(96)
+                            radius: theme.radiusSurface
+                            color: theme.mediaCanvas
+                            clip: true
+
+                            VideoOutput {
+                                id: sourceVideoMonitor
+                                objectName: "timelineSourceVideoOutput"
+                                anchors.fill: parent
+                                anchors.margins: theme.panelPaddingCompact
+                                visible: root.sourceUsesPlayer() && root.hasSource
+                                         && sourceState.mediaType === "video" && root.sourceFrameAvailable
+                                fillMode: VideoOutput.PreserveAspectFit
+                            }
+
+                            Image {
+                                objectName: "timelineSourcePosterImage"
+                                anchors.fill: parent
+                                anchors.margins: theme.panelPaddingCompact
+                                source: root.sourcePreviewImage()
+                                fillMode: Image.PreserveAspectFit
+                                visible: root.hasSource && String(source).length > 0
+                                         && (!root.sourceUsesPlayer()
+                                             || (sourceState.mediaType === "video" && !root.sourceFrameAvailable))
+                                cache: false
+                                asynchronous: true
+                            }
+
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                visible: !root.hasSourceClipValue
+                                width: Math.min(parent.width - theme.space24, theme.scaled(220))
+                                spacing: theme.space8
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Choose media to preview and mark"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeBody
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.Wrap
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineSourceEmptyBrowseButton"
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "Browse Media"
+                                    iconName: "media"
+                                    compact: true
+                                    tooltipText: "Choose an existing library clip or import a new one."
+                                    onClicked: root.tabChangeRequested("media")
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "timelineSourceProgramGangOverlay"
+                                visible: root.programGangEnabled
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.margins: theme.space8
+                                width: Math.min(parent.width - theme.space16, gangOverlayContent.implicitWidth + theme.space16)
+                                height: gangOverlayContent.implicitHeight + theme.space10
+                                radius: theme.radius4
+                                color: theme.alpha(theme.ink950, 0.86)
+                                border.width: 0
+
+                                ColumnLayout {
+                                    id: gangOverlayContent
+                                    anchors.fill: parent
+                                    anchors.margins: theme.space6
+                                    spacing: theme.space2
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: theme.space6
+
+                                        StatusChip {
+                                            objectName: "timelineSourceProgramGangStatus"
+                                            text: root.programGangState.matched === true ? "GANGED" : "NO MATCH"
+                                            tone: root.programGangState.matched === true ? "success" : "warning"
+                                            compact: true
+                                            tooltipText: String(root.programGangState.status || "Program frame is not matched")
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(root.programGangState.status || "Waiting for Program")
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeMicro
+                                            maximumLineCount: 1
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+
+                                    Label {
+                                        objectName: "timelineSourceProgramGangTimeMap"
+                                        visible: root.programGangState.matched === true
+                                        text: "P " + root.timecodeText(root.programGangState.sequenceSeconds)
+                                              + "  ↔  S " + root.timecodeText(root.programGangState.sourceSeconds)
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
                                         font.pixelSize: theme.typeMicro
                                         maximumLineCount: 1
                                         elide: Text.ElideRight
+                                        ToolTip.visible: gangTimeMapHover.hovered
+                                        ToolTip.text: "Program " + root.timecodeText(root.programGangState.sequenceSeconds)
+                                                      + " maps to Source " + root.timecodeText(root.programGangState.sourceSeconds)
+                                                      + " at " + Number(root.programGangState.instantaneousRate || 0).toFixed(2) + "×"
+
+                                        HoverHandler { id: gangTimeMapHover }
                                     }
-                                }
-
-                                Label {
-                                    objectName: "timelineSourceProgramGangTimeMap"
-                                    visible: root.programGangState.matched === true
-                                    text: "P " + root.timecodeText(root.programGangState.sequenceSeconds)
-                                          + "  ↔  S " + root.timecodeText(root.programGangState.sourceSeconds)
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: theme.typeMicro
-                                    maximumLineCount: 1
-                                    elide: Text.ElideRight
-                                    ToolTip.visible: gangTimeMapHover.hovered
-                                    ToolTip.text: "Program " + root.timecodeText(root.programGangState.sequenceSeconds)
-                                                  + " maps to Source " + root.timecodeText(root.programGangState.sourceSeconds)
-                                                  + " at " + Number(root.programGangState.instantaneousRate || 0).toFixed(2) + "×"
-
-                                    HoverHandler { id: gangTimeMapHover }
                                 }
                             }
                         }
-                    }
 
-                    ColumnLayout {
-                        objectName: "timelineSourceTransportAndMarks"
-                        visible: root.hasSourceClipValue
-                        Layout.fillWidth: true
-                        spacing: theme.space4
+                        ColumnLayout {
+                            objectName: "timelineSourceTransportAndMarks"
+                            visible: root.hasSourceClipValue
+                            Layout.fillWidth: true
+                            spacing: theme.space4
+
+                            RowLayout {
+                                objectName: "timelineSourceFrameTransport"
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: theme.gapDense
+
+                                ActionButton {
+                                    objectName: "timelineSourceStepBackButton"
+                                    iconName: "step-back"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Previous source frame"
+                                    enabled: root.hasSourceClipValue
+                                    disabledReason: "Load a clip into Source to step frames."
+                                    onClicked: root.seekSource(root.previewSeconds - 1 / Math.max(1, root.framesPerSecondValue), true)
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineSourcePlayButton"
+                                    iconName: root.programGangEnabled
+                                              ? (root.programPlaying ? "pause" : "play")
+                                              : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "pause" : "play")
+                                    showText: false
+                                    compact: true
+                                    tooltipText: root.programGangEnabled
+                                                 ? (root.programPlaying ? "Pause ganged Program" : "Play ganged Program")
+                                                 : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause source" : "Play source")
+                                    enabled: root.hasSourceClipValue
+                                    disabledReason: "Load a clip into Source to use playback."
+                                    onClicked: {
+                                        if (root.programGangEnabled) {
+                                            root.gangedPlaybackToggleRequested()
+                                            return
+                                        }
+                                        if (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState) {
+                                            root.sourceTapeAutoAdvance = false
+                                            sourcePreviewPlayer.pause()
+                                        } else {
+                                            root.sourceTapeAutoAdvance = root.sourceTapeEnabledValue
+                                            sourcePreviewPlayer.play()
+                                        }
+                                    }
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineSourceStepForwardButton"
+                                    iconName: "step-forward"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Step forward one frame"
+                                    enabled: root.hasSourceClipValue
+                                    disabledReason: "Load a clip into Source to step frames."
+                                    onClicked: root.seekSource(root.previewSeconds + 1 / Math.max(1, root.framesPerSecondValue), true)
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "timelineSourceMarkControls"
+                                Layout.fillWidth: true
+                                spacing: theme.gapDense
+
+                                ActionButton {
+                                    objectName: "timelineSourceMarkInButton"
+                                    Layout.fillWidth: true
+                                    text: "Mark In"
+                                    iconName: "mark-in"
+                                    compact: true
+                                    active: root.sourceInSecondsValue > 0.001
+                                    tooltipText: "Set mark in"
+                                    enabled: root.hasSourceClipValue
+                                    disabledReason: "Load a clip into Source to set an in point."
+                                    onClicked: if (root.documentController) root.documentController.setSourceInSeconds(root.previewSeconds)
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineSourceMarkOutButton"
+                                    Layout.fillWidth: true
+                                    text: "Mark Out"
+                                    iconName: "mark-out"
+                                    compact: true
+                                    active: root.hasSource && root.sourceOutSecondsValue
+                                            < Number(sourceState.durationSeconds || 0) - 0.001
+                                    tooltipText: "Set mark out"
+                                    enabled: root.hasSourceClipValue
+                                    disabledReason: "Load a clip into Source to set an out point."
+                                    onClicked: if (root.documentController) root.documentController.setSourceOutSeconds(root.previewSeconds)
+                                }
+                            }
+                        }
+
+                        ToolValueSlider {
+                            objectName: "timelineSourceScrubber"
+                            visible: root.hasSourceClipValue
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: theme.controlHeightTall
+                            label: "Source position"
+                            valueText: timecodeText(root.previewSeconds)
+                            tooltipText: "Scrub source · " + timecodeText(root.previewSeconds)
+                            from: 0
+                            to: root.hasSource && sourceState.durationSeconds ? sourceState.durationSeconds : 1
+                            value: root.previewSeconds
+                            enabled: root.hasSource
+                            onMoved: root.seekSource(value, true)
+                        }
+
+                        ColumnLayout {
+                            objectName: "timelineSourceMarkedRange"
+                            visible: root.hasSourceClipValue
+                            Layout.fillWidth: true
+                            spacing: theme.space4
+
+                            Label {
+                                objectName: "timelineSourceMarkedDuration"
+                                Layout.fillWidth: true
+                                text: "MARKED RANGE  ·  "
+                                      + timecodeText(Math.max(0, root.sourceOutSecondsValue - root.sourceInSecondsValue))
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: theme.typeCaption
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space6
+
+                                StatusChip {
+                                    objectName: "timelineSourceInStatus"
+                                    Layout.fillWidth: true
+                                    text: "IN  " + timecodeText(root.sourceInSecondsValue)
+                                    tone: root.sourceInSecondsValue > 0.001 ? "accent" : "neutral"
+                                    iconName: "mark-in"
+                                    compact: true
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineClearSourceInButton"
+                                    text: "Clear In"
+                                    compact: true
+                                    tooltipText: "Clear the Source In point and restore the clip start."
+                                    enabled: root.sourceInSecondsValue > 0.001
+                                    disabledReason: "The In point is already at the source start."
+                                    onClicked: if (root.documentController)
+                                                   root.documentController.clearSourceInPoint()
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space6
+
+                                StatusChip {
+                                    objectName: "timelineSourceOutStatus"
+                                    Layout.fillWidth: true
+                                    text: "OUT  " + timecodeText(root.sourceOutSecondsValue)
+                                    tone: root.hasSource && root.sourceOutSecondsValue
+                                          < Number(sourceState.durationSeconds || 0) - 0.001
+                                          ? "accent" : "neutral"
+                                    iconName: "mark-out"
+                                    compact: true
+                                }
+
+                                ActionButton {
+                                    objectName: "timelineClearSourceOutButton"
+                                    text: "Clear Out"
+                                    compact: true
+                                    tooltipText: "Clear the Source Out point and restore the clip end."
+                                    enabled: root.hasSource && root.sourceOutSecondsValue
+                                             < Number(sourceState.durationSeconds || 0) - 0.001
+                                    disabledReason: "The Out point is already at the source end."
+                                    onClicked: if (root.documentController)
+                                                   root.documentController.clearSourceOutPoint()
+                                }
+                            }
+                        }
 
                         RowLayout {
-                            objectName: "timelineSourceFrameTransport"
-                            Layout.alignment: Qt.AlignHCenter
+                            visible: root.hasSourceClipValue
+                            Layout.fillWidth: true
                             spacing: theme.gapDense
 
                             ActionButton {
-                                objectName: "timelineSourceStepBackButton"
-                                iconName: "step-back"
-                                showText: false
+                                objectName: "timelineSourceInsertButton"
+                                Layout.fillWidth: true
+                                text: "Insert at Playhead"
+                                iconName: "plus"
+                                tone: "primary"
                                 compact: true
-                                tooltipText: "Previous source frame"
-                                enabled: root.hasSourceClipValue
-                                disabledReason: "Load a clip into Source to step frames."
-                                onClicked: root.seekSource(root.previewSeconds - 1 / Math.max(1, root.framesPerSecondValue), true)
+                                enabled: root.sourceEditReady
+                                disabledReason: root.sourceEditDisabledReason("insert it")
+                                tooltipText: "Insert the marked Source range at the playhead; later clips shift on linked tracks."
+                                onClicked: if (root.documentController) root.documentController.insertSourceClipAtPlayhead()
                             }
 
-                            ActionButton {
-                                objectName: "timelineSourcePlayButton"
-                                iconName: root.programGangEnabled
-                                          ? (root.programPlaying ? "pause" : "play")
-                                          : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "pause" : "play")
-                                showText: false
+                            MenuButton {
+                                objectName: "timelineSourceEditMenu"
+                                text: "Append / Replace"
                                 compact: true
-                                tooltipText: root.programGangEnabled
-                                             ? (root.programPlaying ? "Pause ganged Program" : "Play ganged Program")
-                                             : (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause source" : "Play source")
-                                enabled: root.hasSourceClipValue
-                                disabledReason: "Load a clip into Source to use playback."
-                                onClicked: {
-                                    if (root.programGangEnabled) {
-                                        root.gangedPlaybackToggleRequested()
+                                primaryOpensMenu: true
+                                tooltipText: "Append the marked range to the end, or overwrite at the playhead."
+                                enabled: root.sourceEditReady
+                                menuItems: [
+                                    {"key": "append", "label": "Append to End", "iconName": "step-forward"},
+                                    {"key": "overwrite", "label": "Overwrite at Playhead", "iconName": "edit"}
+                                ]
+                                menuWidth: 210
+                                onMenuItemTriggered: function(key) {
+                                    if (!root.documentController)
                                         return
-                                    }
-                                    if (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState) {
-                                        root.sourceTapeAutoAdvance = false
-                                        sourcePreviewPlayer.pause()
-                                    } else {
-                                        root.sourceTapeAutoAdvance = root.sourceTapeEnabledValue
-                                        sourcePreviewPlayer.play()
-                                    }
+                                    if (key === "append")
+                                        root.documentController.appendSourceClipToTimeline()
+                                    else if (key === "overwrite")
+                                        root.documentController.overwriteSourceClipAtPlayhead()
                                 }
-                            }
-
-                            ActionButton {
-                                objectName: "timelineSourceStepForwardButton"
-                                iconName: "step-forward"
-                                showText: false
-                                compact: true
-                                tooltipText: "Step forward one frame"
-                                enabled: root.hasSourceClipValue
-                                disabledReason: "Load a clip into Source to step frames."
-                                onClicked: root.seekSource(root.previewSeconds + 1 / Math.max(1, root.framesPerSecondValue), true)
-                            }
-                        }
-
-                        RowLayout {
-                            objectName: "timelineSourceMarkControls"
-                            Layout.fillWidth: true
-                            spacing: theme.gapDense
-
-                            ActionButton {
-                                objectName: "timelineSourceMarkInButton"
-                                Layout.fillWidth: true
-                                text: "Mark In"
-                                iconName: "mark-in"
-                                compact: true
-                                active: root.sourceInSecondsValue > 0.001
-                                tooltipText: "Set mark in"
-                                enabled: root.hasSourceClipValue
-                                disabledReason: "Load a clip into Source to set an in point."
-                                onClicked: if (root.documentController) root.documentController.setSourceInSeconds(root.previewSeconds)
-                            }
-
-                            ActionButton {
-                                objectName: "timelineSourceMarkOutButton"
-                                Layout.fillWidth: true
-                                text: "Mark Out"
-                                iconName: "mark-out"
-                                compact: true
-                                active: root.hasSource && root.sourceOutSecondsValue
-                                        < Number(sourceState.durationSeconds || 0) - 0.001
-                                tooltipText: "Set mark out"
-                                enabled: root.hasSourceClipValue
-                                disabledReason: "Load a clip into Source to set an out point."
-                                onClicked: if (root.documentController) root.documentController.setSourceOutSeconds(root.previewSeconds)
-                            }
-                        }
-                    }
-
-                    ToolValueSlider {
-                        objectName: "timelineSourceScrubber"
-                        visible: root.hasSourceClipValue
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: theme.controlHeightTall
-                        label: "Source position"
-                        valueText: timecodeText(root.previewSeconds)
-                        tooltipText: "Scrub source · " + timecodeText(root.previewSeconds)
-                        from: 0
-                        to: root.hasSource && sourceState.durationSeconds ? sourceState.durationSeconds : 1
-                        value: root.previewSeconds
-                        enabled: root.hasSource
-                        onMoved: root.seekSource(value, true)
-                    }
-
-                    ColumnLayout {
-                        objectName: "timelineSourceMarkedRange"
-                        visible: root.hasSourceClipValue
-                        Layout.fillWidth: true
-                        spacing: theme.space4
-
-                        Label {
-                            objectName: "timelineSourceMarkedDuration"
-                            Layout.fillWidth: true
-                            text: "MARKED RANGE  ·  "
-                                  + timecodeText(Math.max(0, root.sourceOutSecondsValue - root.sourceInSecondsValue))
-                            color: theme.textMain
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space6
-
-                            StatusChip {
-                                objectName: "timelineSourceInStatus"
-                                Layout.fillWidth: true
-                                text: "IN  " + timecodeText(root.sourceInSecondsValue)
-                                tone: root.sourceInSecondsValue > 0.001 ? "accent" : "neutral"
-                                iconName: "mark-in"
-                                compact: true
-                            }
-
-                            ActionButton {
-                                objectName: "timelineClearSourceInButton"
-                                text: "Clear In"
-                                compact: true
-                                enabled: root.sourceInSecondsValue > 0.001
-                                disabledReason: "The In point is already at the source start."
-                                onClicked: if (root.documentController)
-                                               root.documentController.clearSourceInPoint()
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space6
-
-                            StatusChip {
-                                objectName: "timelineSourceOutStatus"
-                                Layout.fillWidth: true
-                                text: "OUT  " + timecodeText(root.sourceOutSecondsValue)
-                                tone: root.hasSource && root.sourceOutSecondsValue
-                                      < Number(sourceState.durationSeconds || 0) - 0.001
-                                      ? "accent" : "neutral"
-                                iconName: "mark-out"
-                                compact: true
-                            }
-
-                            ActionButton {
-                                objectName: "timelineClearSourceOutButton"
-                                text: "Clear Out"
-                                compact: true
-                                enabled: root.hasSource && root.sourceOutSecondsValue
-                                         < Number(sourceState.durationSeconds || 0) - 0.001
-                                disabledReason: "The Out point is already at the source end."
-                                onClicked: if (root.documentController)
-                                               root.documentController.clearSourceOutPoint()
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        visible: root.hasSourceClipValue
-                        Layout.fillWidth: true
-                        spacing: theme.gapDense
-
-                        ActionButton {
-                            objectName: "timelineSourceInsertButton"
-                            Layout.fillWidth: true
-                            text: "Insert"
-                            iconName: "plus"
-                            tone: "primary"
-                            compact: true
-                            enabled: root.sourceEditReady
-                            disabledReason: root.sourceEditDisabledReason("insert it")
-                            onClicked: if (root.documentController) root.documentController.insertSourceClipAtPlayhead()
-                        }
-
-                        MenuButton {
-                            objectName: "timelineSourceEditMenu"
-                            text: "More"
-                            compact: true
-                            primaryOpensMenu: true
-                            tooltipText: "Append or overwrite with the marked source range"
-                            enabled: root.sourceEditReady
-                            menuItems: [
-                                {"key": "append", "label": "Append to End", "iconName": "step-forward"},
-                                {"key": "overwrite", "label": "Overwrite at Playhead", "iconName": "edit"}
-                            ]
-                            menuWidth: 210
-                            onMenuItemTriggered: function(key) {
-                                if (!root.documentController)
-                                    return
-                                if (key === "append")
-                                    root.documentController.appendSourceClipToTimeline()
-                                else if (key === "overwrite")
-                                    root.documentController.overwriteSourceClipAtPlayhead()
                             }
                         }
                     }
                 }
             }
+
         }
 
         ColumnLayout {
@@ -1245,142 +1503,159 @@ GlassSurface {
             Layout.fillHeight: true
             spacing: theme.gapRelated
 
-            ToneTextField {
-                objectName: "timelineUnifiedMediaSearchField"
+            RowLayout {
+                visible: root.assetCountValue > 0
                 Layout.fillWidth: true
-                text: root.mediaSearchText
-                placeholderText: "Search filename, tags, speech, captions…"
-                selectByMouse: true
-                onTextChanged: root.mediaSearchText = text
-            }
+                spacing: theme.space4
 
-            Flickable {
-                objectName: "timelineMediaSearchScopeFilters"
-                visible: root.mediaSearchText.trim().length > 0
-                Layout.fillWidth: true
-                Layout.preferredHeight: visible ? searchScopeRow.implicitHeight : 0
-                contentWidth: searchScopeRow.implicitWidth
-                contentHeight: height
-                flickableDirection: Flickable.HorizontalFlick
-                boundsBehavior: Flickable.StopAtBounds
-                clip: true
+                ToneTextField {
+                    objectName: "timelineUnifiedMediaSearchField"
+                    Layout.fillWidth: true
+                    accessibleLabel: "Search media"
+                    Accessible.description: "Search filenames, metadata, tags, transcript, captions, markers, and on-screen text. Use Search Fields to narrow the search."
+                    text: root.mediaSearchText
+                    placeholderText: "Search media…"
+                    selectByMouse: true
+                    onTextChanged: root.mediaSearchText = text
+                }
 
-                Row {
-                    id: searchScopeRow
-                    spacing: theme.space4
-
-                    Repeater {
-                        model: [
-                            {"key": "all", "label": "All"},
-                            {"key": "filename", "label": "Filename"},
-                            {"key": "metadata", "label": "Metadata"},
-                            {"key": "tags", "label": "Tags"},
-                            {"key": "transcript", "label": "Transcript"},
-                            {"key": "captions", "label": "Captions"},
-                            {"key": "markers", "label": "Markers"},
-                            {"key": "text", "label": "On-screen text"}
-                        ]
-
-                        delegate: FilterChip {
-                            required property var modelData
-                            text: modelData.label
-                            active: root.mediaSearchScopes.indexOf(modelData.key) >= 0
-                            onClicked: root.toggleMediaSearchScope(modelData.key)
-                        }
-                    }
+                MenuButton {
+                    objectName: "timelineMediaSearchScopeMenuButton"
+                    text: "Fields"
+                    iconName: "filter"
+                    compact: true
+                    primaryOpensMenu: true
+                    active: root.mediaSearchScopes.indexOf("all") < 0
+                    accessibleName: root.mediaSearchScopes.indexOf("all") >= 0
+                                    ? "Search fields: all fields"
+                                    : "Search fields: " + root.mediaSearchScopes.length + " selected"
+                    tooltipText: "Choose which media fields are searched. Multiple fields can be combined."
+                    menuWidth: 220
+                    menuItems: root.mediaSearchScopeMenuItems()
+                    onMenuItemTriggered: function(key) { root.toggleMediaSearchScope(key) }
                 }
             }
 
             RowLayout {
+                visible: root.assetCountValue > 0
                 Layout.fillWidth: true
+                spacing: theme.space4
 
-                FilterChip {
+                MenuButton {
                     objectName: "timelineActiveMediaBinFilter"
-                    Layout.fillWidth: !root.documentController
-                                      || root.documentController.activeSmartCollectionId.length === 0
-                    text: root.mediaBinName(root.documentController
-                                            ? root.documentController.activeMediaBinId : "")
+                    Layout.fillWidth: true
+                    text: root.mediaPoolScopeLabel()
+                    iconName: root.documentController
+                              && String(root.documentController.activeSmartCollectionId || "").length > 0
+                              ? "filter" : "folder"
+                    compact: true
+                    primaryOpensMenu: true
                     active: root.documentController
-                            && root.documentController.activeMediaBinId.length > 0
-                    iconName: "folder"
-                    tooltipText: "Show all media"
-                    onClicked: if (root.documentController)
-                                   root.documentController.activeMediaBinId = ""
-                }
-
-                FilterChip {
-                    objectName: "timelineActiveSmartCollectionFilter"
-                    visible: root.documentController
-                             && root.documentController.activeSmartCollectionId.length > 0
-                    Layout.fillWidth: visible
-                    text: root.smartCollectionName(root.documentController
-                                                   ? root.documentController.activeSmartCollectionId : "")
-                    active: visible
-                    iconName: "filter"
-                    tooltipText: "Clear smart collection"
-                    onClicked: if (root.documentController)
-                                   root.documentController.activeSmartCollectionId = ""
+                             && (String(root.documentController.activeMediaBinId || "").length > 0
+                                 || String(root.documentController.activeSmartCollectionId || "").length > 0)
+                    accessibleName: "Filter media pool: " + root.mediaPoolScopeLabel()
+                    tooltipText: "Current filter: " + root.mediaPoolScopeLabel()
+                                 + ". Choose one bin and one smart collection; these filters combine. Choose an active item again to clear it."
+                    menuWidth: 260
+                    menuItems: root.mediaPoolFilterMenuItems()
+                    onMenuItemTriggered: function(key) { root.applyMediaPoolFilter(key) }
                 }
 
                 Label {
-                    text: root.assetCountValue + " clips"
+                    text: root.assetCountValue + (root.assetCountValue === 1 ? " item" : " items")
                     color: theme.textMuted
                     font.family: theme.fontMono
                     font.pixelSize: theme.typeLabel
                 }
 
                 MenuButton {
-                    objectName: "timelineMediaFilmstripDensityMenu"
-                    text: "View"
-                    iconName: "density"
+                    objectName: "timelineMediaPoolBrowseMenuButton"
+                    text: "Browse"
+                    iconName: "media"
                     compact: true
                     primaryOpensMenu: true
-                    menuWidth: 190
-                    tooltipText: "Choose how many cached frames hover scrubbing samples"
-                    menuItems: [
-                        {"key": "compact", "label": "Compact · 5 frames",
-                         "checked": root.mediaFilmstripDensity === "compact"},
-                        {"key": "standard", "label": "Standard · 9 frames",
-                         "checked": root.mediaFilmstripDensity === "standard"},
-                        {"key": "detailed", "label": "Detailed · 15 frames",
-                         "checked": root.mediaFilmstripDensity === "detailed"},
-                        {"key": "smart-collections", "label": "Smart Collections"},
-                        {"key": "source-tape", "label": "Review as Source Tape"},
-                        {"key": "usage", "label": "Analyze Media Usage"}
-                    ]
-                    onMenuItemTriggered: function(key) {
-                        if (key === "smart-collections") {
-                            root.resetSmartCollectionDraft()
-                            smartCollectionsPopup.open()
-                        } else if (key === "source-tape")
-                            root.openSourceTape()
-                        else if (key === "usage")
-                            root.openMediaUsageAnalysis()
-                        else
-                            root.mediaFilmstripDensity = key
-                    }
-                }
-
-                ActionButton {
-                    objectName: "timelineMediaBinsButton"
-                    text: "Bins"
-                    iconName: "folder"
-                    compact: true
-                    tooltipText: "Organize media in nested bins"
-                    onClicked: mediaBinsPopup.open()
+                    menuWidth: 260
+                    tooltipText: "Organize bins and collections, start a source tape, review usage, or adjust preview detail."
+                    menuItems: root.mediaPoolBrowseMenuItems()
+                    onMenuItemTriggered: function(key) { root.handleMediaPoolBrowseAction(key) }
                 }
             }
 
             ActionButton {
                 objectName: "timelineBatchRelinkButton"
                 visible: root.documentController
-                         && root.documentController.offlineMediaItems.length > 0
+                         && root.documentController.hasOfflineMediaItems
                 text: "Relink"
                 iconName: "refresh"
                 compact: true
                 tone: "warning"
                 tooltipText: "Search a folder for all offline timeline media and review every substitution before applying."
                 onClicked: root.batchRelinkRequested()
+            }
+
+            Item {
+                objectName: "timelineMediaEmptyState"
+                visible: root.assetCountValue === 0 &&
+                         (!root.assetCatalog || !root.assetCatalog.loading)
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - theme.space16, theme.scaled(220))
+                    spacing: theme.space8
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.totalAssetCountValue > 0
+                              ? "No media in this view" : "No library media"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeControl
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.totalAssetCountValue > 0
+                              ? "Browse all library media to find a clip."
+                              : "Import files to browse and reuse in this timeline."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeLabel
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    ActionButton {
+                        objectName: "timelineEmptyMediaImportButton"
+                        Layout.alignment: Qt.AlignHCenter
+                        text: root.totalAssetCountValue > 0 ? "Browse Library" : "Open Import"
+                        iconName: root.totalAssetCountValue > 0 ? "media" : "import"
+                        compact: true
+                        tone: "primary"
+                        onClicked: {
+                            if (root.totalAssetCountValue > 0)
+                                mediaPickerRequested()
+                            else
+                                importWorkspaceRequested()
+                        }
+                    }
+                }
+            }
+
+            Label {
+                visible: root.assetCountValue === 0 && root.assetCatalog &&
+                         root.assetCatalog.loading
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                text: "Loading library media…"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeLabel
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
 
             Rectangle {
@@ -1402,12 +1677,32 @@ GlassSurface {
                         Layout.fillWidth: true
 
                         Label {
+                            id: selectedMediaContextLabel
+                            objectName: "timelineSelectedMediaContextLabel"
                             Layout.fillWidth: true
-                            text: String(root.selectedMediaAssetIds.length) + " selected"
+                            text: root.selectedMediaAssetIds.length === 1
+                                  ? root.selectedMediaTitleValue + "  ·  "
+                                    + String(root.selectedMediaAssetValue.mediaType || "Media")
+                                  : String(root.selectedMediaAssetIds.length)
+                                    + " selected  ·  choose one to preview or add"
                             color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: theme.typeCaption
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeLabel
                             font.weight: Font.DemiBold
+                            maximumLineCount: 1
+                            elide: Text.ElideRight
+
+                            ToolTip.visible: selectedMediaContextHover.hovered && truncated
+                            ToolTip.text: root.selectedMediaAssetIds.length === 1
+                                          ? root.selectedMediaTitleValue
+                                            + " · "
+                                            + String(root.selectedMediaAssetValue.mediaType || "Media")
+                                          : String(root.selectedMediaAssetIds.length) + " selected"
+
+                            HoverHandler {
+                                id: selectedMediaContextHover
+                                enabled: selectedMediaContextLabel.truncated
+                            }
                         }
 
                         ActionButton {
@@ -1419,11 +1714,61 @@ GlassSurface {
                         }
                     }
 
-                    RowLayout {
+                    Flow {
+                        objectName: "timelineSelectedMediaActions"
+                        Layout.fillWidth: true
+                        spacing: theme.gapDense
+
+                        ActionButton {
+                            objectName: "timelineMediaSelectedAddToTimelineButton"
+                            text: "Add to Timeline"
+                            iconName: "plus"
+                            tone: "primary"
+                            compact: true
+                            visible: root.selectedMediaAssetIds.length === 1
+                            enabled: root.documentController !== null
+                                     && root.selectedMediaOnlineValue
+                            disabledReason: root.selectedMediaAssetIds.length !== 1
+                                            ? "Select one media item to add it to the timeline."
+                                            : "Relink this media before adding it to the timeline."
+                            tooltipText: "Insert this media at the playhead and shift later clips on linked tracks."
+                            onClicked: root.insertSelectedMediaAtPlayhead()
+                        }
+
+                        ActionButton {
+                            objectName: "timelineMediaSelectedPreviewInSourceButton"
+                            text: "Preview in Source"
+                            iconName: "source"
+                            tone: "secondary"
+                            compact: true
+                            visible: root.selectedMediaAssetIds.length === 1
+                            enabled: root.documentController !== null
+                                     && root.selectedMediaOnlineValue
+                            disabledReason: root.selectedMediaAssetIds.length !== 1
+                                            ? "Select one media item to preview it in Source."
+                                            : "Relink this media before loading it into Source."
+                            tooltipText: "Load this media into the Source monitor to inspect and mark a range."
+                            onClicked: root.previewSelectedMediaInSource()
+                        }
+
+                        Label {
+                            objectName: "timelineMediaMultiSelectionActionHint"
+                            width: parent.width
+                            visible: root.selectedMediaAssetIds.length > 1
+                            text: "Batch actions below apply metadata; add clips one at a time."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            wrapMode: Text.Wrap
+                        }
+                    }
+
+                    Flow {
+                        objectName: "timelineMediaBatchMetadataActions"
                         Layout.fillWidth: true
                         spacing: theme.space4
 
-                    MenuButton {
+                        MenuButton {
                         objectName: "timelineMediaBatchRatingButton"
                         text: "Rating"
                         compact: true
@@ -1507,13 +1852,25 @@ GlassSurface {
                         onClicked: root.openTakeComparison()
                     }
 
-                    Item { Layout.fillWidth: true }
                     }
                 }
             }
 
+            Label {
+                objectName: "timelineMediaSelectionHint"
+                visible: root.assetCountValue > 0 && root.selectedMediaAssetIds.length === 0
+                Layout.fillWidth: true
+                text: "Select a clip, then Add to Timeline or Preview in Source. Drag to place; Overwrite replaces clips."
+                color: theme.textFaint
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.Wrap
+            }
+
             ListView {
+                id: timelineVirtualizedMediaListView
                 objectName: "timelineVirtualizedMediaList"
+                visible: root.assetCountValue > 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
@@ -1522,7 +1879,17 @@ GlassSurface {
                 spacing: theme.gapRelated
                 model: root.assetCatalog
 
+                ScrollBar.vertical: ScrollBar {
+                    id: timelineVirtualizedMediaListScrollBar
+                    policy: ScrollBar.AlwaysOn
+                    visible: timelineVirtualizedMediaListView.contentHeight
+                             > timelineVirtualizedMediaListView.height + 1
+                    interactive: true
+                }
+
                 delegate: TimelineMediaAssetRow {
+                    trailingScrollbarWidth: timelineVirtualizedMediaListScrollBar.visible
+                                             ? timelineVirtualizedMediaListScrollBar.width : 0
                     mediaSearchText: root.mediaSearchText
                     mediaSearchScopes: root.mediaSearchScopes
                     documentController: root.documentController
@@ -1773,7 +2140,32 @@ GlassSurface {
                                       + root.metadataDisplay(root.mediaInspectorTechnical.colorSpace)
                                       + "  ·  "
                                       + root.metadataDisplay(root.mediaInspectorTechnical.colorTransfer)
+                                      + "  ·  "
+                                      + root.metadataDisplay(root.mediaInspectorTechnical.colorPrimaries)
                                 color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.Wrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: root.hasTechnicalColorMetadataTags()
+                                text: "Source color tags  ·  " + root.technicalColorMetadataTagSummary()
+                                      + "\nRaw file tags are evidence only; they do not select a camera profile."
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.Wrap
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                visible: String(root.mediaInspectorTechnical.suggestedVideoInputTransform || "").length > 0
+                                text: "Metadata suggestion  ·  "
+                                      + root.sourceColorTransformName(root.mediaInspectorTechnical.suggestedVideoInputTransform)
+                                      + "\nReview the source tags before applying this input transform."
+                                color: theme.accentCool300
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeCaption
                                 wrapMode: Text.Wrap
@@ -1840,6 +2232,7 @@ GlassSurface {
 
                     ToneTextArea {
                         objectName: "timelineMediaNotesField"
+                        accessibleLabel: "Media notes"
                         Layout.fillWidth: true
                         Layout.preferredHeight: theme.scaled(94)
                         text: root.mediaInspectorNotesDraft
@@ -1857,6 +2250,7 @@ GlassSurface {
 
                     ToneTextArea {
                         objectName: "timelineMediaCustomFieldsField"
+                        accessibleLabel: "Media custom fields"
                         Layout.fillWidth: true
                         Layout.preferredHeight: theme.scaled(104)
                         text: root.mediaInspectorCustomFieldsDraft
@@ -1881,11 +2275,23 @@ GlassSurface {
 
                 Label {
                     Layout.fillWidth: true
-                    text: "Changes support Undo and save with the timeline."
+                    text: root.mediaInspectorApplyStatus.length > 0
+                          ? root.mediaInspectorApplyStatus
+                          : "Changes support Undo and save with the timeline."
                     color: theme.textFaint
                     font.family: theme.fontUi
                     font.pixelSize: theme.typeCaption
                     wrapMode: Text.Wrap
+                }
+
+                ActionButton {
+                    objectName: "timelineMediaMetadataApplyColorSuggestionButton"
+                    visible: root.canApplySourceColorSuggestion()
+                    text: "Apply Profile"
+                    iconName: "check"
+                    tone: "primary"
+                    compact: true
+                    onClicked: root.applySourceColorSuggestion()
                 }
 
                 ActionButton {
@@ -2085,14 +2491,16 @@ GlassSurface {
                                     Layout.fillWidth: true
 
                                     MenuButton {
-                                        text: "★" + String(root.mediaMetadataFor(
-                                                                takeCard.modelData.assetId).rating || 0)
+                                        iconName: "rating"
+                                        text: String(root.mediaMetadataFor(
+                                                         takeCard.modelData.assetId).rating || 0)
                                         compact: true
                                         primaryOpensMenu: true
                                         menuWidth: 140
                                         menuItems: [0, 1, 2, 3, 4, 5].map(function(rating) {
                                             return {"key": String(rating),
-                                                    "label": rating === 0 ? "Unrated" : "★".repeat(rating)}
+                                                    "label": rating === 0 ? "Unrated" : rating + " star" + (rating === 1 ? "" : "s"),
+                                                    "icon": rating === 0 ? "star" : "rating"}
                                         })
                                         onMenuItemTriggered: function(key) {
                                             root.documentController.setMediaAssetRating(
@@ -2867,8 +3275,12 @@ GlassSurface {
                 }
 
                 TapHandler {
-                    onTapped: if (root.documentController)
-                                  root.documentController.activeMediaBinId = ""
+                    onTapped: {
+                        if (!root.documentController)
+                            return
+                        root.documentController.activeMediaBinId = ""
+                        root.documentController.activeSmartCollectionId = ""
+                    }
                 }
 
                 DropArea {
@@ -2898,20 +3310,22 @@ GlassSurface {
                     spacing: theme.space4
 
                     Repeater {
-                        model: root.documentController ? root.documentController.mediaBins : []
+                        model: root.mediaBinsModel
 
                         delegate: Rectangle {
                             id: binCard
                             required property var modelData
                             readonly property string binId: String(modelData.binId || "")
                             readonly property bool selectedForRename: root.selectedMediaBinId === binId
+                            readonly property bool activeBin: root.documentController
+                                                              && String(root.documentController.activeMediaBinId || "") === binId
                             Layout.fillWidth: true
                             Layout.leftMargin: Math.min(theme.space24, Number(modelData.depth || 0) * theme.space12)
                             implicitHeight: binColumn.implicitHeight + theme.space8
                             radius: theme.radiusControl
                             color: binDrop.containsDrag
                                    ? theme.alpha(theme.focusRing, 0.18)
-                                   : modelData.active
+                                   : activeBin
                                      ? theme.alpha(theme.ink800, 0.92)
                                      : theme.alpha(theme.ink900, 0.72)
                             border.width: 0
@@ -3064,7 +3478,7 @@ GlassSurface {
 
                     Label {
                         visible: !root.documentController
-                                 || root.documentController.mediaBins.length === 0
+                                 || root.mediaBinsModel.length === 0
                         Layout.fillWidth: true
                         Layout.topMargin: theme.space12
                         text: "Create a bin, then drag media into it."

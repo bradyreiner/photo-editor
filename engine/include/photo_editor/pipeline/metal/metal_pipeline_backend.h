@@ -40,7 +40,12 @@ class MetalWorkingSurface final : public RenderSurfaceBacking {
   [[nodiscard]] bool copy_pixels(
       std::vector<ColorPixel>* destination,
       CancellationToken cancellation = {}) const override;
+  [[nodiscard]] bool copy_pixels_validates_finite() const noexcept override;
   [[nodiscard]] RenderSurfaceDescriptor descriptor() const;
+  [[nodiscard]] bool copy_sampled_pixels(
+      int sampled_width, int sampled_height,
+      std::vector<ColorPixel>* destination,
+      CancellationToken cancellation = {}) const;
   [[nodiscard]] std::uintptr_t native_buffer_handle() const;
   [[nodiscard]] std::uint64_t device_registry_id() const;
   [[nodiscard]] std::uintptr_t native_ready_event_handle() const;
@@ -69,6 +74,7 @@ class MetalOutputSurface final : public RenderSurfaceBacking {
   [[nodiscard]] bool copy_pixels(
       std::vector<ColorPixel>* destination,
       CancellationToken cancellation = {}) const override;
+  [[nodiscard]] bool copy_pixels_validates_finite() const noexcept override;
   [[nodiscard]] int width() const;
   [[nodiscard]] int height() const;
   [[nodiscard]] MetalOutputSurfaceFormat format() const;
@@ -77,6 +83,12 @@ class MetalOutputSurface final : public RenderSurfaceBacking {
   [[nodiscard]] std::uintptr_t native_ready_event_handle() const;
   [[nodiscard]] std::uint64_t ready_event_value() const;
   [[nodiscard]] bool producer_completed_successfully() const;
+  // Packed display pixels for consumers such as a pixel inspector. The caller
+  // owns the destination and performs this potentially blocking read on a worker.
+  [[nodiscard]] bool copy_bgra8_region(
+      int x, int y, int region_width, int region_height,
+      std::span<std::uint8_t> destination,
+      CancellationToken cancellation = {}) const;
   [[nodiscard]] bool copy_bgra8_pixels_for_testing(
       std::span<std::uint8_t> destination) const;
 

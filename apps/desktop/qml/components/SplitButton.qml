@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
@@ -19,6 +18,7 @@ Item {
     property string tooltipText: ""
     property string disabledReason: ""
     property string menuTooltipText: text.length > 0 ? "More options for " + text : "More options"
+    property string accessibleName: ""
     property int menuWidth: theme.menuMinWidth
     property int menuItemMaxLines: 2
     readonly property int menuMinimumWidth: theme.menuMinWidth
@@ -28,19 +28,29 @@ Item {
     signal clicked()
     signal menuItemTriggered(string key)
 
+    readonly property string resolvedAccessibleName: {
+        const explicitName = String(root.accessibleName || "").trim()
+        if (explicitName.length > 0)
+            return explicitName
+        const visibleText = String(root.text || "").trim()
+        if (visibleText.length > 0)
+            return visibleText
+        const helpText = String(root.tooltipText || "").trim()
+        return helpText.length > 0 ? helpText : "Options"
+    }
+
     Theme { id: theme }
     MenuItemMetrics { id: menuMetrics; items: root.menuItems }
 
     implicitHeight: root.tone === "primary" || root.tone === "danger"
                     ? theme.controlHeightPrimary
-                    : (compact ? Math.max(theme.controlHeightDense, theme.scaled(32))
-                               : Math.max(theme.controlHeight, theme.scaled(36)))
-    implicitWidth: primaryButton.implicitWidth + (root.menuEnabled ? chevronButton.implicitWidth + 1 : 0)
+                    : (compact ? theme.controlHeightDense : theme.controlHeight)
+    implicitWidth: primaryButton.implicitWidth + (root.menuEnabled
+                  ? Math.max(root.implicitHeight, chevronButton.implicitWidth) + 1
+                  : 0)
     opacity: root.enabled ? 1.0 : 0.56
-    activeFocusOnTab: true
-    Accessible.name: root.text
-    Accessible.description: root.primaryEnabled ? root.tooltipText : root.disabledReason
-    Accessible.role: Accessible.Button
+    activeFocusOnTab: false
+    Accessible.ignored: true
 
     Keys.onSpacePressed: function(event) {
         if (root.enabled && root.primaryEnabled)
@@ -73,7 +83,7 @@ Item {
                                                    String(root.menuMaximumWidth) +
                                                    "|padding:" +
                                                    String(root.menuPopoverPadding) +
-                                                   "|item-height:32-36|icon-column:true|shortcut-column:true|labels-wrap:true"
+                                                   "|item-height:menu-token|icon-column:true|shortcut-column:true|labels-wrap:true"
     readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
     readonly property string splitContract: "split-button:v1|primary:" +
                                             String(root.primaryEnabled) +
@@ -92,7 +102,8 @@ Item {
                                             "|disabled-reasons-complete:" +
                                             String(disabledItemsExplainState) +
                                             "|keyboard:true|escape:true|disabled-reasons:true|checked-state:true|no-elide:true|readable-text:true|geometry:true|width:" +
-                                            String(menuWidth)
+                                            String(menuWidth) +
+                                            "|wrapper:ignored|single-focus-stop:true|accessible-name-override:true"
 
     RowLayout {
         anchors.fill: parent
@@ -100,6 +111,7 @@ Item {
 
         ActionButton {
             id: primaryButton
+            objectName: root.objectName.length > 0 ? root.objectName + "PrimaryAction" : ""
             Layout.fillWidth: true
             Layout.preferredHeight: root.implicitHeight
             text: root.text
@@ -108,6 +120,7 @@ Item {
             accent: root.accent
             compact: root.compact
             allowLabelWrap: root.allowLabelWrap
+            accessibleName: root.resolvedAccessibleName
             active: root.active
             enabled: root.enabled && root.primaryEnabled
             tooltipText: !root.primaryEnabled && root.disabledReason.length > 0
@@ -118,14 +131,16 @@ Item {
 
         ActionButton {
             id: chevronButton
+            objectName: root.objectName.length > 0 ? root.objectName + "MenuAction" : ""
             visible: root.menuEnabled
             Layout.preferredWidth: root.implicitHeight
             Layout.preferredHeight: root.implicitHeight
             showText: false
             iconName: "chevron-right"
-            tone: root.tone === "primary" ? "secondary" : root.tone
+            tone: root.tone
             accent: root.accent
             compact: root.compact
+            accessibleName: root.menuTooltipText
             active: menuPopup.visible
             enabled: root.enabled && root.menuEnabled
             tooltipText: root.menuTooltipText
@@ -137,6 +152,7 @@ Item {
 
     MenuPopover {
         id: menuPopup
+        ownerObjectName: root.objectName
         menuItems: root.menuItems
         accent: root.accent
         anchorHeight: root.height

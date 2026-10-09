@@ -16,6 +16,7 @@ struct ThumbnailPresentationFacts final {
   QString file_path;
   QString state_signature;
   int mask_revision = 0;
+  int photo_layer_revision = -1;
   QVariantMap queue_fields;
   ThumbnailRefreshQueueCompletion queue_completion;
   bool has_asset = false;
@@ -34,9 +35,11 @@ struct ThumbnailPresentationDependencies final {
 class ThumbnailPresentationService final {
  public:
   [[nodiscard]] QVariantList groupMaskSets(
-      const QVariantList& masks) const;
+      const QVariantList& masks,
+      bool masks_are_canonical = false) const;
   [[nodiscard]] QVariantList groupRetouchStack(
-      const QVariantList& masks) const;
+      const QVariantList& masks,
+      bool masks_are_canonical = false) const;
 
   [[nodiscard]] QVariantList presentMaskSets(
       const QVariantList& current_sets,

@@ -4,6 +4,18 @@ Current qualification refresh (2026-09-19): the user's broader professional-tool
 
 First implementation batch (2026-09-19): incremental live brush coverage, asynchronous auto-mask feedback, safe direct mask switching and draft typography fidelity are implemented. See [test results, native text screenshots and measurement limits](evidence/editing-tools-2026-09-19/README.md). These results qualify those fixes, not the entire professional-tool program. Continue with related tools in complete workflows; diagnosis and verification accompany each fix rather than becoming separate delivery phases.
 
+Latest implementation note (2026-09-25): base-image selection copies offer explicit linked and independent modes. The independent cutout renders the captured developed base on a worker, bakes the soft selection into premultiplied RGBA pixel tiles, and replaces its temporary selection link without adding a second undo step. Linked copies from masked content layers preserve their direct mask and existing linked selection, intersect both with the active selection, and retain that behavior through recipe save/reopen. Content-layer independent snapshots now rasterize the selected layer and its masks to self-contained pixel tiles through the same async materialization path; the Studio layer menu and agent command both expose it, and copy + rasterization remain one undo step. `photo_pixel_paint_test` verifies base cutout alpha, immunity to later base edits, and one-step undo/redo; `photo_composition_workflow_test` verifies content-mask intersection, independent content rasterization, agent composition, undo/redo, and exact recipe round-trip; the thumbnail queue test checks the extended mask identity signature; `composition_tool_contract` verifies MCP forwarding. Native end-to-end subject → refinement → cutout → text → save/reopen/export and broader selection/brush qualification gates remain open.
+
+Release recheck (2026-09-26): `photo_composition_workflow_test` builds and passes
+on the current release tree. Its retained [CTest output](evidence/selection-repair-2026-09-24/photo-composition-workflow-release.log)
+confirms 48 top-first layer/group fixtures, styled text behind a copied
+selection, the agent composition path, independent base/content cutouts,
+undo/redo, and exact recipe reopen. The selection fixture is synthetic and
+rectangular; this does not satisfy the native real-subject workflow or
+segmentation-quality gate.
+
+Latest Smart Select safeguard (2026-09-25): multi-point masks now fail closed unless every positive prompt is selected, every negative prompt is excluded, and all positive prompts belong to one 8-connected foreground region. The pinned real Obama portrait still yields only 168 selected pixels from 2687x3356; the focused diagnostic proves those matched prompt samples are disconnected and rejects the mask. `object_pick_policy_test`, `segmentation_request_policy_test`, and the no-argument Vision API/error smoke pass (3/3), while the explicit portrait diagnostic correctly exits as a failure. This is a result-integrity guard, not segmentation-quality evidence; Apple Vision inference still fails to initialize on this host, and learned SAM inference remains unimplemented.
+
 This checklist tracks the work required to make masking, selection, and layer editing feel like a professional editor. Status keys:
 
 - `[x]` implemented and validated in the current code path

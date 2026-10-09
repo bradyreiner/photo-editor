@@ -1403,11 +1403,19 @@ void validate_layer_effect_changes(const QVariant& value, QStringList* errors) {
       QStringLiteral("enabled"), QStringLiteral("amount"), QStringLiteral("sigma"),
       QStringLiteral("radius"), QStringLiteral("levels"), QStringLiteral("distance"),
       QStringLiteral("angle"), QStringLiteral("strength"), QStringLiteral("threshold"),
-      QStringLiteral("edgeMode")};
+      QStringLiteral("edgeMode"), QStringLiteral("diffusionRadius"),
+      QStringLiteral("highlightThreshold"), QStringLiteral("highlightKnee"),
+      QStringLiteral("diffusionStrength"), QStringLiteral("warmth"), QStringLiteral("highlightProtection"),
+      QStringLiteral("paperScale"), QStringLiteral("paperTexture"), QStringLiteral("inkSpread"),
+      QStringLiteral("inkDensity"), QStringLiteral("redRegistrationX"), QStringLiteral("redRegistrationY"),
+      QStringLiteral("blueRegistrationX"), QStringLiteral("blueRegistrationY"), QStringLiteral("seed"),
+      QStringLiteral("falloff"), QStringLiteral("highlightWeighting"),
+      QStringLiteral("protectSubject"), QStringLiteral("maskId")};
   const QSet<QString> allowed_types{
       QStringLiteral("gaussian_blur"), QStringLiteral("box_blur"),
       QStringLiteral("posterize_linear_rgb"), QStringLiteral("invert_linear_rgb"),
-      QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask")};
+      QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask"),
+      QStringLiteral("optical_diffusion"), QStringLiteral("imperfect_print"), QStringLiteral("dragged_shutter")};
   const QSet<QString> allowed_edges{
       QStringLiteral("transparent"), QStringLiteral("extend"), QStringLiteral("reflect")};
   QSet<QString> ids;
@@ -1446,9 +1454,22 @@ void validate_layer_effect_changes(const QVariant& value, QStringList* errors) {
       type_fields.insert(QStringLiteral("levels"));
     } else if (type == QStringLiteral("motion_blur")) {
       type_fields.unite({QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("edgeMode")});
+    } else if (type == QStringLiteral("dragged_shutter")) {
+      type_fields.unite({QStringLiteral("distance"), QStringLiteral("angle"), QStringLiteral("falloff"),
+          QStringLiteral("highlightWeighting"), QStringLiteral("protectSubject"), QStringLiteral("maskId"),
+          QStringLiteral("edgeMode")});
     } else if (type == QStringLiteral("unsharp_mask")) {
       type_fields.unite({QStringLiteral("sigma"), QStringLiteral("strength"),
                          QStringLiteral("threshold"), QStringLiteral("edgeMode")});
+    } else if (type == QStringLiteral("optical_diffusion")) {
+      type_fields.unite({QStringLiteral("diffusionRadius"), QStringLiteral("highlightThreshold"),
+          QStringLiteral("highlightKnee"), QStringLiteral("diffusionStrength"), QStringLiteral("warmth"),
+          QStringLiteral("highlightProtection")});
+    } else if (type == QStringLiteral("imperfect_print")) {
+      type_fields.unite({QStringLiteral("paperScale"), QStringLiteral("paperTexture"),
+          QStringLiteral("inkSpread"), QStringLiteral("inkDensity"), QStringLiteral("redRegistrationX"),
+          QStringLiteral("redRegistrationY"), QStringLiteral("blueRegistrationX"),
+          QStringLiteral("blueRegistrationY"), QStringLiteral("seed")});
     }
     for (auto iterator = change.cbegin(); iterator != change.cend(); ++iterator) {
       if (!type_fields.contains(iterator.key())) {
@@ -1482,6 +1503,22 @@ void validate_layer_effect_changes(const QVariant& value, QStringList* errors) {
         errors->append(QStringLiteral("%1 motion distance must be between 0 and 4096.").arg(context));
       if (!change.contains(QStringLiteral("angle")) || !optional_number_in_range(change, QStringLiteral("angle"), -180.0, 180.0))
         errors->append(QStringLiteral("%1 motion angle must be between -180 and 180.").arg(context));
+    } else if (type == QStringLiteral("dragged_shutter")) {
+      if (!change.contains(QStringLiteral("distance")) || !optional_number_in_range(change, QStringLiteral("distance"), 0.0, 4096.0))
+        errors->append(QStringLiteral("%1 trail distance must be between 0 and 4096.").arg(context));
+      if (!change.contains(QStringLiteral("angle")) || !optional_number_in_range(change, QStringLiteral("angle"), -180.0, 180.0))
+        errors->append(QStringLiteral("%1 trail angle must be between -180 and 180.").arg(context));
+      if (!change.contains(QStringLiteral("falloff")) || !optional_number_in_range(change, QStringLiteral("falloff"), 0.0, 1.0))
+        errors->append(QStringLiteral("%1 falloff must be between 0 and 1.").arg(context));
+      if (!change.contains(QStringLiteral("highlightWeighting")) || !optional_number_in_range(change, QStringLiteral("highlightWeighting"), 0.0, 1.0))
+        errors->append(QStringLiteral("%1 highlight weighting must be between 0 and 1.").arg(context));
+      if (!change.contains(QStringLiteral("protectSubject")) || !variant_is_bool(change, QStringLiteral("protectSubject")))
+        errors->append(QStringLiteral("%1 protectSubject must be boolean.").arg(context));
+      if (change.contains(QStringLiteral("maskId")) && !is_bounded_non_empty_string(change.value(QStringLiteral("maskId")), 80))
+        errors->append(QStringLiteral("%1 maskId must name an existing mask.").arg(context));
+      if (change.value(QStringLiteral("protectSubject")).toBool() &&
+          !is_bounded_non_empty_string(change.value(QStringLiteral("maskId")), 80))
+        errors->append(QStringLiteral("%1 subject protection requires maskId.").arg(context));
     } else if (type == QStringLiteral("unsharp_mask")) {
       if (!change.contains(QStringLiteral("sigma")) || !optional_number_in_range(change, QStringLiteral("sigma"), 0.0, 4096.0))
         errors->append(QStringLiteral("%1 unsharp sigma must be between 0 and 4096.").arg(context));
@@ -1489,6 +1526,35 @@ void validate_layer_effect_changes(const QVariant& value, QStringList* errors) {
         errors->append(QStringLiteral("%1 unsharp strength must be between 0 and 5.").arg(context));
       if (!change.contains(QStringLiteral("threshold")) || !optional_number_in_range(change, QStringLiteral("threshold"), 0.0, 1.0))
         errors->append(QStringLiteral("%1 unsharp threshold must be between 0 and 1.").arg(context));
+    } else if (type == QStringLiteral("optical_diffusion")) {
+      const auto require_range = [&](const QString& name, double minimum, double maximum) {
+        if (!change.contains(name) || !optional_number_in_range(change, name, minimum, maximum))
+          errors->append(QStringLiteral("%1 optical diffusion field %2 is outside its supported range.").arg(context, name));
+      };
+      require_range(QStringLiteral("diffusionRadius"), 0.0, 4096.0);
+      require_range(QStringLiteral("highlightThreshold"), 0.0, 16.0);
+      require_range(QStringLiteral("highlightKnee"), 0.0, 8.0);
+      require_range(QStringLiteral("diffusionStrength"), 0.0, 5.0);
+      require_range(QStringLiteral("warmth"), -1.0, 1.0);
+      require_range(QStringLiteral("highlightProtection"), 0.0, 1.0);
+    } else if (type == QStringLiteral("imperfect_print")) {
+      const auto require_range = [&](const QString& name, double minimum, double maximum) {
+        if (!change.contains(name) || !optional_number_in_range(change, name, minimum, maximum))
+          errors->append(QStringLiteral("%1 imperfect print field %2 is outside its supported range.").arg(context, name));
+      };
+      require_range(QStringLiteral("paperScale"), 2.0, 512.0);
+      require_range(QStringLiteral("paperTexture"), 0.0, 1.0);
+      require_range(QStringLiteral("inkSpread"), 0.0, 1.0);
+      require_range(QStringLiteral("inkDensity"), 0.0, 2.0);
+      require_range(QStringLiteral("redRegistrationX"), -8.0, 8.0);
+      require_range(QStringLiteral("redRegistrationY"), -8.0, 8.0);
+      require_range(QStringLiteral("blueRegistrationX"), -8.0, 8.0);
+      require_range(QStringLiteral("blueRegistrationY"), -8.0, 8.0);
+      double seed = 0.0;
+      if (!change.contains(QStringLiteral("seed")) ||
+          !variant_is_finite_number(change.value(QStringLiteral("seed")), &seed) ||
+          seed < 0.0 || seed > 4294967295.0 || std::floor(seed) != seed)
+        errors->append(QStringLiteral("%1 imperfect print seed must be an unsigned 32-bit integer.").arg(context));
     }
   }
 }
@@ -1510,11 +1576,12 @@ photo_editor::pipeline::PhotoEffectInstance effect_instance_from_change(
   effect.type_id = change.value(QStringLiteral("type")).toString().toStdString();
   effect.enabled = change.value(QStringLiteral("enabled")).toBool();
   effect.amount = change.value(QStringLiteral("amount")).toDouble();
+  effect.mask_ref = change.value(QStringLiteral("maskId")).toString().toStdString();
   effect.input_scope = layer_kind == QStringLiteral("adjustment")
       ? PhotoEffectInputScope::CompositeBelow
       : PhotoEffectInputScope::LayerContent;
   const auto requested_edge = change.value(QStringLiteral("edgeMode")).toString();
-  const auto default_edge = effect.type_id == "motion_blur" ? QStringLiteral("extend")
+  const auto default_edge = (effect.type_id == "motion_blur" || effect.type_id == "dragged_shutter") ? QStringLiteral("extend")
       : effect.type_id == "unsharp_mask" ? QStringLiteral("reflect")
                                            : QStringLiteral("transparent");
   const auto edge = effect_edge_mode(requested_edge.isEmpty() ? default_edge : requested_edge);
@@ -1530,11 +1597,35 @@ photo_editor::pipeline::PhotoEffectInstance effect_instance_from_change(
     effect.motion.distance = change.value(QStringLiteral("distance")).toDouble();
     effect.motion.angle = change.value(QStringLiteral("angle")).toDouble();
     effect.motion.edge_mode = edge;
+  } else if (effect.type_id == "dragged_shutter") {
+    effect.dragged_shutter.distance = change.value(QStringLiteral("distance")).toDouble();
+    effect.dragged_shutter.angle = change.value(QStringLiteral("angle")).toDouble();
+    effect.dragged_shutter.falloff = change.value(QStringLiteral("falloff")).toDouble();
+    effect.dragged_shutter.highlight_weighting = change.value(QStringLiteral("highlightWeighting")).toDouble();
+    effect.dragged_shutter.protect_subject = change.value(QStringLiteral("protectSubject")).toBool();
+    effect.dragged_shutter.edge_mode = edge;
   } else if (effect.type_id == "unsharp_mask") {
     effect.unsharp.sigma = change.value(QStringLiteral("sigma")).toDouble();
     effect.unsharp.strength = change.value(QStringLiteral("strength")).toDouble();
     effect.unsharp.threshold = change.value(QStringLiteral("threshold")).toDouble();
     effect.unsharp.edge_mode = edge;
+  } else if (effect.type_id == "optical_diffusion") {
+    effect.diffusion.radius = change.value(QStringLiteral("diffusionRadius")).toDouble();
+    effect.diffusion.threshold = change.value(QStringLiteral("highlightThreshold")).toDouble();
+    effect.diffusion.knee = change.value(QStringLiteral("highlightKnee")).toDouble();
+    effect.diffusion.strength = change.value(QStringLiteral("diffusionStrength")).toDouble();
+    effect.diffusion.warmth = change.value(QStringLiteral("warmth")).toDouble();
+    effect.diffusion.highlight_protection = change.value(QStringLiteral("highlightProtection")).toDouble();
+  } else if (effect.type_id == "imperfect_print") {
+    effect.imperfect_print.paper_scale = change.value(QStringLiteral("paperScale")).toDouble();
+    effect.imperfect_print.paper_texture = change.value(QStringLiteral("paperTexture")).toDouble();
+    effect.imperfect_print.ink_spread = change.value(QStringLiteral("inkSpread")).toDouble();
+    effect.imperfect_print.ink_density = change.value(QStringLiteral("inkDensity")).toDouble();
+    effect.imperfect_print.red_offset_x = change.value(QStringLiteral("redRegistrationX")).toDouble();
+    effect.imperfect_print.red_offset_y = change.value(QStringLiteral("redRegistrationY")).toDouble();
+    effect.imperfect_print.blue_offset_x = change.value(QStringLiteral("blueRegistrationX")).toDouble();
+    effect.imperfect_print.blue_offset_y = change.value(QStringLiteral("blueRegistrationY")).toDouble();
+    effect.imperfect_print.seed = change.value(QStringLiteral("seed")).toUInt();
   }
   return effect;
 }
@@ -1564,11 +1655,36 @@ QVariantMap effect_instance_to_map(const photo_editor::pipeline::PhotoEffectInst
     result.insert(QStringLiteral("distance"), effect.motion.distance);
     result.insert(QStringLiteral("angle"), effect.motion.angle);
     result.insert(QStringLiteral("edgeMode"), edge_name(effect.motion.edge_mode));
+  } else if (effect.type_id == "dragged_shutter") {
+    result.insert(QStringLiteral("distance"), effect.dragged_shutter.distance);
+    result.insert(QStringLiteral("angle"), effect.dragged_shutter.angle);
+    result.insert(QStringLiteral("falloff"), effect.dragged_shutter.falloff);
+    result.insert(QStringLiteral("highlightWeighting"), effect.dragged_shutter.highlight_weighting);
+    result.insert(QStringLiteral("protectSubject"), effect.dragged_shutter.protect_subject);
+    if (!effect.mask_ref.empty()) result.insert(QStringLiteral("maskId"), QString::fromStdString(effect.mask_ref));
+    result.insert(QStringLiteral("edgeMode"), edge_name(effect.dragged_shutter.edge_mode));
   } else if (effect.type_id == "unsharp_mask") {
     result.insert(QStringLiteral("sigma"), effect.unsharp.sigma);
     result.insert(QStringLiteral("strength"), effect.unsharp.strength);
     result.insert(QStringLiteral("threshold"), effect.unsharp.threshold);
     result.insert(QStringLiteral("edgeMode"), edge_name(effect.unsharp.edge_mode));
+  } else if (effect.type_id == "optical_diffusion") {
+    result.insert(QStringLiteral("diffusionRadius"), effect.diffusion.radius);
+    result.insert(QStringLiteral("highlightThreshold"), effect.diffusion.threshold);
+    result.insert(QStringLiteral("highlightKnee"), effect.diffusion.knee);
+    result.insert(QStringLiteral("diffusionStrength"), effect.diffusion.strength);
+    result.insert(QStringLiteral("warmth"), effect.diffusion.warmth);
+    result.insert(QStringLiteral("highlightProtection"), effect.diffusion.highlight_protection);
+  } else if (effect.type_id == "imperfect_print") {
+    result.insert(QStringLiteral("paperScale"), effect.imperfect_print.paper_scale);
+    result.insert(QStringLiteral("paperTexture"), effect.imperfect_print.paper_texture);
+    result.insert(QStringLiteral("inkSpread"), effect.imperfect_print.ink_spread);
+    result.insert(QStringLiteral("inkDensity"), effect.imperfect_print.ink_density);
+    result.insert(QStringLiteral("redRegistrationX"), effect.imperfect_print.red_offset_x);
+    result.insert(QStringLiteral("redRegistrationY"), effect.imperfect_print.red_offset_y);
+    result.insert(QStringLiteral("blueRegistrationX"), effect.imperfect_print.blue_offset_x);
+    result.insert(QStringLiteral("blueRegistrationY"), effect.imperfect_print.blue_offset_y);
+    result.insert(QStringLiteral("seed"), effect.imperfect_print.seed);
   }
   return result;
 }
@@ -2439,7 +2555,7 @@ QVariantMap agent_recipe_patch_tool_schema() {
           QStringLiteral("textTypography"),
       });
       schema.insert(QStringLiteral("coordinateUnits"), QStringLiteral("source-image-pixels"));
-      schema.insert(QStringLiteral("textTypographySchema"), QStringLiteral("photo-text-style-v1-or-v2"));
+      schema.insert(QStringLiteral("textTypographySchema"), QStringLiteral("photo-text-style-v1-v4"));
       schema.insert(QStringLiteral("replacementPolicy"), QStringLiteral("replace-prior-agent-graphic-layers-only"));
       schema.insert(QStringLiteral("textMaximumLength"), 2048);
       schema.insert(QStringLiteral("maximumTextLayers"), 12);
@@ -2456,7 +2572,9 @@ QVariantMap agent_recipe_patch_tool_schema() {
           QStringLiteral("size"), QStringLiteral("weight"), QStringLiteral("italic"),
           QStringLiteral("underline"), QStringLiteral("tracking"), QStringLiteral("lineHeight"),
           QStringLiteral("baselineOffset"), QStringLiteral("color"),
-          QStringLiteral("mode"), QStringLiteral("paragraphSpacing")});
+          QStringLiteral("mode"), QStringLiteral("paragraphSpacing"), QStringLiteral("strokeWidth"),
+          QStringLiteral("strokeColor"), QStringLiteral("shadowX"), QStringLiteral("shadowY"),
+          QStringLiteral("shadowColor"), QStringLiteral("axes")});
     }
     insert_typed_schema_field(
         &groups,
@@ -2496,6 +2614,36 @@ QVariantMap agent_recipe_patch_tool_schema() {
              {QStringLiteral("strengthRange"), QVariantList{0.0, 5.0}},
              {QStringLiteral("thresholdRange"), QVariantList{0.0, 1.0}},
              {QStringLiteral("edgeModes"), edge_modes.value(QStringLiteral("allowed"))}}},
+        {QStringLiteral("optical_diffusion"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("diffusionRadius"),
+                 QStringLiteral("highlightThreshold"), QStringLiteral("highlightKnee"),
+                 QStringLiteral("diffusionStrength"), QStringLiteral("warmth"),
+                 QStringLiteral("highlightProtection")}},
+             {QStringLiteral("diffusionRadiusRange"), QVariantList{0.0, 4096.0}},
+             {QStringLiteral("highlightThresholdRange"), QVariantList{0.0, 16.0}},
+             {QStringLiteral("highlightKneeRange"), QVariantList{0.0, 8.0}},
+             {QStringLiteral("diffusionStrengthRange"), QVariantList{0.0, 5.0}},
+             {QStringLiteral("warmthRange"), QVariantList{-1.0, 1.0}},
+             {QStringLiteral("highlightProtectionRange"), QVariantList{0.0, 1.0}}}},
+        {QStringLiteral("imperfect_print"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("paperScale"),
+                 QStringLiteral("paperTexture"), QStringLiteral("inkSpread"), QStringLiteral("inkDensity"),
+                 QStringLiteral("redRegistrationX"), QStringLiteral("redRegistrationY"),
+                 QStringLiteral("blueRegistrationX"), QStringLiteral("blueRegistrationY"), QStringLiteral("seed")}},
+             {QStringLiteral("paperScaleRange"), QVariantList{2.0, 512.0}},
+             {QStringLiteral("paperTextureRange"), QVariantList{0.0, 1.0}},
+             {QStringLiteral("inkSpreadRange"), QVariantList{0.0, 1.0}},
+             {QStringLiteral("inkDensityRange"), QVariantList{0.0, 2.0}},
+             {QStringLiteral("plateRegistrationRange"), QVariantList{-8.0, 8.0}},
+             {QStringLiteral("seedRange"), QVariantList{0LL, 4294967295LL}}}},
+        {QStringLiteral("dragged_shutter"), QVariantMap{
+             {QStringLiteral("requiredFields"), QStringList{QStringLiteral("distance"), QStringLiteral("angle"),
+                 QStringLiteral("falloff"), QStringLiteral("highlightWeighting"), QStringLiteral("protectSubject")}},
+             {QStringLiteral("distanceRange"), QVariantList{0.0, 4096.0}},
+             {QStringLiteral("angleRange"), QVariantList{-180.0, 180.0}},
+             {QStringLiteral("falloffRange"), QVariantList{0.0, 1.0}},
+             {QStringLiteral("highlightWeightingRange"), QVariantList{0.0, 1.0}},
+             {QStringLiteral("maskId"), QStringLiteral("optional-existing-mask-id")}}},
     };
     insert_typed_schema_field(
         &groups,
@@ -2507,7 +2655,9 @@ QVariantMap agent_recipe_patch_tool_schema() {
             {QStringLiteral("allowedTypes"), QStringList{
                  QStringLiteral("gaussian_blur"), QStringLiteral("box_blur"),
                  QStringLiteral("posterize_linear_rgb"), QStringLiteral("invert_linear_rgb"),
-                 QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask")}},
+                 QStringLiteral("motion_blur"), QStringLiteral("unsharp_mask"),
+                 QStringLiteral("optical_diffusion"), QStringLiteral("imperfect_print"),
+                 QStringLiteral("dragged_shutter")}},
             {QStringLiteral("typeSchemas"), type_schemas},
             {QStringLiteral("commonRanges"), QVariantMap{
                  {QStringLiteral("amount"), QVariantList{0.0, 1.0}}}},

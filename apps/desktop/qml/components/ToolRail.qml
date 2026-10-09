@@ -8,6 +8,7 @@ Item {
     id: root
 
     property var tools: []
+    property var toolIdentityModel: []
     property color accent: theme.accentWarm400
     property int buttonSize: theme.railButtonSizeCompact
     property int menuWidth: 220
@@ -69,11 +70,34 @@ Item {
                                                          primaryToolIds().join(",") +
                                                          "|source:rail-model|buttons:present|trigger-by-id:true"
 
-    onToolsChanged: closeOpenMenus()
+    onToolsChanged: {
+        closeOpenMenus()
+        syncToolIdentityModel()
+    }
     onSwitchSerialChanged: closeOpenMenus()
 
     function closeOpenMenus() {
         root.closeMenusRequested()
+    }
+
+    function syncToolIdentityModel() {
+        const list = root.tools || []
+        const next = []
+        for (let index = 0; index < list.length; ++index) {
+            const id = toolId(list[index])
+            next.push(id.length > 0 ? "id:" + id : "slot:" + index)
+        }
+        const current = root.toolIdentityModel || []
+        if (current.length !== next.length)
+            root.toolIdentityModel = next
+        else {
+            for (let index = 0; index < next.length; ++index) {
+                if (String(current[index]) !== next[index]) {
+                    root.toolIdentityModel = next
+                    break
+                }
+            }
+        }
     }
 
     function toolId(tool) {
@@ -228,12 +252,12 @@ Item {
 
         Repeater {
             id: toolRepeater
-            model: root.tools
+            model: root.toolIdentityModel
 
             delegate: Item {
                 id: toolDelegate
-                required property var modelData
-                readonly property var tool: modelData || ({})
+                required property int index
+                readonly property var tool: (root.tools || [])[index] || ({})
                 readonly property var toolMenuItems: root.menuActions(tool)
                 readonly property bool menuAvailable: toolMenuItems.length > 0
                 readonly property string activeFamilyLabel: tool.active === true ? root.toolLabel(tool) : ""

@@ -7,6 +7,7 @@
 #include "photo_editor/pipeline/color_pipeline.h"
 
 #include <QSize>
+#include <QStringList>
 #include <QVariantList>
 
 #include <span>
@@ -18,6 +19,23 @@ enum class DesktopRenderPurpose {
   Preview,
   Output,
 };
+
+struct DisplayReferredTextPolicySnapshot final {
+  QString render_color_domain = QStringLiteral("working-scene-linear");
+  QString eligibility = QStringLiteral("legacy-working-scene");
+  QString reason = QStringLiteral("no-topmost-plain-text-suffix");
+  QString version = QStringLiteral("display-referred-text-suffix-v1");
+  QString limits = QStringLiteral(
+      "Opaque solid root text only; direct own-mask rasters must cover the full canvas with matching aspect ratio and valid bytes. Preview ICC is applied after text only through the exact PhotographicOutput->DeviceTransform->Publish suffix with a ready SDR profile. Soft proof, export ICC, HDR targets, selection masks, effects, clipping, and non-identity detail/geometry remain in the working-scene path.");
+  QStringList eligible_layer_ids;
+};
+
+[[nodiscard]] DisplayReferredTextPolicySnapshot
+classify_display_referred_text_layers(
+    const EditRecipeState& state,
+    const photo_editor::pipeline::ColorPipelineConfig& color_pipeline_config,
+    DesktopRenderPurpose purpose,
+    const QSize& output_size);
 
 [[nodiscard]] std::vector<photo_editor::pipeline::LocalMaskSet>
 compile_pipeline_local_mask_sets(

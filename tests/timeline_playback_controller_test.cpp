@@ -170,6 +170,33 @@ int main(int argc, char** argv) {
           first_visible_source) {
     return fail("playback prefetch should protect the visible frame while warming the next cut");
   }
+  playback.seekSequenceSeconds(0.5);
+  playback.play();
+  const auto document_before_suspend = document.deterministicDocumentHash();
+  playback.setWorkspaceActive(false);
+  const auto paused_playhead = document.sequencePlayheadSeconds();
+  QEventLoop suspended_loop;
+  QTimer::singleShot(40, &suspended_loop, &QEventLoop::quit);
+  suspended_loop.exec();
+  if (playback.workspaceActive() || document.sequencePlaying() ||
+      !nearly_equal(document.sequencePlayheadSeconds(), paused_playhead) ||
+      !playback.prefetchPlan().isEmpty() || !playback.prefetchedSourceUrl().isEmpty() ||
+      document.deterministicDocumentHash() != document_before_suspend) {
+    return fail("Leaving Timeline should pause clocks and prefetch without changing the document");
+  }
+  playback.play();
+  document.playSequence();
+  if (document.sequencePlaying())
+    return fail("Hidden Timeline must reject playback even through document commands");
+  playback.setWorkspaceActive(true);
+  QEventLoop resumed_loop;
+  QTimer::singleShot(30, &resumed_loop, &QEventLoop::quit);
+  resumed_loop.exec();
+  if (!playback.workspaceActive() || document.sequencePlaying() ||
+      !nearly_equal(document.sequencePlayheadSeconds(), paused_playhead) ||
+      playback.activeSourceUrl() != first_visible_source || playback.prefetchPlan().isEmpty()) {
+    return fail("Returning to Timeline should retain its source and playhead and stay paused");
+  }
   playback.setLikelyNextEditSeconds(4.5);
   QEventLoop likely_edit_loop;
   QTimer::singleShot(30, &likely_edit_loop, &QEventLoop::quit);

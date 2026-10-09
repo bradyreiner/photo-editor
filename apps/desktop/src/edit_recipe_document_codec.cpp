@@ -1,8 +1,100 @@
 #include "edit_recipe_state.h"
+#include "edit_recipe_mask_encoding_cache.h"
 
 namespace photo_editor::desktop {
 
 namespace {
+
+// Include conservative space for duplicated base64 JSON and container overhead.
+constexpr qsizetype kMaskEncodingBudget = 128LL * 1024 * 1024;
+
+bool exact_mask_value(const QVariant& a, const QVariant& b) {
+  if (a.metaType() != b.metaType()) return false;
+  switch (a.metaType().id()) {
+    case QMetaType::QVariantList: {
+      const auto left = a.toList(), right = b.toList();
+      if (left.size() != right.size()) return false;
+      for (qsizetype i = 0; i < left.size(); ++i)
+        if (!exact_mask_value(left[i], right[i])) return false;
+      return true;
+    }
+    case QMetaType::QVariantMap: {
+      const auto left = a.toMap(), right = b.toMap();
+      if (left.size() != right.size()) return false;
+      auto r = right.cbegin();
+      for (auto l = left.cbegin(); l != left.cend(); ++l, ++r)
+        if (l.key() != r.key() || !exact_mask_value(l.value(), r.value())) return false;
+      return true;
+    }
+    case QMetaType::UnknownType: return true;
+    case QMetaType::QString:
+    case QMetaType::QByteArray:
+    case QMetaType::Bool:
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+    case QMetaType::Double:
+    case QMetaType::Float: return a == b;
+    default: return false;
+  }
+}
+
+bool copy_mask_key(const QVariant& value, QVariant* copy, qsizetype* budget) {
+  const auto charge = [budget](qsizetype bytes) {
+    if (bytes > *budget) return false;
+    *budget -= bytes;
+    return true;
+  };
+  if (!charge(512)) return false;
+  switch (value.metaType().id()) {
+    case QMetaType::QVariantList: {
+      QVariantList list;
+      for (const auto& item : value.toList()) {
+        QVariant child;
+        if (!copy_mask_key(item, &child, budget)) return false;
+        list.append(std::move(child));
+      }
+      *copy = std::move(list);
+      return true;
+    }
+    case QMetaType::QVariantMap: {
+      QVariantMap map;
+      const auto source = value.toMap();
+      for (auto it = source.cbegin(); it != source.cend(); ++it) {
+        if (it.key().size() > *budget / 8 || !charge(it.key().size() * 8)) return false;
+        QVariant child;
+        if (!copy_mask_key(it.value(), &child, budget)) return false;
+        map.insert(QString(it.key().constData(), it.key().size()), std::move(child));
+      }
+      *copy = std::move(map);
+      return true;
+    }
+    case QMetaType::QByteArray: {
+      const auto bytes = value.toByteArray();
+      if (bytes.size() > *budget / 7 || !charge(bytes.size() * 7)) return false;
+      *copy = QByteArray(bytes.constData(), bytes.size());
+      return true;
+    }
+    case QMetaType::QString: {
+      const auto string = value.toString();
+      if (string.size() > *budget / 16 || !charge(string.size() * 16)) return false;
+      *copy = QString(string.constData(), string.size());
+      return true;
+    }
+    case QMetaType::UnknownType:
+    case QMetaType::Bool:
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+    case QMetaType::Double:
+    case QMetaType::Float:
+      *copy = value;
+      return true;
+    default: return false;
+  }
+}
 
 void insert_serialized_brush_paths(
     const QVariantMap& mask_definition,
@@ -1665,8 +1757,36 @@ EditRecipeState parse_edit_recipe_json(const QString& recipe_json) {
 #else
 #define PHOTO_EDITOR_RECIPE_NOINLINE
 #endif
-QJsonObject build_edit_adjustment_state_object(
-    const EditRecipeState& state) {
+const std::array<QJsonArray, 3>* EditRecipeMaskEncodingCache::find(
+    const QVariantList& masks) const {
+  return !masks.isEmpty() && !masks_.isEmpty() && exact_mask_value(masks, masks_)
+      ? &encoded_ : nullptr;
+}
+
+void EditRecipeMaskEncodingCache::store(
+    const QVariantList& masks, const std::array<QJsonArray, 3>& encoded) {
+  clear();
+  if (masks.isEmpty()) return;
+  // Normalization generates a fresh identity for missing IDs. Preserve that
+  // behavior instead of freezing the first generated identity in this cache.
+  for (const auto& mask : masks) {
+    if (mask.metaType().id() != QMetaType::QVariantMap ||
+        mask.toMap().value(QStringLiteral("id")).toString().simplified().isEmpty()) return;
+  }
+  qsizetype budget = kMaskEncodingBudget;
+  QVariant key;
+  if (!copy_mask_key(masks, &key, &budget)) return;
+  masks_ = key.toList();
+  encoded_ = encoded;
+}
+
+void EditRecipeMaskEncodingCache::clear() {
+  masks_.clear();
+  encoded_ = {};
+}
+
+static QJsonObject build_edit_adjustment_state_object_cached(
+    const EditRecipeState& state, EditRecipeMaskEncodingCache* cache) {
   const auto primary_sections = [&state]() PHOTO_EDITOR_RECIPE_NOINLINE {
   QJsonObject raw_adjustments;
   raw_adjustments.insert(QStringLiteral("inputTransformEnabled"), state.raw_input_transform_enabled);
@@ -2060,7 +2180,7 @@ QJsonObject build_edit_adjustment_state_object(
   const auto& export_transform = output_sections[3];
   const auto& color_pipeline = output_sections[4];
 
-  const auto serialized_mask_collections = [&state]() PHOTO_EDITOR_RECIPE_NOINLINE {
+  const auto build_mask_collections = [&state]() PHOTO_EDITOR_RECIPE_NOINLINE {
   const auto serialize_mask_object = [](
       const QVariantMap& candidate,
       int ordinal) PHOTO_EDITOR_RECIPE_NOINLINE {
@@ -2779,7 +2899,10 @@ QJsonObject build_edit_adjustment_state_object(
 
   return std::array<QJsonArray, 3>{mask_stack, retouch_stack, mask_sets};
   }();
-  }();
+  };
+  const auto* cached_masks = cache ? cache->find(state.mask_stack) : nullptr;
+  const auto serialized_mask_collections = cached_masks ? *cached_masks : build_mask_collections();
+  if (cache && !cached_masks) cache->store(state.mask_stack, serialized_mask_collections);
   const auto& mask_stack = serialized_mask_collections[0];
   const auto& retouch_stack = serialized_mask_collections[1];
   const auto& mask_sets = serialized_mask_collections[2];
@@ -2822,9 +2945,17 @@ QJsonObject build_edit_adjustment_state_object(
   return object;
 }
 
-QJsonObject build_edit_recipe_object(
-    const EditRecipeState& state) {
-  auto object = build_edit_adjustment_state_object(state);
+QJsonObject build_edit_adjustment_state_object(const EditRecipeState& state) {
+  return build_edit_adjustment_state_object_cached(state, nullptr);
+}
+
+QJsonObject build_edit_recipe_object(const EditRecipeState& state) {
+  return build_edit_recipe_object_with_mask_cache(state, nullptr);
+}
+
+QJsonObject build_edit_recipe_object_with_mask_cache(
+    const EditRecipeState& state, EditRecipeMaskEncodingCache* cache) {
+  auto object = build_edit_adjustment_state_object_cached(state, cache);
   object.insert(QStringLiteral("recipeVersion"), detail::photo_layers_have_paint_tiles(state.layers)
       ? kPhotoPaintEditRecipeVersion : detail::photo_layers_have_typography(state.layers)
       ? kPhotoTypographyEditRecipeVersion : detail::photo_layers_have_effect_stacks(state.layers)

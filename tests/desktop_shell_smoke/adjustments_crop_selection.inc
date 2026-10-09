@@ -182,7 +182,7 @@
           edit_workspace,
           "editAdjustmentFilterSignature",
           Q_RETURN_ARG(QVariant, adjustment_filter_signature)) ||
-      adjustment_filter_signature.toString() != QStringLiteral("query:dehaze|count:1|groups:presence") ||
+      adjustment_filter_signature.toString() != QStringLiteral("query:dehaze|intent:all|count:1|groups:presence") ||
       edit_adjustment_filter_field->property("text").toString() != QStringLiteral("dehaze") ||
       !edit_adjustment_filter_status_label->property("visible").toBool() ||
       !edit_adjustment_filter_status_label->property("text").toString().contains(QStringLiteral("1 matching")) ||
@@ -202,10 +202,22 @@
           "editAdjustmentFilterSignature",
           Q_RETURN_ARG(QVariant, adjustment_filter_signature)) ||
       adjustment_filter_signature.toString() !=
-          QStringLiteral("query:channel|count:1|groups:advanced-color") ||
+          QStringLiteral("query:channel|intent:all|count:1|groups:advanced-color") ||
       !advanced_color_group->property("visible").toBool() ||
       presence_group->property("visible").toBool()) {
     return fail("adjust inspector filter should find advanced color controls by contained capability names");
+  }
+  edit_workspace->setProperty("editAdjustmentFilterText", QStringLiteral("grading"));
+  QCoreApplication::processEvents();
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "editAdjustmentFilterSignature",
+          Q_RETURN_ARG(QVariant, adjustment_filter_signature)) ||
+      adjustment_filter_signature.toString() !=
+          QStringLiteral("query:grading|intent:all|count:1|groups:color-grading") ||
+      !color_grading_group->property("visible").toBool() ||
+      advanced_color_group->property("visible").toBool()) {
+    return fail("adjust inspector filter should isolate Color Grading from specialist color-mix controls");
   }
   QVariant raw_availability_signature;
   QVariant disabled_capability_signature;
@@ -224,7 +236,7 @@
           "disabledCapabilityReasonSignature",
           Q_RETURN_ARG(QVariant, disabled_capability_signature)) ||
       editor_preview.rawControlsAvailable() ||
-      adjustment_filter_signature.toString() != QStringLiteral("query:raw|count:0|groups:") ||
+      adjustment_filter_signature.toString() != QStringLiteral("query:raw|intent:all|count:0|groups:") ||
       raw_availability_signature.toString() !=
           QStringLiteral("available:false|rawGroups:0|groupVisible:false") ||
       !edit_adjustment_filter_status_label->property("text").toString().contains(QStringLiteral("RAW source")) ||
@@ -269,7 +281,7 @@
           "editAdjustmentFilterSignature",
           Q_RETURN_ARG(QVariant, adjustment_filter_signature)) ||
       adjustment_filter_signature.toString() !=
-          QStringLiteral("query:|count:7|groups:white-balance,light,tone-curve,color,presence,detail,advanced-color") ||
+          QStringLiteral("query:|intent:all|count:11|groups:white-balance,light,levels,tone-curve,color,color-mix,color-grading,advanced-color,presence,detail,lens-transform") ||
       !white_balance_group->property("visible").toBool() ||
       !light_group->property("visible").toBool() ||
       !tone_curve_group->property("visible").toBool() ||
@@ -286,52 +298,62 @@
       return fail("edit inspector footer should contain only edit-local actions, not export navigation");
     }
   }
-  auto* initial_activity_indicator = find_named_item(root, QStringLiteral("floatingActivityIndicator"));
   auto* app_navigation_bar = find_named_item(root, QStringLiteral("appNavigationBar"));
+  const auto app_activity_error_visible = root->property("appActivityErrorVisible").toBool();
+  const auto recovery_banner_visible = root->property("recoveryBannerVisible").toBool();
+  const auto status_row_visible = app_activity_error_visible || recovery_banner_visible;
+  auto* initial_activity_indicator = find_named_item(
+      root,
+      recovery_banner_visible
+          ? QStringLiteral("recoveryStatusIndicator")
+          : app_activity_error_visible
+                ? QStringLiteral("failureActivityIndicator")
+                : QStringLiteral("floatingActivityIndicator"));
   auto* initial_edit_inspector = qobject_cast<QQuickItem*>(edit_inspector_panel);
   auto* initial_edit_footer = qobject_cast<QQuickItem*>(edit_inspector_footer);
+  const auto activity_indicator_rect = scene_rect(initial_activity_indicator);
+  const auto navigation_rect = scene_rect(app_navigation_bar);
   if (initial_activity_indicator == nullptr || app_navigation_bar == nullptr ||
-      initial_activity_indicator->width() <= 0.0 ||
-      (item_visible(initial_activity_indicator) && initial_activity_indicator->height() <= 0.0) ||
-      initial_activity_indicator->y() + 1.0 < app_navigation_bar->y() + app_navigation_bar->height() ||
+      (status_row_visible &&
+       (!item_visible(initial_activity_indicator) || activity_indicator_rect.width() <= 0.0 ||
+        activity_indicator_rect.height() <= 0.0 ||
+        activity_indicator_rect.top() + 1.0 < navigation_rect.bottom())) ||
+      (!status_row_visible && initial_activity_indicator->height() > 0.0) ||
       initial_edit_filmstrip == nullptr ||
       !item_visible(initial_edit_inspector) || !item_visible(initial_edit_footer)) {
     return fail("activity status should sit directly beneath navigation without occupying space while idle");
   }
   if (light_basic_tone_group == nullptr || light_advanced_tone_group == nullptr ||
-      light_levels_group != nullptr || light_zone_mapping_group == nullptr ||
-      tone_curve_input_levels_group == nullptr || tone_curve_input_levels_strip == nullptr ||
+      levels_inspector_group == nullptr || light_zone_mapping_group == nullptr ||
+      tone_curve_input_levels_group != nullptr || tone_curve_input_levels_strip == nullptr ||
       tone_curve_input_levels_histogram == nullptr || tone_curve_input_levels_handle == nullptr ||
       light_rolloff_detail_reset_button == nullptr || light_zone_mixer_reset_button == nullptr ||
       tone_curve_input_levels_reset_button == nullptr ||
       light_basic_tone_group->property("title").toString() != QStringLiteral("Basic Tone") ||
       light_advanced_tone_group->property("title").toString() != QStringLiteral("Roll-off & Detail") ||
       light_zone_mapping_group->property("title").toString() != QStringLiteral("Zone Mixer") ||
-      tone_curve_input_levels_group->property("title").toString() != QStringLiteral("Input Levels") ||
+      levels_inspector_group->property("title").toString() != QStringLiteral("Levels") ||
       !light_advanced_tone_group->property("resetVisible").toBool() ||
       !light_zone_mapping_group->property("resetVisible").toBool() ||
-      !tone_curve_input_levels_group->property("resetVisible").toBool() ||
+      !levels_inspector_group->property("resetVisible").toBool() ||
       !light_basic_tone_group->property("expanded").toBool() ||
       light_advanced_tone_group->property("expanded").toBool() ||
       light_zone_mapping_group->property("expanded").toBool() ||
-      tone_curve_input_levels_group->property("expanded").toBool() ||
+      !levels_inspector_group->property("visible").toBool() ||
       !(light_basic_tone_group->property("y").toDouble() <
         light_advanced_tone_group->property("y").toDouble() &&
         light_advanced_tone_group->property("y").toDouble() <
         light_zone_mapping_group->property("y").toDouble())) {
-    return fail("light inspector should keep only tone controls while tone curve owns a collapsed input-level utility");
+    return fail("Levels should be a standalone inspector section with its own reset affordance");
   }
   edit_workspace->setProperty("lightAdvancedToneExpanded", true);
-  edit_workspace->setProperty("lightLevelsExpanded", true);
   edit_workspace->setProperty("lightZonesExpanded", true);
   QCoreApplication::processEvents();
   if (!light_advanced_tone_group->property("expanded").toBool() ||
-      !tone_curve_input_levels_group->property("expanded").toBool() ||
       !light_zone_mapping_group->property("expanded").toBool()) {
-    return fail("advanced tone, input levels, and zone groups should expand through explicit workspace state");
+    return fail("advanced tone and zone groups should expand through explicit workspace state");
   }
   edit_workspace->setProperty("lightAdvancedToneExpanded", false);
-  edit_workspace->setProperty("lightLevelsExpanded", false);
   edit_workspace->setProperty("lightZonesExpanded", false);
   QCoreApplication::processEvents();
   if (advanced_color_group == nullptr || color_mix_group == nullptr || channel_mixer_group == nullptr ||
@@ -667,7 +689,7 @@
   auto* liquify_radius_slider = edit_workspace->findChild<QObject*>(QStringLiteral("liquifyRadiusSlider"));
   QVariant committed_input_value;
   if (exposure_slider == nullptr || exposure_value_field == nullptr ||
-      exposure_modified_marker == nullptr || exposure_reset_button == nullptr ||
+      exposure_modified_marker != nullptr || exposure_reset_button == nullptr ||
       temperature_slider == nullptr ||
       temperature_value_field == nullptr || !exposure_value_field->property("enabled").toBool() ||
       !temperature_value_field->property("enabled").toBool()) {
@@ -678,30 +700,31 @@
       exposure_slider->property("studioAdjustmentSliderContract").toString();
   const auto exposure_studio_slider_signature =
       exposure_slider->property("studioAdjustmentSliderSignature").toString();
-  if (!exposure_slider_contract.contains(QStringLiteral("inspector-slider:v2")) ||
+  if (!exposure_slider_contract.contains(QStringLiteral("inspector-slider:v4")) ||
+      !exposure_slider_contract.contains(QStringLiteral("wide-rail:true")) ||
       !exposure_slider_contract.contains(QStringLiteral("value-column:68")) ||
       !exposure_slider_contract.contains(QStringLiteral("reset-column:28")) ||
-      !exposure_slider_contract.contains(QStringLiteral("row-height:44")) ||
+      !exposure_slider_contract.contains(QStringLiteral("row-height:62")) ||
       !exposure_slider_contract.contains(QStringLiteral("track:3")) ||
       !exposure_slider_contract.contains(QStringLiteral("thumb:12-16")) ||
       !exposure_slider_contract.contains(QStringLiteral("reserved-thumb:16")) ||
       !exposure_slider_contract.contains(QStringLiteral("typed-entry:true")) ||
-      !exposure_slider_contract.contains(QStringLiteral("modified-marker:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("modified-marker:false")) ||
       !exposure_slider_contract.contains(QStringLiteral("fixed-reset:true")) ||
       !exposure_slider_contract.contains(QStringLiteral("stable-value:true")) ||
-      !exposure_slider_contract.contains(QStringLiteral("fixed-label:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("label-layout:fluid")) ||
       !exposure_slider_contract.contains(QStringLiteral("disabled-reason:true")) ||
       !exposure_slider_contract.contains(QStringLiteral("no-elide:true")) ||
       !exposure_slider_contract.contains(QStringLiteral("double-click-reset:true")) ||
       !exposure_slider_contract.contains(QStringLiteral("no-handle-layout-shift:true")) ||
-      !exposure_studio_slider_contract.contains(QStringLiteral("studio-adjustment-slider:v1")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("studio-adjustment-slider:v2")) ||
       !exposure_studio_slider_contract.contains(QStringLiteral("shared-inspector-slider:true")) ||
       !exposure_studio_slider_contract.contains(QStringLiteral("coalesced-drag:true")) ||
       !exposure_studio_slider_contract.contains(QStringLiteral("target-aware:true")) ||
       !exposure_studio_slider_contract.contains(QStringLiteral("disabled-reason:true")) ||
       !exposure_studio_slider_signature.contains(QStringLiteral("|target-support:base-image,adjustment-layer|")) ||
       !exposure_studio_slider_signature.contains(QStringLiteral("|target-supported:true|")) ||
-      !exposure_studio_slider_signature.contains(QStringLiteral("|slider:inspector-slider:v2")) ||
+      !exposure_studio_slider_signature.contains(QStringLiteral("|slider:inspector-slider:v4")) ||
       !exposure_studio_slider_signature.contains(QStringLiteral("|target:adjustment-control-target-support:v1"))) {
     std::cerr << "Exposure slider contracts: slider="
               << exposure_slider_contract.toStdString()
@@ -721,8 +744,7 @@
   if (
       std::abs(editor_preview.exposure() - 1.37) > 1e-6 ||
       exposure_slider->property("valueText").toString() != QStringLiteral("+1.37 EV") ||
-      !exposure_slider->property("modified").toBool() ||
-      !exposure_modified_marker->property("visible").toBool()) {
+      !exposure_slider->property("modified").toBool()) {
     return fail("precise exposure entry should accept typed EV values through the slider value field");
   }
   if (!QMetaObject::invokeMethod(
@@ -770,19 +792,22 @@
       grading_balance_slider == nullptr || selected_tone_saturation_slider == nullptr ||
       selected_tone_luminance_slider == nullptr ||
       split_toning_focused_wheel->property("wheelSize").toDouble() < 140.0 ||
-      grading_amount_slider->property("controlHeight").toInt() < 40 ||
-      grading_balance_slider->property("controlHeight").toInt() < 40 ||
-      selected_tone_hue_slider->property("controlHeight").toInt() < 40 ||
-      selected_tone_saturation_slider->property("controlHeight").toInt() < 40 ||
-      selected_tone_luminance_slider->property("controlHeight").toInt() < 40 ||
+      grading_amount_slider->property("controlHeight").toInt() < 28 ||
+      grading_balance_slider->property("controlHeight").toInt() < 28 ||
+      selected_tone_hue_slider->property("controlHeight").toInt() < 28 ||
+      selected_tone_saturation_slider->property("controlHeight").toInt() < 28 ||
+      selected_tone_luminance_slider->property("controlHeight").toInt() < 28 ||
       grading_amount_slider->property("valueText").toString() != QStringLiteral("100") ||
       grading_balance_slider->property("valueText").toString() != QStringLiteral("0%")) {
-    return fail("color grading should expose a large focused wheel plus 40px Amount, Balance, Hue, Saturation, and Luminance sliders");
+    return fail("color grading should expose a large focused wheel with compact, precise Amount, Balance, Hue, Saturation, and Luminance controls");
   }
-  if (split_toning_shadows_wheel->property("minimumUsefulWidth").toInt() > 96 ||
-      split_toning_midtones_wheel->property("minimumUsefulWidth").toInt() > 96 ||
-      split_toning_highlights_wheel->property("minimumUsefulWidth").toInt() > 96) {
-    return fail("split-toning preview wheels should stay compact enough to fit three-up in the inspector");
+  if (split_toning_shadows_wheel->property("text").toString() != QStringLiteral("Shadows") ||
+      split_toning_midtones_wheel->property("text").toString() != QStringLiteral("Midtones") ||
+      split_toning_highlights_wheel->property("text").toString() != QStringLiteral("Highlights") ||
+      split_toning_focused_wheel->property("wheelSize").toDouble() < 250.0 ||
+      !split_toning_focused_wheel->property("title").toString().isEmpty() ||
+      split_toning_focused_wheel->property("showValueReadouts").toBool()) {
+    return fail("color grading should use named tonal-range tabs above one large, uncluttered hue/saturation wheel");
   }
   if (!QMetaObject::invokeMethod(
           selected_tone_hue_slider,
@@ -843,7 +868,7 @@
   if (std::abs(editor_preview.exposure()) > 1e-6 ||
       std::abs(editor_preview.channelMixerRedFromRed() - 100.0) > 1e-6 ||
       exposure_slider->property("modified").toBool() ||
-      exposure_modified_marker->property("visible").toBool() ||
+      exposure_modified_marker != nullptr ||
       channel_mixer_red_slider->property("modified").toBool()) {
     return fail("double-click reset should restore each adjustment slider to its declared default value");
   }
@@ -876,17 +901,48 @@
     return fail("detail inspector should expose inspection, sharpen, masking, and noise reduction controls");
   }
   auto* detail_edit_image_viewport = find_named_object(edit_workspace, QStringLiteral("editImageViewport"));
+  const auto detail_inspection_asset_path =
+      runtime_root.filePath(QStringLiteral("detail-inspection-proof.png"));
+  QImage detail_inspection_fixture(1200, 800, QImage::Format_RGB32);
+  detail_inspection_fixture.fill(QColor(72, 96, 120));
+  if (!detail_inspection_fixture.save(detail_inspection_asset_path)) {
+    return fail("detail inspection proof should create a source image fixture");
+  }
+  catalog_assets.replaceAssetsForTesting({make_asset(
+      QStringLiteral("detail-inspection-proof"),
+      detail_inspection_asset_path,
+      QUrl::fromLocalFile(detail_inspection_asset_path).toString())});
+  catalog_assets.selectIndex(0);
+  if (!wait_for_condition([&]() {
+        return editor_preview.hasAsset() &&
+               editor_preview.assetId() == QStringLiteral("detail-inspection-proof") &&
+               editor_preview.sourceImageWidth() == detail_inspection_fixture.width() &&
+               editor_preview.sourceImageHeight() == detail_inspection_fixture.height() &&
+               !editor_preview.processing();
+      }, 15000)) {
+    return fail("detail inspection proof asset should publish source dimensions before one-to-one review");
+  }
+  process_layout_events(8);
   QVariant detail_inspection_started;
+  const auto detail_pixel_ratio =
+      detail_edit_image_viewport != nullptr
+          ? detail_edit_image_viewport->property("inspectionDevicePixelRatio").toDouble()
+          : 1.0;
   if (detail_edit_image_viewport == nullptr ||
       !QMetaObject::invokeMethod(
           detail_edit_image_viewport,
           "inspectDetailAtOneToOne",
           Q_RETURN_ARG(QVariant, detail_inspection_started)) ||
       !detail_inspection_started.toBool() ||
-      detail_edit_image_viewport->property("zoom").toDouble() <= 1.01 ||
+      std::abs(detail_edit_image_viewport->property("sourcePixelScreenWidth").toDouble() *
+                   detail_pixel_ratio -
+               1.0) > 0.05 ||
+      std::abs(detail_edit_image_viewport->property("sourcePixelScreenHeight").toDouble() *
+                   detail_pixel_ratio -
+               1.0) > 0.05 ||
       !edit_workspace->property("loupeEnabled").toBool() ||
       !edit_workspace->property("focusPeakingOverlayEnabled").toBool()) {
-    return fail("detail inspection should switch the edit viewport into 1:1 loupe/peaking review");
+    return fail("detail inspection should render one source pixel per device pixel with loupe and peaking enabled");
   }
   edit_workspace->setProperty("loupeEnabled", false);
   edit_workspace->setProperty("focusPeakingOverlayEnabled", false);
@@ -1214,19 +1270,18 @@
         find_named_object(edit_workspace, QStringLiteral("diagnosticsOverlayPanel"));
     if (focused_diagnostics_button == nullptr ||
         focused_diagnostics_panel == nullptr ||
-        focused_diagnostics_button->property("visible").toBool() ||
-        focused_diagnostics_panel->property("visible").toBool()) {
-      return fail("developer diagnostics should stay hidden while developer diagnostics are disabled");
+        !focused_diagnostics_button->property("visible").toBool() ||
+        !focused_diagnostics_panel->property("visible").toBool() ||
+        !focused_diagnostics_button->property("diagnosticsMenuContract")
+             .toString()
+             .contains(QStringLiteral("image-inspection:user-accessible"))) {
+      return fail("image inspection overlays should be available in Edit without developer mode");
     }
-    edit_workspace->setProperty("developerDiagnosticsEnabled", true);
     edit_workspace->setProperty("diagnosticsPanelOpen", false);
     QCoreApplication::processEvents();
     if (!focused_diagnostics_button->property("visible").toBool() ||
-        focused_diagnostics_panel->property("visible").toBool() ||
-        !focused_diagnostics_button->property("diagnosticsMenuContract")
-             .toString()
-             .contains(QStringLiteral("developer-mode-gated:true"))) {
-      return fail("developer diagnostics button should appear only after developer diagnostics are enabled");
+        focused_diagnostics_panel->property("visible").toBool()) {
+      return fail("image inspection button should stay visible while its menu is closed");
     }
     edit_workspace->setProperty("diagnosticsPanelOpen", true);
     QCoreApplication::processEvents();
@@ -1234,14 +1289,14 @@
         !item_visible(qobject_cast<QQuickItem*>(focused_diagnostics_panel)) ||
         !focused_diagnostics_panel->property("diagnosticsMenuContract")
              .toString()
-             .contains(QStringLiteral("developer-mode-gated:true"))) {
-      return fail("developer diagnostics panel should open only under the developer diagnostics gate");
+             .contains(QStringLiteral("image-inspection:user-accessible"))) {
+      return fail("image inspection panel should open with advanced details still developer-gated");
     }
     edit_workspace->setProperty("developerDiagnosticsEnabled", false);
     QCoreApplication::processEvents();
-    if (focused_diagnostics_button->property("visible").toBool() ||
-        focused_diagnostics_panel->property("visible").toBool()) {
-      return fail("turning off developer diagnostics should hide diagnostic chrome immediately");
+    if (!focused_diagnostics_button->property("visible").toBool() ||
+        !focused_diagnostics_panel->property("visible").toBool()) {
+      return fail("turning off developer diagnostics should preserve normal image inspection overlays");
     }
     trace_smoke_progress("focused diagnostics gating checked");
     return EXIT_SUCCESS;
@@ -1438,6 +1493,14 @@
   auto* mask_source_sky_button = edit_workspace->findChild<QObject*>(QStringLiteral("maskSourceSkyButton"));
   auto* mask_source_background_button =
       edit_workspace->findChild<QObject*>(QStringLiteral("maskSourceBackgroundButton"));
+  auto* mask_selection_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("maskSelectionMenuButton"));
+  auto* mask_brush_shape_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("maskBrushShapeMenuButton"));
+  auto* mask_range_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("maskRangeMenuButton"));
+  auto* mask_retouch_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("maskRetouchMenuButton"));
   auto* mask_source_brush_add_button =
       edit_workspace->findChild<QObject*>(QStringLiteral("maskSourceBrushAddButton"));
   auto* mask_source_brush_erase_button =
@@ -1575,14 +1638,14 @@
       edit_pan_zoom_input_handler->property("pointerGrabPolicy").toString() != QStringLiteral("defer-to-mask-overlay") ||
       !mask_creation_toolbar->property("visible").toBool() ||
       mask_creation_toolbar->property("sourceCreationContract").toString() !=
-          QStringLiteral("selection-top-toolbar:v2|source-creation:false|combine:true|status:true|done:true|owner:left-rail") ||
+          QStringLiteral("selection-top-toolbar:v2|source-creation:false|combine:true|status:true|done:true|owner:top-context-toolbar") ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "selectionCreationSurfaceSignature",
           Q_RETURN_ARG(QVariant, selection_creation_surface_signature)) ||
       selection_creation_surface_signature.toString() !=
           QStringLiteral(
-              "selection-creation-surfaces:v2|owner:left-rail|rail:true|rail-expanded:false|rail-creation-surfaces:1|rail-visible-entries:4|top-source-creation:false|top-combine-toolbar:true|legacy-source-buttons:hidden|retouch-in-selection:true|visible-creation-surfaces:1") ||
+              "selection-creation-surfaces:v2|owner:top-tool-rail|rail:true|rail-expanded:false|rail-creation-surfaces:1|rail-visible-entries:4|top-source-creation:false|top-combine-toolbar:true|legacy-source-buttons:hidden|retouch-in-selection:true|visible-creation-surfaces:1") ||
       mask_creation_vocabulary_label->property("text").toString() != QStringLiteral("Selection") ||
       !mask_creation_vocabulary_label->property("vocabularyTooltip").toString().contains(QStringLiteral("Retouch")) ||
       !mask_creation_vocabulary_label->property("vocabularyTooltip").toString().contains(QStringLiteral("Selection group")) ||
@@ -1591,9 +1654,29 @@
       !mask_creation_vocabulary_label->property("vocabularyTooltip").toString().contains(QStringLiteral("Overlay")) ||
       !mask_tool_rail->property("visible").toBool() ||
       mask_tool_rail->property("layoutContract").toString() !=
-          QStringLiteral("left-rail|icon-first|expandable:v1") ||
+          QStringLiteral("top-tool-rail|icon-first|popover-menus:true|surface:transparent") ||
       !mask_tool_rail->property("compactLabelsHidden").toBool() ||
-      mask_tool_rail->property("width").toDouble() > 54.0 ||
+      mask_tool_rail->property("width").toDouble() > 200.0 ||
+      mask_selection_menu_button == nullptr ||
+      !mask_selection_menu_button->property("visible").toBool() ||
+      !mask_selection_menu_button->property("menuEnabled").toBool() ||
+      mask_selection_menu_button->property("menuItems").toList().size() != 4 ||
+      mask_selection_menu_button->property("resolvedAccessibleName").toString().isEmpty() ||
+      mask_brush_shape_menu_button == nullptr ||
+      !mask_brush_shape_menu_button->property("visible").toBool() ||
+      !mask_brush_shape_menu_button->property("menuEnabled").toBool() ||
+      mask_brush_shape_menu_button->property("menuItems").toList().size() != 10 ||
+      mask_brush_shape_menu_button->property("resolvedAccessibleName").toString().isEmpty() ||
+      mask_range_menu_button == nullptr ||
+      !mask_range_menu_button->property("visible").toBool() ||
+      !mask_range_menu_button->property("menuEnabled").toBool() ||
+      mask_range_menu_button->property("menuItems").toList().size() != 3 ||
+      mask_range_menu_button->property("resolvedAccessibleName").toString().isEmpty() ||
+      mask_retouch_menu_button == nullptr ||
+      !mask_retouch_menu_button->property("visible").toBool() ||
+      !mask_retouch_menu_button->property("menuEnabled").toBool() ||
+      mask_retouch_menu_button->property("menuItems").toList().size() != 6 ||
+      mask_retouch_menu_button->property("resolvedAccessibleName").toString().isEmpty() ||
       mask_tool_rail_toggle_button->property("text").toString() != QStringLiteral("Tools") ||
       !mask_tool_rail_toggle_button->property("tooltip").toString().contains(QStringLiteral("Expand")) ||
       mask_tool_rail_section_label->property("visible").toBool() ||
@@ -2327,6 +2410,76 @@
               << shared_outline_hit_target->height() << '\n';
     return fail("clicking the shared canvas outline should reselect its mask/layer target");
   }
+
+  auto* edit_history_tab =
+      find_named_object(edit_workspace, QStringLiteral("historyInspectorTabButton"));
+  auto* edit_history_panel = find_named_object(edit_workspace, QStringLiteral("editHistoryPanel"));
+  auto* edit_history_undo = find_named_object(edit_workspace, QStringLiteral("editHistoryUndoButton"));
+  auto* edit_history_redo = find_named_object(edit_workspace, QStringLiteral("editHistoryRedoButton"));
+  auto* active_selection_outline = find_named_item(
+      edit_workspace, QStringLiteral("editImageViewportSharedActiveSelectionOutline"));
+  if (edit_history_tab == nullptr || edit_history_panel == nullptr || edit_history_undo == nullptr ||
+      edit_history_redo == nullptr || active_selection_outline == nullptr ||
+      !QMetaObject::invokeMethod(edit_history_tab, "clicked", Qt::DirectConnection)) {
+    return fail("selection history should expose its tab, undo/redo controls, and rendered outline");
+  }
+  process_layout_events(8);
+  if (!edit_history_panel->property("visible").toBool() ||
+      !edit_history_undo->property("enabled").toBool() ||
+      !item_visible(active_selection_outline)) {
+    return fail("the committed selection should remain rendered while its edit history is visible");
+  }
+  const auto capture_selection_outline = [&]() {
+    process_layout_events(5);
+    const auto frame = root_window->grabWindow();
+    if (frame.isNull())
+      return QImage{};
+    const auto scene_bounds = active_selection_outline->mapRectToScene(
+        QRectF(0, 0, active_selection_outline->width(), active_selection_outline->height()));
+    const auto scale = frame.devicePixelRatio();
+    const QRect pixel_bounds(
+        qRound(scene_bounds.x() * scale),
+        qRound(scene_bounds.y() * scale),
+        qRound(scene_bounds.width() * scale),
+        qRound(scene_bounds.height() * scale));
+    return frame.copy(pixel_bounds.intersected(frame.rect()));
+  };
+  const auto significant_pixel_difference = [](const QImage& first, const QImage& second) {
+    if (first.isNull() || second.isNull() || first.size() != second.size())
+      return -1;
+    auto changed = 0;
+    for (auto y = 0; y < first.height(); ++y) {
+      for (auto x = 0; x < first.width(); ++x) {
+        const auto a = first.pixelColor(x, y);
+        const auto b = second.pixelColor(x, y);
+        const auto distance = std::abs(a.red() - b.red()) +
+                              std::abs(a.green() - b.green()) +
+                              std::abs(a.blue() - b.blue());
+        if (distance > 36)
+          ++changed;
+      }
+    }
+    return changed;
+  };
+  const auto committed_selection_pixels = capture_selection_outline();
+  if (committed_selection_pixels.isNull() ||
+      !QMetaObject::invokeMethod(edit_history_undo, "clicked", Qt::DirectConnection) ||
+      !wait_for_condition([&]() { return editor_preview.maskCount() == mask_count_before_polygon_cancel; })) {
+    return fail("History Undo should remove the committed polygon selection");
+  }
+  const auto undone_selection_pixels = capture_selection_outline();
+  if (!edit_history_redo->property("enabled").toBool() ||
+      significant_pixel_difference(committed_selection_pixels, undone_selection_pixels) < 40 ||
+      !QMetaObject::invokeMethod(edit_history_redo, "clicked", Qt::DirectConnection) ||
+      !wait_for_condition(
+          [&]() { return editor_preview.maskCount() == mask_count_before_polygon_cancel + 1; }) ||
+      !wait_for_condition([&]() { return item_visible(active_selection_outline); })) {
+    return fail("Undo/Redo should remove and restore the rendered selection through the visible history controls");
+  }
+  const auto redone_selection_pixels = capture_selection_outline();
+  if (significant_pixel_difference(committed_selection_pixels, redone_selection_pixels) > 500) {
+    return fail("Redo should restore the same rendered polygon selection state");
+  }
   editor_preview.removeActiveMask();
   QCoreApplication::processEvents();
   if (editor_preview.maskCount() != mask_count_before_polygon_cancel) {
@@ -2463,6 +2616,9 @@
       !active_canvas_tool_done_button->property("enabled").toBool()) {
     return fail("active lasso drawing should expose a Done-ready active-tool chip and Enter/Return shortcuts");
   }
+  edit_workspace->setProperty("lassoDrawArmed", true);
+  edit_viewport->setProperty("maskGestureKind", QStringLiteral("lasso"));
+  edit_viewport->setProperty("maskGestureId", editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap().value("id"));
   if (!QMetaObject::invokeMethod(
           edit_viewport,
           "handleMaskPointerReleased")) {
@@ -2473,9 +2629,9 @@
   if (editor_preview.activeMaskKind() != QStringLiteral("lasso") ||
       !closed_lasso.value(QStringLiteral("lassoClosed")).toBool() ||
       !closed_lasso.value(QStringLiteral("lassoSimplified")).toBool() ||
-      !closed_lasso.value(QStringLiteral("lassoSmoothed")).toBool() ||
+      closed_lasso.value(QStringLiteral("lassoSmoothed")).toBool() ||
       closed_lasso.value(QStringLiteral("lassoRawPointCount")).toInt() != 5) {
-    return fail("Studio lasso release should close, simplify, and smooth the freehand path");
+    return fail("Studio lasso release should close and preserve the freehand path");
   }
   QVariant lasso_finished;
   if (!QMetaObject::invokeMethod(

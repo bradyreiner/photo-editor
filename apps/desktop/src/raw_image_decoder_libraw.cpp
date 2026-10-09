@@ -5,6 +5,7 @@
 
 #include <QColorSpace>
 #include <QDateTime>
+#include <QFile>
 #include <QMutex>
 #include <QMutexLocker>
 #include <deque>
@@ -18,6 +19,10 @@
 #include <memory>
 #include <string>
 #include <string_view>
+
+#if defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#endif
 
 #include "photo_editor/pipeline/color_pipeline.h"
 #include "photo_editor/pipeline/color_transform.h"
@@ -54,6 +59,90 @@ RawSampleCache& raw_sample_cache() {
   return cache;
 }
 constexpr qint64 kRawSampleCacheBudget = 192 * 1024 * 1024;
+
+struct RawMetadataCacheEntry final {
+  QString key;
+  photo_editor::pipeline::DecodedImageMetadata metadata;
+};
+struct RawMetadataCache final {
+  QMutex mutex;
+  std::deque<RawMetadataCacheEntry> entries;
+  quint64 hits = 0;
+  quint64 misses = 0;
+};
+RawMetadataCache& raw_metadata_cache() {
+  static RawMetadataCache cache;
+  return cache;
+}
+constexpr std::size_t kRawMetadataCacheCapacity = 64;
+
+bool raw_metadata_cache_key(
+    const QString& file_path,
+    const RawDecodeSettings& settings,
+    int output_contract,
+    QString* key) {
+  if (key == nullptr) {
+    return false;
+  }
+  const QFileInfo info(file_path);
+  const auto absolute_path = info.absoluteFilePath();
+  if (absolute_path.isEmpty()) {
+    return false;
+  }
+
+  auto file_revision = QString{};
+#if defined(Q_OS_UNIX)
+  const auto encoded_path = QFile::encodeName(absolute_path);
+  struct stat status {};
+  if (::stat(encoded_path.constData(), &status) != 0 ||
+      !S_ISREG(status.st_mode)) {
+    return false;
+  }
+#if defined(Q_OS_MACOS)
+  const auto modified = status.st_mtimespec;
+  const auto changed = status.st_ctimespec;
+#else
+  const auto modified = status.st_mtim;
+  const auto changed = status.st_ctim;
+#endif
+  file_revision = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8")
+      .arg(absolute_path)
+      .arg(static_cast<qulonglong>(status.st_dev))
+      .arg(static_cast<qulonglong>(status.st_ino))
+      .arg(static_cast<qlonglong>(status.st_size))
+      .arg(static_cast<qlonglong>(modified.tv_sec))
+      .arg(static_cast<qlonglong>(modified.tv_nsec))
+      .arg(static_cast<qlonglong>(changed.tv_sec))
+      .arg(static_cast<qlonglong>(changed.tv_nsec));
+#else
+  if (!info.isFile()) {
+    return false;
+  }
+  file_revision = QStringLiteral("%1|%2|%3|%4")
+      .arg(absolute_path)
+      .arg(info.size())
+      .arg(info.lastModified().toMSecsSinceEpoch())
+      .arg(info.metadataChangeTime().toMSecsSinceEpoch());
+#endif
+
+  // Metadata depends on settings as well as the source revision. Use enough
+  // precision to keep distinct floating-point settings from sharing an entry.
+  const auto settings_key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9")
+      .arg(settings.input_transform_enabled ? 1 : 0)
+      .arg(settings.demosaic_quality.trimmed().toLower())
+      .arg(settings.exposure, 0, 'g', 17)
+      .arg(settings.hot_dead_pixel_cleanup_amount, 0, 'g', 17)
+      .arg(settings.false_color_suppression_amount, 0, 'g', 17)
+      .arg(settings.highlight_recovery_enabled ? 1 : 0)
+      .arg(settings.white_balance_override_enabled ? 1 : 0)
+      .arg(settings.white_balance_temperature, 0, 'g', 17)
+      .arg(settings.white_balance_tint, 0, 'g', 17);
+  *key = QStringLiteral("%1|%2|%3|%4")
+      .arg(file_revision, settings_key,
+           settings.input_color_profile.trimmed().toLower())
+      .arg(output_contract);
+  return true;
+}
 
 enum class LibRawOutputContract {
   CameraLinear,
@@ -856,9 +945,19 @@ bool libraw_camera_linear_image_supported(const QString& file_path) {
 
 LibRawDecodeCacheStats libraw_decode_cache_stats() {
   auto& cache = raw_sample_cache();
-  QMutexLocker lock(&cache.mutex);
-  auto stats = cache.stats;
-  stats.entries = static_cast<int>(cache.entries.size());
+  auto stats = LibRawDecodeCacheStats{};
+  {
+    QMutexLocker lock(&cache.mutex);
+    stats = cache.stats;
+    stats.entries = static_cast<int>(cache.entries.size());
+  }
+  auto& metadata_cache = raw_metadata_cache();
+  {
+    QMutexLocker lock(&metadata_cache.mutex);
+    stats.metadata_hits = metadata_cache.hits;
+    stats.metadata_misses = metadata_cache.misses;
+    stats.metadata_entries = static_cast<int>(metadata_cache.entries.size());
+  }
   return stats;
 }
 
@@ -867,6 +966,12 @@ void clear_libraw_decode_cache() {
   QMutexLocker lock(&cache.mutex);
   cache.entries.clear();
   cache.stats = {};
+  lock.unlock();
+  auto& metadata_cache = raw_metadata_cache();
+  QMutexLocker metadata_lock(&metadata_cache.mutex);
+  metadata_cache.entries.clear();
+  metadata_cache.hits = 0;
+  metadata_cache.misses = 0;
 }
 
 QSize libraw_camera_linear_image_size(const QString& file_path) {
@@ -1060,12 +1165,49 @@ static bool read_libraw_metadata(
   if (metadata == nullptr) {
     return false;
   }
+  auto key = QString{};
+  if (!raw_metadata_cache_key(
+          file_path, settings, static_cast<int>(output_contract), &key)) {
+    return false;
+  }
+  auto& cache = raw_metadata_cache();
+  {
+    QMutexLocker lock(&cache.mutex);
+    for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it) {
+      if (it->key != key) {
+        continue;
+      }
+      auto entry = *it;
+      cache.entries.erase(it);
+      cache.entries.push_front(std::move(entry));
+      *metadata = cache.entries.front().metadata;
+      ++cache.hits;
+      return true;
+    }
+    ++cache.misses;
+  }
   const auto raw = open_raw(file_path);
   if (raw == nullptr) {
     return false;
   }
   auto staged = photo_editor::pipeline::DecodedImageMetadata{};
   populate_metadata(*raw, settings, output_contract, &staged);
+  if (!staged.valid) {
+    return false;
+  }
+  {
+    QMutexLocker lock(&cache.mutex);
+    for (auto it = cache.entries.begin(); it != cache.entries.end(); ++it) {
+      if (it->key == key) {
+        cache.entries.erase(it);
+        break;
+      }
+    }
+    cache.entries.push_front(RawMetadataCacheEntry{key, staged});
+    while (cache.entries.size() > kRawMetadataCacheCapacity) {
+      cache.entries.pop_back();
+    }
+  }
   *metadata = std::move(staged);
   return true;
 #else

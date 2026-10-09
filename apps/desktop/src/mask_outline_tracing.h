@@ -13,9 +13,9 @@ namespace photo_editor::desktop {
     const QVariantMap& mask);
 
 [[nodiscard]] QVariantList traced_outline_paths_for_alpha_mask(
-    const QByteArray& data, int width, int height);
+    const QByteArray& data, int width, int height, bool preserve_pixel_edges = false);
 
 [[nodiscard]] QVariantList traced_outline_paths_for_alpha_mask_with_edge_padding(
-    const QByteArray& data, int width, int height);
+    const QByteArray& data, int width, int height, bool preserve_pixel_edges = false);
 
 }  // namespace photo_editor::desktop

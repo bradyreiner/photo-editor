@@ -51,6 +51,11 @@ Deployment is a separate action after the implementation and evidence can be rev
 
 ## Local implementation evidence
 
+The [2026-10-05 readiness fixes](customer-readiness-fixes-2026-10-05.md) extend this
+initial implementation with device recovery, key rotation, validated setup,
+bounded retries, privacy operations, monitoring and backup/restore tools. That
+report contains current local verification and the remaining hosted/release gates.
+
 The [service runbook](../services/customer-platform/README.md) includes setup,
 policy defaults, operational recovery, and the remaining production gates.
 Local verification on 2026-09-23:

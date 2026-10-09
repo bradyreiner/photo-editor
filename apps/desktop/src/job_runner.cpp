@@ -1,4 +1,5 @@
 #include "job_runner.h"
+#include "job_output_transaction.h"
 
 #include "bounded_qimage_reader.h"
 
@@ -11,6 +12,12 @@
 #include "timeline_asset_store.h"
 #include "timeline_document_controller.h"
 #include "worker_queue_registry.h"
+#include "photo_cache_budget.h"
+#if defined(Q_OS_MACOS)
+#include <sys/sysctl.h>
+#elif defined(Q_OS_UNIX)
+#include <unistd.h>
+#endif
 
 #include "photo_editor/io/openexr_io.h"
 #include "photo_editor/io/hdr_avif_io.h"
@@ -33,6 +40,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QTimer>
@@ -144,14 +152,17 @@ class CancellationAwareSaveDevice final : public QIODevice {
   photo_editor::pipeline::CancellationToken cancellation_;
 };
 
-QString full_file_sha256(const QString& file_path) {
+QString full_file_sha256(const QString& file_path, photo_editor::pipeline::CancellationToken cancellation = {}) {
   QFile file(file_path);
   if (!file.open(QIODevice::ReadOnly)) {
     return {};
   }
   QCryptographicHash hash(QCryptographicHash::Sha256);
   while (!file.atEnd()) {
-    hash.addData(file.read(1024 * 1024));
+    if (cancellation.cancelled()) return {};
+    const auto bytes = file.read(1024 * 1024);
+    if (bytes.isEmpty() && file.error() != QFileDevice::NoError) return {};
+    hash.addData(bytes);
   }
   return QString::fromLatin1(hash.result().toHex());
 }
@@ -164,15 +175,16 @@ bool remove_delivery_artifact(const QString& output_path) {
 
 QVariantMap write_delivery_integrity(
     const QString& output_path,
-    photo_editor::pipeline::CancellationToken cancellation = {}) {
+    photo_editor::pipeline::CancellationToken cancellation = {},
+    const QString& published_path = {}) {
   const QFileInfo output(output_path);
   const auto checksum = cancellation.cancelled()
                             ? QString{}
-                            : full_file_sha256(output.absoluteFilePath());
+                            : full_file_sha256(output.absoluteFilePath(), cancellation);
   QVariantMap result{
       {QStringLiteral("schema"), QStringLiteral("delivery-integrity:v1")},
       {QStringLiteral("algorithm"), QStringLiteral("sha256-full-v1")},
-      {QStringLiteral("outputPath"), output.absoluteFilePath()},
+      {QStringLiteral("outputPath"), published_path.isEmpty() ? output.absoluteFilePath() : published_path},
       {QStringLiteral("fileBytes"), output.size()},
       {QStringLiteral("sha256"), checksum},
       {QStringLiteral("valid"),
@@ -188,7 +200,7 @@ QVariantMap write_delivery_integrity(
     const auto manifest = QJsonObject::fromVariantMap(result);
     sidecar.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
     if (!cancellation.cancelled() && sidecar.commit()) {
-      result.insert(QStringLiteral("sidecarPath"), sidecar_path);
+      result.insert(QStringLiteral("sidecarPath"), published_path.isEmpty() ? sidecar_path : published_path + QStringLiteral(".integrity.json"));
     }
   }
   return result;
@@ -1335,7 +1347,7 @@ bool write_hdr_avif_image(
 }
 
 int preview_export_diff_tolerance_for_preset(const QString& preset) {
-  const auto normalized = preset.trimmed();
+  const auto normalized = preset.section(QLatin1Char('|'), 0, 0).trimmed();
   if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
     return 18;
   }
@@ -1832,6 +1844,46 @@ PreviewExportDiff compare_preview_to_export(
   return diff;
 }
 
+QImage apply_export_output_sharpening(
+    const QImage& input,
+    const QString& mode,
+    photo_editor::pipeline::CancellationToken cancellation) {
+  if (mode == QStringLiteral("off") || input.isNull()) return input;
+  const auto source = input.convertToFormat(QImage::Format_ARGB32);
+  if (source.isNull()) return {};
+  auto output = source.copy();
+  const auto amount = mode == QStringLiteral("print") ? 0.34 : 0.22;
+  const auto clamp_channel = [](double value) {
+    return qBound(0, static_cast<int>(std::lround(value)), 255);
+  };
+  for (int y = 0; y < source.height(); ++y) {
+    if (cancellation.cancelled()) return {};
+    auto* output_row = reinterpret_cast<QRgb*>(output.scanLine(y));
+    for (int x = 0; x < source.width(); ++x) {
+      const auto original = source.pixel(x, y);
+      double blur_red = 0.0;
+      double blur_green = 0.0;
+      double blur_blue = 0.0;
+      for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+        const auto sample_y = qBound(0, y + offset_y, source.height() - 1);
+        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+          const auto sample_x = qBound(0, x + offset_x, source.width() - 1);
+          const auto sample = source.pixel(sample_x, sample_y);
+          const auto weight = (offset_x == 0 ? 2 : 1) * (offset_y == 0 ? 2 : 1);
+          blur_red += qRed(sample) * weight;
+          blur_green += qGreen(sample) * weight;
+          blur_blue += qBlue(sample) * weight;
+        }
+      }
+      const auto red = qRed(original) + amount * (qRed(original) - blur_red / 16.0);
+      const auto green = qGreen(original) + amount * (qGreen(original) - blur_green / 16.0);
+      const auto blue = qBlue(original) + amount * (qBlue(original) - blur_blue / 16.0);
+      output_row[x] = qRgba(clamp_channel(red), clamp_channel(green), clamp_channel(blue), qAlpha(original));
+    }
+  }
+  return output;
+}
+
 QString output_suffix_for_preset(const QString& preset, bool rendered_output) {
   if (!rendered_output) {
     return {};
@@ -2074,6 +2126,9 @@ bool render_photo_export(
   if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
     image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   }
+  image = apply_export_output_sharpening(
+      image, export_output_sharpening_for_preset(preset), cancellation);
+  if (cancellation.cancelled() || image.isNull()) return false;
   image = prepare_image_for_export_encoding(
       image, options);
   if (cancellation.cancelled() || image.isNull()) {
@@ -2173,7 +2228,7 @@ QString output_file_path_for_job(
   return {};
 }
 
-bool queued_job_less_than(const PersistentJobRecord& lhs, const PersistentJobRecord& rhs) {
+int queued_job_priority_rank(const PersistentJobRecord& job) {
   const auto requested_priority = [](const PersistentJobRecord& job) {
     const auto priority =
         job.metadata_json.value(QStringLiteral("priority")).toString().trimmed().toLower();
@@ -2196,32 +2251,14 @@ bool queued_job_less_than(const PersistentJobRecord& lhs, const PersistentJobRec
                                  .toString().trimmed();
     return timeline_id.isEmpty() ? job.asset_id : timeline_id;
   };
-  const auto lhs_priority = WorkerQueueRegistry::priorityDecision(
-                                workflow(lhs), worker_surface_for_job_kind(lhs.job_kind),
-                                affected_id(lhs), requested_priority(lhs))
-                                .value(QStringLiteral("effectiveRank")).toInt();
-  const auto rhs_priority = WorkerQueueRegistry::priorityDecision(
-                                workflow(rhs), worker_surface_for_job_kind(rhs.job_kind),
-                                affected_id(rhs), requested_priority(rhs))
-                                .value(QStringLiteral("effectiveRank")).toInt();
-  if (lhs_priority != rhs_priority) {
-    return lhs_priority > rhs_priority;
-  }
-  const auto queue_order = [](const PersistentJobRecord& job) {
-    return job.metadata_json.value(QStringLiteral("queueOrder"))
-        .toVariant().toLongLong();
-  };
-  const auto lhs_order = queue_order(lhs);
-  const auto rhs_order = queue_order(rhs);
-  if (lhs_order > 0 && rhs_order > 0 && lhs_order != rhs_order) {
-    return lhs_order < rhs_order;
-  }
-  const auto lhs_created = lhs.created_at.trimmed();
-  const auto rhs_created = rhs.created_at.trimmed();
-  if (lhs_created != rhs_created) {
-    return lhs_created < rhs_created;
-  }
-  return lhs.job_id < rhs.job_id;
+  return WorkerQueueRegistry::priorityDecision(
+      workflow(job), worker_surface_for_job_kind(job.job_kind), affected_id(job), requested_priority(job))
+      .value(QStringLiteral("effectiveRank")).toInt();
+}
+
+bool queued_job_less_than(const PersistentJobRecord& lhs, const PersistentJobRecord& rhs) {
+  const auto left = queued_job_priority_rank(lhs), right = queued_job_priority_rank(rhs);
+  return left == right ? job_order_less_than(lhs, rhs) : left > right;
 }
 
 QVariantMap run_export_work(
@@ -2419,12 +2456,12 @@ QVariantMap run_timeline_render_work(
     const QString& document_path,
     const QString& output_path,
     const QString& timeline_id,
-    const QString& resource_policy) {
+    const QString& resource_policy,
+    const std::shared_ptr<std::atomic_bool>& cancellation) {
   QElapsedTimer timer;
   timer.start();
   QVariantMap result;
   result.insert(QStringLiteral("success"), false);
-  result.insert(QStringLiteral("outputPath"), output_path);
 
   TimelineDocumentController controller;
   if (!controller.loadTimeline(document_path)) {
@@ -2433,19 +2470,44 @@ QVariantMap run_timeline_render_work(
     return result;
   }
   controller.setBackgroundRenderResourcePolicy(resource_policy);
-
-  if (!controller.renderCurrentTimeline(output_path)) {
-    result.insert(QStringLiteral("errorMessage"), controller.status());
+  controller.setRenderCancellationToken(cancellation);
+  const auto canceled = [&]() { return cancellation && cancellation->load(std::memory_order_relaxed); };
+  const auto fail = [&](const QString& message) {
+    result.insert(QStringLiteral("canceled"), canceled());
+    result.insert(QStringLiteral("errorMessage"), message);
     result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
     return result;
+  };
+  if (canceled()) return fail(QStringLiteral("Timeline render canceled before staging."));
+  if (!QDir().mkpath(QFileInfo(output_path).absolutePath()))
+    return fail(QStringLiteral("Unable to create the timeline delivery folder."));
+  JobOutputTransaction delivery(output_path);
+  if (!delivery.valid()) return fail(QStringLiteral("Unable to stage timeline delivery."));
+  const auto staged_output = delivery.stagedPath(QFileInfo(output_path).fileName());
+
+  if (!controller.renderCurrentTimeline(staged_output)) {
+    return fail(canceled() ? QStringLiteral("Timeline render canceled.") : controller.status());
   }
+  const auto output_integrity = write_delivery_integrity(staged_output,
+      {.cancellation_requested = cancellation.get()}, output_path);
+  if (!output_integrity.value(QStringLiteral("valid")).toBool())
+    return fail(QStringLiteral("The staged timeline output could not be checksum-verified."));
+  if (canceled()) return fail(QStringLiteral("Timeline render canceled before publication."));
+  const auto publication = delivery.publish(canceled);
+  if (!publication.value("ok").toBool()) return fail(publication.value("error").toString());
+  result.insert(QStringLiteral("outputPath"), output_path);
+  result.insert(QStringLiteral("deliveryArtifacts"), delivery.artifacts());
 
   const auto poster_source = controller.generateVideoPoster(output_path, timeline_id);
   if (!poster_source.isEmpty()) {
     result.insert(QStringLiteral("posterPath"), QUrl(poster_source).toLocalFile());
   }
-  const auto output_integrity = write_delivery_integrity(output_path);
   result.insert(QStringLiteral("outputIntegrity"), output_integrity);
+  if (canceled()) {
+    result.insert(QStringLiteral("publicationRollback"), delivery.rollback());
+    result.remove(QStringLiteral("outputPath"));
+    return fail(QStringLiteral("Timeline delivery canceled during verification."));
+  }
   if (!output_integrity.value(QStringLiteral("valid")).toBool()) {
     result.insert(
         QStringLiteral("errorMessage"),
@@ -2500,6 +2562,8 @@ bool update_timeline_render_artifacts(
     return false;
   }
 
+  const auto canonical_path = job.metadata_json.value(QStringLiteral("canonicalDocumentPath")).toString().trimmed();
+  const auto editable_path = canonical_path.isEmpty() ? job.source_path : canonical_path;
   auto records = loadTimelineAssetRecords();
   const auto updated_at = iso_now();
   TimelineAssetRecord persisted_record;
@@ -2510,8 +2574,8 @@ bool update_timeline_render_artifacts(
     }
 
     record.asset_id = job.asset_id.isEmpty() ? QStringLiteral("timeline:%1").arg(timeline_id) : job.asset_id;
-    record.name = job.display_label;
-    record.document_path = job.source_path;
+    if (canonical_path.isEmpty()) record.name = job.display_label;
+    record.document_path = editable_path;
     record.render_path = job.output_path;
     if (!poster_path.isEmpty()) {
       record.poster_path = poster_path;
@@ -2529,7 +2593,7 @@ bool update_timeline_render_artifacts(
     persisted_record.asset_id = job.asset_id.isEmpty() ? QStringLiteral("timeline:%1").arg(timeline_id) : job.asset_id;
     persisted_record.timeline_id = timeline_id;
     persisted_record.name = job.display_label;
-    persisted_record.document_path = job.source_path;
+    persisted_record.document_path = editable_path;
     persisted_record.render_path = job.output_path;
     persisted_record.poster_path = poster_path.isEmpty()
                                        ? job.metadata_json.value(QStringLiteral("posterPath")).toString().trimmed()
@@ -2546,6 +2610,10 @@ bool update_timeline_render_artifacts(
     }
     return false;
   }
+
+  // Snapshot jobs must never overwrite either the immutable render input or
+  // a newer canonical edit/backup when the older render finishes.
+  if (!canonical_path.isEmpty()) return true;
 
   QJsonObject document;
   QFile file(job.source_path);
@@ -2673,7 +2741,9 @@ void remove_import_partial_files(const QString& source_path, const QJsonObject& 
 QVariantMap run_import_work(
     const QString& job_id,
     const QString& source_path,
-    const QJsonObject& metadata_json) {
+    const QJsonObject& metadata_json,
+    int metadata_threads,
+    const std::shared_ptr<std::atomic_bool>& cancellation) {
   QElapsedTimer timer;
   timer.start();
   QVariantMap result;
@@ -2686,6 +2756,9 @@ QVariantMap run_import_work(
     result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
     return result;
   }
+
+  if (metadata_threads > 0)
+    environment.insert(QStringLiteral("PHOTO_EDITOR_IMPORT_METADATA_THREADS"), QString::number(metadata_threads));
 
   const auto import_mode = metadata_json.value(QStringLiteral("importMode")).toString().trimmed().isEmpty()
                                ? QStringLiteral("referenced")
@@ -2719,15 +2792,14 @@ QVariantMap run_import_work(
   process.setWorkingDirectory(QDir::currentPath());
   process.setProcessEnvironment(environment);
   process.setProcessChannelMode(QProcess::MergedChannels);
+  WorkerQueueRegistry::configureBackgroundProcess(&process, QStringLiteral("catalog_import"));
   process.start(import_program(), arguments);
 
   const auto started = process.waitForStarted(5000);
   auto finished = false;
   auto canceled = false;
   auto paused = false;
-  QElapsedTimer process_timer;
-  process_timer.start();
-  while (started && process_timer.elapsed() < 120000) {
+  while (started && process.state() != QProcess::NotRunning) {
     if (process.waitForFinished(100)) {
       finished = true;
       break;
@@ -2744,6 +2816,7 @@ QVariantMap run_import_work(
     paused = record_it != records.cend() &&
              (record_it->status == QStringLiteral("Pausing") ||
               record_it->metadata_json.value(QStringLiteral("pauseRequested")).toBool());
+    canceled = canceled || (cancellation && cancellation->load(std::memory_order_relaxed) && !paused);
     if (!canceled && !paused) {
       continue;
     }
@@ -2756,10 +2829,7 @@ QVariantMap run_import_work(
     finished = true;
     break;
   }
-  if (started && !finished) {
-    process.kill();
-    process.waitForFinished(2000);
-  }
+  finished = started && process.state() == QProcess::NotRunning;
   const auto output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
   if (!manifest_path.isEmpty()) {
     QFile::remove(manifest_path);
@@ -2844,8 +2914,7 @@ QVariantMap run_import_work(
 }  // namespace
 
 JobRunner::JobRunner(QObject* parent) : QObject(parent) {
-  connect(&async_job_watcher_, &QFutureWatcher<QVariantMap>::finished, this, &JobRunner::handleAsyncJobFinished);
-  connect(&cancellation_watcher_, &QFutureWatcher<JobCancellationReadResult>::finished,
+  connect(&cancellation_watcher_, &QFutureWatcher<QVector<JobCancellationReadResult>>::finished,
           this, &JobRunner::finishCancellationObservation);
   connect(&queue_watcher_, &QFutureWatcher<JobQueueReadResult>::finished,
           this, &JobRunner::finishQueueObservation);
@@ -2867,53 +2936,128 @@ JobRunner::JobRunner(QObject* parent) : QObject(parent) {
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &JobRunner::wake);
 }
 
+JobAdmissionBudget JobRunner::admissionBudget() const {
+  static const quint64 installed_memory = []() -> quint64 {
+#if defined(Q_OS_MACOS)
+    uint64_t bytes = 0;
+    size_t size = sizeof(bytes);
+    if (sysctlbyname("hw.memsize", &bytes, &size, nullptr, 0) == 0) return bytes;
+#elif defined(Q_OS_UNIX)
+    const auto pages = sysconf(_SC_PHYS_PAGES);
+    const auto page_size = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page_size > 0) return static_cast<quint64>(pages) * static_cast<quint64>(page_size);
+#endif
+    // Unknown capacity and platforms without file-identity proof stay serial.
+    return 0;
+  }();
+  const auto pressure = photo_cache_budget_snapshot().value(QStringLiteral("pressure")).toString();
+  const bool foreground = WorkerQueueRegistry::userIntentSnapshot().value(QStringLiteral("latencySensitive")).toBool();
+  return job_admission_budget(QThread::idealThreadCount(), installed_memory,
+                              pressure != QStringLiteral("normal"), foreground);
+}
+
+bool JobRunner::refreshAttemptResources(const AttemptPtr& attempt, const PersistentJobRecord& job) {
+  if (!isCurrentAttempt(attempt)) return false;
+  if (job_execution_specification(job) != attempt->resources.specification) {
+    releaseAttempt(attempt);
+    return false;
+  }
+  const auto refreshed = inspect_job_resources(job);
+  QVector<JobResourceClaim> active;
+  for (const auto& other : active_attempts_) if (other != attempt) active.push_back(other->resources);
+  if (!admit_job_resources(refreshed, active, admissionBudget())) {
+    releaseAttempt(attempt);
+    return false;
+  }
+  attempt->resources = refreshed;
+  return true;
+}
+
+JobRunner::AttemptPtr JobRunner::beginAttempt(const PersistentJobRecord& job) {
+  if (active_attempts_.contains(job.job_id)) return {};
+  auto attempt = std::make_shared<Attempt>();
+  attempt->job_id = job.job_id;
+  attempt->job_kind = job.job_kind;
+  attempt->queue_wait_ms = queue_wait_msecs_for_job(job);
+  attempt->timer.start();
+  attempt->watcher = new QFutureWatcher<QVariantMap>(this);
+  active_attempts_.insert(job.job_id, attempt);
+  // The map owns the attempt. A weak callback avoids a watcher/attempt cycle;
+  // the locked reference keeps it alive through completion and map removal.
+  connect(attempt->watcher.data(), &QFutureWatcher<QVariantMap>::finished, this,
+          [this, weak = std::weak_ptr<Attempt>(attempt)] {
+            if (auto finished = weak.lock()) handleAsyncJobFinished(finished);
+          });
+  return attempt;
+}
+
+bool JobRunner::isCurrentAttempt(const AttemptPtr& attempt) const {
+  return attempt && active_attempts_.value(attempt->job_id) == attempt;
+}
+
+void JobRunner::releaseAttempt(const AttemptPtr& attempt) {
+  // A late callback for an older retry must not release its replacement.
+  if (!isCurrentAttempt(attempt)) return;
+  active_attempts_.remove(attempt->job_id);
+  QTimer::singleShot(0, this, &JobRunner::processNextJob);
+}
+
 void JobRunner::observeActiveJobCancellation() {
-  if (active_job_id_.isEmpty() || active_job_cancellation_ == nullptr) return;
+  if (active_attempts_.isEmpty()) return;
   if (cancellation_reading_) {
     cancellation_pending_ = true;
     return;
   }
+  QVector<JobCancellationReadResult> attempts;
+  attempts.reserve(active_attempts_.size());
+  for (const auto& attempt : active_attempts_) {
+    attempts.push_back({attempt->job_id, attempt->cancellation, {}, false});
+  }
   cancellation_reading_ = true;
-  // Capture the attempt token as well as the ID: a resumed/retried job can reuse
-  // its ID while an older read is still running. No worker retains this QObject.
-  cancellation_watcher_.setFuture(QtConcurrent::run(
-      [job_id = active_job_id_, cancellation = active_job_cancellation_]() {
-        JobCancellationReadResult result{job_id, cancellation, {}, false};
-        try {
-          const auto records = loadPersistedJobRecords(&result.error, false);
-          if (!result.error.isEmpty()) return result;
-          const auto active_record = std::find_if(records.cbegin(), records.cend(),
-              [&job_id](const auto& record) { return record.job_id == job_id; });
-          result.requested = active_record == records.cend() ||
-              active_record->status == QStringLiteral("Canceling") ||
-              active_record->status == QStringLiteral("Pausing") ||
-              active_record->metadata_json.value(QStringLiteral("cancellationRequested")).toBool() ||
-              active_record->metadata_json.value(QStringLiteral("pauseRequested")).toBool();
-        } catch (const std::exception& error) {
-          result.error = QString::fromUtf8(error.what());
-        } catch (...) {
-          result.error = QStringLiteral("Unable to read job cancellation state.");
-        }
-        return result;
-      }));
+  // One authoritative read covers all captured attempts. Workers retain only
+  // IDs and tokens, so late replies cannot cancel a retry with the same ID.
+  cancellation_watcher_.setFuture(QtConcurrent::run([attempts = std::move(attempts)]() mutable {
+    QString read_error;
+    QVector<PersistentJobRecord> records;
+    try {
+      records = loadPersistedJobRecords(&read_error, false);
+    } catch (const std::exception& error) {
+      read_error = QString::fromUtf8(error.what());
+    } catch (...) {
+      read_error = QStringLiteral("Unable to read job cancellation state.");
+    }
+    for (auto& attempt : attempts) {
+      attempt.error = read_error;
+      if (!read_error.isEmpty()) continue;
+      const auto record = std::find_if(records.cbegin(), records.cend(),
+          [&attempt](const auto& value) { return value.job_id == attempt.job_id; });
+      attempt.requested = record == records.cend() ||
+          record->status == QStringLiteral("Canceling") ||
+          record->status == QStringLiteral("Pausing") ||
+          record->metadata_json.value(QStringLiteral("cancellationRequested")).toBool() ||
+          record->metadata_json.value(QStringLiteral("pauseRequested")).toBool();
+    }
+    return attempts;
+  }));
 }
 
 void JobRunner::finishCancellationObservation() {
-  const auto result = cancellation_watcher_.result();
+  const auto results = cancellation_watcher_.result();
   cancellation_reading_ = false;
-  const bool same_attempt = result.job_id == active_job_id_ &&
-      result.cancellation == active_job_cancellation_;
-  if (same_attempt && result.error.isEmpty() && result.requested) {
-    active_job_cancellation_->store(true, std::memory_order_relaxed);
+  QString retry_error;
+  for (const auto& result : results) {
+    const auto current = active_attempts_.value(result.job_id);
+    if (!current || result.cancellation != current->cancellation) continue;
+    if (!result.error.isEmpty()) retry_error = result.error;
+    else if (result.requested) current->cancellation->store(true, std::memory_order_relaxed);
   }
   if (cancellation_pending_) {
     cancellation_pending_ = false;
     wake();
-  } else if (same_attempt && !result.error.isEmpty()) {
-    // A failed read is not proof of deletion or cancellation. Retry without
-    // blocking the GUI or requiring another user action; new work expedites it.
+  } else if (!retry_error.isEmpty()) {
+    // A failed read is not proof of deletion or cancellation.
     observability::logWarning(photoEditorJobsLog(), QStringLiteral("job.cancellation.read_failed"),
-        {{QStringLiteral("job_id"), result.job_id}, {QStringLiteral("error"), result.error}});
+        {{QStringLiteral("error"), retry_error}});
     if (!wake_timer_.isActive()) wake_timer_.start(1000);
   }
 }
@@ -2948,9 +3092,16 @@ void JobRunner::processNextJob() {
     if (recovery_requested_) initializeFromStore();
     return;
   }
-  if (!active_job_id_.isEmpty()) {
+  if (!active_attempts_.isEmpty()) {
     observeActiveJobCancellation();
-    return;
+    const auto budget = admissionBudget();
+    const bool exclusive = std::any_of(active_attempts_.cbegin(), active_attempts_.cend(),
+        [](const auto& attempt) { return attempt->resources.lane == JobResourceLane::Exclusive; });
+    if (exclusive || active_attempts_.size() >= 2 ||
+        (budget.maximum_jobs == 1 && !budget.temporarily_limited)) return;
+    // Under temporary pressure, read once to discover whether eligible work is
+    // waiting. Only a blocked eligible job schedules a retry; idle queues do not
+    // poll, and permanently serial hosts retain notification-driven observation.
   }
   if (queue_reading_) {
     queue_pending_ = true;
@@ -2960,10 +3111,44 @@ void JobRunner::processNextJob() {
   // Observing the queue must not wait for database helpers on the UI thread or
   // migrate legacy history. Startup recovery retains ownership of migration.
   // No worker captures this QObject, so shutdown does not wait on a helper.
-  queue_watcher_.setFuture(QtConcurrent::run([] {
+  QVector<JobResourceClaim> active_resources;
+  QStringList active_ids;
+  for (const auto& attempt : active_attempts_) {
+    active_resources.push_back(attempt->resources);
+    active_ids.push_back(attempt->job_id);
+  }
+  auto inspection_budget = admissionBudget();
+  if (inspection_budget.temporarily_limited) inspection_budget.maximum_jobs = 2;
+  queue_watcher_.setFuture(QtConcurrent::run([active_resources, active_ids, inspection_budget] {
     JobQueueReadResult result;
     try {
       result.records = loadPersistedJobRecords(&result.error, false);
+      if (result.error.isEmpty()) {
+        struct Candidate { const PersistentJobRecord* job; int priority; };
+        QVector<Candidate> candidates;
+        for (const auto& job : std::as_const(result.records)) {
+          if (job.status == QStringLiteral("Queued") && !active_ids.contains(job.job_id) &&
+              (job.job_kind == QStringLiteral("asset_export") || job.job_kind == QStringLiteral("catalog_import") ||
+               job.job_kind == QStringLiteral("timeline_render")))
+            candidates.push_back({&job, queued_job_priority_rank(job)});
+        }
+        // Precomputed ranks make the worker comparator stable even if foreground
+        // intent changes while this background scan is running.
+        std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+          return a.priority == b.priority ? job_order_less_than(*a.job, *b.job) : a.priority > b.priority;
+        });
+        for (const auto& candidate : candidates) {
+          const auto& job = *candidate.job;
+          const auto lane = potential_job_resource_lane(job);
+          if (!active_resources.isEmpty() && (lane == JobResourceLane::Exclusive ||
+              std::any_of(active_resources.cbegin(), active_resources.cend(),
+                  [lane](const auto& current) { return current.lane == lane || current.lane == JobResourceLane::Exclusive; })))
+            continue;
+          const auto resources = inspect_job_resources(job, active_resources);
+          result.resources.insert(job.job_id, resources);
+          if (admit_job_resources(resources, active_resources, inspection_budget)) break;
+        }
+      }
     } catch (const std::exception& error) {
       result.error = QString::fromUtf8(error.what());
     } catch (...) {
@@ -2980,8 +3165,7 @@ void JobRunner::finishQueueObservation() {
     observability::logWarning(photoEditorJobsLog(), QStringLiteral("job.queue.read_failed"),
         {{QStringLiteral("error"), result.error}});
   }
-  if (queue_pending_ || (wake_timer_.isActive() && wake_timer_.interval() == 0) ||
-      !active_job_id_.isEmpty()) {
+  if (queue_pending_ || (wake_timer_.isActive() && wake_timer_.interval() == 0)) {
     // A newer notification invalidates this snapshot. Read the latest queue
     // once, rather than starting a job from history superseded during the read.
     queue_pending_ = false;
@@ -3009,65 +3193,92 @@ void JobRunner::finishQueueObservation() {
   }
 
   std::sort(queued_jobs.begin(), queued_jobs.end(), queued_job_less_than);
-  const auto job = queued_jobs.front();
-  const auto purpose = job.metadata_json.value(QStringLiteral("purpose"))
+  QVector<JobResourceClaim> active;
+  for (const auto& attempt : active_attempts_) active.push_back(attempt->resources);
+  const auto budget = admissionBudget();
+  bool deferred = false;
+  bool capacity_deferred = false;
+  for (const auto& job : queued_jobs) {
+    if (active_attempts_.contains(job.job_id)) continue;
+    if (!result.resources.contains(job.job_id)) {
+      // A completion or changed foreground priority may make an uninspected
+      // candidate the next standalone job. Refresh instead of guessing its claim.
+      if (active.isEmpty()) { wake(); return; }
+      continue;
+    }
+    const auto resources = result.resources.value(job.job_id);
+    if (!admit_job_resources(resources, active, budget)) {
+      capacity_deferred = capacity_deferred || (budget.temporarily_limited &&
+          admit_job_resources(resources, active, {2, budget.additional_memory_bytes, false}));
+      continue;
+    }
+    const auto purpose = job.metadata_json.value(QStringLiteral("purpose"))
+                             .toString().trimmed().toLower();
+    const auto stage = job.metadata_json.value(QStringLiteral("stage"))
                            .toString().trimmed().toLower();
-  const auto stage = job.metadata_json.value(QStringLiteral("stage"))
-                         .toString().trimmed().toLower();
-  const auto scheduling_workflow =
-      purpose.contains(QStringLiteral("preview")) ||
-              stage.contains(QStringLiteral("export_preview"))
-          ? QStringLiteral("export-preview")
-          : job.job_kind;
-  const auto timeline_id = job.metadata_json.value(QStringLiteral("timelineId"))
-                               .toString().trimmed();
-  const auto scheduling_decision = WorkerQueueRegistry::priorityDecision(
-      scheduling_workflow,
-      worker_surface_for_job_kind(job.job_kind),
-      timeline_id.isEmpty() ? job.asset_id : timeline_id,
-      job.metadata_json.value(QStringLiteral("priority")).toString());
-  if (scheduling_decision.value(QStringLiteral("deferred")).toBool()) {
-    wake_timer_.start(120);
+    const auto scheduling_workflow =
+        purpose.contains(QStringLiteral("preview")) ||
+                stage.contains(QStringLiteral("export_preview"))
+            ? QStringLiteral("export-preview")
+            : job.job_kind;
+    const auto timeline_id = job.metadata_json.value(QStringLiteral("timelineId"))
+                                 .toString().trimmed();
+    const auto scheduling_decision = WorkerQueueRegistry::priorityDecision(
+        scheduling_workflow,
+        worker_surface_for_job_kind(job.job_kind),
+        timeline_id.isEmpty() ? job.asset_id : timeline_id,
+        job.metadata_json.value(QStringLiteral("priority")).toString());
+    if (scheduling_decision.value(QStringLiteral("deferred")).toBool()) {
+      deferred = true;
+      continue;
+    }
+    const auto attempt = beginAttempt(job);
+    if (!attempt) continue;
+    attempt->resources = resources;
+    observability::logInfo(
+        photoEditorJobsLog(),
+        QStringLiteral("job.started"),
+        {
+            {QStringLiteral("job_id"), job.job_id},
+            {QStringLiteral("job_kind"), job.job_kind},
+            {QStringLiteral("asset_id"), job.asset_id},
+            {QStringLiteral("source_path"), job.source_path},
+            {QStringLiteral("queue_wait_ms"), attempt->queue_wait_ms},
+            {QStringLiteral("active_jobs"), active_attempts_.size()},
+            {QStringLiteral("resource_lane"), static_cast<int>(resources.lane)},
+            {QStringLiteral("additional_memory_reserve_bytes"), resources.additional_memory_bytes},
+            {QStringLiteral("effective_priority"),
+             scheduling_decision.value(QStringLiteral("effectivePriority"))},
+            {QStringLiteral("priority_reason"),
+             scheduling_decision.value(QStringLiteral("reason"))},
+        });
+    WorkerQueueRegistry::logSample(
+        worker_pool_id_for_job_kind(job.job_kind),
+        job.job_kind,
+        worker_surface_for_job_kind(job.job_kind),
+        static_cast<int>(std::count_if(active_attempts_.cbegin(), active_attempts_.cend(),
+            [&job](const auto& current) { return current->job_kind == job.job_kind; })),
+        static_cast<int>(qMax<qsizetype>(0, queued_jobs.size() - 1)),
+        job.job_kind == QStringLiteral("asset_export") ? 2 : 1,
+        attempt->queue_wait_ms);
+    if (job.job_kind == QStringLiteral("catalog_import")) {
+      QTimer::singleShot(0, this, [this, attempt]() { if (isCurrentAttempt(attempt)) runImportJob(attempt); });
+      return;
+    }
+    if (job.job_kind == QStringLiteral("timeline_render")) {
+      QTimer::singleShot(0, this, [this, attempt]() { if (isCurrentAttempt(attempt)) runTimelineRenderJob(attempt); });
+      return;
+    }
+    QTimer::singleShot(0, this, [this, attempt]() { if (isCurrentAttempt(attempt)) runExportJob(attempt); });
     return;
   }
-  active_job_id_ = job.job_id;
-  active_job_kind_ = job.job_kind;
-  active_queue_wait_ms_ = queue_wait_msecs_for_job(job);
-  active_job_timer_.restart();
-  observability::logInfo(
-      photoEditorJobsLog(),
-      QStringLiteral("job.started"),
-      {
-          {QStringLiteral("job_id"), job.job_id},
-          {QStringLiteral("job_kind"), job.job_kind},
-          {QStringLiteral("asset_id"), job.asset_id},
-          {QStringLiteral("source_path"), job.source_path},
-          {QStringLiteral("queue_wait_ms"), active_queue_wait_ms_},
-          {QStringLiteral("effective_priority"),
-           scheduling_decision.value(QStringLiteral("effectivePriority"))},
-          {QStringLiteral("priority_reason"),
-           scheduling_decision.value(QStringLiteral("reason"))},
-      });
-  WorkerQueueRegistry::logSample(
-      worker_pool_id_for_job_kind(job.job_kind),
-      job.job_kind,
-      worker_surface_for_job_kind(job.job_kind),
-      1,
-      static_cast<int>(qMax<qsizetype>(0, queued_jobs.size() - 1)),
-      1,
-      active_queue_wait_ms_);
-  if (job.job_kind == QStringLiteral("catalog_import")) {
-    QTimer::singleShot(0, this, [this, job_id = active_job_id_]() { runImportJob(job_id); });
-    return;
-  }
-  if (job.job_kind == QStringLiteral("timeline_render")) {
-    QTimer::singleShot(0, this, [this, job_id = active_job_id_]() { runTimelineRenderJob(job_id); });
-    return;
-  }
-  QTimer::singleShot(0, this, [this, job_id = active_job_id_]() { runExportJob(job_id); });
+  if (deferred) wake_timer_.start(120);
+  else if (capacity_deferred) wake_timer_.start(500);
 }
 
-void JobRunner::runExportJob(const QString& job_id) {
+void JobRunner::runExportJob(const AttemptPtr& attempt) {
+  if (!isCurrentAttempt(attempt)) return;
+  const auto& job_id = attempt->job_id;
   const auto records = loadPersistedJobRecords();
   auto job_it = std::find_if(
       records.cbegin(),
@@ -3075,21 +3286,16 @@ void JobRunner::runExportJob(const QString& job_id) {
       [&](const auto& record) { return record.job_id == job_id; });
 
   if (job_it == records.cend()) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
   auto job = *job_it;
   if (job.status != QStringLiteral("Queued")) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
+  if (!refreshAttemptResources(attempt, job)) return;
 
   job.status = QStringLiteral("Running");
   job.progress = 20;
@@ -3105,10 +3311,7 @@ void JobRunner::runExportJob(const QString& job_id) {
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
@@ -3121,10 +3324,7 @@ void JobRunner::runExportJob(const QString& job_id) {
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
@@ -3144,15 +3344,10 @@ void JobRunner::runExportJob(const QString& job_id) {
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
   job.output_path = output_path;
-  active_job_cancellation_ =
-      std::make_shared<std::atomic_bool>(false);
 
   // Persisted jobs created before canonical plan admission did not mirror the
   // stable source identity into their render metadata. Repair them at the
@@ -3166,7 +3361,7 @@ void JobRunner::runExportJob(const QString& job_id) {
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
 
-  async_job_watcher_.setFuture(QtConcurrent::run(
+  attempt->watcher->setFuture(QtConcurrent::run(
       run_export_work,
       source_path,
       job.recipe_json,
@@ -3176,25 +3371,18 @@ void JobRunner::runExportJob(const QString& job_id) {
       render_photo,
       export_render_job,
       export_preview_job,
-      active_job_cancellation_));
+      attempt->cancellation));
+  wake();
 }
 
-void JobRunner::handleAsyncJobFinished() {
-  const auto job_id = active_job_id_;
-  const auto job_kind = active_job_kind_;
-  const auto queue_wait_ms = active_queue_wait_ms_;
-  const auto total_elapsed_ms = active_job_timer_.isValid() ? active_job_timer_.elapsed() : 0;
-  active_job_id_.clear();
-  active_job_kind_.clear();
-  active_queue_wait_ms_ = 0;
-  active_job_cancellation_.reset();
-
-  if (job_id.isEmpty()) {
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
-    return;
-  }
-
-  const auto result = async_job_watcher_.result();
+void JobRunner::handleAsyncJobFinished(const AttemptPtr& attempt) {
+  if (!isCurrentAttempt(attempt)) return;
+  const auto release = qScopeGuard([this, attempt] { releaseAttempt(attempt); });
+  const auto job_id = attempt->job_id;
+  const auto job_kind = attempt->job_kind;
+  const auto queue_wait_ms = attempt->queue_wait_ms;
+  const auto total_elapsed_ms = attempt->timer.isValid() ? attempt->timer.elapsed() : 0;
+  const auto result = attempt->watcher->result();
   const auto records = loadPersistedJobRecords();
   auto job_it = std::find_if(
       records.cbegin(),
@@ -3202,7 +3390,6 @@ void JobRunner::handleAsyncJobFinished() {
       [&](const auto& record) { return record.job_id == job_id; });
 
   if (job_it == records.cend()) {
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
 
@@ -3286,6 +3473,13 @@ void JobRunner::handleAsyncJobFinished() {
         QStringLiteral("outputIntegrity"),
         QJsonObject::fromVariantMap(output_integrity));
   }
+  const auto delivery_artifacts = result.value(QStringLiteral("deliveryArtifacts")).toList();
+  if (!delivery_artifacts.isEmpty())
+    job.metadata_json.insert(QStringLiteral("deliveryArtifacts"), QJsonArray::fromVariantList(delivery_artifacts));
+  const auto revoke_timeline_delivery = [&]() {
+    const auto revoked = JobOutputTransaction::rollbackArtifacts(delivery_artifacts);
+    job.metadata_json.insert(QStringLiteral("deliveryRollback"), QJsonObject::fromVariantMap(revoked));
+  };
   const auto export_render_mask_trace =
       export_render_job.value(QStringLiteral("maskAlphaTrace")).toMap();
   const auto stale_export_render_result =
@@ -3306,7 +3500,8 @@ void JobRunner::handleAsyncJobFinished() {
     if ((job.job_kind == QStringLiteral("asset_export") ||
          job.job_kind == QStringLiteral("timeline_render")) &&
         !output_path.isEmpty()) {
-      remove_delivery_artifact(output_path);
+      if (job.job_kind == QStringLiteral("timeline_render")) revoke_timeline_delivery();
+      else remove_delivery_artifact(output_path);
     }
     const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
     if (job.job_kind == QStringLiteral("timeline_render") && !poster_path.isEmpty()) {
@@ -3323,7 +3518,8 @@ void JobRunner::handleAsyncJobFinished() {
   } else if (cancellation_requested) {
     const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
     if (!output_path.isEmpty()) {
-      remove_delivery_artifact(output_path);
+      if (job.job_kind == QStringLiteral("timeline_render")) revoke_timeline_delivery();
+      else remove_delivery_artifact(output_path);
     }
     const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
     if (!poster_path.isEmpty()) {
@@ -3460,9 +3656,10 @@ void JobRunner::handleAsyncJobFinished() {
       worker_pool_id_for_job_kind(job_kind),
       job_kind,
       worker_surface_for_job_kind(job_kind),
+      static_cast<int>(std::count_if(active_attempts_.cbegin(), active_attempts_.cend(),
+          [&job_kind](const auto& current) { return current->job_kind == job_kind; })) - 1,
       0,
-      0,
-      1,
+      job_kind == QStringLiteral("asset_export") ? 2 : 1,
       queue_wait_ms,
       worker_elapsed_ms,
       job.status == QStringLiteral("Completed") ? 1 : 0,
@@ -3539,10 +3736,11 @@ void JobRunner::handleAsyncJobFinished() {
         QStringLiteral("job.failed"),
         event_fields);
   }
-  QTimer::singleShot(0, this, &JobRunner::processNextJob);
 }
 
-void JobRunner::runImportJob(const QString& job_id) {
+void JobRunner::runImportJob(const AttemptPtr& attempt) {
+  if (!isCurrentAttempt(attempt)) return;
+  const auto& job_id = attempt->job_id;
   const auto records = loadPersistedJobRecords();
   auto job_it = std::find_if(
       records.cbegin(),
@@ -3550,33 +3748,26 @@ void JobRunner::runImportJob(const QString& job_id) {
       [&](const auto& record) { return record.job_id == job_id; });
 
   if (job_it == records.cend()) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
   auto job = *job_it;
   if (job.status != QStringLiteral("Queued")) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
+  if (!refreshAttemptResources(attempt, job)) return;
 
   const auto source_path = normalized_local_path(job.source_path);
   if (source_path.isEmpty() || !QFileInfo::exists(source_path)) {
-    const auto queue_wait_ms = active_queue_wait_ms_;
+    const auto queue_wait_ms = attempt->queue_wait_ms;
     job.status = QStringLiteral("Failed");
     job.error_message = QStringLiteral("The selected import source is unavailable.");
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
+    releaseAttempt(attempt);
     observability::logWarning(
         photoEditorJobsLog(),
         QStringLiteral("job.failed"),
@@ -3587,10 +3778,9 @@ void JobRunner::runImportJob(const QString& job_id) {
             {QStringLiteral("queue_wait_ms"), queue_wait_ms},
             {QStringLiteral("cancellation_requested"), false},
             {QStringLiteral("cancellation_reason"), QString()},
-            {QStringLiteral("elapsed_ms"), active_job_timer_.isValid() ? active_job_timer_.elapsed() : 0},
+            {QStringLiteral("elapsed_ms"), attempt->timer.isValid() ? attempt->timer.elapsed() : 0},
             {QStringLiteral("error"), job.error_message},
         });
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
 
@@ -3599,14 +3789,19 @@ void JobRunner::runImportJob(const QString& job_id) {
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
 
-  async_job_watcher_.setFuture(QtConcurrent::run(
+  attempt->watcher->setFuture(QtConcurrent::run(
       run_import_work,
       job.job_id,
       source_path,
-      job.metadata_json));
+      job.metadata_json,
+      attempt->resources.import_metadata_threads,
+      attempt->cancellation));
+  wake();
 }
 
-void JobRunner::runTimelineRenderJob(const QString& job_id) {
+void JobRunner::runTimelineRenderJob(const AttemptPtr& attempt) {
+  if (!isCurrentAttempt(attempt)) return;
+  const auto& job_id = attempt->job_id;
   const auto records = loadPersistedJobRecords();
   auto job_it = std::find_if(
       records.cbegin(),
@@ -3614,21 +3809,16 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
       [&](const auto& record) { return record.job_id == job_id; });
 
   if (job_it == records.cend()) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
   auto job = *job_it;
   if (job.status != QStringLiteral("Queued")) {
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
+  if (!refreshAttemptResources(attempt, job)) return;
 
   const auto source_path = normalized_local_path(job.source_path);
   if (source_path.isEmpty()) {
@@ -3637,10 +3827,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
@@ -3651,10 +3838,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
     job.progress = 0;
     job.updated_at = iso_now();
     (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    active_queue_wait_ms_ = 0;
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
+    releaseAttempt(attempt);
     return;
   }
 
@@ -3665,13 +3849,15 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
 
-  async_job_watcher_.setFuture(QtConcurrent::run(
+  attempt->watcher->setFuture(QtConcurrent::run(
       run_timeline_render_work,
       source_path,
       output_path,
       job.metadata_json.value(QStringLiteral("timelineId")).toString().trimmed(),
       job.metadata_json.value(QStringLiteral("resourcePolicy"))
-          .toString(QStringLiteral("playback-first"))));
+          .toString(QStringLiteral("playback-first")),
+      attempt->cancellation));
+  wake();
 }
 
 }  // namespace photo_editor::desktop

@@ -7,6 +7,7 @@
   "purchaseUrl": "",
   "subscriptionPurchaseUrl": "",
   "subscriptionPriceLabel": "",
+  "billingPortalUrl": "",
   "purchaseRecoveryUrl": "https://app.lemonsqueezy.com/my-orders/",
   "commercialTermsApproved": false
 }

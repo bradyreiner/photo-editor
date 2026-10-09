@@ -142,8 +142,10 @@ Popup {
                     font.weight: Font.DemiBold
                 }
 
-                TextField {
+                ToneTextField {
                     id: searchField
+                    objectName: "commandPaletteSearchField"
+                    accessibleLabel: "Search commands"
                     Layout.fillWidth: true
                     placeholderText: "Type a command"
                     placeholderTextColor: theme.textFaint

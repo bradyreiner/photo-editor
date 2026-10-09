@@ -88,6 +88,14 @@ struct RenderMaskOptions final {
     const photo_editor::pipeline::RenderPlan*
         canonical_plan = nullptr,
     photo_editor::pipeline::CancellationToken cancellation = {});
+[[nodiscard]] QImage render_output_image_with_compiled_state(
+    const QImage& image,
+    const RenderEditState& state,
+    const photo_editor::pipeline::ColorAdjustmentState& compiled_state,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format,
+    const photo_editor::pipeline::RenderPlan& canonical_plan,
+    photo_editor::pipeline::CancellationToken cancellation = {});
 [[nodiscard]] QImage render_output_image_with_backend(
     const QImage& image,
     const RenderEditState& state,

@@ -9,8 +9,8 @@ Dialog {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: 920
-    height: 640
+    width: Math.min(theme.scaled(920), parent ? parent.width - 32 : theme.scaled(920))
+    height: Math.min(theme.scaled(640), parent ? parent.height - 32 : theme.scaled(640))
     padding: 0
     standardButtons: Dialog.NoButton
 
@@ -18,8 +18,8 @@ Dialog {
     property string displayCalibrationMessage: ""
     readonly property var pageTitles: ["General", "Color", "Timeline", "Storage", "Privacy & Support", "Account"]
     readonly property string dialogVisibilityContract: "dialog-visibility:v1|preferences|always:nav-current-page-close-by-escape|contextual:page-settings-storage-paths-backend-status|one-expansion:workspace-picker-backend-picker-folder-open|hover-focus:preference-navigation-controls|diagnostic:backend-availability-storage-paths|preserve:functionality"
-    readonly property string dialogSurfaceContract: "dialog-surface:v1|preferences|nav:fixed-left|page:dominant|sections:scrollable|toggles:stable|paths:copyable-wrap|no-elide:true|no-overlap:true"
-    readonly property string functionPreservationMap: "function-preservation:v3|dark-mode:general-toggle|interface-scale:0.9-2.0|density:clean-pro-inspect|contrast:standard-high|motion:standard-reduced|color-vision:5-palettes|startup-workspace:general-combo|reopen-workspace:general-toggle|preview-backend:general-combo|timeline-defaults:timeline-page|storage-folders:storage-open-actions"
+    readonly property string dialogSurfaceContract: "dialog-surface:v2|preferences|nav:scrollable-left|page:dominant|sections:scrollable|toggles:stable|paths:copyable-wrap|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v4|dark-mode:general-toggle|interface-scale:0.9-2.0|density:comfortable-balanced-compact|contrast:standard-high|motion:standard-reduced|color-vision:5-palettes|startup-workspace:general-combo|reopen-workspace:general-toggle|preview-backend:general-combo|timeline-defaults:timeline-page|storage-folders:storage-open-actions"
 
     Theme { id: theme }
 
@@ -94,7 +94,7 @@ Dialog {
                     text: section.title
                     color: sectionTheme.textStrong
                     font.family: sectionTheme.fontUi
-                    font.pixelSize: 15
+                    font.pixelSize: sectionTheme.typeSection
                     font.weight: Font.DemiBold
                 }
 
@@ -104,7 +104,7 @@ Dialog {
                     text: section.subtitle
                     color: sectionTheme.textMuted
                     font.family: sectionTheme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: sectionTheme.typeBody
                     wrapMode: Text.WordWrap
                 }
             }
@@ -126,9 +126,10 @@ Dialog {
         color: rowTheme.alpha(rowTheme.glassBase, 0.36)
         border.width: 1
         border.color: rowTheme.alpha(rowTheme.glassEdge, 0.2)
-        implicitHeight: 70
+        implicitHeight: Math.max(rowTheme.controlHeightStandard, toggleRowContent.implicitHeight + rowTheme.space12 * 2)
 
         RowLayout {
+            id: toggleRowContent
             anchors.fill: parent
             anchors.margins: rowTheme.space12
             spacing: rowTheme.space12
@@ -142,7 +143,7 @@ Dialog {
                     text: row.title
                     color: rowTheme.textStrong
                     font.family: rowTheme.fontUi
-                    font.pixelSize: 13
+                    font.pixelSize: rowTheme.typeControl
                     font.weight: Font.Medium
                     wrapMode: Text.WordWrap
                 }
@@ -152,7 +153,7 @@ Dialog {
                     text: row.description
                     color: rowTheme.textMuted
                     font.family: rowTheme.fontUi
-                    font.pixelSize: 11
+                    font.pixelSize: rowTheme.typeCaption
                     wrapMode: Text.WordWrap
                 }
             }
@@ -207,7 +208,7 @@ Dialog {
                     text: card.label
                     color: cardTheme.textStrong
                     font.family: cardTheme.fontUi
-                    font.pixelSize: 13
+                    font.pixelSize: cardTheme.typeControl
                     font.weight: Font.DemiBold
                 }
 
@@ -240,7 +241,7 @@ Dialog {
                 text: card.description
                 color: cardTheme.textMuted
                 font.family: cardTheme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: cardTheme.typeCaption
                 wrapMode: Text.WordWrap
             }
 
@@ -252,8 +253,10 @@ Dialog {
                 border.color: cardTheme.alpha(cardTheme.lineSoft, 0.8)
                 implicitHeight: pathField.implicitHeight + cardTheme.space12 * 2
 
-                TextArea {
+                ToneTextArea {
                     id: pathField
+                    objectName: "configuredStoragePathField"
+                    accessibleLabel: "Configured storage path"
                     anchors.fill: parent
                     anchors.margins: cardTheme.space12
                     readOnly: true
@@ -262,7 +265,7 @@ Dialog {
                     text: card.path.length > 0 ? card.path : "Not configured"
                     color: cardTheme.textMain
                     font.family: cardTheme.fontMono
-                    font.pixelSize: 11
+                    font.pixelSize: cardTheme.typeCaption
                     background: null
                     padding: 0
                 }
@@ -367,7 +370,12 @@ Dialog {
         loadDisplayTargetFields()
     }
 
-    onOpened: loadDisplayTargetFields()
+    onOpened: {
+        loadDisplayTargetFields()
+        const firstPage = pageNavigation.itemAt(currentPage)
+        if (firstPage)
+            firstPage.forceActiveFocus(Qt.PopupFocusReason)
+    }
 
     Connections {
         target: editorPreview
@@ -385,6 +393,7 @@ Dialog {
     }
 
     background: PopupSurface {
+        radius: theme.radiusPanel
         accent: theme.accentWarm400
         accentRail: false
     }
@@ -395,7 +404,8 @@ Dialog {
         spacing: theme.space18
 
         GlassSurface {
-            Layout.preferredWidth: 232
+            objectName: "preferencesNavigationPanel"
+            Layout.preferredWidth: Math.min(theme.scaled(232), root.availableWidth * 0.28)
             Layout.fillHeight: true
             accent: theme.accentWarm400
             accentRail: false
@@ -406,65 +416,45 @@ Dialog {
                 anchors.margins: theme.space18
                 spacing: theme.space18
 
-                ColumnLayout {
+                Label {
                     Layout.fillWidth: true
-                    spacing: theme.space6
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Preferences"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 28
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Launch behavior, preview acceleration, editing defaults, and runtime folders."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        wrapMode: Text.WordWrap
-                    }
+                    text: "Preferences"
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeDialogTitle
+                    font.weight: Font.DemiBold
                 }
+                ScrollView {
+                    objectName: "preferencesNavigationScroll"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    contentWidth: availableWidth
+                    clip: true
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: theme.space4
+                        Repeater {
+                            id: pageNavigation
+                            model: root.pageTitles
 
-                Repeater {
-                    model: root.pageTitles
+                            delegate: PreferenceNavRow {
+                                required property int index
+                                required property string modelData
 
-                    delegate: PreferenceNavRow {
-                        required property int index
-                        required property string modelData
-
-                        pageIndex: index
-                        title: modelData
-                        subtitle: root.pageSubtitle(index)
-                        accent: root.pageAccent(index)
-                        selected: root.currentPage === index
-                        onActivated: function(pageIndex) {
-                            root.currentPage = pageIndex
+                                objectName: "preferencesPageNav_" + index
+                                pageIndex: index
+                                title: modelData
+                                subtitle: root.pageSubtitle(index)
+                                accent: root.pageAccent(index)
+                                selected: root.currentPage === index
+                                showSubtitle: false
+                                onActivated: function(pageIndex) {
+                                    root.currentPage = pageIndex
+                                }
+                            }
                         }
-                    }
-                }
 
-                Item { Layout.fillHeight: true }
-
-                GlassSurface {
-                    Layout.fillWidth: true
-                    radius: theme.radiusPanel
-                    surfaceOpacity: 0.42
-                    edgeOpacity: 0.2
-                    implicitHeight: shellNote.implicitHeight + theme.space16 * 2
-
-                    Label {
-                        id: shellNote
-                        anchors.fill: parent
-                        anchors.margins: theme.space16
-                        text: "Changes apply immediately and are persisted through app restarts."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -481,49 +471,31 @@ Dialog {
                 anchors.margins: theme.space18
                 spacing: theme.space16
 
-                Rectangle {
+                ColumnLayout {
+                    objectName: "preferencesPageHeader"
                     Layout.fillWidth: true
-                    radius: theme.radiusPanel
-                    color: theme.alpha(root.pageAccent(root.currentPage), 0.1)
-                    border.width: 1
-                    border.color: theme.alpha(root.pageAccent(root.currentPage), 0.3)
-                    implicitHeight: heroBody.implicitHeight + theme.space18 * 2
-
-                    ColumnLayout {
-                        id: heroBody
-                        anchors.fill: parent
-                        anchors.margins: theme.space18
-                        spacing: theme.space8
-
-                        Label {
-                            text: root.pageEyebrow(root.currentPage)
-                            color: root.pageAccent(root.currentPage)
-                            font.family: theme.fontMono
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.pageTitles[root.currentPage]
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 24
-                            font.weight: Font.DemiBold
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.pageSubtitle(root.currentPage)
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
-                        }
+                    spacing: theme.space8
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.pageTitles[root.currentPage]
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeDialogTitle
+                        font.weight: Font.DemiBold
+                        wrapMode: Text.WordWrap
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.pageSubtitle(root.currentPage)
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeBody
+                        wrapMode: Text.WordWrap
                     }
                 }
 
                 StackLayout {
+                    objectName: "preferencesPageContent"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     currentIndex: root.currentPage
@@ -568,7 +540,7 @@ Dialog {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: "Workspace Density"
+                                    text: "Control density"
                                     color: theme.textStrong
                                     font.pixelSize: theme.typeControl
                                     font.weight: Font.Medium
@@ -577,10 +549,18 @@ Dialog {
                                 ToneComboBox {
                                     objectName: "interfaceDensityCombo"
                                     Layout.fillWidth: true
-                                    model: ["Clean", "Pro", "Inspect"]
-                                    currentIndex: Math.max(0, ["clean", "pro", "inspect"].indexOf(appShell.interfaceDensity))
-                                    Accessible.name: "Workspace density"
-                                    onActivated: appShell.interfaceDensity = ["clean", "pro", "inspect"][currentIndex]
+                                    model: ["Comfortable", "Balanced", "Compact"]
+                                    currentIndex: Math.max(0, ["comfortable", "balanced", "compact"].indexOf(appShell.interfaceDensity))
+                                    Accessible.name: "Control density"
+                                    onActivated: appShell.interfaceDensity = ["comfortable", "balanced", "compact"][currentIndex]
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Adjust control spacing across the app. Panel layouts and text scale stay independent."
+                                    color: theme.textMuted
+                                    font.pixelSize: theme.typeCaption
+                                    wrapMode: Text.WordWrap
                                 }
 
                                 PreferenceToggleRow {
@@ -626,11 +606,12 @@ Dialog {
                                     text: "Startup Workspace"
                                     color: theme.textStrong
                                     font.family: theme.fontUi
-                                    font.pixelSize: 12
+                                    font.pixelSize: theme.typeBody
                                     font.weight: Font.Medium
                                 }
 
                                 ToneComboBox {
+                                    accessibleLabel: qsTr("Startup workspace")
                                     Layout.fillWidth: true
                                     model: appShell.workspaceNames
                                     currentIndex: appShell.startupWorkspace
@@ -656,11 +637,12 @@ Dialog {
                                     text: "Preview Backend Preference"
                                     color: theme.textStrong
                                     font.family: theme.fontUi
-                                    font.pixelSize: 12
+                                    font.pixelSize: theme.typeBody
                                     font.weight: Font.Medium
                                 }
 
                                 ToneComboBox {
+                                    accessibleLabel: qsTr("Preview backend preference")
                                     Layout.fillWidth: true
                                     model: previewBackend.backendPreferenceOptions
                                     currentIndex: Math.max(0, model.indexOf(previewBackend.preferredBackend))
@@ -686,7 +668,7 @@ Dialog {
                                             text: "Active: " + previewBackend.activeBackend
                                             color: theme.textStrong
                                             font.family: theme.fontUi
-                                            font.pixelSize: 13
+                                            font.pixelSize: theme.typeControl
                                             font.weight: Font.DemiBold
                                         }
 
@@ -695,7 +677,7 @@ Dialog {
                                             text: previewBackend.backendSummary
                                             color: theme.textMuted
                                             font.family: theme.fontUi
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                             wrapMode: Text.WordWrap
                                         }
 
@@ -705,7 +687,7 @@ Dialog {
                                                   + "  •  CUDA available: " + (previewBackend.cudaAvailable ? "Yes" : "No")
                                             color: theme.textFaint
                                             font.family: theme.fontMono
-                                            font.pixelSize: 10
+                                            font.pixelSize: theme.typeMicro
                                             wrapMode: Text.WordWrap
                                         }
                                     }
@@ -722,7 +704,7 @@ Dialog {
                                               : "Auto prefers Metal on Apple Silicon and CUDA on supported Windows NVIDIA systems."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: theme.typeBody
                                         wrapMode: Text.WordWrap
                                     }
 
@@ -747,7 +729,7 @@ Dialog {
                                         text: "This resets startup workspace, workspace restore behavior, and timeline defaults."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: theme.typeBody
                                         wrapMode: Text.WordWrap
                                     }
 
@@ -797,7 +779,7 @@ Dialog {
                                                    ? theme.success
                                                    : theme.warning
                                             font.family: theme.fontUi
-                                            font.pixelSize: 13
+                                            font.pixelSize: theme.typeControl
                                             font.weight: Font.DemiBold
                                         }
 
@@ -808,7 +790,7 @@ Dialog {
                                                                   : "No active display identity")
                                             color: theme.textMain
                                             font.family: theme.fontMono
-                                            font.pixelSize: 10
+                                            font.pixelSize: theme.typeMicro
                                             wrapMode: Text.WrapAnywhere
                                         }
 
@@ -821,7 +803,7 @@ Dialog {
                                                   + editorPreview.systemMonitorDisplayTarget.provenance
                                             color: theme.textMuted
                                             font.family: theme.fontUi
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                             wrapMode: Text.WordWrap
                                         }
                                     }
@@ -859,7 +841,7 @@ Dialog {
                                         Label {
                                             text: "Peak luminance (nits)"
                                             color: theme.textMuted
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                         }
                                         ToneTextField {
                                             id: peakLuminanceField
@@ -876,7 +858,7 @@ Dialog {
                                         Label {
                                             text: "Black luminance (nits)"
                                             color: theme.textMuted
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                         }
                                         ToneTextField {
                                             id: blackLuminanceField
@@ -893,7 +875,7 @@ Dialog {
                                         Label {
                                             text: "Reference white (nits)"
                                             color: theme.textMuted
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                         }
                                         ToneTextField {
                                             id: referenceWhiteField
@@ -910,7 +892,7 @@ Dialog {
                                         Label {
                                             text: "Surround luminance (nits)"
                                             color: theme.textMuted
-                                            font.pixelSize: 11
+                                            font.pixelSize: theme.typeCaption
                                         }
                                         ToneTextField {
                                             id: surroundLuminanceField
@@ -931,7 +913,7 @@ Dialog {
                                            ? theme.error
                                            : theme.textMuted
                                     font.family: theme.fontUi
-                                    font.pixelSize: 11
+                                    font.pixelSize: theme.typeCaption
                                     wrapMode: Text.WordWrap
                                 }
 
@@ -1009,7 +991,7 @@ Dialog {
                                         text: "Use this if the timeline layout gets too fragmented or you want to reapply the current defaults."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: theme.typeBody
                                         wrapMode: Text.WordWrap
                                     }
 
@@ -1062,7 +1044,7 @@ Dialog {
                                     text: appShell.storageConfigurationStatus
                                     color: theme.textMain
                                     font.family: theme.fontUi
-                                    font.pixelSize: 11
+                                    font.pixelSize: theme.typeCaption
                                     wrapMode: Text.WordWrap
                                 }
                             }
@@ -1127,7 +1109,7 @@ Dialog {
                                     visible: typeof crashReporting !== "undefined" && crashReporting.available
                                     text: "Reports go to Sentry and include app and system details, a customer ID when activated, and native crash data that may contain process memory. License keys and photo files are not deliberately attached. Turning this off removes queued reports."
                                     color: theme.textMuted
-                                    font.pixelSize: 12
+                                    font.pixelSize: theme.typeBody
                                     wrapMode: Text.WordWrap
                                 }
 
@@ -1149,7 +1131,7 @@ Dialog {
                                         text: "Create a support folder containing system metadata and up to three recent text-log sessions. Photo bytes are never included. Review the folder before sending it."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: theme.typeBody
                                         wrapMode: Text.WordWrap
                                     }
 
@@ -1198,32 +1180,28 @@ Dialog {
                     }
                 }
 
-                Rectangle {
+                Item {
+                    objectName: "preferencesFooter"
                     Layout.fillWidth: true
-                    radius: theme.radiusPanel
-                    color: theme.alpha(theme.ink850, 0.92)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.52)
-                    implicitHeight: footerRow.implicitHeight + theme.space12 * 2
+                    implicitHeight: footerRow.implicitHeight
 
                     RowLayout {
                         id: footerRow
                         anchors.fill: parent
-                        anchors.margins: theme.space12
                         spacing: theme.space12
 
                         Label {
                             Layout.fillWidth: true
                             text: root.currentPage === 1
-                                  ? "Reference defaults are explicit but unverified; only measured values are labeled calibrated."
+                                  ? "Only measured display values are labeled calibrated."
                                   : root.currentPage === 3
-                                  ? "Photo storage and backup locations can be changed here; original and catalog backups remain separate."
+                                  ? "Original and catalog backups use separate folders."
                                   : root.currentPage === 4
                                     ? "Crash reports are optional. Review support bundles before sharing them."
                                   : "Preference changes are saved immediately."
                             color: theme.textFaint
                             font.family: theme.fontUi
-                            font.pixelSize: 11
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WordWrap
                         }
 
@@ -1235,9 +1213,9 @@ Dialog {
                         }
 
                         ActionButton {
+                            objectName: "preferencesCloseButton"
                             text: "Close"
                             compact: true
-                            tone: "primary"
                             iconName: "close"
                             onClicked: root.close()
                         }

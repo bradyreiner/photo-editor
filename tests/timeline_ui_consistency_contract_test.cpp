@@ -118,6 +118,8 @@ int main() {
     const auto job_queue_model =
         read_text(root / "apps/desktop/src/job_queue_model.cpp");
     const auto job_runner = read_text(root / "apps/desktop/src/job_runner.cpp");
+    const auto job_admission_policy =
+        read_text(root / "apps/desktop/src/job_admission_policy.h");
     const auto job_store = read_text(root / "apps/desktop/src/job_store.cpp");
     const auto worker_queue_registry =
         read_text(root / "apps/desktop/src/worker_queue_registry.cpp");
@@ -152,7 +154,11 @@ int main() {
         !contains(job_queue_model, "QString JobQueueModel::duplicateRenderJob(") ||
         !contains(job_queue_model, "QString JobQueueModel::revealOutputPath(") ||
         !contains(job_store, "record.job_kind != QStringLiteral(\"timeline_render\")") ||
-        !contains(job_runner, "QStringLiteral(\"queueOrder\")") ||
+        !contains(job_runner,
+                  "a.priority == b.priority ? job_order_less_than(*a.job, *b.job) : a.priority > b.priority") ||
+        !contains(job_admission_policy,
+                  "job_order_less_than(const PersistentJobRecord& lhs, const PersistentJobRecord& rhs)") ||
+        !contains(job_admission_policy, "metadata_json.value(\"queueOrder\")") ||
         !contains(job_runner, "Paused safely. Resume to render this timeline again.") ||
         !contains(job_queue_model_test, "priority then manual render order should survive a fresh model instance") ||
         !contains(job_queue_model_test, "duplicate should preserve delivery intent while clearing runtime results") ||
@@ -247,7 +253,7 @@ int main() {
         !contains(timeline_view, "objectName: \"timelineSaveStateChip\"") ||
         !contains(timeline_view, "function timelineSaveStateText()") ||
         !contains(timeline_view, "objectName: \"timelineHeaderMoreMenuButton\"") ||
-        !contains(timeline_view, "function timelineSaveMenuItems()") ||
+        !contains(timeline_view, "function timelineHeaderMenuItems()") ||
         contains(timeline_view, "label: \"Tracks\"") ||
         contains(timeline_view, "key: \"add-media\"")) {
       return fail("the compact project, history, primary-media, save-state, and overflow header is incomplete");
@@ -287,7 +293,7 @@ int main() {
         !contains(media_asset_row, "text: root.online ? \"Ready\" : \"Offline\"") ||
         !contains(gallery_picker, "readonly property real selectedDurationSeconds:") ||
         !contains(catalog_model_cpp, "map.insert(QStringLiteral(\"durationSeconds\"), item.duration_seconds)") ||
-        !contains(timeline_view, "function insertPickedMedia()") ||
+        !contains(timeline_view, "function addPickedMedia()") ||
         !contains(timeline_view, "timelineDocument.insertClipFromGallery(") ||
         !contains(timeline_view, "function overwritePickedMedia()") ||
         !contains(timeline_view, "timelineDocument.overwriteClipFromGallery(") ||
@@ -305,7 +311,7 @@ int main() {
     if (!contains(timeline_view,
                   "timeline-coordinate-alignment:v1|origin:header-boundary-ruler-playhead-lanes-clips|") ||
         !contains(timeline_view, "function timelineX(seconds)") ||
-        !contains(timeline_view, "property real committedX: root.timelineX(modelData.startSeconds)") ||
+        !contains(timeline_view, "property real committedX: root.timelineX(clipBlock.displayedStartSeconds)") ||
         !contains(timeline_view, "function rulerLabelInterval()") ||
         !contains(timeline_view, "function isMajorRulerTick(seconds)") ||
         !contains(timeline_view, "objectName: \"timelinePlayheadHitTarget\"") ||
@@ -325,7 +331,7 @@ int main() {
         !contains(timeline_view, "Keys.onLeftPressed: root.setLaneHeaderWidth") ||
         !contains(timeline_view, "property string trackHeightsJson: \"{}\"") ||
         !contains(timeline_view, "function restoreTimelineViewportState()") ||
-        !contains(timeline_view, "onTrackHeightsChanged: timelineWorkspaceSettings.trackHeightsJson = JSON.stringify(trackHeights)") ||
+        !contains(timeline_view, "onTrackHeightsChanged: {") ||
         !contains(timeline_view, "timelineWorkspaceSettings.timelineZoom = timelineZoom") ||
         !contains(timeline_view, "timelineWorkspaceSettings.timelineScrollX = contentX") ||
         !contains(timeline_view, "timelineWorkspaceSettings.timelineScrollY = contentY") ||
@@ -339,14 +345,13 @@ int main() {
         !contains(track_header, "objectName: \"timelineTrackReorderPreview\"") ||
         !contains(track_header, "root.reorderPreviewDirection = -1") ||
         !contains(track_header, ": (trackData.muted ? \"audio-muted\" : \"audio\")") ||
-        !contains(track_header, "iconName: \"star\"") ||
         !contains(track_header, "iconName: \"source\"") ||
         !contains(track_header, "objectName: \"timelineDeleteTrackConfirmation\"") ||
         !contains(track_header, "You can undo the deletion.") ||
         !contains(track_header, "documentController.removeTrackRow(trackData.trackIndex, true)")) {
       return fail("track headers need persisted horizontal resize plus keyboard and preset lane sizing");
     }
-    if (!contains(effects_panel, "timeline-effects-panel-style:v6|surface:borderless") ||
+    if (!contains(effects_panel, "timeline-effects-panel-style:v9|surface:borderless") ||
         !contains(effects_panel, "objectName: \"timelineInspectorNoSelectionState\"") ||
         !contains(effects_panel, "readonly property bool hasClip: hasSingleSelection") ||
         !contains(effects_panel, "text: \"Select a clip to inspect\"") ||
@@ -423,7 +428,7 @@ int main() {
         !contains(timeline_view, "\"key\": \"cache\"") ||
         !contains(clip_content, "objectName: \"timelineClipStatusStrip\"") ||
         !contains(clip_content, "objectName: \"timelineClipStatusBadge-\" + badgeKey") ||
-        !contains(clip_content, "border.width: 0") ||
+        contains(clip_content, "border.width:") ||
         !contains(timeline_view, "objectName: \"timelineGroupSelectedClipsAction\"") ||
         !contains(timeline_view, "timelineDocument.groupSelectedClips()") ||
         !contains(timeline_view, "text: rippleModeEnabled ? \"Ripple Delete\" : \"Lift Clip\"") ||
@@ -448,6 +453,16 @@ int main() {
         !contains(timeline_view, "property bool effectsPanelCollapsed: true") ||
         !contains(timeline_view, "property bool timelineAdvancedControlsVisible: false") ||
         !contains(timeline_view, "function timelineCreateMenuItems()") ||
+        !contains(timeline_view, "key: \"add-audio-track\"") ||
+        !contains(timeline_view, "label: \"Independent Audio Lane…\"") ||
+        !contains(timeline_view, "objectName: \"timelineAudioTrackRolePopup\"") ||
+        !contains(timeline_view, "timelineDocument.addIndependentAudioTrack(") ||
+        !contains(timeline_view, "{\"role\": \"dialogue\", \"label\": \"Dialogue\"}") ||
+        !contains(timeline_view, "{\"role\": \"music\", \"label\": \"Music\"}") ||
+        !contains(timeline_view, "{\"role\": \"voiceover\", \"label\": \"Voiceover\"}") ||
+        !contains(timeline_view, "{\"role\": \"ambience\", \"label\": \"Ambience\"}") ||
+        !contains(timeline_view, "{\"role\": \"effects\", \"label\": \"Sound Effects\"}") ||
+        !contains(timeline_view, "{\"role\": \"commentary\", \"label\": \"Commentary\"}") ||
         !contains(timeline_view, "function timelineViewMenuItems()") ||
         !contains(timeline_view, "function timelineZoomMenuItems()")) {
       return fail("the calm default, contextual controls, and progressive command menus are missing");
@@ -497,6 +512,15 @@ int main() {
         !contains(effects_panel, "objectName: \"timelineTitleTemplateMenuButton\"") ||
         !contains(effects_panel, "root.documentController.applySelectedTitleTemplate(key)")) {
       return fail("title production needs contextual reusable presets for creation and non-destructive inspector restyling");
+    }
+    if (!contains(effects_panel, "objectName: \"timelineTitleMotionMenuButton\"") ||
+        !contains(effects_panel, "\"key\": \"title-fade\"") ||
+        !contains(effects_panel, "\"key\": \"title-pop\"") ||
+        !contains(effects_panel, "\"key\": \"title-rise\"") ||
+        !contains(effects_panel, "\"key\": \"title-slide-from-left\"") ||
+        !contains(effects_panel, "\"key\": \"title-slide-from-right\"") ||
+        !contains(effects_panel, "applySelectedClipMotionPreset(key)")) {
+      return fail("the title Inspector should expose editable fade, pop, rise, and slide motion presets");
     }
     if (!contains(timeline_view,
                   "timeline-delivery-preflight:v3|platforms:youtube-shorts-tiktok-instagram|"
@@ -627,7 +651,10 @@ int main() {
         !contains(timeline_view, "objectName: \"timelineRecoveryCandidateList\"") ||
         !contains(timeline_view, "Open works from the recovery and changes nothing until Save.") ||
         !contains(timeline_view, "Restore Copy creates a separate project immediately.") ||
-        !contains(timeline_view, "timelineDocument.openRecoveryCandidate(String(modelData.candidateId))") ||
+        !contains(timeline_view, "timelineDocument.openRecoveryCandidate(candidateId)") ||
+        !contains(timeline_view, "function onRecoveryOpenCompleted(candidateId, succeeded)") ||
+        !contains(timeline_view, "timelineDocument.recoveryOpenInProgress") ||
+        !contains(timeline_view, "timelineDocument.cancelRecoveryOpen()") ||
         !contains(timeline_view, "timelineDocument.restoreRecoveryCandidateAsCopy(") ||
         !contains(timeline_view, "timelineDocument.discardRecoveryCandidate(") ||
         !contains(timeline_view, "Qt.callLater(presentTimelineRecoveryIfNeeded)")) {
@@ -864,7 +891,7 @@ int main() {
                   "organize:drag-media-and-bins|delete:contents-to-parent|"
                   "state:undo-redo-save-reopen|ui:calm-filter-plus-modular-manager") ||
         !contains(source_panel, "objectName: \"timelineActiveMediaBinFilter\"") ||
-        !contains(source_panel, "objectName: \"timelineMediaBinsButton\"") ||
+        !contains(source_panel, "objectName: \"timelineMediaPoolBrowseMenuButton\"") ||
         !contains(source_panel, "objectName: \"timelineMediaBinsPopup\"") ||
         !contains(source_panel, "keys: [\"timeline-media\", \"timeline-bin\"]") ||
         !contains(source_panel, "root.documentController.assignMediaAssetToBin(") ||
@@ -888,7 +915,7 @@ int main() {
         !contains(source_panel, "objectName: \"timelineMediaBatchColorButton\"") ||
         !contains(source_panel, "objectName: \"timelineMediaTagsPopup\"") ||
         !contains(source_panel, "objectName: \"timelineMediaApplyTagsButton\"") ||
-        !contains(media_asset_row, "timeline-media-asset-row:v4|") ||
+        !contains(media_asset_row, "timeline-media-asset-row:v5|") ||
         !contains(media_asset_row, "event.key >= Qt.Key_0 && event.key <= Qt.Key_5") ||
         !contains(media_asset_row, "event.key === Qt.Key_F") ||
         !contains(media_asset_row, "event.key === Qt.Key_X") ||
@@ -900,13 +927,14 @@ int main() {
       return fail("media review metadata needs contextual batch commands, fast keys, undo, and persisted controller state");
     }
     if (!contains(source_panel,
-                  "timeline-unified-media-search:v1|one-field:filename-metadata-tags-"
-                  "transcript-captions-markers-on-screen-text|filters:all-and-composable-scopes|"
+                  "timeline-unified-media-search:v2|one-field:filename-metadata-tags-"
+                  "transcript-captions-markers-on-screen-text|fields:search-menu-composable|"
+                  "filters:bin-plus-smart-collection|"
                   "quoted-phrases:true|results:matched-scope|default-density:query-contextual") ||
         !contains(source_panel, "objectName: \"timelineUnifiedMediaSearchField\"") ||
-        !contains(source_panel, "objectName: \"timelineMediaSearchScopeFilters\"") ||
-        !contains(source_panel, "{\"key\": \"transcript\", \"label\": \"Transcript\"}") ||
-        !contains(source_panel, "{\"key\": \"text\", \"label\": \"On-screen text\"}") ||
+        !contains(source_panel, "objectName: \"timelineMediaSearchScopeMenuButton\"") ||
+        !contains(source_panel, "{ \"key\": \"transcript\", \"label\": \"Transcript\", \"icon\": \"audio\"") ||
+        !contains(source_panel, "{ \"key\": \"text\", \"label\": \"On-screen text\", \"icon\": \"text\"") ||
         !contains(media_asset_row, "documentController.searchMediaAsset(") ||
         !contains(media_asset_row, "objectName: \"timelineMediaSearchMatchScope\"") ||
         !contains(timeline_document_controller,
@@ -921,7 +949,7 @@ int main() {
                   "density:compact-5-standard-9-detailed-15|decode:ffmpeg-384x216-single-frame|"
                   "queue:latest-per-asset-bounded-24|cache:bounded-240-files-96mb|"
                   "full-resolution-per-move:false|ui:hover-contextual") ||
-        !contains(source_panel, "objectName: \"timelineMediaFilmstripDensityMenu\"") ||
+        !contains(source_panel, "objectName: \"timelineMediaPoolBrowseMenuButton\"") ||
         !contains(source_panel, "mediaFilmstripDensity === \"compact\" ? 5") ||
         !contains(media_asset_row, "interval: 80") ||
         !contains(media_asset_row, "documentController.requestMediaHoverFrame(") ||
@@ -954,7 +982,7 @@ int main() {
                   "derivative|reveal:timeline-or-catalog|remove:unused-confirmed|"
                   "consolidate:explicit-canonical-verified-group-confirmed|"
                   "state:controller-undo-redo-save-reopen|ui:view-menu-modular-filtered") ||
-        !contains(source_panel, "{\"key\": \"usage\", \"label\": \"Analyze Media Usage\"}") ||
+        !contains(source_panel, "{ \"key\": \"usage\", \"label\": \"Analyze Media Usage\", \"icon\": \"info\"") ||
         !contains(source_panel, "objectName: \"timelineMediaUsagePopup\"") ||
         !contains(source_panel, "objectName: \"timelineMediaUsageFilters\"") ||
         !contains(source_panel, "objectName: \"timelineRevealMediaUsageButton\"") ||
@@ -977,7 +1005,7 @@ int main() {
                   "source:existing-monitor-and-edit-actions|exit:current-source-retained|"
                   "sequence-mutation:none") ||
         !contains(source_panel,
-                  "{\"key\": \"source-tape\", \"label\": \"Review as Source Tape\"}") ||
+                  "{ \"key\": \"source-tape\", \"label\": \"Review as Source Tape\", \"icon\": \"play\"") ||
         !contains(source_panel, "objectName: \"timelineSourceTapeBar\"") ||
         !contains(source_panel, "objectName: \"timelineSourceTapePreviousButton\"") ||
         !contains(source_panel, "objectName: \"timelineSourceTapeNextButton\"") ||
@@ -1017,11 +1045,11 @@ int main() {
                   "timeline-smart-collections:v1|rules:media-type-rating-label-tag-date-"
                   "duration-orientation-offline-usage-custom-field|logic:all-rules-live|"
                   "state:create-edit-delete-undo-redo-save-reopen|"
-                  "filter:bin-search-composable|ui:view-menu-modular") ||
+                  "filter:bin-search-composable|ui:direct-filter-plus-browse-manager") ||
         !contains(source_panel,
-                  "{\"key\": \"smart-collections\", \"label\": \"Smart Collections\"}") ||
+                  "{ \"key\": \"smart-collections\", \"label\": \"Manage Smart Collections…\", \"icon\": \"filter\"") ||
         !contains(source_panel, "objectName: \"timelineSmartCollectionsPopup\"") ||
-        !contains(source_panel, "objectName: \"timelineActiveSmartCollectionFilter\"") ||
+        !contains(source_panel, "objectName: \"timelineActiveMediaBinFilter\"") ||
         !contains(source_panel, "objectName: \"timelineSmartCollectionMediaTypeRule\"") ||
         !contains(source_panel, "objectName: \"timelineSmartCollectionRatingRule\"") ||
         !contains(source_panel, "objectName: \"timelineSmartCollectionLabelRule\"") ||
@@ -1422,11 +1450,11 @@ int main() {
                   "selection:soft-fill-hairline|tracks:accent-rail|viewer:sequence-aspect-fit-effects|"
                   "effects:seven-real-stack-controls|focus:keyboard-only|"
                   "signal-colors:functional-only") ||
-        !contains(action_button, "action-button:v6|shared-component:true") ||
-        !contains(action_button, "editorial-default:true|accent-restrained:true|") ||
-        !contains(action_button, "clipped-explicit-only:true|borderless-rest:true|") ||
-        !contains(tool_button, "radius: theme.radius4") ||
-        !contains(filter_chip, ": \"transparent\"") ||
+        !contains(action_button, "action-button:v11|shared-component:true|hierarchy:primary-graphite-secondary-neutral-tertiary-quiet") ||
+        !contains(action_button, "flat-surface:true|accent-restrained:true") ||
+        !contains(action_button, "borderless-rest:true|hover-fill-not-border:true") ||
+        !contains(tool_button, "cornerRadius: theme.radiusControl") ||
+        !contains(filter_chip, "theme.commandFill(\"secondary\", root.active") ||
         !contains(track_header, "target:accent-rail|edges:structural-only") ||
         !contains(theme, "readonly property bool darkMode: true") ||
         !contains(timeline_view, "objectName: \"timelineProgramMonitorStage\"") ||
@@ -1435,9 +1463,12 @@ int main() {
         !contains(timeline_view, "parent.width / sequenceAspectRatio")) {
       return fail("the dark-only editorial chrome and aspect-fitted Program viewer contract is missing");
     }
-    if (!contains(source_panel, "timeline-source-panel-style:v1|surface:shared") ||
-        !contains(effects_panel, "timeline-effects-panel-style:v6|surface:borderless") ||
+    if (!contains(source_panel, "timeline-source-panel-style:v2|surface:shared") ||
+        !contains(effects_panel, "timeline-effects-panel-style:v9|surface:borderless") ||
         !contains(effects_panel, "seven-real-search-favorites-recents-categories-compatibility-live-thumbnails-versioned-presets-stack-amount-enable-bypass-reset-remove-clear") ||
+        !contains(effects_panel, "timeline-keyframe-toolbar:v1|hierarchy:heading-count-menu|controls:dedicated-row|responsive:no-overlap|accessibility:combined-count") ||
+        !contains(effects_panel, "objectName: \"timelineKeyframeToolbarLabel\"") ||
+        !contains(effects_panel, "objectName: \"timelineKeyframeToolbarActions\"") ||
         !contains(timeline_view, "import QtQuick.Effects") ||
         !contains(timeline_view, "MultiEffect {") ||
         !contains(timeline_view, "function clipEffectBrightness(clip)") ||
@@ -1485,7 +1516,9 @@ int main() {
     }
     if (!contains(
             timeline_view,
-            "timeline-effect-stack-presets:v2|storage:user-global-atomic-json-bounded-128|"
+            "timeline-effect-stack-presets:v2|builtins:12-stable-ids-supported-stacks-not-persisted|"
+            "media:video-clips-only-current-preview-path|"
+            "storage:user-global-atomic-json-bounded-128|"
             "versioning:family-retained-revisions-latest-promotion|"
             "schema:migrate-v1-to-v2|preview:ordered-enabled-amount-availability|"
             "application:selective-merge-or-replace-one-undo|"
@@ -1498,7 +1531,7 @@ int main() {
         !contains(timeline_document_controller, "saveSelectedClipEffectStackPreset") ||
         !contains(timeline_document_controller, "effectStackPresetPreview") ||
         !contains(timeline_document_controller, "applyEffectStackPreset") ||
-        !contains(timeline_document_controller, "while (effect_stack_presets_.size() > 128)") ||
+        !contains(timeline_document_controller, "auto custom_preset_count = 0;") ||
         !contains(timeline_document_controller, "skipped %1 unavailable") ||
         !contains(effects_panel, "objectName: \"timelineEffectStackPresetsButton\"") ||
         !contains(effects_panel, "objectName: \"timelineEffectStackPresetPopup\"") ||
@@ -1520,7 +1553,7 @@ int main() {
             "fallback:none|undo-save-reopen:true") ||
         !contains(timeline_view, "objectName: \"timelineSourcePatchSummary\"") ||
         !contains(timeline_view, "timelineDocument.sourcePatchReady") ||
-        !contains(track_header, "shortLabel: trackData.displayLabel") ||
+        !contains(track_header, "readonly property string groupHeadingText:") ||
         !contains(track_header, "Patch source \" + trackData.trackKind + \" to \" + trackData.displayLabel")) {
       return fail("independent source video/audio patch destinations and compact track affordances are missing");
     }
@@ -1595,7 +1628,7 @@ int main() {
                   "hostWindow.visibility = fullScreenProgramPreviousWindowVisibility") ||
         !contains(timeline_view, "parent: root.fullScreenProgramActive") ||
         !contains(timeline_view, "? fullScreenProgramStage") ||
-        !contains(timeline_view, "? comparisonProgramStage : programMonitorStage") ||
+        !contains(timeline_view, "programComparisonWindow.comparisonStage : programMonitorStage") ||
         !contains(timeline_view, "objectName: \"timelineFullScreenProgramSurface\"") ||
         !contains(timeline_view, "objectName: \"timelineFullScreenProgramStage\"") ||
         !contains(timeline_view, "objectName: \"timelineFullScreenExitButton\"") ||
@@ -1797,10 +1830,10 @@ int main() {
       return fail("revision-cached adaptive waveform tiers, trim-accurate cropping, and lazy viewport loading are missing");
     }
     if (!contains(timeline_view, "timelineDocument.setLinkedEditOverride((mouse.modifiers & Qt.AltModifier) !== 0)") ||
-        !contains(timeline_view, "text: modelData.audioLinked ? \"Unlink Audio\" : \"Relink Audio\"") ||
+        !contains(timeline_view, "text: clipMenu.clipData.audioLinked ? \"Unlink Audio\" : \"Relink Audio\"") ||
         !contains(timeline_view, "? \"Duplicate Selected Clips\"") ||
         !contains(timeline_view, "sequences: [\"Ctrl+D\", \"Meta+D\"]") ||
-        !contains(timeline_view, "modelData.audioLinked")) {
+        !contains(timeline_view, "clipMenu.clipData.audioLinked")) {
       return fail("linked A/V override, link-state, duplicate, and quiet badge controls are missing");
     }
     if (!contains(timeline_view, "timeline-trim-preview:v1|viewer:two-up-outgoing-incoming|frames:source-timecode-exact|throttle:24ms|restore:on-release-cancel") ||
@@ -1816,7 +1849,7 @@ int main() {
       return fail("live two-up trim preview, exact frame mapping, throttling, and cancel restoration are missing");
     }
     if (!contains(timeline_view,
-                  "timeline-keyframe-motion:v1|parameters:transform-opacity-gain-effects|"
+                  "timeline-keyframe-motion:v2|parameters:transform-opacity-gain-effects-shared-grade-controls|"
                   "interpolation:hold-linear-ease-bezier|lanes:inline-progressive|"
                   "curve-editor:modular|preview:playhead-evaluated|persistence:undo-save-reopen") ||
         !contains(timeline_view, "objectName: \"timelineKeyframeCurveWindow\"") ||
@@ -1833,18 +1866,63 @@ int main() {
         !contains(timeline_view, "objectName: \"timelineBezierInHandle\"") ||
         !contains(timeline_view, "objectName: \"timelineBezierOutHandle\"") ||
         !contains(timeline_view, "objectName: \"timelineBezierHandleLinkButton\"") ||
+        !contains(timeline_view, "objectName: \"timelineKeyframeBatchMenuButton\"") ||
         !contains(timeline_view, "function interpolatedKeyframeValue(left, right, progress)") ||
         !contains(timeline_view, "timelineDocument.setSelectedClipKeyframeBezierHandle(") ||
         !contains(timeline_view, "timelineDocument.setSelectedClipKeyframeBezierHandlesLinked(") ||
         !contains(timeline_view,
-                  "timeline-advanced-keyframes:v1|graphs:value-speed|selection:modifier-multi|"
-                  "handles:weighted-bezier-linked-broken|timing:fixed-roving|"
+                  "timeline-advanced-keyframes:v4|graphs:value-speed|selection:modifier-multi|"
+                  "handles:weighted-bezier-linked-broken|tracks:automation-shared-curve-editor|"
+                  "batch:clip-and-track|clipboard:clip-and-track-selection|timing:fixed-roving-clip-only|"
                   "align:value-first-average-last|distribute:time-value|"
                   "scale:selected-time-value|clipboard:selected-paste-at-playhead|"
                   "preview-export:shared-evaluation|persistence:undo-save-reopen|"
                   "performance:bounded-canvas-sampling|density:modular-window-only") ||
         !contains(timeline_view, "objectName: \"timelineKeyframeValueGraphButton\"") ||
         !contains(timeline_view, "objectName: \"timelineKeyframeSpeedGraphButton\"") ||
+        !contains(timeline_view, "objectName: \"timelineKeyframeIncomingSpeedValueField\"") ||
+        !contains(timeline_view, "objectName: \"timelineKeyframeOutgoingSpeedValueField\"") ||
+        !contains(timeline_view,
+                  "timelineDocument.setSelectedClipKeyframeSpeedForSide(") ||
+        !contains(timeline_view, "objectName: \"timelineKeyframeSpeedDetailRow\"") ||
+        !contains(timeline_view, "function setCurveKeyframeSpeed(seconds, side, value)") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationSpeedEditorPopup\"") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationIncomingSpeedValueField\"") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationOutgoingSpeedValueField\"") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationSetKeyframeSpeedAction\"") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationToggleBezierHandlesLinkedAction\"") ||
+        !contains(timeline_view, "function trackAutomationSpeedUnit(parameter)") ||
+        !contains(timeline_view,
+                  "timelineDocument.setTrackAutomationKeyframeSpeedForSide(") ||
+        !contains(timeline_view,
+                  "timelineDocument.setTrackAutomationKeyframeSpeed(") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationOpenCurveEditorButton\"") ||
+        !contains(timeline_view,
+                  "function openTrackAutomationCurveEditor(trackData, parameter)") ||
+        !contains(timeline_view,
+                  "timelineDocument.setTrackAutomationKeyframeBezierHandle(") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationCurveCopyButton\"") ||
+        !contains(timeline_view,
+                  "objectName: \"timelineTrackAutomationCurvePasteButton\"") ||
+        !contains(timeline_view,
+                  "timelineDocument.copyTrackAutomationKeyframes(") ||
+        !contains(timeline_view,
+                  "timelineDocument.pasteTrackAutomationKeyframes(") ||
+        !contains(timeline_document_controller,
+                  "TimelineDocumentController::setTrackAutomationKeyframeBezierHandle(") ||
+        !contains(timeline_document_controller,
+                  "TimelineDocumentController::copyTrackAutomationKeyframes(") ||
+        !contains(timeline_document_controller,
+                  "TimelineDocumentController::pasteTrackAutomationKeyframes(") ||
+        !contains(timeline_view,
+                  "readonly property bool trackAutomationMode: root.curveEditorTarget === \"track\"") ||
         !contains(timeline_view, "objectName: \"timelineKeyframeRovingButton\"") ||
         !contains(timeline_view, "function curveSpeedAt(localSeconds)") ||
         !contains(timeline_view, "property var selectedSeconds: []") ||
@@ -1870,7 +1948,7 @@ int main() {
         !contains(timeline_document_controller,
                   "keyframe_object.insert(QStringLiteral(\"roving\"), keyframe.roving)") ||
         !contains(timeline_view,
-                  "timeline-keyframe-lanes:v2|clip:inline-transform-opacity-gain-effects|"
+                  "timeline-keyframe-lanes:v3|clip:inline-transform-opacity-gain-effects-shared-grade-controls|"
                   "track:inline-opacity-gain-pan|density:closed-by-default-expand-per-track|"
                   "edit:direct-time-value-interpolation-delete|curve:vector-bounded|"
                   "preview-export:shared|undo-save-reopen:true") ||
@@ -1879,6 +1957,38 @@ int main() {
         !contains(timeline_view, "timelineDocument.removeTrackAutomationKeyframe(") ||
         !contains(timeline_view, "timelineDocument.setTrackAutomationKeyframeInterpolation(") ||
         !contains(effects_panel, "component ParameterKeyframeButton: ActionButton") ||
+        !contains(effects_panel,
+                  "timeline-title-motion:v4|target:title-clips|presets:fade-pop-rise-slide-left-right|"
+                  "lifecycle:entrance-and-exit|animation:editable-clip-keyframes|"
+                  "text-position:anchor-and-transform-keyframes|"
+                  "clear:static-removes-motion-and-transform-keys|"
+                  "preview-export:shared-anchor-transform-path|state:undo-save-reopen") ||
+        !contains(effects_panel, "function titlePositionValue(axis)") ||
+        !contains(effects_panel, "function setTitlePosition(axis, value)") ||
+        !contains(effects_panel, "function animatedClipValue(clip, parameter, fallbackValue)") ||
+        !contains(effects_panel,
+                  "root.animatedClipValueProvider(clip, parameter, fallbackValue)") ||
+        !contains(effects_panel, "const offset = root.animatedClipValue(") ||
+        !contains(timeline_view,
+                  "animatedClipValueProvider: function(clip, parameter, fallbackValue)") ||
+        !contains(effects_panel,
+                  "root.documentController.setSelectedTitlePositionX(anchor)") ||
+        !contains(effects_panel,
+                  "root.documentController.setSelectedTitlePositionY(anchor)") ||
+        !contains(effects_panel, "parameterName: \"titlePositionX\"") ||
+        !contains(effects_panel, "parameterName: \"titlePositionY\"") ||
+        !contains(timeline_view, "objectName: \"timelineProgramTitleDragArea\"") ||
+        !contains(timeline_view, "timelineDocument.beginContinuousEdit()") ||
+        !contains(timeline_view, "timelineDocument.setSelectedTitlePositionX(") ||
+        !contains(timeline_view, "timelineDocument.setSelectedTitlePositionY(") ||
+        !contains(effects_panel, "objectName: \"timelineTitlePositionXSlider\"") ||
+        !contains(effects_panel, "objectName: \"timelineTitlePositionYSlider\"") ||
+        !contains(effects_panel, "objectName: \"timelineTitlePositionXKeyframeButton\"") ||
+        !contains(effects_panel, "objectName: \"timelineTitlePositionYKeyframeButton\"") ||
+        !contains(effects_panel, "from: 0.05") ||
+        !contains(effects_panel, "to: 4") ||
+        !contains(timeline_view,
+                  "if (parameter === \"frameScale\") return ({\"minimum\": 0.05, \"maximum\": 4})") ||
         !contains(effects_panel, "parameterName: \"frameScale\"") ||
         !contains(effects_panel, "parameterName: \"frameOffsetX\"") ||
         !contains(effects_panel, "parameterName: \"frameOffsetY\"") ||
@@ -2185,7 +2295,9 @@ int main() {
         !contains(timeline_document_controller,
                   "bool TimelineDocumentController::setSelectedClipAudioChannelMapping(") ||
         !contains(timeline_document_controller,
-                  "format=duration:stream=codec_type,width,height,channels,channel_layout") ||
+                  "format=duration:format_tags=Gamma for Look,Color for Look:") ||
+        !contains(timeline_document_controller,
+                  "color_transfer,color_primaries,channels,channel_layout:") ||
         !contains(timeline_document_controller,
                   "clip_object.insert(QStringLiteral(\"audioChannelMode\"), clip.audio_channel_mode)") ||
         !contains(timeline_document_controller,
@@ -2215,8 +2327,11 @@ int main() {
                   "reset:all-stages|scale:0-minus6-minus12-minus24-minus48|"
                   "reduced-motion:static-values|ui:mixer-window") ||
         !contains(timeline_view,
-                  "timeline-track-automation:v4|video:opacity|"
+                  "timeline-track-automation:v8|video:opacity|"
                   "audio:gain-pan-eq-compressor-limiter-gate-deesser-highpass-lowpass|"
+                  "keyframe-tangents:weighted-bezier-in-out-linked-broken|"
+                  "curve:shared-modular-value-speed-editor|"
+                  "clipboard:copy-paste-full-or-selected|bulk-align-distribute-scale:multi-key-undoable|"
                   "ui:context-mixer-processor-window-inline-lanes|"
                   "edit:add-drag-time-value-interpolation-delete|"
                   "preview:decoded-buffer-playhead-evaluated|"
@@ -2259,7 +2374,8 @@ int main() {
         !contains(timeline_view, "objectName: \"timelineExternalAudioSyncSampleResult\"") ||
         !contains(timeline_view, "timelineDocument.previewSelectedExternalAudioSync(") ||
         !contains(timeline_view, "timelineDocument.applySelectedExternalAudioSync(") ||
-        !contains(timeline_view, "Preview only · no clips move until Apply") ||
+        !contains(audio_mixer,
+                  "tooltipText: \"Preview timecode, waveform, or manual synchronization before moving external audio.\"") ||
         !contains(timeline_document_controller, "Broadcast Wave stores its source timecode") ||
         !contains(timeline_document_controller, "waveform_alignment(") ||
         !contains(timeline_document_controller, "timeline-external-audio-sync:v1") ||
@@ -2282,7 +2398,7 @@ int main() {
         !contains(timeline_document_controller, "qRound64(") ||
         !contains(audio_meter, "model: [0, -6, -12, -24, -48]") ||
         !contains(audio_meter, "NumberAnimation { duration: 70") ||
-        !contains(audio_meter, "enabled: !root.reducedMotion") ||
+        !contains(audio_meter, "enabled: root && !root.reducedMotion") ||
         !contains(audio_output, "double* true_peak_left") ||
         !contains(audio_output, "publish_true_peak_segment") ||
         !contains(audio_output, "void TimelineAudioOutput::resetMeters()") ||
@@ -2391,17 +2507,17 @@ int main() {
     if (!contains(timeline_view,
                   "timeline-dark-accessibility:v1|appearance:dark-only|"
                   "surfaces:ink950-900-850-800-750|outlines:focus-selection-structure-only|") ||
-        !contains(theme, "accessibility-theme:v3|appearance:dark-only|scale:0.9-2.0|") ||
-        !contains(theme, "semantic-accents:v1|primary:champagne|selection:cyan|focus:paper|") ||
-        !contains(theme, "dark-contrast:v1|text-main:12.67|text-muted:7.27|text-faint:5.14|") ||
-        !contains(theme, "readonly property int typeMicro: scaled(9)") ||
-        !contains(theme, "readonly property int typeCaption: scaled(10)") ||
-        !contains(theme, "readonly property color textFaint: highContrast ? \"#C9C6C0\" : \"#85827C\"") ||
+        !contains(theme, "accessibility-theme:v4|appearance:dark-only|scale:0.9-2.0|") ||
+        !contains(theme, "semantic-accents:v4|primary:graphite|selection:muted-blue|focus:paper|") ||
+        !contains(theme, "dark-contrast:v2|normal-text-target:4.5|control-target:3|") ||
+        !contains(theme, "readonly property int typeMicro: scaled(11)") ||
+        !contains(theme, "readonly property int typeCaption: scaled(12)") ||
+        !contains(theme, "readonly property color textFaint: highContrast ? \"#CDD1D8\" : \"#9299A5\"") ||
         !contains(theme, "readonly property color editorSelectionEdge: selectionAccent") ||
-        !contains(theme, "readonly property int radiusControl: radius6") ||
-        !contains(theme, "readonly property int radiusPanel: radius10") ||
-        !contains(theme, "readonly property int radiusSurface: radius8") ||
-        !contains(app_icon, "app-icon:v1|canvas:16-grid|stroke:optically-scaled|") ||
+        !contains(theme, "readonly property int radiusControl: scaled(3)") ||
+        !contains(theme, "readonly property int radiusPanel: radius4") ||
+        !contains(theme, "readonly property int radiusSurface: radius4") ||
+        !contains(app_icon, "app-icon:v2|canvas:16-grid|aspect:square-centered|") ||
         !contains(action_button, "minimum-px:10") ||
         !contains(track_header, "objectName: \"timelineTrackHeightResizeHandle-") ||
         !contains(track_header, "Accessible.role: Accessible.Slider") ||
@@ -2416,12 +2532,12 @@ int main() {
         !contains(timeline_view, "Keys.onRightPressed: timelineViewport.contentX = Math.min(")) {
       return fail("the dark semantic, readable, scalable, focus-visible, and keyboard-operable Timeline contract is incomplete");
     }
-    if (contrast_ratio("#D3CFC8", "#0B0B0C") < 7.0 ||
-        contrast_ratio("#A09D97", "#0B0B0C") < 4.5 ||
-        contrast_ratio("#85827C", "#0B0B0C") < 4.5 ||
-        contrast_ratio("#F4F0E8", "#0B0B0C") < 3.0 ||
-        contrast_ratio("#E8A849", "#0B0B0C") < 4.5 ||
-        contrast_ratio("#FF5D5D", "#0B0B0C") < 4.5) {
+    if (contrast_ratio("#E0E2E7", "#050505") < 4.5 ||
+        contrast_ratio("#9C9CAF", "#050505") < 4.5 ||
+        contrast_ratio("#9299A5", "#050505") < 4.5 ||
+        contrast_ratio("#F4F6F8", "#050505") < 3.0 ||
+        contrast_ratio("#F6C945", "#050505") < 4.5 ||
+        contrast_ratio("#FF3B30", "#050505") < 4.5) {
       return fail("dark Timeline text, focus, warning, and error tokens must pass their contrast thresholds");
     }
     if (!contains(
@@ -2433,7 +2549,7 @@ int main() {
         !contains(timeline_view, "function virtualizedClipsForTrack(track)") ||
         !contains(timeline_view, "model: root.virtualizedRulerTicks(interval)") ||
         !contains(timeline_view, "model: root.virtualizedSequenceMarkers()") ||
-        !contains(timeline_view, "model: root.virtualizedTrackModel()") ||
+        !contains(timeline_view, "model: root.timelineVirtualizedTrackRows") ||
         !contains(timeline_view, "model: root.virtualizedClipsForTrack(trackLane.modelData)") ||
         !contains(source_panel, "objectName: \"timelineVirtualizedMediaList\"") ||
         !contains(source_panel, "reuseItems: true") ||
@@ -2468,7 +2584,7 @@ int main() {
     }
 
     if (!contains(timeline_view, "function closeTransientSurfaces()") ||
-        !contains(timeline_view, "if (!visible)\n            closeTransientSurfaces()") ||
+        !contains(timeline_view, "if (!visible) {\n            adjustmentPreviewCacheTimer.stop()") ||
         !contains(timeline_view, "function restorePopupInvoker(item)") ||
         !contains(timeline_view, "onClosed: {") ||
         !contains(menu_button, "if (!visible)\n            menuPopup.close()") ||
@@ -2490,7 +2606,7 @@ int main() {
     }
     if (!contains(
             preferences,
-            "[\"General\", \"Color\", \"Timeline\", \"Storage\", \"Privacy & Support\"]") ||
+            "readonly property var pageTitles: [\"General\", \"Color\", \"Timeline\", \"Storage\", \"Privacy & Support\", \"Account\"]") ||
         !contains(preferences, "editorPreview.systemMonitorDisplayIdentity") ||
         !contains(preferences, "editorPreview.systemMonitorDisplayTarget.verified") ||
         !contains(preferences, "appShell.setDisplayCalibration(") ||

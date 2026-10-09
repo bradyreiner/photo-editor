@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <future>
@@ -10,9 +11,12 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QDir>
+#include <QFileInfo>
 #include <QPainter>
+#include <QStringList>
 
 #include "ai_model_runtime.h"
+#include "object_pick_policy.h"
 
 namespace {
 
@@ -30,9 +34,137 @@ int main(int argc, char** argv) {
   const auto status = photo_editor::desktop::ai_model_runtime_status();
   if (!status.bundle_verified || !status.inpaint_artifact_verified ||
       !status.inpaint_available ||
-      status.inpaint_runtime_label != QStringLiteral("LaMa Model Inpaint")) {
+      status.inpaint_runtime_label != QStringLiteral("LaMa Model Inpaint") ||
+      !status.smart_selection_artifacts_verified || !status.smart_selection_available ||
+      status.smart_selection_runtime_label != QStringLiteral("SAM Smart Select")) {
     std::cerr << status.summary.toStdString() << '\n';
-    return fail("pinned LaMa runtime should report ready before inference");
+    return fail("pinned LaMa and SAM2 runtimes should report ready before inference");
+  }
+
+  if (argc >= 4 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--smart-select-photo")) {
+    QImage photo(QString::fromLocal8Bit(argv[2]));
+    if (photo.isNull()) return fail("Smart Select diagnostic photo must load");
+    QVector<photo_editor::desktop::SmartSelectPrompt> prompts;
+    const auto prompt_specs = QString::fromLocal8Bit(argv[3]).split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    for (const auto& prompt_spec : prompt_specs) {
+      const auto fields = prompt_spec.split(QLatin1Char(','));
+      if (fields.size() == 5 && fields.at(4) == QStringLiteral("box")) {
+        bool valid = true;
+        QVector<double> coordinates;
+        for (int index = 0; index < 4; ++index) {
+          bool ok = false;
+          coordinates.append(fields.at(index).toDouble(&ok));
+          valid = valid && ok;
+        }
+        if (!valid) return fail("Box diagnostic bounds must be numeric");
+        const QRectF box(QPointF(coordinates.at(0), coordinates.at(1)),
+                         QPointF(coordinates.at(2), coordinates.at(3)));
+        prompts.append({.x = box.center().x(), .y = box.center().y(), .negative = false, .box = box});
+        continue;
+      }
+      if (fields.size() != 3) return fail("Smart Select diagnostic points use x,y,+ or x,y,-");
+      bool x_ok = false;
+      bool y_ok = false;
+      const auto x = fields.at(0).toDouble(&x_ok);
+      const auto y = fields.at(1).toDouble(&y_ok);
+      if (!x_ok || !y_ok || (fields.at(2) != QStringLiteral("+") && fields.at(2) != QStringLiteral("-"))) {
+        return fail("Smart Select diagnostic point is invalid");
+      }
+      prompts.append({.x = x, .y = y, .negative = fields.at(2) == QStringLiteral("-")});
+    }
+    photo_editor::desktop::SegmentationResult previous_mask;
+    const photo_editor::desktop::SegmentationResult* previous_mask_input = nullptr;
+    if (argc >= 6) {
+      const QImage previous_mask_image(QString::fromLocal8Bit(argv[5]));
+      if (previous_mask_image.isNull() ||
+          previous_mask_image.size() != photo.size()) {
+        return fail("Smart Select refinement mask must match the source photo dimensions");
+      }
+      const auto grayscale_mask = previous_mask_image.convertToFormat(QImage::Format_Grayscale8);
+      previous_mask.width = grayscale_mask.width();
+      previous_mask.height = grayscale_mask.height();
+      previous_mask.mask_data.resize(previous_mask.width * previous_mask.height);
+      for (int y = 0; y < previous_mask.height; ++y) {
+        std::copy_n(
+            reinterpret_cast<const char*>(grayscale_mask.constScanLine(y)),
+            previous_mask.width,
+            previous_mask.mask_data.data() + y * previous_mask.width);
+      }
+      previous_mask.success = true;
+      if (argc >= 7) {
+        QFile refinement_logits_file(QString::fromLocal8Bit(argv[6]));
+        if (!refinement_logits_file.open(QIODevice::ReadOnly)) {
+          return fail("Smart Select refinement logits must load");
+        }
+        previous_mask.refinement_logits = refinement_logits_file.readAll();
+        previous_mask.refinement_logits_width = 256;
+        previous_mask.refinement_logits_height = 256;
+        if (previous_mask.refinement_logits.size() != 256 * 256 * static_cast<int>(sizeof(float))) {
+          return fail("Smart Select refinement logits must be a 256x256 float tensor");
+        }
+      }
+      previous_mask_input = &previous_mask;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    const auto mask = photo_editor::desktop::generate_ai_smart_selection_mask(
+        photo,
+        prompts,
+        previous_mask_input);
+    if (!mask.success || mask.width != photo.width() || mask.height != photo.height() ||
+        mask.mask_data.size() != photo.width() * photo.height() ||
+        mask.refinement_logits_width != 256 || mask.refinement_logits_height != 256 ||
+        mask.refinement_logits.size() != 256 * 256 * static_cast<int>(sizeof(float))) {
+      std::cerr << "smart-select error=" << mask.error_message.toStdString() << '\n';
+      return fail("SAM2 must return a source-resolution mask and exact decoder logits for refinement");
+    }
+    auto prompts_match = true;
+    for (const auto& prompt : prompts) {
+      if (prompt.box.isValid()) continue;
+      const auto x = std::clamp(qRound(prompt.x * (mask.width - 1)), 0, mask.width - 1);
+      const auto y = std::clamp(qRound(prompt.y * (mask.height - 1)), 0, mask.height - 1);
+      const auto alpha = static_cast<unsigned char>(mask.mask_data.at(y * mask.width + x));
+      const auto matches = prompt.negative ? alpha < 96 : alpha >= 96;
+      prompts_match = prompts_match && matches;
+      std::cout << "prompt=" << (prompt.negative ? "negative" : "positive")
+                << " x=" << prompt.x << " y=" << prompt.y
+                << " alpha=" << static_cast<int>(alpha) << '\n';
+    }
+    const auto selected_pixels = std::count_if(
+        mask.mask_data.cbegin(), mask.mask_data.cend(),
+        [](char value) { return static_cast<unsigned char>(value) >= 96; });
+    const auto coverage = static_cast<double>(selected_pixels) /
+                          static_cast<double>(mask.mask_data.size());
+    const auto result_honors_prompts =
+        photo_editor::desktop::smart_select_result_honors_prompts(mask, prompts);
+    if (!prompts_match || !result_honors_prompts || coverage <= 0.0 || coverage > 0.92) {
+      std::cerr << "coverage=" << coverage << " promptsMatch=" << prompts_match
+                << " singlePositiveComponent=" << result_honors_prompts << '\n';
+      return fail("SAM2 diagnostic mask must honor every point, keep positive points connected, and select less than 92 percent of the photo");
+    }
+    if (argc >= 5) {
+      const auto output_path = QString::fromLocal8Bit(argv[4]);
+      QDir().mkpath(QFileInfo(output_path).absolutePath());
+      QImage output(mask.width, mask.height, QImage::Format_Grayscale8);
+      for (int y = 0; y < mask.height; ++y) {
+        auto* row = output.scanLine(y);
+        for (int x = 0; x < mask.width; ++x) {
+          row[x] = static_cast<unsigned char>(mask.mask_data.at(y * mask.width + x));
+        }
+      }
+      if (!output.save(output_path)) return fail("Smart Select diagnostic mask must save");
+      if (!mask.refinement_logits.isEmpty()) {
+        QFile refinement_logits_file(output_path + QStringLiteral(".logits"));
+        if (!refinement_logits_file.open(QIODevice::WriteOnly) ||
+            refinement_logits_file.write(mask.refinement_logits) != mask.refinement_logits.size()) {
+          return fail("Smart Select refinement logits must save");
+        }
+      }
+    }
+    std::cout << "photo=" << photo.width() << 'x' << photo.height()
+              << " coverage=" << coverage << " selectedPixels=" << selected_pixels
+              << " elapsedMs=" << timer.elapsed() << '\n';
+    return EXIT_SUCCESS;
   }
 
   constexpr auto width = 640;
@@ -57,6 +189,121 @@ int main(int argc, char** argv) {
     }
   }
   source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+
+  const QVector<photo_editor::desktop::SmartSelectPrompt> smart_prompts{
+      {.x = 0.5, .y = 0.5, .negative = false},
+      {.x = 0.08, .y = 0.08, .negative = true},
+  };
+  QElapsedTimer smart_select_timer;
+  smart_select_timer.start();
+  const auto smart_selection =
+      photo_editor::desktop::generate_ai_smart_selection_mask(source, smart_prompts);
+  const auto smart_select_cold_ms = smart_select_timer.elapsed();
+  smart_select_timer.restart();
+  const auto smart_selection_warm =
+      photo_editor::desktop::generate_ai_smart_selection_mask(source, smart_prompts);
+  const auto smart_select_warm_ms = smart_select_timer.elapsed();
+  const auto center_alpha = smart_selection.success
+      ? static_cast<unsigned char>(smart_selection.mask_data.at((height / 2) * width + width / 2))
+      : 0;
+  const auto negative_alpha = smart_selection.success
+      ? static_cast<unsigned char>(smart_selection.mask_data.at((height / 12) * width + width / 12))
+      : 255;
+  if (!smart_selection.success || !smart_selection_warm.success ||
+      smart_selection.width != width || smart_selection.height != height ||
+      smart_selection.mask_data.size() != width * height || center_alpha < 128 ||
+      smart_selection.refinement_logits_width != 256 ||
+      smart_selection.refinement_logits_height != 256 ||
+      smart_selection.refinement_logits.size() != 256 * 256 * static_cast<int>(sizeof(float)) ||
+      negative_alpha > 127 ||
+      !photo_editor::desktop::smart_select_result_honors_prompts(smart_selection, smart_prompts)) {
+    std::cerr << "success=" << smart_selection.success
+              << " warmSuccess=" << smart_selection_warm.success
+              << " centerAlpha=" << static_cast<int>(center_alpha)
+              << " negativeAlpha=" << static_cast<int>(negative_alpha)
+              << " error=" << smart_selection.error_message.toStdString() << '\n';
+    return fail("SAM2 must return a full-resolution mask that follows positive and negative prompts");
+  }
+  std::cout << "sam2_cold_ms=" << smart_select_cold_ms
+            << " sam2_warm_ms=" << smart_select_warm_ms
+            << " positiveAlpha=" << static_cast<int>(center_alpha)
+            << " negativeAlpha=" << static_cast<int>(negative_alpha) << '\n';
+
+  const QVector<photo_editor::desktop::SmartSelectPrompt> box_prompts{
+      {.x = 0.5, .y = 0.5, .negative = false,
+       .box = QRectF(QPointF(0.35, 0.30), QPointF(0.65, 0.70))},
+      {.x = 0.08, .y = 0.08, .negative = true}};
+  const auto box_selection = photo_editor::desktop::generate_ai_smart_selection_mask(source, box_prompts);
+  if (!box_selection.success ||
+      !photo_editor::desktop::smart_select_result_honors_prompts(box_selection, box_prompts) ||
+      static_cast<unsigned char>(box_selection.mask_data.at((height / 2) * width + width / 2)) < 96 ||
+      static_cast<unsigned char>(box_selection.mask_data.at(144 * width + 224)) >= 96) {
+    std::cerr << "box error=" << box_selection.error_message.toStdString() << '\n';
+    return fail("Real SAM2 box inference must select the enclosed item while allowing background corners");
+  }
+
+  const auto smart_photo_path = qEnvironmentVariable("PHOTO_SMART_SELECT_TEST_SOURCE");
+  const auto smart_photo_output_path = qEnvironmentVariable("PHOTO_SMART_SELECT_TEST_OUTPUT");
+  if (!smart_photo_path.isEmpty()) {
+    QImage photo(smart_photo_path);
+    if (photo.isNull()) return fail("Smart Select photographic fixture must load");
+    const QVector<photo_editor::desktop::SmartSelectPrompt> photo_prompts{
+        {.x = 0.50, .y = 0.18, .negative = false},
+        {.x = 0.50, .y = 0.45, .negative = false},
+        {.x = 0.52, .y = 0.70, .negative = false},
+        {.x = 0.10, .y = 0.25, .negative = true},
+        {.x = 0.90, .y = 0.55, .negative = true},
+    };
+    QElapsedTimer photo_timer;
+    photo_timer.start();
+    const auto photo_mask = photo_editor::desktop::generate_ai_smart_selection_mask(photo, photo_prompts);
+    if (!photo_mask.success || photo_mask.width != photo.width() || photo_mask.height != photo.height() ||
+        photo_mask.mask_data.size() != photo.width() * photo.height()) {
+      std::cerr << "photo smart-select error=" << photo_mask.error_message.toStdString() << '\n';
+      return fail("SAM2 photographic selection must return a source-resolution mask");
+    }
+    auto prompt_samples_valid = true;
+    for (const auto& prompt : photo_prompts) {
+      const auto x = std::clamp(qRound(prompt.x * (photo.width() - 1)), 0, photo.width() - 1);
+      const auto y = std::clamp(qRound(prompt.y * (photo.height() - 1)), 0, photo.height() - 1);
+      const auto alpha = static_cast<unsigned char>(photo_mask.mask_data.at(y * photo.width() + x));
+      std::cout << "sam2_prompt=" << (prompt.negative ? "negative" : "positive")
+                << " x=" << prompt.x << " y=" << prompt.y
+                << " alpha=" << static_cast<int>(alpha) << '\n';
+      prompt_samples_valid = prompt_samples_valid &&
+          (prompt.negative ? alpha < 96 : alpha >= 96);
+    }
+    if (!smart_photo_output_path.isEmpty()) {
+      QDir().mkpath(QFileInfo(smart_photo_output_path).absolutePath());
+      QImage output(photo.width(), photo.height(), QImage::Format_Grayscale8);
+      for (int y = 0; y < photo.height(); ++y) {
+        auto* row = output.scanLine(y);
+        for (int x = 0; x < photo.width(); ++x) {
+          row[x] = static_cast<unsigned char>(photo_mask.mask_data.at(y * photo.width() + x));
+        }
+      }
+      if (!output.save(smart_photo_output_path)) return fail("Smart Select photographic mask must save");
+    }
+    const auto selected_pixels = std::count_if(
+        photo_mask.mask_data.cbegin(), photo_mask.mask_data.cend(),
+        [](char value) { return static_cast<unsigned char>(value) >= 96; });
+    const auto selected_coverage = static_cast<double>(selected_pixels) /
+                                   static_cast<double>(photo_mask.mask_data.size());
+    const auto photo_result_honors_prompts =
+        photo_editor::desktop::smart_select_result_honors_prompts(photo_mask, photo_prompts);
+    if (!prompt_samples_valid || !photo_result_honors_prompts ||
+        selected_coverage <= 0.0 || selected_coverage > 0.92) {
+      std::cerr << "selectedCoverage=" << selected_coverage
+                << " promptSamplesValid=" << prompt_samples_valid
+                << " singlePositiveComponent=" << photo_result_honors_prompts << '\n';
+      return fail("SAM2 photographic mask must honor positive and negative prompts without selecting nearly the entire image");
+    }
+    std::cout << "sam2_photo=" << photo.width() << 'x' << photo.height()
+              << " selectedPixels=" << selected_pixels
+              << " selectedCoverage=" << selected_coverage
+              << " elapsedMs=" << photo_timer.elapsed()
+              << " maskOutput=" << smart_photo_output_path.toStdString() << '\n';
+  }
 
   photo_editor::desktop::AiInpaintRequest request;
   request.source_image = source;

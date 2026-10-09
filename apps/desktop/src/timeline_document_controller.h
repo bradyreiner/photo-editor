@@ -24,12 +24,16 @@ class QProcess;
 namespace photo_editor::desktop {
 
 struct TimelineSpeechState;
+struct TimelineCacheInspectionIndex;
 
 class TimelineDocumentController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool hasActiveTimeline READ hasActiveTimeline NOTIFY timelineStateChanged)
   Q_PROPERTY(QVariantList clips READ clips NOTIFY clipsChanged)
+  Q_PROPERTY(QVariantList sequenceClipSummaries READ sequenceClipSummaries NOTIFY sequenceChanged)
   Q_PROPERTY(QVariantList sequenceTracks READ sequenceTracks NOTIFY sequenceChanged)
+  Q_PROPERTY(QVariantList timelineTracks READ timelineTracks NOTIFY sequenceChanged)
+  Q_PROPERTY(QVariantList trackGroups READ trackGroups NOTIFY sequenceChanged)
   Q_PROPERTY(QVariantMap currentClip READ currentClip NOTIFY selectionChanged)
   Q_PROPERTY(QVariantMap programClip READ programClip NOTIFY playbackStateChanged)
   Q_PROPERTY(int clipCount READ clipCount NOTIFY clipsChanged)
@@ -57,6 +61,15 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(bool autoReframeBusy READ autoReframeBusy NOTIFY autoReframeChanged)
   Q_PROPERTY(QString autoReframeStatus READ autoReframeStatus NOTIFY autoReframeChanged)
   Q_PROPERTY(QVariantList autoReframeSuggestions READ autoReframeSuggestions NOTIFY autoReframeChanged)
+  Q_PROPERTY(bool trackingBusy READ trackingBusy NOTIFY trackingChanged)
+  Q_PROPERTY(double trackingProgress READ trackingProgress NOTIFY trackingChanged)
+  Q_PROPERTY(QString trackingStatus READ trackingStatus NOTIFY trackingChanged)
+  Q_PROPERTY(bool rotoscopingAvailable READ rotoscopingAvailable NOTIFY trackingChanged)
+  Q_PROPERTY(bool surfaceTrackingAvailable READ surfaceTrackingAvailable NOTIFY trackingChanged)
+  Q_PROPERTY(QVariantList surfaceTrackSources READ surfaceTrackSources NOTIFY clipsChanged)
+  Q_PROPERTY(bool sceneTrackingAvailable READ sceneTrackingAvailable NOTIFY trackingChanged)
+  Q_PROPERTY(QVariantList sceneTrackSources READ sceneTrackSources NOTIFY clipsChanged)
+  Q_PROPERTY(QVariantList motionTrackSources READ motionTrackSources NOTIFY clipsChanged)
   Q_PROPERTY(bool stabilizationAnalysisBusy READ stabilizationAnalysisBusy NOTIFY stabilizationAnalysisChanged)
   Q_PROPERTY(double stabilizationAnalysisProgress READ stabilizationAnalysisProgress NOTIFY stabilizationAnalysisChanged)
   Q_PROPERTY(QString stabilizationAnalysisStatus READ stabilizationAnalysisStatus NOTIFY stabilizationAnalysisChanged)
@@ -104,8 +117,11 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(QVariantList sequenceMarkers READ sequenceMarkers NOTIFY markersChanged)
   Q_PROPERTY(QVariantList reviewNotes READ reviewNotes NOTIFY markersChanged)
   Q_PROPERTY(QVariantList multicamGroups READ multicamGroups NOTIFY multicamChanged)
+  Q_PROPERTY(int multicamGroupCount READ multicamGroupCount NOTIFY multicamChanged)
   Q_PROPERTY(QVariantMap activeMulticamGroup READ activeMulticamGroup NOTIFY multicamChanged)
   Q_PROPERTY(bool currentClipIsMulticam READ currentClipIsMulticam NOTIFY multicamChanged)
+  Q_PROPERTY(bool colorScopeAnalysisBusy READ colorScopeAnalysisBusy NOTIFY colorScopeAnalysisChanged)
+  Q_PROPERTY(QVariantMap colorScopeAnalysisData READ colorScopeAnalysisData NOTIFY colorScopeAnalysisChanged)
   Q_PROPERTY(QVariantMap sourceClip READ sourceClip NOTIFY sourceMonitorChanged)
   Q_PROPERTY(bool hasSourceClip READ hasSourceClip NOTIFY sourceMonitorChanged)
   Q_PROPERTY(bool sourceTapeEnabled READ sourceTapeEnabled NOTIFY sourceTapeChanged)
@@ -142,12 +158,19 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(int compoundNavigationDepth READ compoundNavigationDepth NOTIFY compoundNavigationChanged)
   Q_PROPERTY(QString compoundBreadcrumb READ compoundBreadcrumb NOTIFY compoundNavigationChanged)
   Q_PROPERTY(QVariantList sequenceVersions READ sequenceVersions NOTIFY sequenceVersionsChanged)
-  Q_PROPERTY(QVariantList recoveryCandidates READ recoveryCandidates NOTIFY recoveryCandidatesChanged)
+  Q_PROPERTY(QVariantList recoveryCandidates READ displayedRecoveryCandidates NOTIFY recoveryCandidatesChanged)
+  Q_PROPERTY(bool recoveryCandidatesLoading READ recoveryCandidatesLoading NOTIFY recoveryCandidatesChanged)
+  Q_PROPERTY(bool recoveryOpenInProgress READ recoveryOpenInProgress NOTIFY recoveryOpenStateChanged)
+  Q_PROPERTY(QString recoveryOpenCandidateId READ recoveryOpenCandidateId NOTIFY recoveryOpenStateChanged)
   Q_PROPERTY(QVariantList offlineMediaItems READ offlineMediaItems NOTIFY clipsChanged)
+  Q_PROPERTY(bool hasOfflineMediaItems READ hasOfflineMediaItems NOTIFY clipsChanged)
   Q_PROPERTY(QVariantList mediaBins READ mediaBins NOTIFY mediaBinsChanged)
-  Q_PROPERTY(QString activeMediaBinId READ activeMediaBinId WRITE setActiveMediaBinId NOTIFY mediaBinsChanged)
+  Q_PROPERTY(QString activeMediaBinId READ activeMediaBinId WRITE setActiveMediaBinId NOTIFY activeMediaBinChanged)
   Q_PROPERTY(QVariantList smartCollections READ smartCollections NOTIFY smartCollectionsChanged)
   Q_PROPERTY(QString activeSmartCollectionId READ activeSmartCollectionId WRITE setActiveSmartCollectionId NOTIFY smartCollectionsChanged)
+  Q_PROPERTY(QVariantList recentTimelineRecords READ recentTimelineRecords NOTIFY recentTimelinesChanged)
+  Q_PROPERTY(bool recentTimelinesLoading READ recentTimelinesLoading NOTIFY recentTimelinesChanged)
+  Q_PROPERTY(bool timelineSaveInProgress READ timelineSaveInProgress NOTIFY timelineSaveStateChanged)
   Q_PROPERTY(QVariantList reviewRanges READ reviewRanges NOTIFY reviewRangesChanged)
   Q_PROPERTY(QVariantMap programScopeData READ programScopeData NOTIFY programScopeAnalysisChanged)
   Q_PROPERTY(bool programScopeAnalysisBusy READ programScopeAnalysisBusy NOTIFY programScopeAnalysisChanged)
@@ -161,7 +184,10 @@ class TimelineDocumentController final : public QObject {
 
   [[nodiscard]] bool hasActiveTimeline() const;
   [[nodiscard]] QVariantList clips() const;
+  [[nodiscard]] QVariantList sequenceClipSummaries() const;
   [[nodiscard]] QVariantList sequenceTracks() const;
+  [[nodiscard]] QVariantList timelineTracks() const;
+  [[nodiscard]] QVariantList trackGroups() const;
   [[nodiscard]] QVariantMap currentClip() const;
   [[nodiscard]] QVariantMap programClip() const;
   [[nodiscard]] int clipCount() const;
@@ -194,6 +220,8 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] QString stabilizationAnalysisStatus() const;
   [[nodiscard]] bool stabilizationCompareBefore() const;
   [[nodiscard]] QVariantMap programScopeData() const;
+  [[nodiscard]] QVariantMap requestProgramScopeCaptureForAutomation();
+  [[nodiscard]] QVariantMap programColorScopeSummaryForAutomation() const;
   [[nodiscard]] bool programScopeAnalysisBusy() const;
   [[nodiscard]] int programScopePublishedRevision() const;
   Q_INVOKABLE QVariantList timelineSearchResults(
@@ -264,8 +292,11 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] QVariantList sequenceMarkers() const;
   [[nodiscard]] QVariantList reviewNotes() const;
   [[nodiscard]] QVariantList multicamGroups() const;
+  [[nodiscard]] int multicamGroupCount() const;
   [[nodiscard]] QVariantMap activeMulticamGroup() const;
   [[nodiscard]] bool currentClipIsMulticam() const;
+  [[nodiscard]] bool colorScopeAnalysisBusy() const;
+  [[nodiscard]] QVariantMap colorScopeAnalysisData() const;
   [[nodiscard]] QVariantMap sourceClip() const;
   [[nodiscard]] bool hasSourceClip() const;
   [[nodiscard]] bool sourceTapeEnabled() const;
@@ -305,7 +336,12 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] QString compoundBreadcrumb() const;
   [[nodiscard]] QVariantList sequenceVersions() const;
   [[nodiscard]] QVariantList recoveryCandidates() const;
+  [[nodiscard]] QVariantList displayedRecoveryCandidates() const;
+  [[nodiscard]] bool recoveryCandidatesLoading() const;
+  [[nodiscard]] bool recoveryOpenInProgress() const;
+  [[nodiscard]] QString recoveryOpenCandidateId() const;
   [[nodiscard]] QVariantList offlineMediaItems() const;
+  [[nodiscard]] bool hasOfflineMediaItems() const;
   [[nodiscard]] QVariantList mediaBins() const;
   [[nodiscard]] QString activeMediaBinId() const;
   [[nodiscard]] QVariantList smartCollections() const;
@@ -320,6 +356,11 @@ class TimelineDocumentController final : public QObject {
   void setActiveSmartCollectionId(const QString& collection_id);
 
   Q_INVOKABLE QVariantList recentTimelines() const;
+  [[nodiscard]] QVariantList recentTimelineRecords() const;
+  [[nodiscard]] bool recentTimelinesLoading() const;
+  Q_INVOKABLE void refreshRecentTimelines();
+  [[nodiscard]] bool timelineSaveInProgress() const;
+  Q_INVOKABLE bool saveTimelineAsync(bool queue_gallery_render = false);
   Q_INVOKABLE QVariantList pancakeSequences() const;
   Q_INVOKABLE QVariantMap pancakeSequencePreview(
       const QString& document_path) const;
@@ -346,7 +387,8 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE bool resetSelectedClipOutputVariantOverride();
   Q_INVOKABLE void closeTimeline();
   Q_INVOKABLE bool loadTimeline(const QString& document_path);
-  Q_INVOKABLE bool saveTimeline();
+  Q_INVOKABLE void setPhotoWorkIntent(bool visible, bool interaction_active, const QString& asset_id);
+  Q_INVOKABLE bool saveTimeline(bool queue_gallery_render = false);
   Q_INVOKABLE bool createSequenceVersion(const QString& label = QString());
   Q_INVOKABLE bool createSequenceVersionWithMetadata(
       const QString& label,
@@ -378,6 +420,7 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE bool deleteSequenceVersion(const QString& version_id);
   Q_INVOKABLE void refreshRecoveryCandidates();
   Q_INVOKABLE bool openRecoveryCandidate(const QString& candidate_id);
+  Q_INVOKABLE void cancelRecoveryOpen();
   Q_INVOKABLE bool restoreRecoveryCandidateAsCopy(const QString& candidate_id);
   Q_INVOKABLE bool discardRecoveryCandidate(const QString& candidate_id);
   Q_INVOKABLE QVariantMap previewBatchRelink(const QStringList& search_roots) const;
@@ -464,8 +507,16 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE bool flushEditJournal();
   Q_INVOKABLE QString editJournalPath() const;
   void setBackgroundRenderResourcePolicy(const QString& policy);
+  void setRenderCancellationToken(std::shared_ptr<std::atomic_bool> cancellation) { render_cancellation_ = std::move(cancellation); }
   [[nodiscard]] bool renderCurrentTimeline(const QString& output_path) const;
+  // Native task adapter hooks; not arbitrary JSON mutation tools.
+  [[nodiscard]] QString agentTaskDocumentId() const;
+  [[nodiscard]] QByteArray agentTaskDocumentState() const;
+  [[nodiscard]] bool agentTaskDocumentReady() const;
+  bool restoreAgentTaskDocument(const QByteArray& state);
+  Q_INVOKABLE QVariantMap inspectAgentDocument() const;
   [[nodiscard]] QString generateVideoPoster(const QString& file_path, const QString& cache_key = QString()) const;
+  Q_INVOKABLE QVariantMap timelineClipDetails(int clip_index) const;
   Q_INVOKABLE void selectClip(int index);
   Q_INVOKABLE void addClipFromGallery(
       const QString& asset_id,
@@ -475,7 +526,12 @@ class TimelineDocumentController final : public QObject {
       const QString& poster_source = QString());
   Q_INVOKABLE void addTitleClip();
   Q_INVOKABLE bool addTitleClipFromTemplate(const QString& template_key);
+  Q_INVOKABLE bool addGraphicShape(const QString& shape_type);
   Q_INVOKABLE bool addAdjustmentClip(double duration_seconds = 5.0);
+  bool addAdjustmentClipAt(double start_seconds, double duration_seconds);
+  Q_INVOKABLE QVariantMap addAdjustmentClipForAutomation(
+      double start_seconds,
+      double duration_seconds);
   Q_INVOKABLE bool applySelectedTitleTemplate(const QString& template_key);
   Q_INVOKABLE void updateSelectedTitle(const QVariantMap& values);
   Q_INVOKABLE QVariantMap captionStyleTemplatePreview(const QString& template_id) const;
@@ -501,6 +557,35 @@ class TimelineDocumentController final : public QObject {
       const QString& composition = QStringLiteral("headroom"));
   Q_INVOKABLE void cancelAutoReframeAnalysis();
   Q_INVOKABLE bool applyAutoReframeSuggestions();
+  [[nodiscard]] bool trackingBusy() const;
+  [[nodiscard]] double trackingProgress() const;
+  [[nodiscard]] QString trackingStatus() const;
+  [[nodiscard]] QVariantList motionTrackSources() const;
+  Q_INVOKABLE bool analyzeSelectedClipMotion(const QVariantMap& seed);
+  [[nodiscard]] bool surfaceTrackingAvailable() const;
+  [[nodiscard]] QVariantList surfaceTrackSources() const;
+  Q_INVOKABLE bool analyzeSelectedClipSurface(const QVariantMap& seed);
+  Q_INVOKABLE bool correctSelectedSurfaceTrack(const QVariantList& quad);
+  Q_INVOKABLE bool attachSurfaceTrackToSelectedClip(const QString& source_clip_id);
+  [[nodiscard]] bool sceneTrackingAvailable() const;
+  [[nodiscard]] QVariantList sceneTrackSources() const;
+  Q_INVOKABLE QVariantMap scenePreviewFrame() const;
+  Q_INVOKABLE QVariantMap sceneTrackPointFrame(const QString& source_clip_id, double sequence_seconds) const;
+  Q_INVOKABLE QVariantMap sceneAttachmentOcclusionFrame(const QString& clip_id, double sequence_seconds) const;
+  Q_INVOKABLE bool setSelectedSceneAttachmentOcclusion(bool enabled);
+  Q_INVOKABLE bool analyzeSelectedClipOcclusion(const QVariantMap& seed, bool temporal);
+  Q_INVOKABLE bool analyzeSelectedClipSceneCamera();
+  Q_INVOKABLE bool attachSceneTrackToSelectedClip(const QString& source_clip_id, const QStringList& point_ids);
+  Q_INVOKABLE bool setSelectedSceneAttachmentPlacement(const QVariantMap& placement);
+  Q_INVOKABLE bool detachSelectedSceneAttachment();
+  Q_INVOKABLE bool analyzeSelectedClipCutout();
+  [[nodiscard]] bool rotoscopingAvailable() const;
+  Q_INVOKABLE bool analyzeSelectedClipRotoscope(const QVariantMap& seed);
+  Q_INVOKABLE QVariantMap rotoscopeCorrectionFrame() const;
+  Q_INVOKABLE bool correctSelectedRotoscope(const QVariantList& points);
+  Q_INVOKABLE void cancelTrackingAnalysis();
+  Q_INVOKABLE bool attachMotionTrackToSelectedClip(const QString& source_clip_id);
+  Q_INVOKABLE bool setSelectedClipForegroundCutout(bool enabled);
   Q_INVOKABLE bool setSelectedClipStabilization(
       bool enabled,
       double smoothing,
@@ -579,12 +664,42 @@ class TimelineDocumentController final : public QObject {
       double trim_end_seconds,
       const QString& poster_source = QString());
   Q_INVOKABLE void addVideoTrack();
+  Q_INVOKABLE bool addIndependentVideoTrack();
+  Q_INVOKABLE bool addGraphicsTrack();
+  Q_INVOKABLE void addMusicTrack();
+  Q_INVOKABLE bool addIndependentAudioTrack(const QString& audio_role);
+  Q_INVOKABLE bool renameTrackRow(int track_row_index, const QString& name);
+  Q_INVOKABLE bool duplicateTrackRow(int track_row_index);
+  Q_INVOKABLE bool createTrackGroup(int track_row_index, const QString& name);
+  Q_INVOKABLE bool setTrackGroup(int track_row_index, const QString& group_id);
+  Q_INVOKABLE bool setTrackGroupParent(
+      const QString& group_id,
+      const QString& parent_group_id);
+  Q_INVOKABLE bool setTrackGroupState(
+      const QString& group_id,
+      const QString& state,
+      bool enabled);
+  Q_INVOKABLE int selectTrackGroupClips(const QString& group_id);
+  Q_INVOKABLE bool setTrackGroupTransform(
+      const QString& group_id,
+      double scale,
+      double offset_x,
+      double offset_y,
+      double rotation_degrees);
+  Q_INVOKABLE bool renameTrackGroup(const QString& group_id, const QString& name);
+  Q_INVOKABLE bool setTrackGroupCollapsed(const QString& group_id, bool collapsed);
   Q_INVOKABLE bool moveTrackRow(int track_row_index, int direction);
   Q_INVOKABLE bool removeTrackRow(int track_row_index, bool confirm_non_empty = false);
   Q_INVOKABLE void moveSelectedClipToTrackRow(int track_row_index, double start_seconds);
   Q_INVOKABLE bool moveSelectedClipToTrackRowWithMode(
       int track_row_index,
       double start_seconds,
+      const QString& mode,
+      bool ripple);
+  Q_INVOKABLE bool moveSelectedClipsToTrackRowWithMode(
+      int track_row_index,
+      double anchor_start_seconds,
+      const QString& anchor_clip_id,
       const QString& mode,
       bool ripple);
   Q_INVOKABLE void liftSelectedClip();
@@ -622,6 +737,8 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE bool cancelRenderCacheGeneration();
   Q_INVOKABLE void clearRenderCache();
   Q_INVOKABLE QVariantMap projectCacheSummary() const;
+  Q_INVOKABLE void refreshProjectCacheSummary();
+  Q_INVOKABLE void setProjectCacheManagerVisible(bool visible);
   Q_INVOKABLE QVariantMap cleanupProjectCaches(const QStringList& categories);
   Q_INVOKABLE QVariantMap cacheBudgetState() const;
   Q_INVOKABLE bool setProjectCacheBudgets(const QVariantMap& settings);
@@ -647,6 +764,42 @@ class TimelineDocumentController final : public QObject {
       double from_sequence_seconds,
       double to_sequence_seconds,
       double value);
+  Q_INVOKABLE bool setTrackAutomationKeyframeSpeed(
+      int track_row_index,
+      const QString& parameter,
+      double sequence_seconds,
+      double value_per_second);
+  Q_INVOKABLE bool setTrackAutomationKeyframeSpeedForSide(
+      int track_row_index,
+      const QString& parameter,
+      double sequence_seconds,
+      const QString& side,
+      double value_per_second);
+  Q_INVOKABLE bool setTrackAutomationKeyframeBezierHandle(
+      int track_row_index,
+      const QString& parameter,
+      double sequence_seconds,
+      const QString& side,
+      double time_offset_seconds,
+      double value_offset);
+  Q_INVOKABLE bool setTrackAutomationKeyframeBezierHandlesLinked(
+      int track_row_index,
+      const QString& parameter,
+      double sequence_seconds,
+      bool linked);
+  Q_INVOKABLE int copyTrackAutomationKeyframes(
+      int track_row_index,
+      const QString& parameter,
+      const QVariantList& sequence_seconds = {});
+  Q_INVOKABLE int pasteTrackAutomationKeyframes(
+      int track_row_index,
+      const QString& parameter,
+      double sequence_seconds);
+  Q_INVOKABLE int applyTrackAutomationKeyframeOperation(
+      int track_row_index,
+      const QString& parameter,
+      const QVariantList& sequence_seconds,
+      const QString& operation);
   Q_INVOKABLE bool removeTrackAutomationKeyframe(
       int track_row_index,
       const QString& parameter,
@@ -701,6 +854,11 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedFrameOffsetX(double frame_offset_x);
   Q_INVOKABLE void setSelectedFrameOffsetY(double frame_offset_y);
   Q_INVOKABLE void setSelectedFrameRotationDegrees(double frame_rotation_degrees);
+  Q_INVOKABLE void setSelectedFramePerspectiveX(double perspective_x);
+  Q_INVOKABLE void setSelectedFramePerspectiveY(double perspective_y);
+  Q_INVOKABLE void setSelectedTitleFontSize(double font_size);
+  Q_INVOKABLE void setSelectedTitlePositionX(double position_x);
+  Q_INVOKABLE void setSelectedTitlePositionY(double position_y);
   Q_INVOKABLE void setSelectedClipOpacity(double opacity);
   Q_INVOKABLE void setSelectedClipAudioGain(double gain_db);
   Q_INVOKABLE bool setSelectedClipAudioChannelMapping(
@@ -729,9 +887,22 @@ class TimelineDocumentController final : public QObject {
       const QString& parameter,
       double local_seconds,
       double value);
+  Q_INVOKABLE bool setSelectedClipKeyframeSpeed(
+      const QString& parameter,
+      double local_seconds,
+      double value_per_second);
+  Q_INVOKABLE bool setSelectedClipKeyframeSpeedForSide(
+      const QString& parameter,
+      double local_seconds,
+      const QString& side,
+      double value_per_second);
   Q_INVOKABLE bool setSelectedClipKeyframeInterpolation(
       const QString& parameter,
       double local_seconds,
+      const QString& interpolation);
+  Q_INVOKABLE int setSelectedClipKeyframeSelectionInterpolation(
+      const QString& parameter,
+      const QVariantList& local_seconds,
       const QString& interpolation);
   Q_INVOKABLE bool setSelectedClipKeyframeBezierHandle(
       const QString& parameter,
@@ -778,6 +949,9 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedClipEffectsEnabled(bool enabled);
   Q_INVOKABLE void setSelectedClipEffectEnabled(const QString& effect_name, bool enabled);
   Q_INVOKABLE void setSelectedClipEffectAmount(const QString& effect_name, double amount);
+  Q_INVOKABLE void setSelectedClipEffectMask(
+      const QString& effect_name, const QVariantMap& mask);
+  Q_INVOKABLE void clearSelectedClipEffectMask(const QString& effect_name);
   Q_INVOKABLE void resetSelectedClipEffect(const QString& effect_name);
   Q_INVOKABLE QVariantMap effectStackPresetPreview(const QString& preset_id) const;
   Q_INVOKABLE bool saveSelectedClipEffectStackPreset(const QString& preset_name);
@@ -788,8 +962,89 @@ class TimelineDocumentController final : public QObject {
       bool replace_existing = false);
   Q_INVOKABLE bool applySelectedClipColorLut(const QString& file_path);
   Q_INVOKABLE bool clearSelectedClipColorLut();
+  Q_INVOKABLE bool setSelectedClipVideoInputTransform(const QString& profile);
+  Q_INVOKABLE QVariantMap inspectClipColorForAutomation(const QString& clip_id) const;
+  Q_INVOKABLE void setProgramComparisonSurfaceAvailable(bool available);
+  Q_INVOKABLE void acknowledgeProgramScopeCaptureRequest(
+      bool accepted,
+      const QString& error = QString{});
+  Q_INVOKABLE QVariantMap openProgramComparisonForAutomation(
+      const QString& clip_id,
+      double sequence_seconds = -1.0,
+      const QString& mode = QStringLiteral("wipe"));
+  Q_INVOKABLE QVariantMap inspectClipSourceColorMetadataForAutomation(
+      const QString& clip_id) const;
+  void setPlaybackColorSignalMetadataForCurrentClip(
+      const QString& clip_id,
+      QVariantMap metadata);
+  Q_INVOKABLE QVariantMap setClipColorLutForAutomation(
+      const QString& clip_id,
+      const QString& file_path);
+  Q_INVOKABLE QVariantMap clearClipColorLutForAutomation(const QString& clip_id);
+  Q_INVOKABLE QVariantMap setClipVideoInputTransformForAutomation(
+      const QString& clip_id,
+      const QString& profile);
+  Q_INVOKABLE QVariantMap setClipShotMatchGainsForAutomation(
+      const QString& clip_id,
+      double red_gain,
+      double green_gain,
+      double blue_gain);
+  Q_INVOKABLE QVariantMap inspectClipColorGradeForAutomation(
+      const QString& clip_id) const;
+  Q_INVOKABLE QVariantMap setClipColorGradeRecipeForAutomation(
+      const QString& clip_id,
+      const QJsonObject& recipe);
+  Q_INVOKABLE QVariantMap editClipColorGradeLayerForAutomation(
+      const QString& clip_id,
+      const QString& operation,
+      const QString& layer_id,
+      const QVariantMap& layer,
+      int position,
+      bool enabled,
+      double opacity,
+      const QString& parameter,
+      double value,
+      const QString& blend_mode = QString{});
+  Q_INVOKABLE QVariantMap addClipColorGradeAdjustmentLayerForAutomation(
+      const QString& clip_id,
+      const QString& name = QString());
+  Q_INVOKABLE QVariantMap setClipColorGradeParameterForAutomation(
+      const QString& clip_id,
+      const QString& parameter,
+      double value);
+  Q_INVOKABLE QVariantMap setClipColorGradeCurveForAutomation(
+      const QString& clip_id,
+      const QString& layer_id,
+      const QString& channel,
+      const QVariantList& points);
+  Q_INVOKABLE QVariantMap clearClipColorGradeRecipeForAutomation(
+      const QString& clip_id);
+  [[nodiscard]] QString colorGradeRecipeJsonForClip(
+      const QString& clip_id) const;
+  [[nodiscard]] QVariantList activeProgramAdjustmentColorGrades(
+      const QString& program_clip_id) const;
+  Q_INVOKABLE bool hasLiveProgramAdjustmentColorGrade(
+      const QString& program_clip_id) const;
+  Q_INVOKABLE QVariantMap inspectClipEffectsForAutomation(const QString& clip_id) const;
+  Q_INVOKABLE QVariantMap editClipEffectStackForAutomation(
+      const QString& clip_id,
+      const QString& operation,
+      const QString& effect_name = QString(),
+      double amount = 0.0,
+      bool enabled = false);
+  Q_INVOKABLE QVariantMap setClipOpacityForAutomation(
+      const QString& clip_id,
+      double opacity);
+  Q_INVOKABLE QVariantMap editClipKeyframeForAutomation(
+      const QString& clip_id,
+      const QString& operation,
+      const QString& parameter,
+      double local_seconds,
+      double value,
+      const QString& interpolation = QString{});
   Q_INVOKABLE bool matchSelectedClipColorToReference(const QString& reference_clip_id);
   Q_INVOKABLE QVariantMap analyzeSelectedClipColorScopes() const;
+  Q_INVOKABLE bool requestSelectedClipColorScopes();
   Q_INVOKABLE void assignSelectedClipTransition(
       const QString& edge,
       const QString& transition_name,
@@ -798,6 +1053,7 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE QVariantList transitionPreviewStatesAt(double sequence_seconds) const;
   Q_INVOKABLE double sourceDurationSecondsForFile(const QString& file_path);
   Q_INVOKABLE bool splitSelectedClip(double split_seconds);
+  Q_INVOKABLE int splitSelectedClipsAtSequenceSeconds(double sequence_seconds);
   Q_INVOKABLE void loadSourceClipFromGallery(
       const QString& asset_id,
       const QString& file_path,
@@ -830,6 +1086,12 @@ class TimelineDocumentController final : public QObject {
       double proposed_seconds,
       double threshold_seconds,
       const QString& excluded_clip_id = QString(),
+      const QString& excluded_marker_id = QString(),
+      bool include_audio_peaks = false) const;
+  Q_INVOKABLE QVariantMap resolveTimelineSnapForClips(
+      double proposed_seconds,
+      double threshold_seconds,
+      const QStringList& excluded_clip_ids,
       const QString& excluded_marker_id = QString(),
       bool include_audio_peaks = false) const;
   Q_INVOKABLE void renameSequenceMarker(const QString& marker_id, const QString& label);
@@ -924,10 +1186,13 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void redo();
 
 signals:
+  void trackingChanged();
   void timelineStateChanged();
   void clipsChanged();
   void sequenceChanged();
   void selectionChanged();
+  void selectedClipStateChanged();
+  void trackAutomationStateChanged(const QString& track_id, const QVariantList& keyframes);
   void timelineNameChanged();
   void statusChanged();
   void dirtyChanged();
@@ -949,11 +1214,20 @@ signals:
   void backgroundWorkPriorityChanged();
   void staleResultStateChanged();
   void cacheBudgetStateChanged();
+  void projectCacheSummaryChanged();
+  void projectCacheCleanupFinished(const QVariantMap& result);
   void pancakeSequencesChanged();
+  void recentTimelinesChanged();
+  void timelineSaveStateChanged();
+  void timelineSaveCompleted(bool success, const QString& timeline_asset_id, const QString& project_binding);
   void compoundNavigationChanged();
   void sequenceVersionsChanged();
   void recoveryCandidatesChanged();
+  void recoveryOpenStateChanged();
+  void recoveryOpenCompleted(const QString& candidate_id, bool succeeded);
   void mediaBinsChanged();
+  void activeMediaBinChanged();
+  void colorScopeAnalysisChanged();
   void smartCollectionsChanged();
   void reviewRangesChanged();
   void mediaMetadataChanged();
@@ -969,21 +1243,49 @@ signals:
   void autoReframeChanged();
   void stabilizationAnalysisChanged();
   void programScopeAnalysisChanged();
+  void programScopeCaptureRequested();
   void multicamChanged();
   void effectStackPresetsChanged();
   void captionStyleTemplatesChanged();
+  void programComparisonRequested(
+      const QString& clip_id,
+      double sequence_seconds,
+      const QString& mode);
 
  private:
+  friend struct TimelineHistoryTestAccess;
   CustomerEditAccess customer_edit_access_;
+  bool program_comparison_surface_available_ = false;
+  bool scope_capture_request_acknowledged_ = false;
+  bool scope_capture_request_accepted_ = false;
+  QString scope_capture_request_error_;
 
   enum class TrackKind {
     Video,
     Audio,
   };
 
+  struct ClipEffectMask final {
+    bool enabled = false;
+    QString shape = QStringLiteral("ellipse");
+    double center_x = 0.5;
+    double center_y = 0.5;
+    double width = 0.65;
+    double height = 0.65;
+    double feather = 0.04;
+    bool inverted = false;
+    bool operator==(const ClipEffectMask&) const = default;
+  };
+
   struct ClipEffectState final {
+    ClipEffectState() = default;
+    ClipEffectState(bool enabled_value, double amount_value)
+        : enabled(enabled_value), amount(amount_value) {}
+
     bool enabled = true;
     double amount = 1.0;
+    ClipEffectMask mask;
+    bool operator==(const ClipEffectState&) const = default;
   };
 
   struct ClipKeyframe final {
@@ -1011,6 +1313,7 @@ signals:
     bool bezier_handles_linked = true;
     bool roving = false;
     QString source;
+    bool operator==(const ClipKeyframe&) const = default;
   };
 
   struct CaptionWord final {
@@ -1019,11 +1322,13 @@ signals:
     double end_seconds = 0.0;
     QString speaker;
     double confidence = 1.0;
+    bool operator==(const CaptionWord&) const = default;
   };
 
   struct SilenceRange final {
     double source_start_seconds = 0.0;
     double source_end_seconds = 0.0;
+    bool operator==(const SilenceRange&) const = default;
   };
 
   struct OutputVariantOverride final {
@@ -1032,6 +1337,8 @@ signals:
     double frame_offset_x = 0.0;
     double frame_offset_y = 0.0;
     double frame_rotation_degrees = 0.0;
+    double frame_perspective_x = 0.0;
+    double frame_perspective_y = 0.0;
     double title_font_size = 64.0;
     double title_position_x = 0.5;
     double title_position_y = 0.82;
@@ -1051,6 +1358,7 @@ signals:
     double caption_safe_margin_x = 0.08;
     double caption_safe_margin_y = 0.08;
     QVector<ClipKeyframe> framing_keyframes;
+    bool operator==(const OutputVariantOverride&) const = default;
   };
 
   struct Clip final {
@@ -1083,6 +1391,10 @@ signals:
     bool duration_provisional = false;
     bool audio_presence_provisional = false;
     QSize source_size;
+    QString source_color_matrix;
+    QString source_color_range;
+    QString source_color_transfer;
+    QString source_color_primaries;
     double multicam_sync_marker_seconds = -1.0;
     QString proxy_path;
     QString proxy_status = QStringLiteral("none");
@@ -1097,6 +1409,8 @@ signals:
     double frame_offset_x = 0.0;
     double frame_offset_y = 0.0;
     double frame_rotation_degrees = 0.0;
+    double frame_perspective_x = 0.0;
+    double frame_perspective_y = 0.0;
     double opacity = 1.0;
     double audio_gain_db = 0.0;
     double fade_in_seconds = 0.0;
@@ -1106,6 +1420,8 @@ signals:
     QString retime_interpolation_mode = QStringLiteral("frame-sampling");
     bool effects_enabled = true;
     QStringList effect_stack;
+    QVariantMap motion_tracking;
+    QVariantMap foreground_cutout;
     QHash<QString, ClipEffectState> effect_states;
     bool stabilization_enabled = false;
     double stabilization_smoothing = 0.55;
@@ -1119,6 +1435,10 @@ signals:
     QString stabilization_analysis_source_signature;
     double stabilization_analysis_trim_start_seconds = 0.0;
     double stabilization_analysis_trim_end_seconds = 0.0;
+    QString video_input_transform;
+    QString video_input_transform_source = QStringLiteral("automatic");
+    QString color_grade_recipe_json;
+    QString color_grade_recipe_error;
     QString color_lut_path;
     bool color_lut_enabled = true;
     double shot_match_red_gain = 1.0;
@@ -1138,6 +1458,12 @@ signals:
     double title_position_x = 0.5;
     double title_position_y = 0.82;
     QString title_background_color = QStringLiteral("#99000000");
+    QString title_shape_type;
+    double title_shape_width = 0.55;
+    double title_shape_height = 0.16;
+    double title_shape_corner_radius = 0.0;
+    QString title_shape_stroke_color = QStringLiteral("#ffffffff");
+    double title_shape_stroke_width = 0.0;
     QString caption_style_template_id = QStringLiteral("clean-subtitle");
     QString caption_casing = QStringLiteral("none");
     QString caption_stroke_color = QStringLiteral("#ff000000");
@@ -1156,6 +1482,7 @@ signals:
     QString silence_analysis_status = QStringLiteral("not-analyzed");
     QVector<SilenceRange> audio_silence_ranges;
     QHash<QString, OutputVariantOverride> output_variant_overrides;
+    bool operator==(const Clip&) const = default;
   };
 
   struct DialogueCleanupState final {
@@ -1177,9 +1504,20 @@ signals:
   struct Track final {
     QString track_id;
     QString display_label;
+    QString custom_name;
     TrackKind kind = TrackKind::Video;
     QString role = QStringLiteral("media");
     int lane_index = 0;
+    bool independent = false;
+    QString group_id;
+    QString group_parent_id;
+    QString group_name;
+    bool group_collapsed = false;
+    bool group_video_hidden = false;
+    double group_transform_scale = 1.0;
+    double group_transform_offset_x = 0.0;
+    double group_transform_offset_y = 0.0;
+    double group_transform_rotation_degrees = 0.0;
     bool locked = false;
     bool muted = false;
     bool solo = false;
@@ -1421,6 +1759,20 @@ signals:
     QHash<QString, QByteArray> external_document_bytes;
   };
 
+  struct DocumentSnapshot final {
+    Snapshot state;
+    QString timeline_id;
+    QString timeline_name;
+    QString created_at;
+    QString saved_render_path;
+    QString saved_poster_path;
+    QString active_tool;
+    QString edit_mode;
+    bool linked_selection_enabled = false;
+    QString transcription_language;
+    bool transcription_speaker_diarization = false;
+  };
+
   struct CompoundRenderRequest final {
     QString clip_id;
     QString document_path;
@@ -1446,6 +1798,15 @@ signals:
     [[nodiscard]] bool isValid() const { return track_index >= 0 && clip_index >= 0; }
   };
 
+  struct TimelineSnapCandidate final {
+    double seconds = 0.0;
+    int priority = 0;
+    QString kind;
+    QString label;
+    QString clip_id;
+    QString marker_id;
+  };
+
   struct ClipFileProjectionState final {
     QString playback_path;
     bool source_online = false;
@@ -1453,10 +1814,25 @@ signals:
     bool using_proxy = false;
   };
 
+  struct ClipFileProjectionCacheEntry final {
+    QString source_path;
+    QString proxy_path;
+    QString proxy_status;
+    QString source_identity_signature;
+    QString media_type;
+    qint64 checked_at_msecs = 0;
+    bool proxy_enabled = false;
+    ClipFileProjectionState state;
+  };
+
   struct ClipMapContext final {
+    QSet<QString> selected_clip_ids;
     QHash<QString, int> flattened_index_by_clip_id;
     QHash<QString, int> track_row_by_id;
     QHash<int, const Track*> audio_track_by_lane;
+    QHash<QString, QVariantMap> group_transform_by_track_id;
+    QHash<QString, bool> effective_track_visibility_by_id;
+    QHash<QString, bool> hidden_by_group_by_track_id;
     QHash<QString, DialogueCleanupState> dialogue_cleanup_by_track_id;
     QHash<QString, double> evaluated_track_opacity_by_id;
     QHash<QString, double> evaluated_track_audio_gain_by_id;
@@ -1468,18 +1844,41 @@ signals:
     bool any_audio_solo = false;
   };
 
-  [[nodiscard]] QVariantMap clipMap(int index) const;
+  struct TrackVisibilityState final {
+    QHash<QString, bool> effective_by_track_id;
+    QHash<QString, bool> hidden_by_group_by_track_id;
+  };
+
+  void scheduleEditJournalEntry(const QString& reason);
+  [[nodiscard]] QFuture<bool> submitEditJournalEntry(
+      const QString& reason,
+      const QFuture<QJsonObject>& serialized_document = {});
+  [[nodiscard]] QVariantMap clipMap(
+      int index,
+      bool include_grade_export_capability = true) const;
   [[nodiscard]] QVariantMap clipMap(const Clip& clip, int flattened_index, const Track& track) const;
   [[nodiscard]] QVariantMap clipMap(
       const Clip& clip,
       int flattened_index,
       const Track& track,
-      const ClipMapContext* context) const;
+      const ClipMapContext* context,
+      bool include_detail_arrays = true,
+      bool include_grade_export_capability = true,
+      bool include_effect_stack = true) const;
+  static void insertClipKeyframeProjection(QVariantMap& map, const Clip& clip);
+  [[nodiscard]] static QStringList availableClipKeyframeParameters(const Clip& clip);
+  [[nodiscard]] QVariantMap compactTimelineClipMap(
+      const Clip& clip, int flattened_index, const Track& track,
+      const ClipMapContext& context) const;
   [[nodiscard]] QVariantMap trackMap(const Track& track, int track_index) const;
+  [[nodiscard]] QVariantMap effectiveTrackGroupTransform(const Track& track) const;
+  [[nodiscard]] TrackVisibilityState trackVisibilityState() const;
   [[nodiscard]] QVariantMap trackMap(
       const Track& track,
       int track_index,
-      const ClipMapContext& context) const;
+      const ClipMapContext& context,
+      bool active_clip_details_only = false,
+      bool compact_timeline_projection = false) const;
   [[nodiscard]] ClipMapContext clipMapContext(
       const QVector<ClipRef>& ordered_refs) const;
   [[nodiscard]] bool isVideoFile(const QString& file_path) const;
@@ -1535,8 +1934,12 @@ signals:
   void trimRetimeCurveEnd(Clip& clip, double timeline_duration_seconds);
   [[nodiscard]] QString normalizedKeyframeParameter(const QString& parameter) const;
   [[nodiscard]] QString normalizedKeyframeInterpolation(const QString& interpolation) const;
+  [[nodiscard]] double clipKeyframeParameterRange(const Clip& clip, const QString& parameter) const;
   [[nodiscard]] double clipParameterBaseValue(const Clip& clip, const QString& parameter) const;
   [[nodiscard]] double boundedClipParameterValue(const QString& parameter, double value) const;
+  [[nodiscard]] double evaluatedKeyframeCurve(
+      QVector<ClipKeyframe> keyframes,
+      double local_seconds) const;
   [[nodiscard]] double evaluatedClipParameter(
       const Clip& clip,
       const QString& parameter,
@@ -1559,7 +1962,10 @@ signals:
   bool replaceSelectedClipFromSourceImpl(bool fit_to_fill);
   [[nodiscard]] QString formatDurationText(double seconds) const;
   [[nodiscard]] QVariantMap markerMap(const Marker& marker) const;
-  [[nodiscard]] QVariantMap multicamGroupMap(const MulticamGroup& group) const;
+  [[nodiscard]] QVariantMap multicamGroupMap(
+      const MulticamGroup& group,
+      const QHash<QString, ClipRef>& clip_refs_by_id) const;
+  [[nodiscard]] QString selectedClipColorScopeRequestKey() const;
   [[nodiscard]] const MulticamGroup* multicamGroupForClip(const QString& clip_id) const;
   [[nodiscard]] MulticamGroup* multicamGroupById(const QString& group_id);
   [[nodiscard]] const MulticamGroup* multicamGroupById(const QString& group_id) const;
@@ -1590,7 +1996,9 @@ signals:
       int audio_channels,
       const QString& audio_channel_layout,
       const QSize& source_size,
-      const QString& status);
+      const QString& status,
+      const QString& suggested_video_input_transform = QString{},
+      const QVariantMap& source_color_metadata = QVariantMap{});
   void startNextSilenceAnalysis();
   void finishActiveSilenceAnalysis(bool succeeded);
   void startNextTranscription();
@@ -1607,7 +2015,7 @@ signals:
   void startNextBeatAnalysis();
   void finishActiveBeatAnalysis(bool succeeded);
   void publishBeatSuggestions();
-  [[nodiscard]] OutputVariantOverride outputVariantOverrideForClip(const Clip& clip) const;
+  [[nodiscard]] static OutputVariantOverride outputVariantOverrideForClip(const Clip& clip);
   bool applyTitleTemplateToClip(Clip* clip, const QString& template_key, bool replace_text);
   void captureOutputVariantOverrides(const QString& variant_key);
   void applyOutputVariantOverrides(const QString& variant_key);
@@ -1634,7 +2042,10 @@ signals:
   void startNextProxyGeneration();
   void finishActiveProxyGeneration(bool succeeded, const QString& error_message = QString());
   [[nodiscard]] QVector<RenderCacheTask> expectedRenderCacheTasks() const;
-  [[nodiscard]] QString renderCacheSignature(double start_seconds, double end_seconds) const;
+  [[nodiscard]] QString renderCacheSignature(
+      double start_seconds,
+      double end_seconds,
+      const QJsonObject& document) const;
   [[nodiscard]] QString renderCacheRevisionIdentity() const;
   [[nodiscard]] QHash<QString, QSet<QString>> projectCacheArtifactPaths() const;
   [[nodiscard]] QSet<QString> otherProjectCacheReferences() const;
@@ -1645,7 +2056,11 @@ signals:
   [[nodiscard]] qint64 timelineMemoryCacheUsageBytes() const;
   [[nodiscard]] qint64 estimatedGpuCacheUsageBytes() const;
   void applyCachePressureResponse();
-  void startNextRenderCacheExtraction();
+  void invalidateProjectCacheSummary();
+  void startProjectCacheInspection();
+  void finishProjectCacheInspection();
+  void applyProjectCacheCleanupResult(const QVariantMap& result);
+  void startNextRenderCacheTask();
   [[nodiscard]] bool shouldDeferBackgroundWork(
       const QString& workflow,
       const QString& affected_clip_id = QString()) const;
@@ -1679,9 +2094,22 @@ signals:
       const QString& output_kind = QStringLiteral("master"),
       const QString& audio_bus_filter = QString(),
       const QString& encoder_override = QString(),
-      int render_pass = 0) const;
+      int render_pass = 0,
+      double render_range_start_seconds = -1.0,
+      double render_range_end_seconds = -1.0,
+      const QStringList& deferred_grade_clip_ids = {}) const;
   [[nodiscard]] bool runTimelineFfmpeg(
       const QStringList& arguments,
+      QString* error_message = nullptr) const;
+  [[nodiscard]] QStringList frameStreamGradeClipIds(
+      QString* error_message = nullptr,
+      bool allow_source_probe = true,
+      QStringList* pending_source_probes = nullptr) const;
+  void startGradeExportSourceProbes(const QStringList& file_paths) const;
+  [[nodiscard]] bool renderTimelineWithFrameStreamGrades(
+      const QString& output_path,
+      const QString& encoder,
+      const QStringList& deferred_grade_clip_ids,
       QString* error_message = nullptr) const;
   [[nodiscard]] bool ffmpegEncoderAvailable(const QString& encoder) const;
   [[nodiscard]] QString resolvedDeliveryEncoder() const;
@@ -1698,6 +2126,9 @@ signals:
   [[nodiscard]] QString stabilizationRollingShutterFilter(const Clip& clip) const;
   [[nodiscard]] QString stabilizationTransformFilter(const Clip& clip) const;
   [[nodiscard]] QJsonObject documentObject() const;
+  bool loadDocumentObject(const QJsonObject& object, const QString& document_path, bool checkpoint_current = true);
+  [[nodiscard]] DocumentSnapshot captureDocumentSnapshot() const;
+  [[nodiscard]] static QJsonObject serializeDocumentSnapshot(const DocumentSnapshot& snapshot);
   [[nodiscard]] bool persistDocument(const QString& document_path) const;
   [[nodiscard]] QString editJournalRootPath() const;
   bool appendEditJournalEntry(const QString& reason);
@@ -1724,7 +2155,8 @@ signals:
       double segment_playback_rate = 0.0,
       bool reverse_segment = false,
       bool freeze_segment = false,
-      double segment_duration_seconds = 0.0) const;
+      double segment_duration_seconds = 0.0,
+      const QString& source_label = QString()) const;
   [[nodiscard]] QString clipParameterFfmpegExpression(
       const Clip& clip,
       const QString& parameter,
@@ -1737,7 +2169,10 @@ signals:
       const QString& time_variable = QStringLiteral("t")) const;
   [[nodiscard]] QString clipEffectsFilter(
       const Clip& clip,
-      double sequence_start_seconds) const;
+      double sequence_start_seconds,
+      bool skip_shared_photo_grade = false,
+      const QStringList& skip_effect_names = QStringList()) const;
+  [[nodiscard]] QString clipBlurFilter(const Clip& clip, double sequence_start_seconds) const;
   [[nodiscard]] QString clipColorFinishingFilter(const Clip& clip) const;
   [[nodiscard]] Clip buildGalleryClip(
       const QString& asset_id,
@@ -1769,7 +2204,15 @@ signals:
       int has_audio_hint);
   void shiftTrackClipsFrom(Track* track, double sequence_seconds, double delta_seconds, const QString& excluded_clip_id = QString());
   void shiftAllTrackClipsFrom(double sequence_seconds, double delta_seconds, const QString& excluded_clip_id = QString());
+  int applyTimelineGapRows(QVariantList selected_gaps);
   void shiftMarkersFrom(double sequence_seconds, double delta_seconds);
+  void rebuildTimelineSnapIndex() const;
+  [[nodiscard]] QVariantMap resolveTimelineSnapInternal(
+      double proposed_seconds,
+      double threshold_seconds,
+      const QSet<QString>& excluded_clip_ids,
+      const QString& excluded_marker_id,
+      bool include_audio_peaks) const;
   void splitTrackClipAtSequenceSeconds(Track* track, int clip_index, double sequence_seconds);
   bool extractSequenceRangeInternal(double start_seconds, double end_seconds, bool push_undo_snapshot);
   [[nodiscard]] QVariantMap buildTextBasedEditPreview(
@@ -1779,11 +2222,17 @@ signals:
   void overwriteTrackRange(Track* track, double range_start_seconds, double range_end_seconds);
   void initializeDefaultTracks();
   void appendTrackPair();
+  Track* appendIndependentVideoTrack();
+  Track* appendGraphicsTrack();
   Track* appendCaptionTrack();
   [[nodiscard]] Track* captionTrack();
   [[nodiscard]] const Track* captionTrack() const;
   void syncAudioTracks();
   [[nodiscard]] bool shouldEditSelectedClipIndependently() const;
+  bool validateSelectedTrimMutation(
+      bool ripple,
+      double ripple_boundary_seconds,
+      double ripple_delta_seconds);
   bool detachSelectedClipAudio(bool push_undo_snapshot);
   void refreshSequenceSizeFromContent();
   void updateCurrentIndexFromSelection();
@@ -1791,7 +2240,14 @@ signals:
   void setStatus(const QString& status);
   void setDirty(bool dirty);
   void clampPlaybackState();
-  void emitAllState();
+  void publishSelectedClipState(
+      const QString& parameter,
+      bool sequence_structure_changed = false);
+  void publishTrackAutomationState(const QString& track_id);
+  void emitAllState(
+      bool editorial_only = false,
+      bool preserve_timeline_tracks_projection = false);
+  void refreshWarmTimelineTracksProjectionAfterEmptyTrackInsertion();
   void emitEditorState();
   void emitSourceMonitorState();
   void emitMarkersState();
@@ -1819,6 +2275,8 @@ signals:
   bool continuous_edit_active_ = false;
   QVector<Track> tracks_;
   QVector<Marker> markers_;
+  mutable QVector<TimelineSnapCandidate> timeline_snap_candidates_;
+  mutable bool timeline_snap_index_dirty_ = true;
   QVector<MulticamGroup> multicam_groups_;
   QVector<MediaBin> media_bins_;
   QVector<SmartCollection> smart_collections_;
@@ -1866,10 +2324,22 @@ signals:
   bool export_audio_stems_ = false;
   bool export_image_sequence_ = false;
   QString background_render_resource_policy_;
+  std::shared_ptr<std::atomic_bool> render_cancellation_;
+  bool renderCancellationRequested() const { return render_cancellation_ && render_cancellation_->load(std::memory_order_relaxed); }
   CacheBudgetSettings cache_budgets_;
   QString cache_pressure_level_ = QStringLiteral("normal");
   QString cache_pressure_override_for_testing_;
   QTimer cache_pressure_timer_;
+  QTimer cache_inspection_timer_, cache_report_poll_timer_;
+  QFutureWatcher<QVariantMap> cache_inspection_watcher_;
+  std::shared_ptr<TimelineCacheInspectionIndex> cache_inspection_index_;
+  std::shared_ptr<std::atomic_bool> cache_inspection_cancelled_;
+  QVariantMap cache_report_;
+  QSet<QString> cache_cleanup_categories_, cache_cleanup_skipped_busy_;
+  quint64 cache_inspection_generation_ = 0, cache_inspection_active_generation_ = 0;
+  bool cache_inspection_active_ = false, cache_inspection_was_cleanup_ = false;
+  bool cache_report_dirty_ = true, cache_report_requested_ = false;
+  bool cache_manager_visible_ = false, cache_pressure_cleanup_pending_ = false;
   int cache_pressure_response_count_ = 0;
   qint64 cache_pressure_last_reclaimed_bytes_ = 0;
   QString active_output_variant_ = QStringLiteral("portrait");
@@ -1877,6 +2347,11 @@ signals:
   bool dirty_ = false;
   QTimer autosave_timer_;
   QTimer edit_journal_timer_;
+  QFutureWatcher<bool> edit_journal_watcher_, autosave_watcher_;
+  QFuture<bool> edit_journal_future_;
+  mutable QHash<QString, QVariantMap> grade_export_capability_cache_;
+  mutable QFutureWatcher<QStringList> grade_export_probe_watcher_;
+  mutable QSet<QString> grade_export_probe_paths_in_flight_;
   QTimer incremental_load_timer_;
   QVector<DeferredMediaHydrationRequest> deferred_media_hydration_queue_;
   int incremental_load_total_count_ = 0;
@@ -1896,6 +2371,21 @@ signals:
   QSet<QString> source_integrity_requests_in_flight_;
   QSet<QString> source_integrity_completed_revisions_;
   QFutureWatcher<QVariantMap>* source_integrity_watcher_ = nullptr;
+  QFutureWatcher<QVariantList>* recent_timelines_watcher_ = nullptr;
+  QFutureWatcher<QVariantList>* recovery_candidates_watcher_ = nullptr;
+  QFutureWatcher<QVariantMap>* recovery_open_watcher_ = nullptr;
+  QFutureWatcher<QVariantMap>* timeline_save_watcher_ = nullptr;
+  QVariantList recent_timeline_records_;
+  QVariantList recovery_candidate_records_;
+  bool recent_timelines_loading_ = false;
+  bool recent_timelines_refresh_pending_ = false;
+  bool recovery_candidates_loading_ = false;
+  bool recovery_candidates_refresh_pending_ = false;
+  bool recovery_open_in_progress_ = false;
+  QString recovery_open_candidate_id_;
+  quint64 recovery_open_request_generation_ = 0;
+  quint64 working_session_generation_ = 0;
+  quint64 document_edit_revision_ = 0;
   SourceIntegrityRequest active_source_integrity_request_;
   QVector<SilenceAnalysisRequest> silence_analysis_queue_;
   QProcess* active_silence_analysis_process_ = nullptr;
@@ -1932,12 +2422,28 @@ signals:
   double loudness_threshold_lufs_ = 0.0;
   double loudness_target_offset_db_ = 0.0;
   QFutureWatcher<QVariantMap>* auto_reframe_watcher_ = nullptr;
+  bool startTrackingAnalysis(const QVariantMap& seed, bool foreground, bool temporal = false, bool scene = false, bool surface = false, bool occlusion = false);
+  [[nodiscard]] bool surfaceTrackDraftReady(const Clip& clip) const;
+  [[nodiscard]] bool surfaceTrackMetadataReady(const Clip& clip) const;
+  [[nodiscard]] QVariantList bakeSurfaceSamples(const Clip& source, const QVariantMap& placement, QString* error) const;
+  [[nodiscard]] bool sceneTrackMetadataReady(const Clip& clip) const;
+  [[nodiscard]] bool sceneAttachmentGeometrySupported(const Clip& clip, const Track& track) const;
+  [[nodiscard]] QVariantList sceneAttachmentQuad(const Clip& clip, double sequence_seconds, QString* error = nullptr) const;
+  [[nodiscard]] QVariantList bakeSceneAnchorSamples(const Clip& source, const QVariantMap& anchor, QString* error) const;
+  [[nodiscard]] QString sceneAttachmentExportFilter(const Clip& clip, double sequence_start, double duration, const QSize& target_size, QString* error) const;
+  void resetTrackingAnalysis();
+  QFutureWatcher<QVariantMap>* tracking_watcher_ = nullptr;
+  std::shared_ptr<std::atomic_bool> tracking_cancel_token_;
+  double tracking_progress_ = 0.0;
+  QString tracking_status_ = QStringLiteral("Track a region or generate a foreground cutout locally.");
   std::shared_ptr<std::atomic_bool> auto_reframe_cancel_token_;
   QString auto_reframe_clip_id_;
   QString auto_reframe_status_ = QStringLiteral("Select a video clip to analyze its subject motion.");
   QVariantList auto_reframe_suggestions_;
   QFutureWatcher<QVariantMap>* program_scope_watcher_ = nullptr;
   QVariantMap program_scope_data_;
+  QString playback_color_signal_clip_id_;
+  QVariantMap playback_color_signal_metadata_;
   QString pending_program_scope_source_;
   int pending_program_scope_revision_ = -1;
   int program_scope_published_revision_ = -1;
@@ -1976,6 +2482,7 @@ signals:
   int source_tape_index_ = -1;
   QSet<QString> waveform_requests_in_flight_;
   mutable QHash<QString, QVector<double>> waveform_peak_fraction_cache_;
+  mutable QHash<QString, ClipFileProjectionCacheEntry> clip_file_projection_cache_;
   QVector<WaveformRequest> waveform_request_queue_;
   QProcess* active_waveform_process_ = nullptr;
   WaveformRequest active_waveform_request_;
@@ -1998,6 +2505,22 @@ signals:
   bool render_cache_cancel_requested_ = false;
   mutable bool render_cache_tasks_dirty_ = true;
   mutable QVector<RenderCacheTask> render_cache_tasks_cache_;
+  mutable QVariantList sequence_versions_cache_;
+  mutable QString sequence_versions_cache_key_;
+  mutable QVariantList transcript_segments_cache_;
+  mutable QVariantList transcript_cleanup_suggestions_cache_;
+  mutable QString transcript_segments_cache_key_;
+  mutable QString transcript_cleanup_suggestions_cache_key_;
+  quint64 transcript_analysis_revision_ = 0;
+  QFutureWatcher<QVariantMap>* color_scope_watcher_ = nullptr;
+  quint64 color_scope_request_generation_ = 0;
+  bool color_scope_busy_ = false;
+  QString color_scope_requested_key_;
+  QString color_scope_cached_key_;
+  QVariantMap color_scope_data_;
+  mutable QVariantList timeline_tracks_projection_cache_;
+  mutable bool timeline_tracks_projection_cache_valid_ = false;
+  bool publishing_preserved_timeline_tracks_projection_ = false;
   int stale_result_discard_count_ = 0;
   QString stale_result_last_workflow_;
   QString stale_result_last_requested_revision_;

@@ -1,0 +1,10 @@
+{
+  "id": "alpine-source-motion",
+  "path": "media/generated/alpine-source-motion.mp4",
+  "origin": "FFmpeg camera-motion animation of synthetic alpine-blue-hour.png; decoder test source",
+  "source_asset": "media/generated/alpine-blue-hour.png",
+  "sha256": "775d48b79c87a6e8ab9d684eea1152a4df39d2c9ffb5715f74303d97d2919d15",
+  "rights_status": "internal-review",
+  "proof_status": "pending",
+  "note": "Source animation, not camera-log footage or Looksy output"
+}

@@ -2378,7 +2378,7 @@
           "layerStackAcceptanceSignature",
           Q_RETURN_ARG(QVariant, live_layer_stack_acceptance_signature)) ||
       !live_layer_stack_acceptance_signature.toString().contains(
-          QStringLiteral("layer-stack-acceptance:v2|select:pointer-modifiers-keyboard|rename:inline-f2-properties|reorder:drag-keyboard-menu")) ||
+          QStringLiteral("layer-stack-acceptance:v3|select:pointer-modifiers-keyboard|rename:inline-f2-properties|reorder:drag-keyboard-menu|hierarchy:drag-into-group-cycle-safe-highlight-expand")) ||
       !live_layer_stack_acceptance_signature.toString().contains(
           QStringLiteral("|visibility:toggle-and-state|opacity:fixed-readout|mask-select:inspector-context|transform:entry-exit|escape:transient-first")) ||
       photo_layers_group->property("layerStackAcceptanceContract").toString() !=
@@ -2803,6 +2803,146 @@
 	        find_named_object(edit_workspace, QStringLiteral("photoLayerDeleteButtonLegacy")) != nullptr) {
 	      return fail("photo layer row hover should not instantiate legacy precision or structure controls");
 	    }
+    if (!editor_preview.addLayerGroup(QStringLiteral("Drop target")))
+      return fail("photo layer hierarchy drag fixture should create a target group");
+    process_layout_events();
+    auto* layer_rows_repeater =
+        edit_workspace->findChild<QObject*>(QStringLiteral("photoLayerRowsRepeater"));
+    QObject* target_group_row = nullptr;
+    QObject* source_layer_row = nullptr;
+    auto target_group_index = -1;
+    auto source_layer_index = -1;
+    QString target_group_id;
+    QString source_layer_id;
+    const auto layer_row_items = find_named_items(edit_workspace, QStringLiteral("photoLayerRow"));
+    for (auto* candidate : layer_row_items) {
+      const auto layer = candidate->property("layerData").toMap();
+      const auto index = candidate->property("layerIndex").toInt();
+      if (layer.value(QStringLiteral("kind")).toString() == QStringLiteral("group") &&
+          layer.value(QStringLiteral("name")).toString() == QStringLiteral("Drop target")) {
+        target_group_row = candidate;
+        target_group_index = index;
+        target_group_id = layer.value(QStringLiteral("id")).toString();
+      } else if (source_layer_row == nullptr &&
+                 layer.value(QStringLiteral("kind")).toString() != QStringLiteral("group") &&
+                 !layer.value(QStringLiteral("locked")).toBool() &&
+                 layer.value(QStringLiteral("treeVisible"), true).toBool()) {
+        source_layer_row = candidate;
+        source_layer_index = index;
+        source_layer_id = layer.value(QStringLiteral("id")).toString();
+      }
+    }
+    auto* drag_proxy = source_layer_row == nullptr
+                           ? nullptr
+                           : source_layer_row->findChild<QObject*>(
+                                 QStringLiteral("photoLayerReorderDragProxy"));
+    auto* source_drag_area = source_layer_row == nullptr
+                                 ? nullptr
+                                 : qobject_cast<QQuickItem*>(source_layer_row->findChild<QObject*>(
+                                       QStringLiteral("photoLayerRowEditTargetArea")));
+    const auto pointer_item = qobject_cast<QQuickItem*>(target_group_row);
+    const auto pointer_x = pointer_item == nullptr ? 0.0 : pointer_item->width() * 0.5;
+    const auto pointer_y = pointer_item == nullptr ? 0.0 : pointer_item->height() * 0.5;
+    if (layer_rows_repeater == nullptr || target_group_row == nullptr ||
+        source_layer_row == nullptr || source_layer_index < 0 || target_group_index < 0 ||
+        drag_proxy == nullptr || source_drag_area == nullptr || pointer_item == nullptr ||
+        target_group_id.isEmpty() ||
+        source_layer_id.isEmpty())
+      return fail("photo layer hierarchy drag fixture should expose a visible unlocked layer and group row");
+    QVariant selected_group_for_grade;
+    if (!QMetaObject::invokeMethod(
+            edit_workspace,
+            "setActivePhotoLayerSelection",
+            Q_RETURN_ARG(QVariant, selected_group_for_grade),
+            Q_ARG(QVariant, QVariant(target_group_index)),
+            Q_ARG(QVariant, QVariant(false))) ||
+        !selected_group_for_grade.toBool()) {
+      return fail("photo layer group should be selectable in the live layer inspector");
+    }
+    auto* group_properties = find_named_object(edit_workspace, QStringLiteral("photoLayerPropertiesPanel"));
+    if (group_properties == nullptr) {
+      return fail("selected photo layer group should expose its properties panel");
+    }
+    group_properties->setProperty("detailsExpanded", true);
+    process_layout_events();
+    auto* group_color_section =
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupColorSection"));
+    if (group_color_section == nullptr ||
+        !group_color_section->property("visible").toBool() ||
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupExposureSlider")) == nullptr ||
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupContrastSlider")) == nullptr ||
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupTemperatureSlider")) == nullptr ||
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupTintSlider")) == nullptr ||
+        find_named_object(edit_workspace, QStringLiteral("photoLayerGroupSaturationSlider")) == nullptr) {
+      return fail("selected photo layer group should expose visible color controls in its live properties panel");
+    }
+    if (!editor_preview.setPhotoLayerGroupExpanded(target_group_index, false))
+      return fail("photo layer hierarchy drag fixture should collapse the target group before dropping");
+    process_layout_events();
+    auto* drag_window = source_drag_area->window();
+    const auto source_pointer = source_drag_area->mapToScene(
+        QPointF(source_drag_area->width() * 0.5, source_drag_area->height() * 0.5));
+    const auto target_pointer = pointer_item->mapToScene(QPointF(pointer_x, pointer_y));
+    if (drag_window == nullptr)
+      return fail("photo layer hierarchy drag fixture should be attached to the live editor window");
+    const auto source_global = QPointF(drag_window->mapToGlobal(source_pointer.toPoint()));
+    const auto target_global = QPointF(drag_window->mapToGlobal(target_pointer.toPoint()));
+    QMouseEvent drag_press(
+        QEvent::MouseButtonPress,
+        source_pointer,
+        source_global,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    QCoreApplication::sendEvent(drag_window, &drag_press);
+    const auto drag_distance = QLineF(source_pointer, target_pointer).length();
+    if (drag_distance < QGuiApplication::styleHints()->startDragDistance() + 2.0)
+      return fail("photo layer hierarchy drag fixture should place its source and group far enough apart to begin a drag");
+    QMouseEvent drag_move(
+        QEvent::MouseMove,
+        target_pointer,
+        target_global,
+        Qt::NoButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    QCoreApplication::sendEvent(drag_window, &drag_move);
+    process_layout_events();
+    if (edit_workspace->property("photoLayerHierarchyDropTargetIndex").toInt() != target_group_index) {
+      return fail("dragging onto a group row should highlight a valid hierarchy drop target");
+    }
+    QObject* target_highlight = nullptr;
+    for (auto* candidate : find_named_items(edit_workspace, QStringLiteral("photoLayerHierarchyDropHighlight"))) {
+      const auto* candidate_item = qobject_cast<QQuickItem*>(candidate);
+      if (candidate_item != nullptr &&
+          candidate_item->parentItem() == qobject_cast<QQuickItem*>(target_group_row)) {
+        target_highlight = candidate;
+        break;
+      }
+    }
+    if (target_highlight == nullptr || !target_highlight->property("visible").toBool())
+      return fail("group drop targeting should show an explicit target highlight");
+    QMouseEvent drag_release(
+        QEvent::MouseButtonRelease,
+        target_pointer,
+        target_global,
+        Qt::LeftButton,
+        Qt::NoButton,
+        Qt::NoModifier);
+    QCoreApplication::sendEvent(drag_window, &drag_release);
+    process_layout_events();
+    bool reparented = false;
+    bool expanded_after_drop = false;
+    for (const auto& value : edit_workspace->property("photoLayerRows").toList()) {
+      const auto layer = value.toMap();
+      const auto id = layer.value(QStringLiteral("id")).toString();
+      if (id == source_layer_id)
+        reparented = layer.value(QStringLiteral("parentId")).toString() == target_group_id;
+      if (id == target_group_id)
+        expanded_after_drop = layer.value(QStringLiteral("expanded")).toBool();
+    }
+    if (!reparented || !expanded_after_drop ||
+        edit_workspace->property("photoLayerHierarchyDropTargetIndex").toInt() != -1)
+      return fail("a hierarchy drop should persist the parent, expand the group, and clear drag feedback");
 	    trace_smoke_progress("layer hover lightweight row checked");
 
 	    return EXIT_SUCCESS;
@@ -2836,7 +2976,7 @@
       photo_layer_inline_actions_contract !=
           QStringLiteral("layer-actions:v2|lazy:true|active:false|hover-instantiates:false|precision-controls:properties-panel|keyboard-accessible:properties-panel|disabled-reasons:true") ||
       photo_layer_fixed_state_action_zone_contract !=
-          QStringLiteral("layer-row-action-zone:v4|component:LayerRowActionZone|normal-width:60|brush-width:30|brush:more-only|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true") ||
+          QStringLiteral("layer-row-action-zone:v6|component:LayerRowActionZone|normal-width:edit-visibility-more|brush-width:edit-more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true") ||
       photo_layer_structure_actions_contract !=
           QStringLiteral("layer-structure-actions:v2|lazy:true|active:false|hover-instantiates:false|reorder:properties-menu|overflow-menu:true|destructive-separated:true|disabled-reasons:true") ||
       photo_layer_reorder_contract !=

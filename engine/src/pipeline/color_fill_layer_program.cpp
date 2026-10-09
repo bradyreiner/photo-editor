@@ -132,10 +132,12 @@ bool retained_simple_layers_supported(const ColorAdjustmentState& state) {
   auto pixel_count = std::size_t{0U};
   for (const auto& layer : state.photo_layers) {
     if (!layer.enabled || layer.opacity <= 1.0e-6) continue;
+    // The retained flat program has no isolated group surface. Keep nested
+    // stacks on the compositor until it can preserve group opacity and blend.
+    if (layer.kind == "group" || !layer.parent_id.empty()) return false;
     // Spatial effects are executed by the CPU layer path until native effect
     // kernels are connected. A retained LUT/program must not omit them.
     if (photo_layer_has_active_effects(layer)) return false;
-    if (layer.kind == "group") continue;
     const auto has_mask = !layer.mask_data.empty();
     const auto mask_size = layer.mask_width > 0 && layer.mask_height > 0
         ? static_cast<std::size_t>(layer.mask_width) *
@@ -169,7 +171,8 @@ bool retained_simple_layers_supported(const ColorAdjustmentState& state) {
         (is_raster &&
          (raster_size != layer.pixels.size() || layer.pixel_width <= 0 ||
           layer.pixel_height <= 0 || !std::isfinite(layer.transform_scale) ||
-          !std::isfinite(layer.transform_rotation))) ||
+          !std::isfinite(layer.transform_rotation) ||
+          (!layer.text_material.empty() && layer.text_material != "none"))) ||
         (has_mask && (mask_size != layer.mask_data.size() ||
                       layer.mask_width <= 0 || layer.mask_height <= 0)) ||
         !std::isfinite(layer.opacity) ||
@@ -250,6 +253,7 @@ CompiledFillLayerProgram compile_fill_layer_program(
     compiled.mask_inverted = layer.mask_inverted;
     compiled.has_mask = !layer.mask_data.empty();
     compiled.clipping_mask = layer.clipping_mask;
+    compiled.erase_base_image = layer.erase_base_image;
     const auto is_raster = layer.kind == "pixel" || layer.kind == "text" ||
                            layer.kind == "source";
     const auto is_adjustment = layer.kind == "adjustment";

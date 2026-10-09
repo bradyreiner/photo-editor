@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/color_lut_program.h"
 #include "photo_editor/pipeline/color_transform.h"
 
 namespace {
@@ -77,6 +78,141 @@ int main() {
       });
   if (!almost_equal(interpolated.blue, 0.5)) {
     return fail("imported cube LUT should interpolate between grid points");
+  }
+
+  const auto solid_blue_lut = photo_editor::pipeline::parse_cube_lut(
+      "LUT_3D_SIZE 2\n"
+      "0 0 1\n0 0 1\n0 0 1\n0 0 1\n"
+      "0 0 1\n0 0 1\n0 0 1\n0 0 1\n");
+  if (!solid_blue_lut.ok()) {
+    return fail("solid-blue CUBE fixture should parse");
+  }
+  const photo_editor::pipeline::ColorPixel neutral_pixel{};
+  const auto trilinear_neutral = photo_editor::pipeline::apply_lut(
+      solid_blue_lut.lut, neutral_pixel);
+  const auto tetrahedral_neutral = photo_editor::pipeline::apply_lut_tetrahedral(
+      solid_blue_lut.lut, neutral_pixel);
+  if (!almost_equal(trilinear_neutral.red, 0.0) ||
+      !almost_equal(trilinear_neutral.green, 0.0) ||
+      !almost_equal(trilinear_neutral.blue, 1.0) ||
+      !almost_equal(tetrahedral_neutral.red, 0.0) ||
+      !almost_equal(tetrahedral_neutral.green, 0.0) ||
+      !almost_equal(tetrahedral_neutral.blue, 1.0)) {
+    return fail("trilinear and tetrahedral CUBE sampling should preserve intentional neutral tinting");
+  }
+
+  const auto one_d_text = std::string{
+      "# independent per-channel shaper\n"
+      "TITLE \"Extended 1D shaper\"\n"
+      "LUT_1D_SIZE 2\n"
+      "LUT_1D_INPUT_RANGE -1 1\n"
+      "0 0 0\n"
+      "2 1 0.5\n"};
+  const auto parsed_one_d = photo_editor::pipeline::parse_cube_lut(one_d_text);
+  if (!parsed_one_d.ok() || parsed_one_d.lut.size != 0 ||
+      parsed_one_d.lut.shaper_size != 2 ||
+      parsed_one_d.lut.shaper_table.size() != 2) {
+    return fail("cube LUT parser should retain a 1D shaper without expanding it");
+  }
+  const auto shaped = photo_editor::pipeline::apply_lut(
+      parsed_one_d.lut,
+      photo_editor::pipeline::ColorPixel{
+          .red = 0.0F,
+          .green = 0.0F,
+          .blue = 0.0F,
+          .alpha = 0.6F,
+      });
+  if (!almost_equal(shaped.red, 1.0) || !almost_equal(shaped.green, 0.5) ||
+      !almost_equal(shaped.blue, 0.25) || !almost_equal(shaped.alpha, 0.6)) {
+    return fail("1D CUBE shaper should honor its input range and preserve extended outputs");
+  }
+  const auto one_d_round_trip = photo_editor::pipeline::parse_cube_lut(
+      photo_editor::pipeline::serialize_cube_lut(parsed_one_d.lut, parsed_one_d.title));
+  if (!one_d_round_trip.ok() || one_d_round_trip.lut.shaper_size != 2 ||
+      one_d_round_trip.lut.shaper_input_range !=
+          std::array<double, 2>{-1.0, 1.0}) {
+    return fail("1D CUBE serialization should preserve the shaper and input range");
+  }
+
+  const auto combined_text = std::string{
+      "# shaper followed by a 3D table\n"
+      "LUT_1D_SIZE 2\n"
+      "LUT_3D_SIZE 2\n"
+      "0 0 0\n"
+      "1 1 1\n"
+      "0 0 0\n"
+      "1 0 0\n"
+      "0 1 0\n"
+      "1 1 0\n"
+      "0 0 1\n"
+      "1 0 1\n"
+      "0 1 1\n"
+      "1 1 1\n"};
+  const auto parsed_combined = photo_editor::pipeline::parse_cube_lut(combined_text);
+  if (!parsed_combined.ok() || parsed_combined.lut.shaper_size != 2 ||
+      parsed_combined.lut.size != 2 || parsed_combined.lut.table.size() != 8) {
+    return fail("cube LUT parser should retain ordered 1D shaper and 3D stages");
+  }
+  const auto combined_pixel = photo_editor::pipeline::apply_lut(
+      parsed_combined.lut,
+      photo_editor::pipeline::ColorPixel{
+          .red = 0.5F,
+          .green = 0.0F,
+          .blue = 0.0F,
+          .alpha = 1.0F,
+      });
+  if (!almost_equal(combined_pixel.blue, 0.5)) {
+    return fail("combined CUBE should apply its shaper before its 3D table");
+  }
+  const auto combined_round_trip = photo_editor::pipeline::parse_cube_lut(
+      photo_editor::pipeline::serialize_cube_lut(parsed_combined.lut, "Combined"));
+  if (!combined_round_trip.ok() || combined_round_trip.lut.shaper_size != 2 ||
+      combined_round_trip.lut.size != 2 ||
+      combined_round_trip.lut.shaper_table.size() != 2 ||
+      combined_round_trip.lut.table.size() != 8) {
+    return fail("combined CUBE serialization should preserve both ordered stages");
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState one_d_state;
+  use_linear_srgb_working(&one_d_state);
+  one_d_state.lut_enabled = true;
+  one_d_state.lut_input_color_space = "Linear sRGB";
+  one_d_state.lut_output_color_space = "Linear sRGB";
+  one_d_state.lut_shaper_table = parsed_one_d.lut.shaper_table;
+  one_d_state.lut_shaper_size = parsed_one_d.lut.shaper_size;
+  one_d_state.lut_shaper_input_range = parsed_one_d.lut.shaper_input_range;
+  const auto one_d_program =
+      photo_editor::pipeline::compile_user_lut_stage_program(one_d_state);
+  const auto one_d_program_pixel =
+      photo_editor::pipeline::apply_compiled_user_lut_stage_program(
+          one_d_program,
+          photo_editor::pipeline::ColorPixel{0.0F, 0.0F, 0.0F, 0.6F});
+  if (!one_d_program.ready() || !almost_equal(one_d_program_pixel.red, 1.0) ||
+      !almost_equal(one_d_program_pixel.green, 0.5) ||
+      !almost_equal(one_d_program_pixel.blue, 0.25)) {
+    return fail("compiled color-engine user LUT should execute a standalone 1D CUBE");
+  }
+  photo_editor::pipeline::LutAdjustment one_d_stack_entry;
+  one_d_stack_entry.name = "1D stack";
+  one_d_stack_entry.input_color_space = "Linear sRGB";
+  one_d_stack_entry.output_color_space = "Linear sRGB";
+  one_d_stack_entry.shaper_table = parsed_one_d.lut.shaper_table;
+  one_d_stack_entry.shaper_size = parsed_one_d.lut.shaper_size;
+  one_d_stack_entry.shaper_input_range = parsed_one_d.lut.shaper_input_range;
+  photo_editor::pipeline::ColorAdjustmentState one_d_stack_state;
+  use_linear_srgb_working(&one_d_stack_state);
+  one_d_stack_state.lut_stack = {one_d_stack_entry};
+  const auto one_d_stack_program =
+      photo_editor::pipeline::compile_user_lut_stage_program(one_d_stack_state);
+  const auto one_d_stack_pixel =
+      photo_editor::pipeline::apply_compiled_user_lut_stage_program(
+          one_d_stack_program,
+          photo_editor::pipeline::ColorPixel{0.0F, 0.0F, 0.0F, 0.6F});
+  if (!one_d_stack_program.ready() ||
+      !almost_equal(one_d_stack_pixel.red, 1.0) ||
+      !almost_equal(one_d_stack_pixel.green, 0.5) ||
+      !almost_equal(one_d_stack_pixel.blue, 0.25)) {
+    return fail("compiled LUT stacks should retain and execute a standalone 1D CUBE");
   }
 
   const auto preview_pixels = photo_editor::pipeline::render_lut_preview_thumbnail(parsed.lut, 4, 4);

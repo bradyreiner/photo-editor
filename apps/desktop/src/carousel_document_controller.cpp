@@ -1,19 +1,21 @@
 #include "carousel_document_controller.h"
 
-#include "bounded_process_wait.h"
-
 #include "app_bootstrap.h"
+#include "blank_canvas_document.h"
 #include "decoded_image_cache.h"
 #include "edit_adjustment_patch.h"
+#include "photo_point_text.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 #include "working_image.h"
 #include "vision_segmentation.h"
 
 #include <QBrush>
+#include <QBuffer>
 #include <QClipboard>
 #include <QColor>
 #include <QColorSpace>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -50,6 +52,9 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <QTextCharFormat>
+#include <QThreadPool>
+#include <QTemporaryDir>
+#include <atomic>
 #include <QTextLayout>
 #include <QTextOption>
 #include <QUrl>
@@ -1422,7 +1427,8 @@ bool write_json_object_atomically(const QString& path, const QJsonObject& object
   if (!file.open(QIODevice::WriteOnly)) {
     return false;
   }
-  if (file.write(QJsonDocument(object).toJson(QJsonDocument::Indented)) < 0) {
+  const auto bytes = QJsonDocument(object).toJson(QJsonDocument::Indented);
+  if (file.write(bytes) != bytes.size()) {
     file.cancelWriting();
     return false;
   }
@@ -1690,6 +1696,39 @@ bool save_legacy_document_index(const QJsonArray& documents) {
   }
   file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
   return file.commit();
+}
+
+void cache_board_gallery_sources(const QString& document_id, const QJsonObject& document) {
+  QSet<QString> paths;
+  const auto collect = [&](const auto& self, const QJsonValue& value) -> void {
+    if (value.isArray()) {
+      for (const auto& entry : value.toArray()) self(self, entry);
+    } else if (value.isObject()) {
+      const auto object = value.toObject();
+      for (auto entry = object.begin(); entry != object.end(); ++entry) {
+        if (entry.key() == QStringLiteral("filePath") || entry.key() == QStringLiteral("file_path")) {
+          const auto path = normalized_path(entry.value().toString());
+          if (path.contains(QStringLiteral("/canvas-documents/")) ||
+              path.contains(QStringLiteral("/carousels/sources/"))) paths.insert(path);
+        } else if (entry.value().isObject() || entry.value().isArray()) self(self, entry.value());
+      }
+    }
+  };
+  collect(collect, document);
+  const auto cache_path = QDir(carousel_documents_root()).filePath(QStringLiteral("gallery-sources.json"));
+  auto cache = read_json_object_file(cache_path);
+  QJsonArray sources;
+  auto ordered_paths = paths.values();
+  std::sort(ordered_paths.begin(), ordered_paths.end());
+  for (const auto& path : ordered_paths) sources.append(QJsonObject{{QStringLiteral("filePath"), path}});
+  if ((sources.isEmpty() && !cache.contains(document_id)) || cache.value(document_id).toArray() == sources) return;
+  cache.insert(document_id, sources);
+  QDir().mkpath(carousel_documents_root());
+  QSaveFile file(cache_path);
+  if (file.open(QIODevice::WriteOnly)) {
+    file.write(QJsonDocument(cache).toJson(QJsonDocument::Compact));
+    file.commit();
+  }
 }
 
 QJsonObject load_legacy_document_payload(const QString& document_id) {
@@ -2272,6 +2311,185 @@ QJsonObject migrate_design_library(QJsonObject library) {
 
 }  // namespace
 
+// A value-only capture of every field read by export rendering, proof, and
+// manifest generation. No live QObject, timers, or GUI services cross threads.
+struct CarouselDocumentController::ExportSnapshot final {
+  QString active_export_preset_id_;
+  int active_export_preset_version_;
+  QString active_slot_;
+  int current_index_;
+  int custom_pixel_height_;
+  int custom_pixel_width_;
+  QString cutout_preview_mode_;
+  QString document_format_;
+  QString document_name_;
+  QVariantMap document_variables_;
+  bool export_aspect_locked_;
+  QString export_board_scope_;
+  QString export_collision_policy_;
+  QString export_color_space_;
+  int export_custom_pixel_height_;
+  int export_custom_pixel_width_;
+  QString export_directory_;
+  QString export_filename_pattern_;
+  QString export_image_format_;
+  int export_image_quality_;
+  bool export_manifest_enabled_;
+  QString export_partial_cleanup_policy_;
+  bool export_preserve_transparency_;
+  QVariantMap export_preset_baseline_;
+  bool export_proof_include_notes_;
+  bool export_proof_sheet_enabled_;
+  QString export_size_mode_;
+  int export_version_;
+  QVector<LinkedGroup> groups_;
+  QVector<CanvasItem> items_;
+  QString saved_document_id_;
+  QString selected_item_id_;
+  QString session_id_;
+  QVector<Slide> slides_;
+  QVariantList export_job_plan_;
+  QVariantList export_job_preflight_;
+  QSize export_job_size_;
+};
+
+struct CarouselDocumentController::ExportTaskState final {
+  std::atomic_bool cancelled{false};
+  std::atomic_int current_board{0};
+  std::atomic_int completed{0};
+};
+
+QThreadPool& CarouselDocumentController::previewThreadPool() {
+  static QThreadPool pool;
+  static const bool configured = [&] { pool.setMaxThreadCount(1); return true; }();
+  Q_UNUSED(configured);
+  return pool;
+}
+
+struct CarouselDocumentController::PreviewFiles final {
+  QString directory;
+  QString file;
+  std::shared_ptr<PreviewFiles> parent;
+  ~PreviewFiles() {
+    // Preview workers can outlive QApplication while their static pool drains.
+    // Qt's global pool may already be gone; do not enqueue cleanup during exit.
+    if (QCoreApplication::closingDown()) {
+      if (!file.isEmpty()) QFile::remove(file);
+      else if (!directory.isEmpty()) QDir(directory).removeRecursively();
+      return;
+    }
+    if (!file.isEmpty()) {
+      (void)QtConcurrent::run([path = file] { QFile::remove(path); });
+      return;
+    }
+    if (directory.isEmpty()) return;
+    // Files remain owned while a published URL or an in-flight snapshot needs
+    // them. Recursive cache cleanup must not run in a UI-thread destructor.
+    (void)QtConcurrent::run([path = directory] { QDir(path).removeRecursively(); });
+  }
+};
+
+struct CarouselDocumentController::PreviewResult final {
+  quint64 revision = 0;
+  QMap<int, QString> boards;
+  QHash<QString, QPair<QString, QSizeF>> items;
+  QVariantMap diagnostics;
+  std::shared_ptr<PreviewFiles> files;
+};
+
+CarouselDocumentController::CarouselDocumentController(const ExportSnapshot& snapshot)
+    : QObject(nullptr) {
+  export_worker_context_ = true;
+  active_export_preset_id_ = snapshot.active_export_preset_id_;
+  active_export_preset_version_ = snapshot.active_export_preset_version_;
+  active_slot_ = snapshot.active_slot_;
+  current_index_ = snapshot.current_index_;
+  custom_pixel_height_ = snapshot.custom_pixel_height_;
+  custom_pixel_width_ = snapshot.custom_pixel_width_;
+  cutout_preview_mode_ = snapshot.cutout_preview_mode_;
+  document_format_ = snapshot.document_format_;
+  document_name_ = snapshot.document_name_;
+  document_variables_ = snapshot.document_variables_;
+  export_aspect_locked_ = snapshot.export_aspect_locked_;
+  export_board_scope_ = snapshot.export_board_scope_;
+  export_collision_policy_ = snapshot.export_collision_policy_;
+  export_color_space_ = snapshot.export_color_space_;
+  export_custom_pixel_height_ = snapshot.export_custom_pixel_height_;
+  export_custom_pixel_width_ = snapshot.export_custom_pixel_width_;
+  export_directory_ = snapshot.export_directory_;
+  export_filename_pattern_ = snapshot.export_filename_pattern_;
+  export_image_format_ = snapshot.export_image_format_;
+  export_image_quality_ = snapshot.export_image_quality_;
+  export_manifest_enabled_ = snapshot.export_manifest_enabled_;
+  export_partial_cleanup_policy_ = snapshot.export_partial_cleanup_policy_;
+  export_preserve_transparency_ = snapshot.export_preserve_transparency_;
+  export_preset_baseline_ = snapshot.export_preset_baseline_;
+  export_proof_include_notes_ = snapshot.export_proof_include_notes_;
+  export_proof_sheet_enabled_ = snapshot.export_proof_sheet_enabled_;
+  export_size_mode_ = snapshot.export_size_mode_;
+  export_version_ = snapshot.export_version_;
+  groups_ = snapshot.groups_;
+  items_ = snapshot.items_;
+  saved_document_id_ = snapshot.saved_document_id_;
+  selected_item_id_ = snapshot.selected_item_id_;
+  session_id_ = snapshot.session_id_;
+  slides_ = snapshot.slides_;
+  export_job_plan_ = snapshot.export_job_plan_;
+  export_job_preflight_ = snapshot.export_job_preflight_;
+  export_job_size_ = snapshot.export_job_size_;
+}
+
+std::shared_ptr<const CarouselDocumentController::ExportSnapshot>
+CarouselDocumentController::captureExportSnapshot() const {
+  auto snapshot = std::make_shared<ExportSnapshot>();
+  snapshot->active_export_preset_id_ = active_export_preset_id_;
+  snapshot->active_export_preset_version_ = active_export_preset_version_;
+  snapshot->active_slot_ = active_slot_;
+  snapshot->current_index_ = current_index_;
+  snapshot->custom_pixel_height_ = custom_pixel_height_;
+  snapshot->custom_pixel_width_ = custom_pixel_width_;
+  snapshot->cutout_preview_mode_ = cutout_preview_mode_;
+  snapshot->document_format_ = document_format_;
+  snapshot->document_name_ = document_name_;
+  snapshot->document_variables_ = document_variables_;
+  snapshot->export_aspect_locked_ = export_aspect_locked_;
+  snapshot->export_board_scope_ = export_board_scope_;
+  snapshot->export_collision_policy_ = export_collision_policy_;
+  snapshot->export_color_space_ = export_color_space_;
+  snapshot->export_custom_pixel_height_ = export_custom_pixel_height_;
+  snapshot->export_custom_pixel_width_ = export_custom_pixel_width_;
+  snapshot->export_directory_ = export_directory_;
+  snapshot->export_filename_pattern_ = export_filename_pattern_;
+  snapshot->export_image_format_ = export_image_format_;
+  snapshot->export_image_quality_ = export_image_quality_;
+  snapshot->export_manifest_enabled_ = export_manifest_enabled_;
+  snapshot->export_partial_cleanup_policy_ = export_partial_cleanup_policy_;
+  snapshot->export_preserve_transparency_ = export_preserve_transparency_;
+  snapshot->export_preset_baseline_ = export_preset_baseline_;
+  snapshot->export_proof_include_notes_ = export_proof_include_notes_;
+  snapshot->export_proof_sheet_enabled_ = export_proof_sheet_enabled_;
+  snapshot->export_size_mode_ = export_size_mode_;
+  snapshot->export_version_ = export_version_;
+  snapshot->groups_ = groups_;
+  snapshot->items_ = items_;
+  snapshot->saved_document_id_ = saved_document_id_;
+  snapshot->selected_item_id_ = selected_item_id_;
+  snapshot->session_id_ = session_id_;
+  snapshot->slides_ = slides_;
+  snapshot->export_job_plan_ = export_job_plan_;
+  snapshot->export_job_preflight_ = export_job_preflight_;
+  snapshot->export_job_size_ = export_job_size_;
+  return snapshot;
+}
+
+CarouselDocumentController::~CarouselDocumentController() {
+  settleAutosaves();
+  if (preview_task_state_) preview_task_state_->cancelled.store(true, std::memory_order_relaxed);
+  if (export_watcher_ != nullptr && export_task_state_) {
+    export_task_state_->cancelled.store(true, std::memory_order_relaxed);
+  }
+}
+
 CarouselDocumentController::CarouselDocumentController(QObject* parent)
     : QObject(parent), session_id_(QUuid::createUuid().toString(QUuid::WithoutBraces)) {
   layout_settings_ = default_layout_settings();
@@ -2300,6 +2518,10 @@ CarouselDocumentController::CarouselDocumentController(QObject* parent)
   preview_debounce_timer_->setInterval(200);
   connect(preview_debounce_timer_, &QTimer::timeout, this,
           &CarouselDocumentController::refreshCurrentSelectionPreviews);
+  preview_watcher_ = new QFutureWatcher<PreviewResult>(this);
+  preview_watcher_->setObjectName(QStringLiteral("carouselPreviewWorker"));
+  connect(preview_watcher_, &QFutureWatcher<PreviewResult>::finished,
+          this, &CarouselDocumentController::finishPreviewRefresh);
   history_coalesce_timer_ = new QTimer(this);
   history_coalesce_timer_->setSingleShot(true);
   history_coalesce_timer_->setInterval(240);
@@ -2309,11 +2531,27 @@ CarouselDocumentController::CarouselDocumentController(QObject* parent)
   cutout_watcher_ = new QFutureWatcher<QVariantMap>(this);
   connect(cutout_watcher_, &QFutureWatcher<QVariantMap>::finished,
           this, &CarouselDocumentController::finishBackgroundRemoval);
+  export_watcher_ = new QFutureWatcher<QVariantMap>(this);
+  connect(export_watcher_, &QFutureWatcher<QVariantMap>::finished, this, [this]() {
+    const auto result = export_watcher_->result();
+    if (export_active_generation_ != export_request_generation_) {
+      export_task_state_.reset();
+      return;
+    }
+    processNextExportStep();
+    export_job_created_files_ = result.value(QStringLiteral("createdFiles")).toStringList();
+    finishAsyncExport(result.value(QStringLiteral("state")).toString(),
+                      result.value(QStringLiteral("failure")).toString());
+    export_task_state_.reset();
+  });
   export_step_timer_ = new QTimer(this);
   export_step_timer_->setSingleShot(true);
   export_step_timer_->setInterval(12);
   connect(export_step_timer_, &QTimer::timeout,
           this, &CarouselDocumentController::processNextExportStep);
+  autosave_watcher_ = new QFutureWatcher<bool>(this);
+  connect(autosave_watcher_, &QFutureWatcher<bool>::finished,
+          this, &CarouselDocumentController::finishAutosave);
   autosave_timer_ = new QTimer(this);
   autosave_timer_->setSingleShot(true);
   autosave_timer_->setInterval(2000);
@@ -2481,6 +2719,98 @@ QVariantMap CarouselDocumentController::selectedRepeatedElementLinkState() const
   state.insert(QStringLiteral("name"), link->name);
   state.insert(QStringLiteral("canDetach"), true);
   state.insert(QStringLiteral("currentBoardNumber"), slideIndexForItem(*item) + 1);
+  return state;
+}
+
+QVariantList CarouselDocumentController::linkedPhotoTextGroups() const {
+  QVariantList values;
+  for (const auto& link : photo_text_links_) {
+    QVariantList board_numbers;
+    QStringList board_names;
+    for (int index = 0; index < slides_.size(); ++index) {
+      const auto& slide = slides_.at(index);
+      if (!link.board_ids.contains(slide.edit_board_id)) continue;
+      board_numbers.push_back(index + 1);
+      board_names.push_back(slide.board_name.isEmpty()
+          ? QStringLiteral("Board %1").arg(index + 1) : slide.board_name);
+    }
+    if (board_numbers.size() < 2) continue;
+    values.push_back(QVariantMap{
+        {QStringLiteral("linkId"), link.id},
+        {QStringLiteral("name"), link.name},
+        {QStringLiteral("layerId"), link.layer_id},
+        {QStringLiteral("boardIds"), link.board_ids},
+        {QStringLiteral("boardNumbers"), board_numbers},
+        {QStringLiteral("boardNames"), board_names},
+    });
+  }
+  return values;
+}
+
+QVariantList CarouselDocumentController::photoTextLinkCandidates(const QString& layer_id) const {
+  QVariantList candidates;
+  const auto normalized_layer_id = layer_id.trimmed();
+  if (normalized_layer_id.isEmpty()) return candidates;
+  for (int index = 0; index < slides_.size(); ++index) {
+    const auto& slide = slides_.at(index);
+    if (slide.edit_board_id.isEmpty() || groupForIndex(index) != nullptr ||
+        slide.primary.type != MediaType::Image ||
+        !editBoardHasUnlockedPhotoTextLayer(slide, normalized_layer_id)) {
+      continue;
+    }
+    candidates.push_back(QVariantMap{
+        {QStringLiteral("boardId"), slide.edit_board_id},
+        {QStringLiteral("boardName"), slide.board_name.isEmpty()
+             ? QStringLiteral("Board %1").arg(index + 1) : slide.board_name},
+        {QStringLiteral("boardNumber"), index + 1},
+        {QStringLiteral("selected"), index == current_index_},
+        {QStringLiteral("linked"), std::any_of(
+             photo_text_links_.cbegin(), photo_text_links_.cend(),
+             [&slide, &normalized_layer_id](const PhotoTextLink& link) {
+               return link.layer_id == normalized_layer_id && link.board_ids.contains(slide.edit_board_id);
+             })},
+    });
+  }
+  return candidates;
+}
+
+QVariantMap CarouselDocumentController::photoTextLinkState(const QString& layer_id) const {
+  QVariantMap state{
+      {QStringLiteral("linked"), false},
+      {QStringLiteral("name"), QString{}},
+      {QStringLiteral("layerId"), layer_id.trimmed()},
+      {QStringLiteral("linkId"), QString{}},
+      {QStringLiteral("boardIds"), QStringList{}},
+      {QStringLiteral("boardNumbers"), QVariantList{}},
+      {QStringLiteral("boardNames"), QStringList{}},
+      {QStringLiteral("canDetach"), false},
+  };
+  if (current_index_ < 0 || current_index_ >= slides_.size()) return state;
+  const auto board_id = slides_.at(current_index_).edit_board_id;
+  const auto normalized_layer_id = layer_id.trimmed();
+  for (const auto& link : photo_text_links_) {
+    if (link.layer_id != normalized_layer_id || !link.board_ids.contains(board_id)) continue;
+    QVariantList board_numbers;
+    QStringList board_names;
+    QStringList ordered_board_ids;
+    for (int index = 0; index < slides_.size(); ++index) {
+      const auto& slide = slides_.at(index);
+      if (!link.board_ids.contains(slide.edit_board_id)) continue;
+      ordered_board_ids.push_back(slide.edit_board_id);
+      board_numbers.push_back(index + 1);
+      board_names.push_back(slide.board_name.isEmpty()
+          ? QStringLiteral("Board %1").arg(index + 1) : slide.board_name);
+    }
+    state.insert(QStringLiteral("linked"), board_numbers.size() >= 2);
+    state.insert(QStringLiteral("name"), link.name);
+    state.insert(QStringLiteral("linkId"), link.id);
+    state.insert(QStringLiteral("boardIds"), ordered_board_ids);
+    state.insert(QStringLiteral("boardNumbers"), board_numbers);
+    state.insert(QStringLiteral("boardNames"), board_names);
+    state.insert(QStringLiteral("currentBoardNumber"), current_index_ + 1);
+    state.insert(QStringLiteral("canDetach"), board_numbers.size() >= 2);
+    break;
+  }
   return state;
 }
 
@@ -2973,6 +3303,105 @@ QVariantMap CarouselDocumentController::preflightIssueState() const {
 QVariantList CarouselDocumentController::textContrastChecks() const {
   QVariantList checks;
   QMap<int, QImage> sampled_board_images;
+  constexpr qint64 kTextContrastSampleCacheBytes = 16LL * 1024 * 1024;
+  constexpr qsizetype kTextContrastSampleCacheEntries = 32;
+  constexpr int kTextContrastSampleWidth = 320;
+  constexpr int kTextContrastSourceMaxEdge = kPreviewLongEdge * 2;
+  const auto sample_cache_key = [this](int board_index, const QSize& sample_size) {
+    QJsonObject key{
+        {QStringLiteral("boardIndex"), board_index},
+        {QStringLiteral("width"), sample_size.width()},
+        {QStringLiteral("height"), sample_size.height()},
+        {QStringLiteral("preview"), true},
+        {QStringLiteral("outputColorSpace"), export_color_space_},
+        // In preview mode only the current editable media receives the active
+        // cutout preview treatment. These values select that media/render mode.
+        {QStringLiteral("currentIndex"), current_index_},
+        {QStringLiteral("activeSlot"), active_slot_},
+        {QStringLiteral("cutoutPreviewMode"), cutout_preview_mode_},
+    };
+    const auto* slide = slideAt(board_index);
+    if (slide == nullptr) return QString{};
+
+    QJsonObject slide_inputs{
+        {QStringLiteral("templateKind"), static_cast<int>(slide->template_kind)},
+        {QStringLiteral("backgroundColor"), slide->background_color},
+        {QStringLiteral("backgroundSecondaryColor"), slide->background_secondary_color},
+        {QStringLiteral("backgroundKind"), slide->background_kind},
+    };
+    const auto* group = groupForIndex(board_index);
+    QJsonArray media_inputs;
+    const auto append_media = [&media_inputs](const MediaItem& media) {
+      auto value = mediaObject(media, false);
+      // Rendering consumes the decoded recipe state as well as its serialized
+      // patch. Include both so transient edits cannot reuse an older sample.
+      value.insert(QStringLiteral("renderRecipeState"), serialize_edit_recipe_json(media.recipe_state));
+      value.insert(QStringLiteral("renderAdjustmentPatch"), media.adjustment_patch_json);
+      if (media.type == MediaType::Image && !media.file_path.isEmpty()) {
+        value.insert(
+            QStringLiteral("sourceDecodeRevision"),
+            decoded_image_cache_key(QFileInfo(media.file_path), kTextContrastSourceMaxEdge));
+      }
+      media_inputs.append(value);
+    };
+    if (group != nullptr) {
+      key.insert(QStringLiteral("linkedGroup"), groupObject(*group, false));
+      append_media(group->media);
+    } else {
+      if (slide->template_kind == SlideTemplate::SplitPair) {
+        append_media(slide->primary);
+        append_media(slide->secondary);
+      } else if (slide->template_kind == SlideTemplate::StackedTriptych) {
+        append_media(slide->primary);
+        append_media(slide->secondary);
+        append_media(slide->tertiary);
+      } else {
+        append_media(slide->primary);
+      }
+    }
+    key.insert(QStringLiteral("slideInputs"), slide_inputs);
+    key.insert(QStringLiteral("mediaInputs"), media_inputs);
+    const auto encoded = QJsonDocument(key).toJson(QJsonDocument::Compact);
+    return QString::fromLatin1(
+        QCryptographicHash::hash(encoded, QCryptographicHash::Sha256).toHex());
+  };
+  const auto cached_sample = [this](const QString& key) -> QImage {
+    const auto found = text_contrast_sample_cache_.constFind(key);
+    if (found == text_contrast_sample_cache_.cend()) return {};
+    text_contrast_sample_cache_lru_.removeAll(key);
+    text_contrast_sample_cache_lru_.prepend(key);
+    return found.value();
+  };
+  const auto remember_sample = [this](const QString& key, const QImage& image) {
+    if (key.isEmpty() || image.isNull()) return;
+    const auto bytes = image.sizeInBytes();
+    if (bytes <= 0 || bytes > kTextContrastSampleCacheBytes) return;
+    if (text_contrast_sample_cache_.contains(key)) {
+      text_contrast_sample_cache_lru_.removeAll(key);
+      text_contrast_sample_cache_lru_.prepend(key);
+      return;
+    }
+    while (!text_contrast_sample_cache_lru_.isEmpty() &&
+           (text_contrast_sample_cache_lru_.size() >= kTextContrastSampleCacheEntries ||
+            text_contrast_sample_cache_bytes_ > kTextContrastSampleCacheBytes - bytes)) {
+      const auto evicted_key = text_contrast_sample_cache_lru_.takeLast();
+      const auto evicted = text_contrast_sample_cache_.take(evicted_key);
+      text_contrast_sample_cache_bytes_ -= evicted.sizeInBytes();
+    }
+    text_contrast_sample_cache_.insert(key, image);
+    text_contrast_sample_cache_lru_.prepend(key);
+    text_contrast_sample_cache_bytes_ += bytes;
+  };
+  QVector<QVector<const CanvasItem*>> visible_photo_layers(slides_.size());
+  for (const auto& candidate : items_) {
+    if (candidate.kind != ItemKind::Image || candidate.hidden) {
+      continue;
+    }
+    const auto board_index = slideIndexForItem(candidate);
+    if (board_index >= 0 && board_index < slideCount()) {
+      visible_photo_layers[board_index].push_back(&candidate);
+    }
+  }
   const auto blend_color = [](const QColor& foreground, const QColor& background, double opacity) {
     const auto alpha = qBound(0.0, opacity, 1.0);
     return QColor::fromRgbF(
@@ -2998,9 +3427,8 @@ QVariantList CarouselDocumentController::textContrastChecks() const {
                                 slide->secondary.type != MediaType::Empty ||
                                 slide->tertiary.type != MediaType::Empty;
     bool has_overlapping_photo_layer = false;
-    for (const auto& candidate : items_) {
-      if (&candidate != &item && candidate.kind == ItemKind::Image && !candidate.hidden &&
-          slideIndexForItem(candidate) == board_index && candidate.bounds.intersects(item.bounds)) {
+    for (const auto* candidate : visible_photo_layers.at(board_index)) {
+      if (candidate != &item && candidate->bounds.intersects(item.bounds)) {
         has_overlapping_photo_layer = true;
         break;
       }
@@ -3015,11 +3443,17 @@ QVariantList CarouselDocumentController::textContrastChecks() const {
       uncertain = true;
       uncertainty_reasons.push_back(QStringLiteral("Photographic backgrounds can vary between sampled pixels."));
       if (!sampled_board_images.contains(board_index)) {
-        const auto sample_width = 320;
+        const auto sample_width = kTextContrastSampleWidth;
         const auto sample_height = qMax(
             1, qRound(static_cast<double>(sample_width) * board_rect.height() / qMax(1.0, board_rect.width())));
-        sampled_board_images.insert(
-            board_index, renderSlideBaseImage(board_index, QSize(sample_width, sample_height), true));
+        const QSize sample_size(sample_width, sample_height);
+        const auto cache_key = sample_cache_key(board_index, sample_size);
+        auto sample = cached_sample(cache_key);
+        if (sample.isNull()) {
+          sample = renderSlideBaseImage(board_index, sample_size, true);
+          remember_sample(cache_key, sample);
+        }
+        sampled_board_images.insert(board_index, std::move(sample));
       }
       const auto& rendered = sampled_board_images.value(board_index);
       if (!rendered.isNull()) {
@@ -6948,6 +7382,10 @@ void CarouselDocumentController::duplicateCurrentSlide() {
   for (int index = 0; index < span; ++index) {
     duplicated_slides.push_back(slides_.at(start_index + index));
     duplicated_slides.last().preview_source.clear();
+    if (!duplicated_slides.last().edit_board_id.isEmpty())
+      duplicated_slides.last().edit_board_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    duplicated_slides.last().edit_board_joined_previous = false;
+    duplicated_slides.last().edit_board_previous_id.clear();
     duplicated_slides.last().section_id.clear();
   }
 
@@ -7032,6 +7470,73 @@ void CarouselDocumentController::duplicateCurrentSlide() {
                       : QStringLiteral("Duplicated a %1-canvas linked spread.").arg(span));
 }
 
+bool CarouselDocumentController::createBoardVariant() {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return false;
+  if (current_index_ < 0 || current_index_ >= slides_.size()) {
+    return false;
+  }
+
+  const int source_index = current_index_;
+  int source_start = source_index;
+  if (const auto* source_group = groupForIndex(source_index); source_group != nullptr) {
+    source_start = source_group->start_index;
+  }
+  const auto source_name = slides_.at(source_index).board_name.trimmed();
+  auto variant_base = source_name.isEmpty()
+                          ? QStringLiteral("Board %1").arg(source_index + 1)
+                          : source_name;
+  const auto variant_marker = QStringLiteral(" · Variant ");
+  const auto marker_index = variant_base.lastIndexOf(variant_marker);
+  if (marker_index > 0) {
+    bool suffix_ok = false;
+    const auto suffix_number = variant_base.mid(marker_index + variant_marker.size()).toInt(&suffix_ok);
+    if (suffix_ok && suffix_number > 0) {
+      variant_base = variant_base.left(marker_index);
+    }
+  }
+
+  QString variant_name;
+  for (int variant_number = 1; variant_number <= kMaxSlides; ++variant_number) {
+    const auto suffix = variant_marker + QString::number(variant_number);
+    const int base_name_limit = qMax(0, 80 - static_cast<int>(suffix.size()));
+    const auto candidate = normalized_board_name(
+        variant_base.left(base_name_limit) + suffix);
+    const bool name_in_use = std::any_of(
+        slides_.cbegin(), slides_.cend(), [&candidate](const Slide& slide) {
+          return slide.board_name == candidate;
+        });
+    if (!name_in_use) {
+      variant_name = candidate;
+      break;
+    }
+  }
+  if (variant_name.isEmpty()) {
+    setStatus(QStringLiteral("Could not find an available variant name."));
+    return false;
+  }
+
+  const int old_slide_count = static_cast<int>(slides_.size());
+  beginHistoryTransaction(QStringLiteral("Create board variant"));
+  duplicateCurrentSlide();
+  if (static_cast<int>(slides_.size()) == old_slide_count) {
+    commitHistoryTransaction();
+    return false;
+  }
+
+  const int copied_board_index = current_index_ + (source_index - source_start);
+  auto* copied_board = slideAt(copied_board_index);
+  if (copied_board == nullptr) {
+    commitHistoryTransaction();
+    return false;
+  }
+  copied_board->board_name = variant_name;
+
+  commitHistoryTransaction();
+  setStatus(QStringLiteral("Created board variant '%1'.").arg(variant_name));
+  return true;
+}
+
 void CarouselDocumentController::removeCurrentSlide() {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return;
@@ -7083,6 +7588,7 @@ void CarouselDocumentController::removeCurrentSlide() {
   rebuildGroupIndices();
   normalizeBoardSections();
   normalizeRepeatedElementLinks();
+  normalizePhotoTextLinks();
   current_index_ = qBound(0, start_index, static_cast<int>(slides_.size()) - 1);
   selected_slide_indices_ = {current_index_};
   normalizeSelection();
@@ -7225,34 +7731,55 @@ void CarouselDocumentController::moveSlide(int from_index, int to_index) {
     return;
   }
   const auto* source_group = groupForIndex(from_index);
-  const auto source_start = source_group != nullptr ? source_group->start_index : from_index;
-  const auto source_span = source_group != nullptr ? source_group->span : 1;
+  int source_start = source_group != nullptr ? source_group->start_index : from_index;
+  int source_span = source_group != nullptr ? source_group->span : 1;
+  const bool drag_was_selected = selected_slide_indices_.contains(from_index);
+  if (drag_was_selected && selected_slide_indices_.size() > 1) {
+    QSet<int> moving_indexes;
+    for (const auto selected_index : selected_slide_indices_) {
+      if (selected_index < 0 || selected_index >= slides_.size()) continue;
+      if (const auto* selected_group = groupForIndex(selected_index); selected_group != nullptr) {
+        for (int index = selected_group->start_index;
+             index < selected_group->start_index + selected_group->span; ++index) {
+          moving_indexes.insert(index);
+        }
+      } else {
+        moving_indexes.insert(selected_index);
+      }
+    }
+    const auto moving_values = moving_indexes.values();
+    if (!moving_values.isEmpty()) {
+      const auto selected_start = *std::min_element(moving_values.cbegin(), moving_values.cend());
+      const auto selected_end = *std::max_element(moving_values.cbegin(), moving_values.cend());
+      if (selected_end - selected_start + 1 == moving_indexes.size()) {
+        source_start = selected_start;
+        source_span = selected_end - selected_start + 1;
+      }
+    }
+  }
   const auto destination = qBound(0, to_index, static_cast<int>(slides_.size()) - source_span);
   if (destination == source_start ||
       (to_index >= source_start && to_index < source_start + source_span)) {
-    current_index_ = from_index;
-    emit selectionChanged();
+    if (!drag_was_selected) {
+      current_index_ = from_index;
+      selected_slide_indices_ = {from_index};
+      setSelectedItemIds({});
+      normalizeForCurrentTemplate();
+      emit selectionChanged();
+      emit slidesChanged();
+    }
     return;
   }
 
-  current_index_ = source_start;
-  beginHistoryTransaction(QStringLiteral("Reorder canvases"));
-  while (current_index_ > destination) {
-    const auto previous_index = current_index_;
-    moveCurrentBackward();
-    if (current_index_ >= previous_index) {
-      break;
-    }
+  pushUndoState(QStringLiteral("Reorder canvases"));
+  if (!drag_was_selected) {
+    current_index_ = from_index;
+    selected_slide_indices_ = {from_index};
+    setSelectedItemIds({});
   }
-  while (current_index_ < destination) {
-    const auto previous_index = current_index_;
-    moveCurrentForward();
-    if (current_index_ <= previous_index) {
-      break;
-    }
-  }
-  commitHistoryTransaction();
-  selected_slide_indices_ = {current_index_};
+  moveSlideBlock(source_start, source_span, destination);
+  refreshPreviews();
+  emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Moved canvas to position %1.").arg(current_index_ + 1));
 }
 
@@ -7566,6 +8093,116 @@ bool CarouselDocumentController::createRepeatedElementLink(
                 .arg(normalized_name)
                 .arg(target_boards.size()));
   return true;
+}
+
+bool CarouselDocumentController::linkEditBoardPhotoText(
+    const QString& layer_id, const QString& name, const QStringList& board_ids) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return false;
+  const auto normalized_layer_id = layer_id.trimmed();
+  const auto normalized_name = normalized_board_name(name);
+  if (current_index_ < 0 || current_index_ >= slides_.size() ||
+      normalized_layer_id.isEmpty() || normalized_name.isEmpty() ||
+      groupForIndex(current_index_) != nullptr ||
+      !editBoardHasUnlockedPhotoTextLayer(slides_.at(current_index_), normalized_layer_id)) {
+    setStatus(QStringLiteral("Select an unlocked native text layer on an Edit board before linking it."));
+    return false;
+  }
+
+  const auto source_board_id = slides_.at(current_index_).edit_board_id;
+  QStringList members{source_board_id};
+  for (const auto& candidate_id : board_ids) {
+    const auto board_id = candidate_id.trimmed();
+    if (board_id.isEmpty() || board_id == source_board_id || members.contains(board_id)) continue;
+    const auto candidate_index = editBoardIndexForId(board_id);
+    if (candidate_index < 0 || groupForIndex(candidate_index) != nullptr ||
+        !editBoardHasUnlockedPhotoTextLayer(slides_.at(candidate_index), normalized_layer_id)) {
+      setStatus(QStringLiteral("Choose only boards with the same unlocked native text layer."));
+      return false;
+    }
+    members.push_back(board_id);
+  }
+  if (members.size() < 2) {
+    setStatus(QStringLiteral("Choose at least one other board to link this text layer."));
+    return false;
+  }
+  int existing_group_index = -1;
+  for (int index = 0; index < photo_text_links_.size(); ++index) {
+    const auto& link = photo_text_links_.at(index);
+    if (link.layer_id != normalized_layer_id) continue;
+    if (link.board_ids.contains(source_board_id)) {
+      existing_group_index = index;
+      continue;
+    }
+    for (const auto& board_id : members) {
+      if (link.board_ids.contains(board_id)) {
+        setStatus(QStringLiteral("A selected board already belongs to a different shared text group."));
+        return false;
+      }
+    }
+  }
+  if (existing_group_index >= 0) {
+    for (int index = 0; index < photo_text_links_.size(); ++index) {
+      if (index == existing_group_index ||
+          photo_text_links_.at(index).layer_id != normalized_layer_id) continue;
+      for (const auto& board_id : members) {
+        if (photo_text_links_.at(index).board_ids.contains(board_id)) {
+          setStatus(QStringLiteral("A selected board already belongs to a different shared text group."));
+          return false;
+        }
+      }
+    }
+  }
+
+  std::sort(members.begin(), members.end(), [this](const QString& left, const QString& right) {
+    return editBoardIndexForId(left) < editBoardIndexForId(right);
+  });
+  pushUndoState(QStringLiteral("Link photo text across boards"));
+  QString link_name = normalized_name;
+  if (existing_group_index >= 0) {
+    auto& link = photo_text_links_[existing_group_index];
+    link_name = link.name;
+    link.board_ids = members;
+    if (link.board_ids.size() < 2) photo_text_links_.removeAt(existing_group_index);
+  } else {
+    PhotoTextLink link;
+    link.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    link.name = normalized_name;
+    link.layer_id = normalized_layer_id;
+    link.board_ids = members;
+    photo_text_links_.push_back(std::move(link));
+  }
+  emitCanvasStateChanged(true);
+  emit documentStateChanged();
+  setStatus(members.size() < 2
+      ? QStringLiteral("Unlinked the final shared text members; each board remains editable.")
+      : QStringLiteral("Linked '%1' across %2 boards. Text edits now update each board's matching layer.")
+            .arg(link_name)
+            .arg(members.size()));
+  return true;
+}
+
+bool CarouselDocumentController::detachEditBoardPhotoText(const QString& layer_id) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return false;
+  if (current_index_ < 0 || current_index_ >= slides_.size()) return false;
+  const auto normalized_layer_id = layer_id.trimmed();
+  const auto board_id = slides_.at(current_index_).edit_board_id;
+  for (qsizetype index = photo_text_links_.size(); index > 0; --index) {
+    auto& link = photo_text_links_[index - 1];
+    if (link.layer_id != normalized_layer_id || !link.board_ids.contains(board_id)) continue;
+    const auto name = link.name;
+    pushUndoState(QStringLiteral("Detach local photo text override"));
+    link.board_ids.removeAll(board_id);
+    if (link.board_ids.size() < 2) photo_text_links_.removeAt(index - 1);
+    emitCanvasStateChanged(true);
+    emit documentStateChanged();
+    setStatus(QStringLiteral("Detached '%1' on board %2 for a local text override.")
+                  .arg(name)
+                  .arg(current_index_ + 1));
+    return true;
+  }
+  return false;
 }
 
 bool CarouselDocumentController::detachSelectedRepeatedElement() {
@@ -8729,7 +9366,7 @@ void CarouselDocumentController::beginHistoryTransaction(const QString& label) {
   captureRepeatedElementSyncSources();
   history_coalesce_timer_->stop();
   history_coalesce_label_.clear();
-  history_transaction_start_ = documentObject();
+  history_transaction_start_ = captureDocumentSnapshot();
   history_transaction_label_ = label.trimmed().isEmpty() ? QStringLiteral("Edit") : label.trimmed();
   history_transaction_active_ = true;
 }
@@ -8746,7 +9383,7 @@ void CarouselDocumentController::commitHistoryTransaction() {
   history_transaction_label_.clear();
   history_transaction_active_ = false;
   pending_repeated_element_sync_source_ids_.clear();
-  if (start == documentObject()) {
+  if (documentSnapshotsEqual(*start, *captureDocumentSnapshot())) {
     return;
   }
   appendUndoEntry({start, label});
@@ -8764,7 +9401,7 @@ void CarouselDocumentController::undo() {
     return;
   }
   const auto entry = undo_stack_.takeLast();
-  redo_stack_.push_back({documentObject(), entry.label});
+  redo_stack_.push_back({captureDocumentSnapshot(), entry.label});
   restoreHistoryEntry(entry, QStringLiteral("Undid"));
 }
 
@@ -8778,7 +9415,7 @@ void CarouselDocumentController::redo() {
     return;
   }
   const auto entry = redo_stack_.takeLast();
-  appendUndoEntry({documentObject(), entry.label});
+  appendUndoEntry({captureDocumentSnapshot(), entry.label});
   restoreHistoryEntry(entry, QStringLiteral("Redid"));
 }
 
@@ -9902,6 +10539,7 @@ bool CarouselDocumentController::applySequenceTemplate(const QString& template_i
   groups_.clear();
   board_sections_.clear();
   repeated_element_links_.clear();
+  photo_text_links_.clear();
   items_.clear();
   selected_item_id_.clear();
   selected_item_ids_.clear();
@@ -13498,7 +14136,7 @@ bool CarouselDocumentController::captureVariantComparisonBaseline(const QString&
   for (int index = 0; index < slides_.size(); ++index) {
     const auto path = QDir(cache_root).filePath(
         QStringLiteral("left-%1.png").arg(index + 1, 2, 10, QLatin1Char('0')));
-    const auto preview = renderSlideImage(index, preview_size, true);
+    const auto preview = renderSlideImage(index, preview_size, false);
     if (preview.isNull() || !preview.save(path)) {
       variant_comparison_left_document_ = {};
       setStatus(QStringLiteral("Could not render the left variant preview for board %1.")
@@ -13540,7 +14178,7 @@ bool CarouselDocumentController::refreshVariantComparison() {
   for (int index = 0; index < slides_.size(); ++index) {
     const auto path = QDir(cache_root).filePath(
         QStringLiteral("right-%1.png").arg(index + 1, 2, 10, QLatin1Char('0')));
-    const auto preview = renderSlideImage(index, preview_size, true);
+    const auto preview = renderSlideImage(index, preview_size, false);
     if (preview.isNull() || !preview.save(path)) {
       setStatus(QStringLiteral("Could not render the current variant preview for board %1.")
                     .arg(index + 1));
@@ -13552,7 +14190,7 @@ bool CarouselDocumentController::refreshVariantComparison() {
   variant_comparison_state_.insert(QStringLiteral("rightBoardCount"), slides_.size());
   variant_comparison_state_.insert(QStringLiteral("rightHash"), documentContentHash());
   const auto max_board = qMax(
-      0, qMin(
+      0, qMax(
              variant_comparison_state_.value(QStringLiteral("leftBoardCount")).toInt(),
              static_cast<int>(slides_.size())) -
              1);
@@ -13571,7 +14209,7 @@ void CarouselDocumentController::setVariantComparisonBoardIndex(int board_index)
   if (!variant_comparison_state_.value(QStringLiteral("active")).toBool()) {
     return;
   }
-  const auto board_count = qMin(
+  const auto board_count = qMax(
       variant_comparison_state_.value(QStringLiteral("leftBoardCount")).toInt(),
       variant_comparison_state_.value(QStringLiteral("rightBoardCount")).toInt());
   const auto next = qBound(0, board_index, qMax(0, board_count - 1));
@@ -15812,7 +16450,8 @@ bool CarouselDocumentController::applyAdjustmentPatchToPhotoEditTargetInternal(
     const auto group_id = descriptor.mid(6);
     if (auto* group = groupById(group_id); group != nullptr && group->media.type == MediaType::Image) {
       target_media = &group->media;
-      target_slide = group->start_index;
+      target_slide = current_index_ >= group->start_index && current_index_ < group->start_index + group->span
+          ? current_index_ : group->start_index;
     }
   } else if (descriptor.startsWith(QStringLiteral("slot:"))) {
     const auto parts = descriptor.split(QLatin1Char(':'));
@@ -15845,6 +16484,22 @@ bool CarouselDocumentController::applyAdjustmentPatchToPhotoEditTargetInternal(
   const auto current_adjustment_patch =
       target_item != nullptr ? target_item->adjustment_patch_json
                              : target_media->adjustment_patch_json;
+  QVector<QPair<int, QString>> linked_photo_text_peer_patches;
+  QString source_board_id;
+  if (target_item == nullptr && target_slot == QStringLiteral("primary") &&
+      target_slide >= 0 && target_slide < slides_.size() &&
+      groupForIndex(target_slide) == nullptr &&
+      !slides_.at(target_slide).edit_board_id.isEmpty()) {
+    source_board_id = slides_.at(target_slide).edit_board_id;
+    QString sync_error;
+    if (!prepareLinkedPhotoTextSync(source_board_id, current_adjustment_patch,
+            adjustment_patch_json, &linked_photo_text_peer_patches, &sync_error)) {
+      setStatus(sync_error.isEmpty()
+          ? QStringLiteral("The shared photo text could not be updated on every linked board.")
+          : sync_error);
+      return false;
+    }
+  }
   if (current_adjustment_patch != adjustment_patch_json) {
     pushUndoState(QStringLiteral("Edit photo"));
     if (target_item != nullptr) {
@@ -15855,6 +16510,13 @@ bool CarouselDocumentController::applyAdjustmentPatchToPhotoEditTargetInternal(
     } else {
       target_media->adjustment_patch_json = adjustment_patch_json;
       target_media->recipe_state = recipeStateFromAdjustmentPayload(adjustment_patch_json);
+      for (const auto& peer_patch : linked_photo_text_peer_patches) {
+        if (peer_patch.first < 0 || peer_patch.first >= slides_.size()) continue;
+        auto& peer = slides_[peer_patch.first].primary;
+        peer.adjustment_patch_json = peer_patch.second;
+        peer.recipe_state = recipeStateFromAdjustmentPayload(peer_patch.second);
+      }
+      if (!source_board_id.isEmpty()) normalizePhotoTextLinks();
     }
   }
 
@@ -15869,11 +16531,23 @@ bool CarouselDocumentController::applyAdjustmentPatchToPhotoEditTargetInternal(
 
   if (current_adjustment_patch != adjustment_patch_json) {
     refreshCurrentSelectionPreviews();
+    QVector<int> linked_text_boards;
+    linked_text_boards.reserve(linked_photo_text_peer_patches.size());
+    for (const auto& peer_patch : linked_photo_text_peer_patches) {
+      linked_text_boards.push_back(peer_patch.first);
+    }
+    if (!linked_text_boards.isEmpty()) queuePreviewRefresh(linked_text_boards, {});
   }
   emitCanvasStateChanged(true);
-  setStatus(current_adjustment_patch == adjustment_patch_json
-                ? QStringLiteral("Returned to Carousel with the existing photo edit.")
-                : QStringLiteral("Applied the Edit adjustments to this Carousel photo."));
+  if (current_adjustment_patch == adjustment_patch_json) {
+    setStatus(QStringLiteral("Returned to Carousel with the existing photo edit."));
+  } else if (!linked_photo_text_peer_patches.isEmpty()) {
+    setStatus(QStringLiteral("Applied the photo edit and updated shared text on %1 other board%2.")
+                  .arg(linked_photo_text_peer_patches.size())
+                  .arg(linked_photo_text_peer_patches.size() == 1 ? QString{} : QStringLiteral("s")));
+  } else {
+    setStatus(QStringLiteral("Applied the Edit adjustments to this Carousel photo."));
+  }
   return true;
 }
 
@@ -17767,6 +18441,7 @@ bool CarouselDocumentController::exportBoardToPlan(
     const QVariantMap& output_plan,
     const QSize& size,
     QString* failure_reason) {
+  if (exportCancellationRequested()) return false;
   if (output_plan.value(QStringLiteral("action")).toString() == QStringLiteral("skip")) {
     return true;
   }
@@ -17814,6 +18489,7 @@ bool CarouselDocumentController::exportBoardToPlan(
   }
 
   auto image = renderSlideImage(index, size, false);
+  if (exportCancellationRequested()) return false;
   if (!export_preserve_transparency_ || export_image_format_ == QStringLiteral("jpeg")) {
     image = image.convertToFormat(QImage::Format_RGB32);
     image.setColorSpace(output_color_space_for_name(export_color_space_));
@@ -17829,6 +18505,7 @@ bool CarouselDocumentController::exportBoardToPlan(
     }
     return false;
   }
+  if (exportCancellationRequested()) return false;
   QImageReader verification_reader(output_path);
   const auto verified_format = verification_reader.format().toLower();
   const auto verified_image = verification_reader.read();
@@ -17958,6 +18635,7 @@ bool CarouselDocumentController::writeProofContactSheet(
     draw_page_header(1);
     int page_number = 1;
     for (int position = 0; position < board_plans.size(); ++position) {
+      if (exportCancellationRequested()) return false;
       if (position > 0 && position % boards_per_page == 0) {
         if (!writer.newPage()) {
           if (failure_reason != nullptr) {
@@ -18014,6 +18692,10 @@ bool CarouselDocumentController::writeProofContactSheet(
           thumbnail_width,
           thumbnail_height);
       auto thumbnail = renderSlideImage(board_index, thumbnail_rect.size(), false);
+      if (exportCancellationRequested()) {
+        painter.restore();
+        return false;
+      }
       if (!thumbnail.colorSpace().isValid()) {
         thumbnail.setColorSpace(output_color_space_for_name(export_color_space_));
       }
@@ -18151,7 +18833,14 @@ bool CarouselDocumentController::writeDeliveryManifest(
     }
     QFile output_file(output_plan.value(QStringLiteral("outputPath")).toString());
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    if (!output_file.open(QIODevice::ReadOnly) || !hash.addData(&output_file)) {
+    bool hashed = output_file.open(QIODevice::ReadOnly);
+    while (hashed && !output_file.atEnd()) {
+      if (exportCancellationRequested()) return false;
+      const auto bytes = output_file.read(1024 * 1024);
+      if (bytes.isEmpty() && output_file.error() != QFile::NoError) hashed = false;
+      else hash.addData(bytes);
+    }
+    if (!hashed) {
       if (failure_reason != nullptr) {
         *failure_reason = QStringLiteral("Unable to hash exported board %1 for the delivery manifest.")
                               .arg(index + 1);
@@ -18240,10 +18929,11 @@ void CarouselDocumentController::exportCarousel() {
   if (directory_path.isEmpty()) {
     return;
   }
-  exportConfiguredCarousel();
+  startConfiguredExport();
 }
 
 bool CarouselDocumentController::exportCarouselToDirectory(const QString& directory_path) {
+  if (export_busy_ || export_task_state_) return false;
   const QDir output_dir(directory_path);
   if (!output_dir.exists()) {
     setStatus(QStringLiteral("Export folder does not exist."));
@@ -19142,7 +19832,8 @@ bool CarouselDocumentController::exportConfiguredCarousel() {
 }
 
 bool CarouselDocumentController::startConfiguredExport() {
-  if (export_busy_) {
+  if (export_busy_ || export_task_state_) {
+    if (!export_busy_) setStatus(QStringLiteral("The previous export is still stopping. Try again shortly."));
     return false;
   }
   export_failure_reason_.clear();
@@ -19170,10 +19861,29 @@ bool CarouselDocumentController::startConfiguredExport() {
 
   export_job_plan_ = exportOutputPreview();
   export_job_size_ = configuredExportPixelSize();
+  export_job_directory_ = QDir(export_directory_).absolutePath();
+  export_active_generation_ = ++export_request_generation_;
+  export_task_state_ = std::make_shared<ExportTaskState>();
+  const auto snapshot = captureExportSnapshot();
+  const auto state = export_task_state_;
   export_state_ = QStringLiteral("running");
   setExportBusy(true);
   emit exportProgressChanged();
   setStatus(QStringLiteral("Export started."));
+  // A single export worker bounds full-resolution image memory even if more
+  // than one controller exists. The worker constructs and destroys its own
+  // renderer; it never touches this controller or its QObject children.
+  static QThreadPool export_pool;
+  static const bool configured = []() {
+    export_pool.setMaxThreadCount(1);
+    return true;
+  }();
+  Q_UNUSED(configured)
+  export_watcher_->setFuture(QtConcurrent::run(&export_pool, [snapshot, state]() {
+    CarouselDocumentController renderer(*snapshot);
+    renderer.export_task_state_ = state;
+    return renderer.runExportJob();
+  }));
   export_step_timer_->start(0);
   return true;
 }
@@ -19183,9 +19893,10 @@ void CarouselDocumentController::cancelExport() {
     return;
   }
   export_cancel_requested_ = true;
+  if (export_task_state_) export_task_state_->cancelled.store(true, std::memory_order_relaxed);
   export_state_ = QStringLiteral("cancelling");
   emit exportProgressChanged();
-  setStatus(QStringLiteral("Cancelling export after the current board."));
+  setStatus(QStringLiteral("Cancelling export."));
 }
 
 bool CarouselDocumentController::retryFailedExport() {
@@ -19209,7 +19920,9 @@ void CarouselDocumentController::revealExportOutput() {
 
 void CarouselDocumentController::cleanupPartialExport() {
   int removed_count = 0;
-  const auto destination = QDir(export_directory_).absolutePath();
+  if (export_busy_) return;
+  const auto destination = export_job_directory_.isEmpty()
+      ? QDir(export_directory_).absolutePath() : export_job_directory_;
   for (const auto& path : std::as_const(export_job_created_files_)) {
     const QFileInfo info(path);
     if (info.absolutePath() == destination && info.exists() && QFile::remove(info.absoluteFilePath())) {
@@ -19218,6 +19931,7 @@ void CarouselDocumentController::cleanupPartialExport() {
   }
   export_job_created_files_.clear();
   emit exportProgressChanged();
+  emit exportSettingsChanged();
   if (removed_count > 0) {
     setStatus(QStringLiteral("Removed %1 partial export file%2.")
                   .arg(removed_count)
@@ -19226,72 +19940,131 @@ void CarouselDocumentController::cleanupPartialExport() {
 }
 
 void CarouselDocumentController::processNextExportStep() {
-  if (!export_busy_) {
-    return;
+  if (!export_busy_ || !export_task_state_) return;
+  const auto current = export_task_state_->current_board.load(std::memory_order_relaxed);
+  const auto completed = export_task_state_->completed.load(std::memory_order_relaxed);
+  if (current != export_current_board_ || completed != export_completed_count_) {
+    export_current_board_ = current;
+    export_completed_count_ = completed;
+    emit exportProgressChanged();
   }
-  if (export_cancel_requested_) {
-    finishAsyncExport(QStringLiteral("cancelled"), QStringLiteral("Export cancelled."));
-    return;
+  export_step_timer_->start(50);
+}
+
+bool CarouselDocumentController::exportCancellationRequested() const {
+  return export_worker_context_ && export_task_state_ &&
+      export_task_state_->cancelled.load(std::memory_order_relaxed);
+}
+
+void CarouselDocumentController::invalidateExportForDocumentChange() {
+  invalidatePreviewRefresh(true);
+  ++export_request_generation_;
+  if (export_task_state_) export_task_state_->cancelled.store(true, std::memory_order_relaxed);
+  export_step_timer_->stop();
+  setExportBusy(false);
+  export_state_ = QStringLiteral("idle");
+  export_current_board_ = 0;
+  export_completed_count_ = 0;
+  export_total_count_ = 0;
+  export_failure_reason_.clear();
+  export_job_plan_.clear();
+  export_job_preflight_.clear();
+  export_job_created_files_.clear();
+  export_cancel_requested_ = false;
+  emit exportProgressChanged();
+}
+
+bool CarouselDocumentController::waitForExportProcess(QProcess* process, int timeout_ms) const {
+  QElapsedTimer elapsed;
+  elapsed.start();
+  while (process->state() != QProcess::NotRunning) {
+    if (exportCancellationRequested() || (timeout_ms >= 0 && elapsed.elapsed() >= timeout_ms)) {
+      process->kill();
+      process->waitForFinished(500);
+      return false;
+    }
+    process->waitForFinished(50);
   }
-  if (export_completed_count_ >= export_total_count_) {
-    QString failure_reason;
-    const auto track_created_artifact = [this](const QString& artifact_type) {
+  return !exportCancellationRequested() && process->error() != QProcess::FailedToStart &&
+      process->exitStatus() == QProcess::NormalExit && process->exitCode() == 0;
+}
+
+QVariantMap CarouselDocumentController::runExportJob() {
+  QString failure;
+  QStringList created_files;
+  const auto destination_available = [&](const QVariantMap& plan) {
+    const auto action = plan.value(QStringLiteral("action")).toString();
+    if (action == QStringLiteral("skip") || action == QStringLiteral("overwrite") ||
+        !QFileInfo::exists(plan.value(QStringLiteral("outputPath")).toString())) return true;
+    failure = QStringLiteral("An output file appeared after export planning. Retry to resolve the filename collision.");
+    return false;
+  };
+  const auto artifact_available = [&](const QString& type) {
+    for (const auto& value : export_job_plan_) {
+      const auto plan = value.toMap();
+      if (plan.value(QStringLiteral("artifactType")).toString() == type) return destination_available(plan);
+    }
+    return true;
+  };
+  const auto track = [&](const QVariantMap& plan) {
+    const auto action = plan.value(QStringLiteral("action")).toString();
+    const auto path = plan.value(QStringLiteral("outputPath")).toString();
+    if (action != QStringLiteral("skip") && action != QStringLiteral("overwrite") && QFileInfo::exists(path)) {
+      created_files.push_back(path);
+    }
+  };
+  bool success = true;
+  int completed = 0;
+  for (const auto& value : export_job_plan_) {
+    const auto plan = value.toMap();
+    const auto board = plan.value(QStringLiteral("boardIndex"), -1).toInt();
+    if (board < 0) continue;
+    if (exportCancellationRequested()) break;
+    if (!destination_available(plan)) {
+      success = false;
+      break;
+    }
+    export_task_state_->current_board.store(board + 1, std::memory_order_relaxed);
+    success = exportBoardToPlan(board, plan, export_job_size_, &failure);
+    track(plan);
+    if (!success) break;
+    export_task_state_->completed.store(++completed, std::memory_order_relaxed);
+  }
+  if (success && !exportCancellationRequested()) {
+    success = !export_proof_sheet_enabled_ || artifact_available(QStringLiteral("proof"));
+    if (success) {
+      success = writeProofContactSheet(export_job_plan_, export_job_size_, &failure);
       for (const auto& value : export_job_plan_) {
         const auto plan = value.toMap();
-        if (plan.value(QStringLiteral("artifactType")).toString() != artifact_type) {
-          continue;
-        }
-        const auto action = plan.value(QStringLiteral("action")).toString();
-        if (action != QStringLiteral("skip") && action != QStringLiteral("overwrite")) {
-          export_job_created_files_.push_back(
-              plan.value(QStringLiteral("outputPath")).toString());
-        }
-        break;
+        if (export_proof_sheet_enabled_ && plan.value(QStringLiteral("artifactType")).toString() == QStringLiteral("proof")) track(plan);
       }
-    };
-    if (!writeProofContactSheet(export_job_plan_, export_job_size_, &failure_reason)) {
-      finishAsyncExport(QStringLiteral("failed"), failure_reason);
-      return;
     }
-    if (export_proof_sheet_enabled_) {
-      track_created_artifact(QStringLiteral("proof"));
-    }
-    if (!writeDeliveryManifest(
-            export_job_plan_, export_job_preflight_, export_job_size_, &failure_reason)) {
-      finishAsyncExport(QStringLiteral("failed"), failure_reason);
-      return;
-    }
-    if (export_manifest_enabled_) {
-      track_created_artifact(QStringLiteral("manifest"));
-    }
-    finishAsyncExport(QStringLiteral("completed"));
-    return;
   }
-
-  const auto index = export_completed_count_;
-  const auto output_plan = export_job_plan_.at(index).toMap();
-  const auto board_index = output_plan.value(QStringLiteral("boardIndex"), -1).toInt();
-  export_current_board_ = board_index + 1;
-  emit exportProgressChanged();
-  QString failure_reason;
-  if (board_index < 0 ||
-      !exportBoardToPlan(board_index, output_plan, export_job_size_, &failure_reason)) {
-    const auto failed_action = output_plan.value(QStringLiteral("action")).toString();
-    const auto failed_path = output_plan.value(QStringLiteral("outputPath")).toString();
-    if (failed_action != QStringLiteral("skip") && failed_action != QStringLiteral("overwrite") &&
-        QFileInfo::exists(failed_path)) {
-      export_job_created_files_.push_back(failed_path);
+  if (success && !exportCancellationRequested()) {
+    success = !export_manifest_enabled_ || artifact_available(QStringLiteral("manifest"));
+    if (success) {
+      success = writeDeliveryManifest(export_job_plan_, export_job_preflight_, export_job_size_, &failure);
+      for (const auto& value : export_job_plan_) {
+        const auto plan = value.toMap();
+        if (export_manifest_enabled_ && plan.value(QStringLiteral("artifactType")).toString() == QStringLiteral("manifest")) track(plan);
+      }
     }
-    finishAsyncExport(QStringLiteral("failed"), failure_reason);
-    return;
   }
-  const auto action = output_plan.value(QStringLiteral("action")).toString();
-  if (action != QStringLiteral("skip") && action != QStringLiteral("overwrite")) {
-    export_job_created_files_.push_back(output_plan.value(QStringLiteral("outputPath")).toString());
+  const auto state = exportCancellationRequested() ? QStringLiteral("cancelled")
+      : success ? QStringLiteral("completed") : QStringLiteral("failed");
+  if (state == QStringLiteral("cancelled")) failure = QStringLiteral("Export cancelled.");
+  if (state != QStringLiteral("completed") && export_partial_cleanup_policy_ == QStringLiteral("remove")) {
+    // Cleanup uses the captured destination and policy, even if the user changed
+    // export settings while this job was running. Never delete overwritten files.
+    QStringList retained;
+    for (const auto& path : created_files) {
+      if (QFileInfo(path).absolutePath() != QDir(export_directory_).absolutePath() ||
+          (QFileInfo::exists(path) && !QFile::remove(path))) retained.push_back(path);
+    }
+    created_files = retained;
   }
-  ++export_completed_count_;
-  emit exportProgressChanged();
-  export_step_timer_->start();
+  return {{QStringLiteral("state"), state}, {QStringLiteral("failure"), failure},
+          {QStringLiteral("createdFiles"), created_files}};
 }
 
 void CarouselDocumentController::finishAsyncExport(
@@ -19302,16 +20075,13 @@ void CarouselDocumentController::finishAsyncExport(
   export_failure_reason_ = failure_reason;
   export_cancel_requested_ = false;
   setExportBusy(false);
-  if ((state == QStringLiteral("failed") || state == QStringLiteral("cancelled")) &&
-      export_partial_cleanup_policy_ == QStringLiteral("remove")) {
-    cleanupPartialExport();
-  }
   emit exportProgressChanged();
+  emit exportSettingsChanged();
   if (state == QStringLiteral("completed")) {
     setStatus(QStringLiteral("Exported %1 board%2 to %3.")
                   .arg(export_completed_count_)
                   .arg(export_completed_count_ == 1 ? QString{} : QStringLiteral("s"))
-                  .arg(export_directory_));
+                  .arg(export_job_directory_));
   } else {
     setStatus(failure_reason);
   }
@@ -19361,6 +20131,8 @@ QVariantList CarouselDocumentController::recentDocuments() const {
 }
 
 bool CarouselDocumentController::saveDocument(const QString& document_name) {
+  settleAutosaves();
+  const auto previous_autosave_path = autosavePath();
   const auto previous_document_id = saved_document_id_;
   const auto next_name = normalized_document_name(document_name.isEmpty() ? document_name_ : document_name);
   setSaveState(QStringLiteral("Saving"));
@@ -19425,17 +20197,21 @@ bool CarouselDocumentController::saveDocument(const QString& document_name) {
                                                    : error_message;
       setSaveState(QStringLiteral("Save failed"), failure);
       setStatus(QStringLiteral("Save failed: %1").arg(failure));
+      scheduleAutosave();
       return false;
     }
   }
 
-  saved_content_snapshot_ = persistentDocumentObject();
+  // Keep the small Gallery projection local even when the document lives in
+  // the catalog. Legacy documents can rebuild this projection from their JSON.
+  cache_board_gallery_sources(saved_document_id_, payload.value(QStringLiteral("document_json")).toObject());
+  rememberSavedContent();
   document_dirty_ = false;
   last_saved_at_ = QDateTime::currentDateTime().toString(Qt::ISODate);
   save_state_ = QStringLiteral("Saved");
   save_error_.clear();
   autosave_timer_->stop();
-  removeCurrentRecoveryFiles();
+  removeCurrentRecoveryFiles(previous_autosave_path);
   emit documentStateChanged();
   setStatus(QStringLiteral("Saved carousel '%1'.").arg(document_name_));
   return true;
@@ -19467,6 +20243,7 @@ bool CarouselDocumentController::loadDocument(const QString& document_id) {
     return false;
   }
 
+  settleAutosaves();
   auto document_value = stored_document.value(QStringLiteral("document_json"));
   if (!document_value.isObject()) {
     document_value = stored_document.value(QStringLiteral("document"));
@@ -19475,9 +20252,11 @@ bool CarouselDocumentController::loadDocument(const QString& document_id) {
     setStatus(document_load_error_.isEmpty()
                   ? QStringLiteral("The selected carousel document is invalid.")
                   : document_load_error_);
+    scheduleAutosave();
     return false;
   }
 
+  invalidateExportForDocumentChange();
   saved_document_id_ = stored_document.value(QStringLiteral("document_id")).toString().trimmed();
   if (saved_document_id_.isEmpty()) {
     saved_document_id_ = stored_document.value(QStringLiteral("documentId")).toString().trimmed();
@@ -19495,7 +20274,7 @@ bool CarouselDocumentController::loadDocument(const QString& document_id) {
   }
   has_active_carousel_ = true;
   clearHistory();
-  saved_content_snapshot_ = persistentDocumentObject();
+  rememberSavedContent();
   document_dirty_ = false;
   save_state_ = QStringLiteral("Saved");
   save_error_.clear();
@@ -19525,27 +20304,80 @@ void CarouselDocumentController::scheduleAutosave() {
   autosave_timer_->start();
 }
 
+QThreadPool& CarouselDocumentController::autosaveThreadPool() {
+  static QThreadPool pool;
+  static const bool configured = [&] { pool.setMaxThreadCount(1); return true; }();
+  Q_UNUSED(configured);
+  return pool;
+}
+
 void CarouselDocumentController::writeAutosave() {
-  if (!has_active_carousel_ || !document_dirty_) {
+  if (!has_active_carousel_ || !document_dirty_ || save_state_ == QStringLiteral("Saving")) return;
+  AutosaveRequest request{captureDocumentSnapshot(), autosavePath(), saved_document_id_,
+                         document_name_, QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs),
+                         autosave_generation_, autosave_revision_};
+  if (active_autosave_) {
+    // At most one running write and the latest requested checkpoint are retained.
+    pending_autosave_ = std::make_unique<AutosaveRequest>(std::move(request));
     return;
   }
-  const auto path = autosavePath();
-  const auto last_good_path = QString(path).replace(
-      QStringLiteral(".autosave.json"), QStringLiteral(".last-good.json"));
-  const auto previous = read_json_object_file(path);
-  if (!previous.isEmpty() && previous.value(QStringLiteral("document")).isObject()) {
-    write_json_object_atomically(last_good_path, previous);
+  startAutosave(std::move(request));
+}
+
+void CarouselDocumentController::startAutosave(AutosaveRequest request) {
+  active_autosave_ = std::make_unique<AutosaveRequest>(request);
+  autosave_watcher_->setFuture(QtConcurrent::run(&autosaveThreadPool(),
+      [request = std::move(request)] { return persistAutosave(request); }));
+}
+
+bool CarouselDocumentController::persistAutosave(const AutosaveRequest& request) {
+  // Only immutable values cross the worker boundary. No QObject, timer or live
+  // document is read here, and writes for this controller are strictly ordered.
+  try {
+    const QJsonObject envelope{
+        {QStringLiteral("recoveryVersion"), 1},
+        {QStringLiteral("capturedAt"), request.captured_at},
+        {QStringLiteral("documentId"), request.document_id},
+        {QStringLiteral("documentName"), request.document_name},
+        {QStringLiteral("documentSchemaVersion"), kCarouselDocumentSchemaVersion},
+        {QStringLiteral("document"), snapshotDocumentObject(*request.snapshot)},
+    };
+    const auto previous = read_json_object_file(request.path);
+    auto previous_document = previous.value(QStringLiteral("document")).toObject();
+    // Our own current-schema checkpoint needs no migration. Rewalking every
+    // item here would repeat the work just performed by the snapshot serializer.
+    const auto previous_version = previous_document.value(QStringLiteral("version")).toInt(-1);
+    const bool supported_document = previous_version == kCarouselDocumentSchemaVersion
+        ? previous_document.value(QStringLiteral("slides")).isArray()
+        : !previous_document.isEmpty() && migrate_carousel_document(&previous_document);
+    if (previous.value(QStringLiteral("recoveryVersion")).toInt() == 1 && supported_document) {
+      const auto last_good_path = QString(request.path).replace(
+          QStringLiteral(".autosave.json"), QStringLiteral(".last-good.json"));
+      if (!write_json_object_atomically(last_good_path, previous)) return false;
+    }
+    return write_json_object_atomically(request.path, envelope);
+  } catch (...) {
+    return false;
   }
-  const auto captured_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-  const QJsonObject envelope{
-      {QStringLiteral("recoveryVersion"), 1},
-      {QStringLiteral("capturedAt"), captured_at},
-      {QStringLiteral("documentId"), saved_document_id_},
-      {QStringLiteral("documentName"), document_name_},
-      {QStringLiteral("documentSchemaVersion"), kCarouselDocumentSchemaVersion},
-      {QStringLiteral("document"), documentObject()},
-  };
-  if (!write_json_object_atomically(path, envelope)) {
+}
+
+void CarouselDocumentController::finishAutosave() {
+  if (!active_autosave_ || !autosave_watcher_->isFinished()) return;
+  const bool succeeded = autosave_watcher_->result();
+  auto completed = std::move(active_autosave_);
+  autosave_watcher_->setFuture(QFuture<bool>{});
+  if (pending_autosave_) {
+    auto next = std::move(pending_autosave_);
+    startAutosave(std::move(*next));
+    return;
+  }
+  if (completed->generation != autosave_generation_ || completed->path != autosavePath() ||
+      !has_active_carousel_ || !document_dirty_ || save_state_ == QStringLiteral("Saving")) return;
+  if (completed->revision != autosave_revision_) {
+    scheduleAutosave();
+    return;
+  }
+  if (!succeeded) {
     const auto failure = QStringLiteral("Autosave failed. The current document remains open and unsaved.");
     setSaveState(QStringLiteral("Save failed"), failure);
     setStatus(failure);
@@ -19556,6 +20388,20 @@ void CarouselDocumentController::writeAutosave() {
   save_error_.clear();
   emit documentStateChanged();
   setStatus(QStringLiteral("Autosaved a crash-safe recovery snapshot."));
+}
+
+void CarouselDocumentController::settleAutosaves() {
+  // Lifecycle operations may synchronously drain at most two admitted writes.
+  // They must finish before a save/discard deletes files or a document changes
+  // recovery identity; ordinary edits and timer callbacks never wait here.
+  if (autosave_timer_) autosave_timer_->stop();
+  // Suppress status publication from the document being saved, left or destroyed.
+  ++autosave_generation_;
+  while (active_autosave_) {
+    autosave_watcher_->future().waitForFinished();
+    finishAutosave();
+  }
+  if (autosave_timer_) autosave_timer_->stop();
 }
 
 void CarouselDocumentController::refreshRecoveryState() {
@@ -19602,6 +20448,7 @@ void CarouselDocumentController::refreshRecoveryState() {
 }
 
 bool CarouselDocumentController::loadRecoveryDocument(bool as_copy) {
+  settleAutosaves();
   const auto envelope = read_json_object_file(recovery_path_);
   if (envelope.value(QStringLiteral("recoveryVersion")).toInt() != 1 ||
       !envelope.value(QStringLiteral("document")).isObject() ||
@@ -19609,8 +20456,10 @@ bool CarouselDocumentController::loadRecoveryDocument(bool as_copy) {
     setStatus(document_load_error_.isEmpty()
                   ? QStringLiteral("The recovery snapshot is invalid.")
                   : document_load_error_);
+    scheduleAutosave();
     return false;
   }
+  invalidateExportForDocumentChange();
   saved_document_id_ = as_copy ? QString{} : envelope.value(QStringLiteral("documentId")).toString();
   document_name_ = normalized_document_name(envelope.value(QStringLiteral("documentName")).toString());
   if (as_copy) {
@@ -19618,6 +20467,7 @@ bool CarouselDocumentController::loadRecoveryDocument(bool as_copy) {
   }
   has_active_carousel_ = true;
   saved_content_snapshot_ = {};
+  saved_content_values_.reset();
   document_dirty_ = true;
   save_state_ = QStringLiteral("Autosaved");
   save_error_.clear();
@@ -19650,6 +20500,7 @@ bool CarouselDocumentController::openRecoveryCopy() {
 }
 
 void CarouselDocumentController::discardRecovery() {
+  settleAutosaves();
   if (!recovery_path_.isEmpty()) {
     QFile::remove(recovery_path_);
     QFile::remove(QString(recovery_path_).replace(
@@ -19676,7 +20527,13 @@ bool CarouselDocumentController::openCurrentSavedVersion() {
   return loadDocument(document_id);
 }
 
-void CarouselDocumentController::removeCurrentRecoveryFiles() {
+void CarouselDocumentController::removeCurrentRecoveryFiles(const QString& previous_path) {
+  settleAutosaves();
+  if (!previous_path.isEmpty() && previous_path != autosavePath()) {
+    QFile::remove(previous_path);
+    QFile::remove(QString(previous_path).replace(
+        QStringLiteral(".autosave.json"), QStringLiteral(".last-good.json")));
+  }
   const auto current_path = autosavePath();
   QFile::remove(current_path);
   QFile::remove(QString(current_path).replace(
@@ -19702,18 +20559,9 @@ bool CarouselDocumentController::hasActiveCarousel() const {
 }
 
 void CarouselDocumentController::closeCarousel() {
+  settleAutosaves();
+  invalidateExportForDocumentChange();
   autosave_timer_->stop();
-  export_step_timer_->stop();
-  export_busy_ = false;
-  export_state_ = QStringLiteral("idle");
-  export_current_board_ = 0;
-  export_completed_count_ = 0;
-  export_total_count_ = 0;
-  export_failure_reason_.clear();
-  export_job_plan_.clear();
-  export_job_preflight_.clear();
-  export_job_created_files_.clear();
-  export_cancel_requested_ = false;
   document_passthrough_ = {};
   document_load_error_.clear();
   source_template_id_.clear();
@@ -19725,7 +20573,11 @@ void CarouselDocumentController::closeCarousel() {
   groups_.clear();
   board_sections_.clear();
   repeated_element_links_.clear();
+  photo_text_links_.clear();
   items_.clear();
+  saved_design_versions_.clear();
+  variant_comparison_left_document_ = {};
+  variant_comparison_state_.clear();
   current_index_ = 0;
   selected_slide_indices_.clear();
   document_format_ = QStringLiteral("4x5");
@@ -19766,6 +20618,7 @@ void CarouselDocumentController::closeCarousel() {
   document_variables_ = defaultDocumentVariables();
   copy_snippets_.clear();
   saved_content_snapshot_ = {};
+  saved_content_values_.reset();
   session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
   preview_revision_ = 0;
   layout_settings_ = default_layout_settings();
@@ -19776,26 +20629,498 @@ void CarouselDocumentController::closeCarousel() {
   emit layoutSettingsChanged();
   emit documentFormatChanged();
   emit documentStateChanged();
+  emit variantComparisonChanged();
   emit exportProgressChanged();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Carousel closed."));
 }
 
+bool CarouselDocumentController::createBoardsFromEdit(const QString& file_path, const QString& display_name,
+    const QString& adjustment_patch_json, int pixel_width, int pixel_height, int initial_board_count) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || export_busy_) return false;
+  const auto path = normalized_path(file_path);
+  const auto decoded = parse_adjustment_patch_json(adjustment_patch_json);
+  if (!QFileInfo(path).isFile() || !isImageFile(path) || !decoded.ok() ||
+      decoded.scope != AdjustmentPatchScope::AssetBound || pixel_width < 1 || pixel_height < 1 ||
+      pixel_width > 16384 || pixel_height > 16384) {
+    setStatus(QStringLiteral("The current edit could not be added to a board document."));
+    return false;
+  }
+  const auto composition_size = crop_rect_for_image(QSize(pixel_width, pixel_height), *decoded.state).size();
+  pixel_width = composition_size.width();
+  pixel_height = composition_size.height();
+  // Keep an existing board document durably available before starting another.
+  if (has_active_carousel_ && (document_dirty_ || saved_document_id_.isEmpty()) && !saveDocument()) return false;
+  const auto previous_id = saved_document_id_;
+  createCarouselWithSettings({{QStringLiteral("carouselName"), display_name.trimmed().isEmpty()
+          ? QStringLiteral("Untitled Boards") : display_name + QStringLiteral(" Boards")},
+      {QStringLiteral("documentFormat"), QStringLiteral("custom")},
+      {QStringLiteral("customPixelWidth"), pixel_width}, {QStringLiteral("customPixelHeight"), pixel_height},
+      {QStringLiteral("slideCount"), qBound(1, initial_board_count, 2)}, {QStringLiteral("primaryMediaPath"), path},
+      {QStringLiteral("primaryMediaLabel"), display_name},
+      {QStringLiteral("primaryMediaRecipeJson"), adjustment_patch_json}});
+  custom_pixel_width_ = pixel_width;
+  custom_pixel_height_ = pixel_height;
+  for (auto& slide : slides_) slide.background_kind = QStringLiteral("transparent");
+  slides_.front().primary.fit_mode = FitMode::Contain;
+  slides_.front().edit_board_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  slides_.front().board_name = display_name.trimmed().isEmpty() ? QStringLiteral("Board 1") : display_name;
+  if (slides_.size() > 1) slides_.last().board_name = QStringLiteral("Board 2");
+  refreshPreviews();
+  emit documentFormatChanged();
+  emitCanvasStateChanged(true);
+  if (!saveDocument()) {
+    const auto failure = save_error_;
+    if (!previous_id.isEmpty()) loadDocument(previous_id);
+    else closeCarousel();
+    setStatus(QStringLiteral("Board conversion failed: %1").arg(failure));
+    return false;
+  }
+  setStatus(slides_.size() > 1 ? QStringLiteral("Saved your edit as Board 1. Board 2 is ready to compose.")
+                             : QStringLiteral("Your edit is ready on Board 1."));
+  return true;
+}
+
+bool CarouselDocumentController::createEditCanvas(const QVariantMap& settings) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || export_busy_) return false;
+  const auto source = create_blank_canvas_source(
+      QDir(carousel_documents_root()).filePath(QStringLiteral("sources")), settings);
+  if (source.contains(QStringLiteral("error"))) {
+    setStatus(source.value(QStringLiteral("error")).toString());
+    return false;
+  }
+  const auto patch = serialize_adjustment_patch_json(EditRecipeState{}, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+  if (!createBoardsFromEdit(source.value(QStringLiteral("path")).toString(),
+      source.value(QStringLiteral("name")).toString(), patch,
+      settings.value(QStringLiteral("width"), 1080).toInt(), settings.value(QStringLiteral("height"), 1350).toInt(), 1)) return false;
+  document_name_ = source.value(QStringLiteral("name")).toString();
+  emitCanvasStateChanged(true);
+  return saveDocument();
+}
+
+bool CarouselDocumentController::prepareEditBoards() {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || !has_active_carousel_ || export_busy_) return false;
+  bool promoted_spread = false;
+  // Existing photo spreads can enter Edit without flattening their shared source.
+  if (items_.isEmpty()) {
+    for (auto& group : groups_) {
+      if (group.media.type != MediaType::Image) continue;
+      if (!group.edit_spread) { group.edit_spread = true; promoted_spread = true; }
+      for (int index = group.start_index; index < group.start_index + group.span && index < slides_.size(); ++index) {
+        if (slides_[index].edit_board_id.isEmpty()) {
+          slides_[index].edit_board_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+          promoted_spread = true;
+        }
+      }
+    }
+  }
+  bool needs_conversion = false;
+  for (const auto& slide : slides_) needs_conversion |= slide.edit_board_id.isEmpty();
+  if (!needs_conversion) {
+    bool updated_join = false;
+    for (qsizetype index = 1; index < slides_.size(); ++index) {
+      auto& slide = slides_[index];
+      if (slide.edit_board_joined_previous && slide.edit_board_previous_id.isEmpty()) {
+        slide.edit_board_previous_id = slides_.at(index - 1).edit_board_id;
+        updated_join = true;
+      }
+    }
+    if (updated_join || promoted_spread) emitCanvasStateChanged(true);
+    return true;
+  }
+  const auto size = exportPixelSize();
+  if (size.width() > 8192 || size.height() > 8192 ||
+      static_cast<qint64>(size.width()) * size.height() > 32LL * 1024 * 1024) {
+    setStatus(QStringLiteral("This board is too large for an Edit canvas."));
+    return false;
+  }
+  auto converted = slides_;
+  const auto source_root = QDir(carousel_documents_root()).filePath(QStringLiteral("sources"));
+  if (!QDir().mkpath(source_root)) return false;
+  for (int index = 0; index < converted.size(); ++index) {
+    auto& slide = converted[index];
+    if (!slide.edit_board_id.isEmpty()) continue;
+    slide.edit_board_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto state = slide.primary.recipe_state;
+    const bool keep_source = slide.template_kind == SlideTemplate::Single &&
+        slide.linked_group_id.isEmpty() && slide.primary.type == MediaType::Image &&
+        slide.primary.fit_mode == FitMode::Contain && qFuzzyCompare(slide.primary.scale, 1.0) &&
+        qFuzzyIsNull(slide.primary.offset_x) && qFuzzyIsNull(slide.primary.offset_y);
+    if (!keep_source) {
+      const auto base = renderSlideBaseImage(index, size, false);
+      const auto path = QDir(source_root).filePath(slide.edit_board_id + QStringLiteral(".png"));
+      QSaveFile file(path);
+      if (base.isNull() || !file.open(QIODevice::WriteOnly) || !base.save(&file, "PNG") || !file.commit()) {
+        setStatus(QStringLiteral("The board's base image could not be saved."));
+        return false;
+      }
+      slide.primary = MediaItem{};
+      slide.primary.type = MediaType::Image;
+      slide.primary.file_path = path;
+      slide.primary.display_label = slide.board_name.isEmpty() ? QStringLiteral("Board %1").arg(index + 1) : slide.board_name;
+      slide.primary.source_pixel_size = size;
+      state = EditRecipeState{};
+    }
+    // Preserve old layout graphics as separate editable pixel layers. Keep the
+    // complete original document alongside them for lossless recovery.
+    for (const auto& item : items_) {
+      if (!slideRectInDocument(index).intersects(item.bounds)) continue;
+      QImage pixels(size, QImage::Format_ARGB32_Premultiplied);
+      pixels.fill(Qt::transparent);
+      auto visible_item = item;
+      visible_item.hidden = false;
+      QPainter painter(&pixels);
+      if (item.kind == ItemKind::Brush) renderBrushItem(&painter, visible_item, index, size);
+      else renderItemIntoSlide(&painter, visible_item, index, size, false);
+      painter.end();
+      QByteArray bytes;
+      QBuffer buffer(&bytes);
+      buffer.open(QIODevice::WriteOnly);
+      if (!pixels.save(&buffer, "PNG")) return false;
+      state.layers.prepend(QVariantMap{{QStringLiteral("id"), item.id}, {QStringLiteral("kind"), QStringLiteral("pixel")},
+          {QStringLiteral("name"), summary_label(item)}, {QStringLiteral("pixelData"), bytes},
+          {QStringLiteral("pixelWidth"), size.width()}, {QStringLiteral("pixelHeight"), size.height()},
+          {QStringLiteral("canvasWidth"), size.width()}, {QStringLiteral("canvasHeight"), size.height()},
+          {QStringLiteral("x"), 0}, {QStringLiteral("y"), 0}, {QStringLiteral("opacity"), 1.0},
+          {QStringLiteral("enabled"), !item.hidden}, {QStringLiteral("locked"), item.locked},
+          {QStringLiteral("blendMode"), item.blend_mode}});
+    }
+    slide.primary.recipe_state = state;
+    slide.primary.adjustment_patch_json = serialize_adjustment_patch_json(state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+    slide.primary.fit_mode = FitMode::Contain;
+    slide.template_kind = SlideTemplate::Single;
+    slide.secondary = {};
+    slide.tertiary = {};
+    slide.linked_group_id.clear();
+    slide.background_kind = QStringLiteral("transparent");
+  }
+  if ((!items_.isEmpty() || !groups_.isEmpty()) && !document_passthrough_.contains(QStringLiteral("originalLayoutDocument")))
+    document_passthrough_.insert(QStringLiteral("originalLayoutDocument"), persistentDocumentObject());
+  for (qsizetype index = 1; index < converted.size(); ++index) {
+    if (converted[index].edit_board_joined_previous && converted[index].edit_board_previous_id.isEmpty())
+      converted[index].edit_board_previous_id = converted.at(index - 1).edit_board_id;
+  }
+  slides_ = std::move(converted);
+  items_.clear();
+  groups_.erase(std::remove_if(groups_.begin(), groups_.end(),
+      [](const LinkedGroup& group) { return !group.edit_spread; }), groups_.end());
+  repeated_element_links_.clear();
+  photo_text_links_.clear();
+  setSelectedItemIds({});
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  return true;
+}
+
+QVariantMap CarouselDocumentController::editBoardPayload(int index) {
+  if (index < 0 || index >= slides_.size() || !prepareEditBoards()) return {};
+  selectSlide(index);
+  setSelectedItemIds({});
+  active_slot_ = QStringLiteral("primary");
+  auto payload = selectedPhotoEditPayload();
+  payload.insert(QStringLiteral("boardId"), slides_.at(index).edit_board_id);
+  const auto* group = groupForIndex(index);
+  payload.insert(QStringLiteral("imageId"), group != nullptr ? group->id : slides_.at(index).edit_board_id);
+  if (!slides_.at(index).board_name.isEmpty())
+    payload.insert(QStringLiteral("displayLabel"), slides_.at(index).board_name);
+  return payload;
+}
+
+bool CarouselDocumentController::addEditBoard(bool extend_current) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || export_busy_ || !canAddSlide() || !prepareEditBoards()) return false;
+  const auto previous = captureDocumentSnapshot();
+  pushUndoState(extend_current ? QStringLiteral("Extend image across boards") : QStringLiteral("Add board"));
+  int insertion = static_cast<int>(slides_.size());
+  QString image_id;
+  if (extend_current) {
+    if (auto* existing_group = groupForIndex(current_index_)) {
+      insertion = existing_group->start_index + existing_group->span;
+      image_id = existing_group->id;
+    } else {
+      LinkedGroup group;
+      group.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+      group.kind = GroupKind::HorizontalPair;
+      group.edit_spread = true;
+      group.start_index = current_index_;
+      group.span = 1;
+      group.media = slides_.at(current_index_).primary;
+      group.media.fit_mode = FitMode::Cover;
+      group.media.manual_crop = true;
+      group.media.offset_x = group.media.offset_y = 0.0;
+      group.media.scale = 1.0;
+      image_id = group.id;
+      insertion = current_index_ + 1;
+      slides_[current_index_].linked_group_id = image_id;
+      slides_[current_index_].primary = {};
+      groups_.push_back(group);
+    }
+  }
+  Slide added;
+  added.board_name = QStringLiteral("Board %1").arg(slides_.size() + 1);
+  added.background_kind = QStringLiteral("transparent");
+  added.linked_group_id = image_id;
+  if (extend_current) {
+    added.edit_board_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  }
+  slides_.insert(insertion, added);
+  rebuildGroupIndices();
+  if (!prepareEditBoards()) {
+    static_cast<void>(loadDocumentObject(snapshotDocumentObject(*previous)));
+    return false;
+  }
+  current_index_ = insertion;
+  selected_slide_indices_ = {insertion};
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  return saveDocument();
+}
+
+bool CarouselDocumentController::addEditPhotoBoard(const QString& file_path) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || export_busy_ || !canAddSlide()) return false;
+  const auto chosen = file_path.isEmpty() ? QFileDialog::getOpenFileName(nullptr,
+      QStringLiteral("Add photo board"), {}, QStringLiteral("Images (*.png *.jpg *.jpeg *.tif *.tiff *.webp *.heic *.avif)")) : file_path;
+  const auto path = normalized_path(chosen);
+  QImageReader reader(path);
+  if (chosen.isEmpty()) return false;
+  if (!QFileInfo(path).isFile() || !isImageFile(path) || !reader.canRead()) {
+    setStatus(QStringLiteral("Choose a readable photo for this board."));
+    return false;
+  }
+  beginHistoryTransaction(QStringLiteral("Add photo board"));
+  if (!addEditBoard(false)) { commitHistoryTransaction(); return false; }
+  auto& media = slides_[current_index_].primary;
+  media = MediaItem{};
+  media.type = MediaType::Image;
+  media.file_path = path;
+  media.display_label = QFileInfo(path).completeBaseName();
+  media.source_pixel_size = reader.size();
+  media.fit_mode = FitMode::Cover;
+  media.manual_crop = true;
+  media.adjustment_patch_json = serialize_adjustment_patch_json(media.recipe_state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+  slides_[current_index_].board_name = media.display_label;
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  commitHistoryTransaction();
+  return saveDocument();
+}
+
+QPair<int, int> CarouselDocumentController::editBoardMoveRange(int index) const {
+  if (index < 0 || index >= slides_.size()) return {-1, 0};
+  int start = index;
+  int end = index + 1;
+  // Images and existing sections are indivisible. Expand connected ranges so
+  // moving a section cannot split an image which also crosses its boundary.
+  bool expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (int board = start; board < end; ++board) {
+      const auto include = [&](int range_start, int range_span) {
+        if (range_start < 0 || range_span <= 0) return;
+        const auto next_start = std::min(start, range_start);
+        const auto next_end = std::max(end, range_start + range_span);
+        expanded = expanded || next_start != start || next_end != end;
+        start = next_start;
+        end = next_end;
+      };
+      if (const auto* group = groupForIndex(board)) include(group->start_index, group->span);
+      if (!slides_.at(board).section_id.isEmpty()) {
+        const auto section = boardSectionRange(slides_.at(board).section_id);
+        include(section.first, section.second);
+      }
+    }
+  }
+  return {start, end - start};
+}
+
+bool CarouselDocumentController::moveEditBoard(int from_index, int insertion_index) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || edit_board_image_busy_ || export_busy_ || !prepareEditBoards()) return false;
+  const auto range = editBoardMoveRange(from_index);
+  if (range.first < 0 || insertion_index < 0 || insertion_index > slides_.size() ||
+      (insertion_index >= range.first && insertion_index <= range.first + range.second)) return false;
+  if (insertion_index < slides_.size() && editBoardMoveRange(insertion_index).first != insertion_index)
+    return false;
+  const auto destination = insertion_index > range.first ? insertion_index - range.second : insertion_index;
+  pushUndoState(QStringLiteral("Move boards"));
+  moveSlideBlock(range.first, range.second, destination);
+  normalizeRepeatedElementLinks();
+  normalizePhotoTextLinks();
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  setStatus(range.second == 1 ? QStringLiteral("Moved board to position %1.").arg(destination + 1)
+                             : QStringLiteral("Moved %1 connected boards to position %2.").arg(range.second).arg(destination + 1));
+  return saveDocument();
+}
+
+bool CarouselDocumentController::canUndoEditBoardMove() const {
+  std::shared_ptr<const DocumentSnapshot> mirrored_baseline;
+  for (auto entry = undo_stack_.crbegin(); entry != undo_stack_.crend(); ++entry) {
+    if (entry->label == QStringLiteral("Move boards"))
+      return !mirrored_baseline || documentSnapshotsEqual(*mirrored_baseline, *captureDocumentSnapshot(), true);
+    if (entry->label != QStringLiteral("Edit photo")) return false;
+    mirrored_baseline = entry->document;
+  }
+  return false;
+}
+
+bool CarouselDocumentController::undoEditBoardMove() {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || edit_board_image_busy_ || export_busy_ || !canUndoEditBoardMove()) return false;
+  // Edit retains the redo states for any photo changes already undone back to
+  // the move baseline. Prune only those duplicate document-history entries.
+  while (!undo_stack_.isEmpty() && undo_stack_.constLast().label == QStringLiteral("Edit photo"))
+    undo_stack_.removeLast();
+  undo();
+  return true;
+}
+
+bool CarouselDocumentController::canUndoEditBoardImageReplacement() const {
+  for (auto entry = undo_stack_.crbegin(); entry != undo_stack_.crend(); ++entry) {
+    if (entry->label == QStringLiteral("Replace base image")) return true;
+    if (entry->label != QStringLiteral("Edit photo")) return false;
+  }
+  return false;
+}
+
+bool CarouselDocumentController::undoEditBoardImageReplacement(const QString& baseline_patch) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || edit_board_image_busy_ || !canUndoEditBoardImageReplacement()) return false;
+  const auto* group = groupForIndex(current_index_);
+  const auto* slide = slideAt(current_index_);
+  if (slide == nullptr || baseline_patch.isEmpty() ||
+      (group != nullptr ? group->media.adjustment_patch_json : slide->primary.adjustment_patch_json) != baseline_patch)
+    return false;
+  // Edit has already undone these mirrored photo states back to the replacement
+  // baseline. Its own redo history retains those edits; discard only the mirror.
+  while (!undo_stack_.isEmpty() && undo_stack_.constLast().label == QStringLiteral("Edit photo"))
+    undo_stack_.removeLast();
+  undo();
+  return true;
+}
+
+bool CarouselDocumentController::replaceEditBoardImage(const QString& file_path) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || edit_board_image_busy_ || export_busy_ || !prepareEditBoards()) return false;
+  const auto path = normalized_path(file_path);
+  QImageReader reader(path);
+  if (!QFileInfo(path).isFile() || !isImageFile(path) || !reader.canRead()) {
+    setStatus(QStringLiteral("Choose a readable image for this board."));
+    return false;
+  }
+  const auto* group = groupForIndex(current_index_);
+  const auto& media = group != nullptr ? group->media : slides_.at(current_index_).primary;
+  // Keep the canonical pixel canvas so existing layer transforms, masks and
+  // board seams remain at their exact coordinates across a source replacement.
+  auto size = media.source_pixel_size;
+  if (!size.isValid()) size = QImageReader(media.file_path).size();
+  if (!size.isValid() || size.width() > 8192 || size.height() > 8192 ||
+      static_cast<qint64>(size.width()) * size.height() > 32LL * 1024 * 1024) {
+    setStatus(QStringLiteral("This source canvas is too large to replace in Edit."));
+    return false;
+  }
+  const auto session = session_id_;
+  const auto revision = autosave_revision_;
+  const auto index = current_index_;
+  const auto source_root = QDir(carousel_documents_root()).filePath(QStringLiteral("sources"));
+  const auto destination = QDir(source_root).filePath(QUuid::createUuid().toString(QUuid::WithoutBraces) + QStringLiteral(".png"));
+  edit_board_image_busy_ = true;
+  emit editBoardImageBusyChanged();
+  setStatus(QStringLiteral("Replacing base image…"));
+  auto* watcher = new QFutureWatcher<QString>(this);
+  connect(watcher, &QFutureWatcher<QString>::finished, this,
+      [this, watcher, session, revision, index, destination, size] {
+    auto error = watcher->result();
+    watcher->deleteLater();
+    if (error.isEmpty() && (session != session_id_ || revision != autosave_revision_ ||
+        index != current_index_ || index < 0 || index >= slides_.size()))
+      error = QStringLiteral("The board changed while the image was loading. Drop it again.");
+    const bool applied = error.isEmpty();
+    if (applied) {
+      pushUndoState(QStringLiteral("Replace base image"));
+      auto* current_group = groupForIndex(index);
+      auto& current_media = current_group != nullptr ? current_group->media : slides_[index].primary;
+      current_media.file_path = destination;
+      current_media.source_pixel_size = size;
+      current_media.source_fingerprint.clear();
+      current_media.source_file_size = QFileInfo(destination).size();
+      current_media.source_modified_ms = QFileInfo(destination).lastModified().toMSecsSinceEpoch();
+      current_media.fit_mode = current_group != nullptr ? FitMode::Cover : FitMode::Contain;
+      current_media.cutout_enabled = false;
+      current_media.cutout_mask_data.clear();
+      // The hidden base-paint raster contains pixels from the previous photo.
+      // Ordinary content layers and their masks remain editable and unchanged.
+      auto& layers = current_media.recipe_state.layers;
+      layers.erase(std::remove_if(layers.begin(), layers.end(), [](const QVariant& value) {
+        return value.toMap().value(QStringLiteral("baseImageEdit")).toBool();
+      }), layers.end());
+      current_media.adjustment_patch_json = serialize_adjustment_patch_json(current_media.recipe_state,
+          all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+      refreshPreviews();
+      emitCanvasStateChanged(true);
+      if (!saveDocument()) error = saveError();
+    } else {
+      QFile::remove(destination);
+    }
+    edit_board_image_busy_ = false;
+    emit editBoardImageBusyChanged();
+    setStatus(error.isEmpty() ? QStringLiteral("Base image replaced. Your layers are preserved.") : error);
+    emit editBoardImageReplaced(applied, error);
+  });
+  watcher->setFuture(QtConcurrent::run([path, size, source_root, destination] {
+    QImageReader source(path);
+    source.setAutoTransform(true);
+    const auto original_size = source.size();
+    if (original_size.isValid()) {
+      const auto decode_size = original_size.scaled(size, Qt::KeepAspectRatioByExpanding);
+      if (decode_size.width() < original_size.width() && decode_size.height() < original_size.height())
+        source.setScaledSize(decode_size);
+    }
+    auto pixels = source.read();
+    if (pixels.isNull()) return QStringLiteral("This image could not be read. The board has not changed.");
+    pixels = pixels.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    pixels = pixels.copy((pixels.width() - size.width()) / 2, (pixels.height() - size.height()) / 2,
+        size.width(), size.height());
+    QSaveFile output(destination);
+    if (!QDir().mkpath(source_root) || !output.open(QIODevice::WriteOnly) ||
+        !pixels.save(&output, "PNG") || !output.commit())
+      return QStringLiteral("The replacement image could not be saved. The board has not changed.");
+    return QString{};
+  }));
+  return true;
+}
+
+bool CarouselDocumentController::removeEditBoard() {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope || export_busy_ || slides_.size() <= 1 || !prepareEditBoards()) return false;
+  pushUndoState(QStringLiteral("Remove board"));
+  const auto removed = current_index_;
+  slides_.removeAt(removed);
+  // A one-board group retains its canonical image identity and editable recipe.
+  // Removing a tile never removes the other tiles of a shared image.
+  rebuildGroupIndices();
+  normalizeBoardSections();
+  normalizeRepeatedElementLinks();
+  normalizePhotoTextLinks();
+  current_index_ = qBound(0, removed, static_cast<int>(slides_.size()) - 1);
+  selected_slide_indices_ = {current_index_};
+  normalizeSelection();
+  normalizeForCurrentTemplate();
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  return saveDocument();
+}
+
 void CarouselDocumentController::createCarouselWithSettings(const QVariantMap& settings) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return;
+  settleAutosaves();
+  invalidateExportForDocumentChange();
   autosave_timer_->stop();
-  export_step_timer_->stop();
-  export_busy_ = false;
-  export_state_ = QStringLiteral("idle");
-  export_current_board_ = 0;
-  export_completed_count_ = 0;
-  export_total_count_ = 0;
-  export_failure_reason_.clear();
-  export_job_plan_.clear();
-  export_job_preflight_.clear();
-  export_job_created_files_.clear();
-  export_cancel_requested_ = false;
   document_passthrough_ = {};
   document_load_error_.clear();
   source_template_id_.clear();
@@ -19807,7 +21132,11 @@ void CarouselDocumentController::createCarouselWithSettings(const QVariantMap& s
   groups_.clear();
   board_sections_.clear();
   repeated_element_links_.clear();
+  photo_text_links_.clear();
   items_.clear();
+  saved_design_versions_.clear();
+  variant_comparison_left_document_ = {};
+  variant_comparison_state_.clear();
   current_index_ = 0;
   selected_slide_indices_ = {0};
   selected_item_id_.clear();
@@ -19914,6 +21243,7 @@ void CarouselDocumentController::createCarouselWithSettings(const QVariantMap& s
   last_saved_at_.clear();
   save_error_.clear();
   saved_content_snapshot_ = {};
+  saved_content_values_.reset();
 
   clearHistory();
   refreshPreviews();
@@ -19922,6 +21252,7 @@ void CarouselDocumentController::createCarouselWithSettings(const QVariantMap& s
   emit layoutSettingsChanged();
   emit documentFormatChanged();
   emit documentStateChanged();
+  emit variantComparisonChanged();
   emit exportProgressChanged();
   emitCanvasStateChanged(true);
   scheduleAutosave();
@@ -20323,6 +21654,7 @@ QSize CarouselDocumentController::configuredExportPixelSize() const {
 }
 
 QString CarouselDocumentController::previewsRoot() const {
+  if (!preview_output_directory_.isEmpty()) return preview_output_directory_;
   const auto cache_root = AppBootstrap::cacheLocation();
   const auto base = cache_root.isEmpty() ? QDir::current().filePath(QStringLiteral(".photo-editor-cache")) : cache_root;
   return QDir(base).filePath(QStringLiteral("carousel-previews/%1").arg(session_id_));
@@ -20373,9 +21705,15 @@ CarouselDocumentController::RecipeState CarouselDocumentController::recipeStateF
       .state.value_or(RecipeState{});
 }
 
-QJsonObject CarouselDocumentController::mediaObject(const MediaItem& media) const {
+QJsonObject CarouselDocumentController::mediaObject(const MediaItem& media, bool resolve_identity) {
   QJsonObject object;
-  const auto identity = source_file_identity(media.file_path, media.source_pixel_size);
+  // Persist the captured source identity. Re-probing here is only useful when
+  // the document is missing a value that serialization must supply.
+  const bool needs_identity = media.source_file_size <= 0 || media.source_modified_ms <= 0 ||
+      !media.source_pixel_size.isValid() || media.source_fingerprint.isEmpty();
+  const auto identity = resolve_identity && needs_identity
+      ? source_file_identity(media.file_path, media.source_pixel_size)
+      : SourceFileIdentity{};
   QString type = QStringLiteral("empty");
   if (media.type == MediaType::Image) {
     type = QStringLiteral("image");
@@ -20410,9 +21748,9 @@ QJsonObject CarouselDocumentController::mediaObject(const MediaItem& media) cons
   object.insert(QStringLiteral("videoAudioPolicy"), media.video_audio_policy);
   object.insert(QStringLiteral("videoLoopIntent"), media.video_loop_intent);
   object.insert(QStringLiteral("sourceFileSize"),
-                media.source_file_size > 0 ? media.source_file_size : identity.file_size);
+                (!resolve_identity || media.source_file_size > 0) ? media.source_file_size : identity.file_size);
   object.insert(QStringLiteral("sourceModifiedMs"),
-                media.source_modified_ms > 0 ? media.source_modified_ms : identity.modified_ms);
+                (!resolve_identity || media.source_modified_ms > 0) ? media.source_modified_ms : identity.modified_ms);
   const auto pixel_size = media.source_pixel_size.isValid() ? media.source_pixel_size : identity.pixel_size;
   object.insert(QStringLiteral("sourcePixelWidth"), pixel_size.width());
   object.insert(QStringLiteral("sourcePixelHeight"), pixel_size.height());
@@ -20536,8 +21874,11 @@ CarouselDocumentController::MediaItem CarouselDocumentController::mediaFromObjec
   return media;
 }
 
-QJsonObject CarouselDocumentController::slideObject(const Slide& slide) const {
+QJsonObject CarouselDocumentController::slideObject(const Slide& slide, bool resolve_identity) {
   QJsonObject object;
+  object.insert(QStringLiteral("editBoardId"), slide.edit_board_id);
+  object.insert(QStringLiteral("editBoardJoinedPrevious"), slide.edit_board_joined_previous);
+  object.insert(QStringLiteral("editBoardPreviousId"), slide.edit_board_previous_id);
   QString template_kind = QStringLiteral("single");
   if (slide.template_kind == SlideTemplate::SplitPair) {
     template_kind = QStringLiteral("split-pair");
@@ -20545,9 +21886,9 @@ QJsonObject CarouselDocumentController::slideObject(const Slide& slide) const {
     template_kind = QStringLiteral("stacked-triptych");
   }
   object.insert(QStringLiteral("templateKind"), template_kind);
-  object.insert(QStringLiteral("primary"), mediaObject(slide.primary));
-  object.insert(QStringLiteral("secondary"), mediaObject(slide.secondary));
-  object.insert(QStringLiteral("tertiary"), mediaObject(slide.tertiary));
+  object.insert(QStringLiteral("primary"), mediaObject(slide.primary, resolve_identity));
+  object.insert(QStringLiteral("secondary"), mediaObject(slide.secondary, resolve_identity));
+  object.insert(QStringLiteral("tertiary"), mediaObject(slide.tertiary, resolve_identity));
   object.insert(QStringLiteral("linkedGroupId"), slide.linked_group_id);
   object.insert(QStringLiteral("sectionId"), slide.section_id);
   object.insert(QStringLiteral("backgroundColor"), slide.background_color);
@@ -20579,6 +21920,9 @@ QJsonObject CarouselDocumentController::slideObject(const Slide& slide) const {
 
 CarouselDocumentController::Slide CarouselDocumentController::slideFromObject(const QJsonObject& object) const {
   Slide slide;
+  slide.edit_board_id = object.value(QStringLiteral("editBoardId")).toString();
+  slide.edit_board_joined_previous = object.value(QStringLiteral("editBoardJoinedPrevious")).toBool();
+  slide.edit_board_previous_id = object.value(QStringLiteral("editBoardPreviousId")).toString();
   const auto template_kind = object.value(QStringLiteral("templateKind")).toString().trimmed();
   if (template_kind == QStringLiteral("split-pair")) {
     slide.template_kind = SlideTemplate::SplitPair;
@@ -20648,13 +21992,14 @@ CarouselDocumentController::Slide CarouselDocumentController::slideFromObject(co
   return slide;
 }
 
-QJsonObject CarouselDocumentController::groupObject(const LinkedGroup& group) const {
+QJsonObject CarouselDocumentController::groupObject(const LinkedGroup& group, bool resolve_identity) {
   QJsonObject object;
   object.insert(QStringLiteral("id"), group.id);
   object.insert(QStringLiteral("kind"), groupKindName(group.kind));
   object.insert(QStringLiteral("startIndex"), group.start_index);
   object.insert(QStringLiteral("span"), group.span);
-  object.insert(QStringLiteral("media"), mediaObject(group.media));
+  object.insert(QStringLiteral("editSpread"), group.edit_spread);
+  object.insert(QStringLiteral("media"), mediaObject(group.media, resolve_identity));
   return object;
 }
 
@@ -20664,16 +22009,21 @@ CarouselDocumentController::LinkedGroup CarouselDocumentController::groupFromObj
   group.kind = groupKindFromTemplate(object.value(QStringLiteral("kind")).toString().trimmed());
   group.start_index = qMax(0, object.value(QStringLiteral("startIndex")).toInt());
   group.span = qMax(0, object.value(QStringLiteral("span")).toInt());
+  group.edit_spread = object.value(QStringLiteral("editSpread")).toBool();
   if (object.value(QStringLiteral("media")).isObject()) {
     group.media = mediaFromObject(object.value(QStringLiteral("media")).toObject());
   }
   return group;
 }
 
-QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item) const {
+QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item, bool resolve_identity) {
   QJsonObject object;
-  const auto identity = source_file_identity(
-      item.file_path, QSize(qRound(item.source_size.width()), qRound(item.source_size.height())));
+  const bool needs_identity = item.source_file_size <= 0 || item.source_modified_ms <= 0 ||
+      item.source_fingerprint.isEmpty();
+  const auto identity = resolve_identity && needs_identity
+      ? source_file_identity(item.file_path,
+            QSize(qRound(item.source_size.width()), qRound(item.source_size.height())))
+      : SourceFileIdentity{};
   object.insert(QStringLiteral("id"), item.id);
   object.insert(QStringLiteral("objectGroupId"), item.object_group_id);
   object.insert(QStringLiteral("componentLinkId"), item.component_link_id);
@@ -20814,9 +22164,9 @@ QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item) const
   source_size.insert(QStringLiteral("height"), item.source_size.height());
   object.insert(QStringLiteral("sourceSize"), source_size);
   object.insert(QStringLiteral("sourceFileSize"),
-                item.source_file_size > 0 ? item.source_file_size : identity.file_size);
+                (!resolve_identity || item.source_file_size > 0) ? item.source_file_size : identity.file_size);
   object.insert(QStringLiteral("sourceModifiedMs"),
-                item.source_modified_ms > 0 ? item.source_modified_ms : identity.modified_ms);
+                (!resolve_identity || item.source_modified_ms > 0) ? item.source_modified_ms : identity.modified_ms);
   object.insert(QStringLiteral("sourceFingerprint"),
                 item.source_fingerprint.isEmpty() ? identity.fingerprint : item.source_fingerprint);
   object.insert(QStringLiteral("cutoutEnabled"), item.cutout_enabled);
@@ -21149,7 +22499,7 @@ CarouselDocumentController::CanvasItem CarouselDocumentController::itemFromObjec
   return item;
 }
 
-QJsonObject CarouselDocumentController::documentObject() const {
+QJsonObject CarouselDocumentController::documentMetadataObject() const {
   QJsonObject object;
   object.insert(QStringLiteral("version"), kCarouselDocumentSchemaVersion);
   object.insert(QStringLiteral("documentName"), document_name_);
@@ -21209,12 +22559,6 @@ QJsonObject CarouselDocumentController::documentObject() const {
       QStringLiteral("ignoredBrandLintIssueIds"),
       QJsonArray::fromStringList(ignored_brand_lint_issue_ids_));
 
-  QJsonArray slides_array;
-  for (const auto& slide : slides_) {
-    slides_array.push_back(slideObject(slide));
-  }
-  object.insert(QStringLiteral("slides"), slides_array);
-
   QJsonArray sections_array;
   for (const auto& section : board_sections_) {
     sections_array.push_back(QJsonObject{
@@ -21234,23 +22578,371 @@ QJsonObject CarouselDocumentController::documentObject() const {
   }
   object.insert(QStringLiteral("repeatedElementLinks"), repeated_links_array);
 
-  QJsonArray groups_array;
-  for (const auto& group : groups_) {
-    groups_array.push_back(groupObject(group));
+  QJsonArray photo_text_links_array;
+  for (const auto& link : photo_text_links_) {
+    QJsonArray board_ids;
+    for (const auto& board_id : link.board_ids) board_ids.push_back(board_id);
+    photo_text_links_array.push_back(QJsonObject{
+        {QStringLiteral("id"), link.id},
+        {QStringLiteral("name"), link.name},
+        {QStringLiteral("layerId"), link.layer_id},
+        {QStringLiteral("boardIds"), board_ids},
+    });
   }
-  object.insert(QStringLiteral("groups"), groups_array);
+  object.insert(QStringLiteral("linkedPhotoTextGroups"), photo_text_links_array);
 
-  QJsonArray items_array;
-  for (const auto& item : items_) {
-    items_array.push_back(itemObject(item));
-  }
-  object.insert(QStringLiteral("items"), items_array);
   QJsonArray versions_array;
   for (const auto& stored : saved_design_versions_) {
     versions_array.push_back(stored);
   }
   object.insert(QStringLiteral("savedDesignVersions"), versions_array);
-  return merge_preserving_unknown_fields(document_passthrough_, object).toObject();
+  return object;
+}
+
+QJsonObject CarouselDocumentController::serializeDocument(
+    QJsonObject object, const QJsonObject& passthrough, const QVector<Slide>& slides,
+    const QVector<LinkedGroup>& groups, const QVector<CanvasItem>& items,
+    bool resolve_identity) {
+  QJsonArray slides_array;
+  for (const auto& slide : slides) {
+    slides_array.push_back(slideObject(slide, resolve_identity));
+  }
+  object.insert(QStringLiteral("slides"), slides_array);
+
+  QJsonArray groups_array;
+  for (const auto& group : groups) {
+    groups_array.push_back(groupObject(group, resolve_identity));
+  }
+  object.insert(QStringLiteral("groups"), groups_array);
+
+  QJsonArray items_array;
+  for (const auto& item : items) {
+    items_array.push_back(itemObject(item, resolve_identity));
+  }
+  object.insert(QStringLiteral("items"), items_array);
+  return merge_preserving_unknown_fields(passthrough, object).toObject();
+}
+
+QJsonObject CarouselDocumentController::documentObject() const {
+  return serializeDocument(documentMetadataObject(), document_passthrough_, slides_, groups_, items_, true);
+}
+
+std::shared_ptr<const CarouselDocumentController::DocumentSnapshot>
+CarouselDocumentController::captureDocumentSnapshot() const {
+  auto snapshot = std::make_shared<DocumentSnapshot>();
+  snapshot->metadata = documentMetadataObject();
+  snapshot->passthrough = document_passthrough_;
+  snapshot->slides = slides_;
+  snapshot->groups = groups_;
+  snapshot->items = items_;
+  snapshot->selected_slide_indices = selected_slide_indices_;
+  // Callers can hold mutable item/slide/group pointers across history capture.
+  // Detach the snapshot roots, leaving those pointers attached to the live document.
+  snapshot->slides.detach();
+  snapshot->groups.detach();
+  snapshot->items.detach();
+  // Resolve fallback provenance now, including failed probes. Delayed serialization
+  // must not observe a source created, removed, or replaced after capture.
+  const auto freeze_media = [](MediaItem& media) {
+    if (media.source_file_size > 0 && media.source_modified_ms > 0 &&
+        media.source_pixel_size.isValid() && !media.source_fingerprint.isEmpty()) return;
+    const auto identity = source_file_identity(media.file_path, media.source_pixel_size);
+    if (media.source_file_size <= 0) media.source_file_size = identity.file_size;
+    if (media.source_modified_ms <= 0) media.source_modified_ms = identity.modified_ms;
+    if (!media.source_pixel_size.isValid()) media.source_pixel_size = identity.pixel_size;
+    if (media.source_fingerprint.isEmpty()) media.source_fingerprint = identity.fingerprint;
+  };
+  for (auto& slide : snapshot->slides) {
+    freeze_media(slide.primary);
+    freeze_media(slide.secondary);
+    freeze_media(slide.tertiary);
+  }
+  for (auto& group : snapshot->groups) freeze_media(group.media);
+  for (auto& item : snapshot->items) {
+    if (item.source_file_size > 0 && item.source_modified_ms > 0 &&
+        !item.source_fingerprint.isEmpty()) continue;
+    const auto identity = source_file_identity(item.file_path,
+        QSize(qRound(item.source_size.width()), qRound(item.source_size.height())));
+    if (item.source_file_size <= 0) item.source_file_size = identity.file_size;
+    if (item.source_modified_ms <= 0) item.source_modified_ms = identity.modified_ms;
+    if (item.source_fingerprint.isEmpty()) item.source_fingerprint = identity.fingerprint;
+  }
+  return snapshot;
+}
+
+QJsonObject CarouselDocumentController::snapshotDocumentObject(const DocumentSnapshot& snapshot) {
+  return serializeDocument(snapshot.metadata, snapshot.passthrough, snapshot.slides,
+                           snapshot.groups, snapshot.items, false);
+}
+
+// These fast paths prove equal serializer inputs; a mismatch still uses the
+// original serialization and unknown-field merge rules. Keep their field coverage
+// synchronized with the writers (carousel_serialized_inputs_contract.py).
+bool CarouselDocumentController::sameSerializedInputs(const MediaItem& left, const MediaItem& right) {
+  return left.source_file_size == right.source_file_size &&
+      left.source_modified_ms == right.source_modified_ms &&
+      left.source_pixel_size == right.source_pixel_size &&
+      left.source_fingerprint == right.source_fingerprint &&
+      left.file_path == right.file_path &&
+      left.type == right.type &&
+      left.display_label == right.display_label &&
+      left.adjustment_patch_json == right.adjustment_patch_json &&
+      left.fit_mode == right.fit_mode &&
+      left.scale == right.scale &&
+      left.offset_x == right.offset_x &&
+      left.offset_y == right.offset_y &&
+      left.focal_x == right.focal_x &&
+      left.focal_y == right.focal_y &&
+      left.manual_crop == right.manual_crop &&
+      left.crop_source == right.crop_source &&
+      left.video_duration_seconds == right.video_duration_seconds &&
+      left.video_trim_in_seconds == right.video_trim_in_seconds &&
+      left.video_trim_out_seconds == right.video_trim_out_seconds &&
+      left.video_poster_seconds == right.video_poster_seconds &&
+      left.video_audio_policy == right.video_audio_policy &&
+      left.video_loop_intent == right.video_loop_intent &&
+      left.cutout_enabled == right.cutout_enabled &&
+      left.cutout_mask_data == right.cutout_mask_data &&
+      left.cutout_mask_width == right.cutout_mask_width &&
+      left.cutout_mask_height == right.cutout_mask_height &&
+      left.cutout_feather == right.cutout_feather &&
+      left.cutout_expand == right.cutout_expand &&
+      left.cutout_edge_contrast == right.cutout_edge_contrast;
+}
+
+bool CarouselDocumentController::sameSerializedInputs(const Slide& left, const Slide& right) {
+  return left.edit_board_id == right.edit_board_id &&
+      left.edit_board_joined_previous == right.edit_board_joined_previous &&
+      left.edit_board_previous_id == right.edit_board_previous_id &&
+      left.template_kind == right.template_kind &&
+      sameSerializedInputs(left.primary, right.primary) &&
+      sameSerializedInputs(left.secondary, right.secondary) &&
+      sameSerializedInputs(left.tertiary, right.tertiary) &&
+      left.linked_group_id == right.linked_group_id &&
+      left.section_id == right.section_id &&
+      left.background_color == right.background_color &&
+      left.background_secondary_color == right.background_secondary_color &&
+      left.background_kind == right.background_kind &&
+      left.brand_theme_kit_id == right.brand_theme_kit_id &&
+      left.brand_theme_variant_id == right.brand_theme_variant_id &&
+      left.board_name == right.board_name &&
+      left.board_role == right.board_role &&
+      left.message_note == right.message_note &&
+      left.media_intent_note == right.media_intent_note &&
+      left.source_reference_note == right.source_reference_note &&
+      left.alt_text == right.alt_text &&
+      left.plain_language_description == right.plain_language_description &&
+      left.accessibility_reading_order == right.accessibility_reading_order &&
+      left.decorative_media_keys == right.decorative_media_keys &&
+      left.layout_columns == right.layout_columns &&
+      left.layout_rows == right.layout_rows &&
+      left.layout_margin_x == right.layout_margin_x &&
+      left.layout_margin_y == right.layout_margin_y &&
+      left.layout_gutter_x == right.layout_gutter_x &&
+      left.layout_gutter_y == right.layout_gutter_y;
+}
+
+bool CarouselDocumentController::sameSerializedInputs(const LinkedGroup& left, const LinkedGroup& right) {
+  return left.id == right.id &&
+      left.kind == right.kind &&
+      left.edit_spread == right.edit_spread &&
+      left.start_index == right.start_index &&
+      left.span == right.span &&
+      sameSerializedInputs(left.media, right.media);
+}
+
+bool CarouselDocumentController::sameSerializedInputs(const CanvasItem& left, const CanvasItem& right) {
+  // QPointF/QRectF/QSizeF equality can be fuzzy. Persisted JSON uses exact
+  // coordinates, including changes smaller than those operators' tolerances.
+  if (left.brush_points.size() != right.brush_points.size()) return false;
+  if (left.brush_points.constData() != right.brush_points.constData()) {
+    for (qsizetype index = 0; index < left.brush_points.size(); ++index) {
+      if (left.brush_points.at(index).x() != right.brush_points.at(index).x() ||
+          left.brush_points.at(index).y() != right.brush_points.at(index).y()) return false;
+    }
+  }
+  return left.source_file_size == right.source_file_size &&
+      left.source_modified_ms == right.source_modified_ms &&
+      left.source_fingerprint == right.source_fingerprint &&
+      left.file_path == right.file_path &&
+      left.source_size.width() == right.source_size.width() &&
+      left.source_size.height() == right.source_size.height() &&
+      left.id == right.id &&
+      left.object_group_id == right.object_group_id &&
+      left.component_link_id == right.component_link_id &&
+      left.component_definition_id == right.component_definition_id &&
+      left.component_instance_id == right.component_instance_id &&
+      left.component_part_id == right.component_part_id &&
+      left.component_definition_version == right.component_definition_version &&
+      left.component_baseline == right.component_baseline &&
+      left.constraint_stack_id == right.constraint_stack_id &&
+      left.constraint_stack_order == right.constraint_stack_order &&
+      left.constraint_stack_axis == right.constraint_stack_axis &&
+      left.constraint_stack_padding == right.constraint_stack_padding &&
+      left.constraint_stack_gap == right.constraint_stack_gap &&
+      left.constraint_stack_anchor_x == right.constraint_stack_anchor_x &&
+      left.constraint_stack_anchor_y == right.constraint_stack_anchor_y &&
+      left.kind == right.kind &&
+      left.external_asset_id == right.external_asset_id &&
+      left.external_asset_file_name == right.external_asset_file_name &&
+      left.external_asset_sha256 == right.external_asset_sha256 &&
+      left.display_label == right.display_label &&
+      left.hidden == right.hidden &&
+      left.locked == right.locked &&
+      left.adjustment_patch_json == right.adjustment_patch_json &&
+      left.text == right.text &&
+      left.text_spans == right.text_spans &&
+      left.brand_color_kit_id == right.brand_color_kit_id &&
+      left.brand_color_token_id == right.brand_color_token_id &&
+      left.brand_typography_kit_id == right.brand_typography_kit_id &&
+      left.brand_typography_token_id == right.brand_typography_token_id &&
+      left.text_role == right.text_role &&
+      left.text_style_id == right.text_style_id &&
+      left.text_color == right.text_color &&
+      left.text_point_size == right.text_point_size &&
+      left.text_fit_mode == right.text_fit_mode &&
+      left.text_fit_min_point_size == right.text_fit_min_point_size &&
+      left.text_fit_max_point_size == right.text_fit_max_point_size &&
+      left.text_font_family == right.text_font_family &&
+      left.original_font_family == right.original_font_family &&
+      left.ignored_preflight_codes == right.ignored_preflight_codes &&
+      left.text_horizontal_alignment == right.text_horizontal_alignment &&
+      left.text_vertical_alignment == right.text_vertical_alignment &&
+      left.text_weight == right.text_weight &&
+      left.text_italic == right.text_italic &&
+      left.text_underline == right.text_underline &&
+      left.text_strikethrough == right.text_strikethrough &&
+      left.text_case == right.text_case &&
+      left.text_letter_spacing == right.text_letter_spacing &&
+      left.text_line_height == right.text_line_height &&
+      left.text_paragraph_spacing == right.text_paragraph_spacing &&
+      left.text_inset == right.text_inset &&
+      left.text_maximum_line_count == right.text_maximum_line_count &&
+      left.text_list_style == right.text_list_style &&
+      left.text_hanging_indent == right.text_hanging_indent &&
+      left.text_auto_number_source == right.text_auto_number_source &&
+      left.text_stroke_color == right.text_stroke_color &&
+      left.text_stroke_width == right.text_stroke_width &&
+      left.text_background_color == right.text_background_color &&
+      left.text_background_opacity == right.text_background_opacity &&
+      left.text_padding == right.text_padding &&
+      left.text_background_radius == right.text_background_radius &&
+      left.shape_kind == right.shape_kind &&
+      left.brush_source_size.width() == right.brush_source_size.width() &&
+      left.brush_source_size.height() == right.brush_source_size.height() &&
+      left.brush_color == right.brush_color &&
+      left.brush_width == right.brush_width &&
+      left.brush_style == right.brush_style &&
+      left.brush_eraser == right.brush_eraser &&
+      left.fill_color == right.fill_color &&
+      left.fill_secondary_color == right.fill_secondary_color &&
+      left.fill_kind == right.fill_kind &&
+      left.stroke_color == right.stroke_color &&
+      left.stroke_width == right.stroke_width &&
+      left.corner_radius == right.corner_radius &&
+      left.opacity == right.opacity &&
+      left.blend_mode == right.blend_mode &&
+      left.flipped_horizontal == right.flipped_horizontal &&
+      left.flipped_vertical == right.flipped_vertical &&
+      left.frame_color == right.frame_color &&
+      left.frame_width == right.frame_width &&
+      left.shadow_color == right.shadow_color &&
+      left.shadow_opacity == right.shadow_opacity &&
+      left.shadow_offset_x == right.shadow_offset_x &&
+      left.shadow_offset_y == right.shadow_offset_y &&
+      left.media_scale == right.media_scale &&
+      left.media_offset_x == right.media_offset_x &&
+      left.media_offset_y == right.media_offset_y &&
+      left.media_focal_x == right.media_focal_x &&
+      left.media_focal_y == right.media_focal_y &&
+      left.media_manual_crop == right.media_manual_crop &&
+      left.media_crop_source == right.media_crop_source &&
+      left.video_duration_seconds == right.video_duration_seconds &&
+      left.video_trim_in_seconds == right.video_trim_in_seconds &&
+      left.video_trim_out_seconds == right.video_trim_out_seconds &&
+      left.video_poster_seconds == right.video_poster_seconds &&
+      left.video_audio_policy == right.video_audio_policy &&
+      left.video_loop_intent == right.video_loop_intent &&
+      left.media_mask_shape == right.media_mask_shape &&
+      left.bounds.x() == right.bounds.x() &&
+      left.bounds.y() == right.bounds.y() &&
+      left.bounds.width() == right.bounds.width() &&
+      left.bounds.height() == right.bounds.height() &&
+      left.rotation_degrees == right.rotation_degrees &&
+      left.fit_mode == right.fit_mode &&
+      left.cutout_enabled == right.cutout_enabled &&
+      left.cutout_mask_data == right.cutout_mask_data &&
+      left.cutout_mask_width == right.cutout_mask_width &&
+      left.cutout_mask_height == right.cutout_mask_height &&
+      left.cutout_feather == right.cutout_feather &&
+      left.cutout_expand == right.cutout_expand &&
+      left.cutout_edge_contrast == right.cutout_edge_contrast;
+}
+
+bool CarouselDocumentController::documentSnapshotsEqual(
+    const DocumentSnapshot& left, const DocumentSnapshot& right,
+    bool persistent, const QJsonObject* serialized_left) {
+  const auto strip_selection = [persistent](QJsonObject object) {
+    if (persistent) {
+      object.remove(QStringLiteral("currentIndex"));
+      object.remove(QStringLiteral("activeSlot"));
+      object.remove(QStringLiteral("selectedItemId"));
+      object.remove(QStringLiteral("selectedItemIds"));
+    }
+    return object;
+  };
+  if (left.passthrough != right.passthrough) {
+    // Loading/undo can replace passthrough values. Preserve the exact original
+    // merge semantics, reusing the already-serialized saved baseline when present.
+    const auto baseline = serialized_left ? *serialized_left : strip_selection(snapshotDocumentObject(left));
+    return baseline == strip_selection(snapshotDocumentObject(right));
+  }
+  const auto left_metadata = strip_selection(left.metadata);
+  const auto right_metadata = strip_selection(right.metadata);
+  if (left_metadata != right_metadata) {
+    auto baseline_metadata = left.passthrough;
+    baseline_metadata.remove(QStringLiteral("slides"));
+    baseline_metadata.remove(QStringLiteral("groups"));
+    baseline_metadata.remove(QStringLiteral("items"));
+    if (merge_preserving_unknown_fields(baseline_metadata, left_metadata) !=
+        merge_preserving_unknown_fields(baseline_metadata, right_metadata)) return false;
+  }
+  const auto same_records = [&left](const auto& before, const auto& after,
+                                    const QString& key, const auto& serialize) {
+    if (before.size() != after.size()) return false;
+    QJsonArray baseline_array;
+    QHash<QString, QJsonValue> baseline_by_id;
+    bool baseline_indexed = false;
+    const auto merged_record = [&](const QJsonObject& object, qsizetype index) {
+      if (!baseline_indexed) {
+        baseline_array = left.passthrough.value(key).toArray();
+        for (const auto& value : baseline_array) {
+          if (!value.isObject()) continue;
+          const auto id = stable_json_id(value.toObject());
+          if (!id.isEmpty()) baseline_by_id.insert(id, value);
+        }
+        baseline_indexed = true;
+      }
+      auto baseline = index < baseline_array.size() ? baseline_array.at(index) : QJsonValue{};
+      const auto id = stable_json_id(object);
+      if (!id.isEmpty() && baseline_by_id.contains(id)) baseline = baseline_by_id.value(id);
+      return merge_preserving_unknown_fields(baseline, object);
+    };
+    for (qsizetype index = 0; index < before.size(); ++index) {
+      if (sameSerializedInputs(before.at(index), after.at(index))) continue;
+      const auto old_record = serialize(before.at(index));
+      const auto new_record = serialize(after.at(index));
+      if (old_record != new_record &&
+          merged_record(old_record, index) != merged_record(new_record, index)) return false;
+    }
+    return true;
+  };
+  return same_records(left.slides, right.slides, QStringLiteral("slides"),
+                      [](const Slide& value) { return slideObject(value, false); }) &&
+      same_records(left.groups, right.groups, QStringLiteral("groups"),
+                   [](const LinkedGroup& value) { return groupObject(value, false); }) &&
+      same_records(left.items, right.items, QStringLiteral("items"),
+                   [](const CanvasItem& value) { return itemObject(value, false); });
 }
 
 QJsonObject CarouselDocumentController::persistentDocumentObject() const {
@@ -21271,6 +22963,7 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
   QVector<LinkedGroup> next_groups;
   QVector<BoardSection> next_sections;
   QVector<RepeatedElementLink> next_repeated_links;
+  QVector<PhotoTextLink> next_photo_text_links;
   QVector<CanvasItem> next_items;
   QVector<QJsonObject> next_saved_versions;
 
@@ -21319,6 +23012,26 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
         !loaded_repeated_link_ids.contains(link.id)) {
       loaded_repeated_link_ids.insert(link.id);
       next_repeated_links.push_back(link);
+    }
+  }
+
+  const auto photo_text_links_array = object.value(QStringLiteral("linkedPhotoTextGroups")).toArray();
+  next_photo_text_links.reserve(photo_text_links_array.size());
+  QSet<QString> loaded_photo_text_link_ids;
+  for (const auto& value : photo_text_links_array) {
+    const auto stored = value.toObject();
+    PhotoTextLink link;
+    link.id = stored.value(QStringLiteral("id")).toString().trimmed();
+    link.name = normalized_board_name(stored.value(QStringLiteral("name")).toString());
+    link.layer_id = stored.value(QStringLiteral("layerId")).toString().trimmed();
+    for (const auto& board_value : stored.value(QStringLiteral("boardIds")).toArray()) {
+      const auto board_id = board_value.toString().trimmed();
+      if (!board_id.isEmpty() && !link.board_ids.contains(board_id)) link.board_ids.push_back(board_id);
+    }
+    if (!link.id.isEmpty() && !link.name.isEmpty() && !link.layer_id.isEmpty() &&
+        link.board_ids.size() >= 2 && !loaded_photo_text_link_ids.contains(link.id)) {
+      loaded_photo_text_link_ids.insert(link.id);
+      next_photo_text_links.push_back(std::move(link));
     }
   }
 
@@ -21373,6 +23086,7 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
   groups_ = next_groups;
   board_sections_ = next_sections;
   repeated_element_links_ = next_repeated_links;
+  photo_text_links_ = next_photo_text_links;
   for (auto& slide : slides_) {
     const auto* stored = brandKitById(slide.brand_theme_kit_id);
     const auto themed = stored != nullptr
@@ -21399,6 +23113,7 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
   variant_comparison_state_.clear();
   normalizeBoardSections();
   normalizeRepeatedElementLinks();
+  normalizePhotoTextLinks();
   normalizeConstraintStacks();
   layout_settings_ = normalized_layout_settings(
       object.value(QStringLiteral("layoutSettings")).toObject().toVariantMap());
@@ -21480,8 +23195,8 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
        loaded_format == QStringLiteral("9x16") || loaded_format == QStringLiteral("custom"))
           ? loaded_format
           : QStringLiteral("4x5");
-  custom_pixel_width_ = qBound(64, object.value(QStringLiteral("customPixelWidth")).toInt(1080), 16384);
-  custom_pixel_height_ = qBound(64, object.value(QStringLiteral("customPixelHeight")).toInt(1350), 16384);
+  custom_pixel_width_ = qBound(1, object.value(QStringLiteral("customPixelWidth")).toInt(1080), 16384);
+  custom_pixel_height_ = qBound(1, object.value(QStringLiteral("customPixelHeight")).toInt(1350), 16384);
   export_color_space_ = normalized_output_color_space_name(
       object.value(QStringLiteral("exportColorSpace")).toString(QStringLiteral("sRGB")));
   export_filename_pattern_ = normalized_export_filename_pattern(
@@ -21587,6 +23302,7 @@ bool CarouselDocumentController::loadDocumentObject(QJsonObject object) {
   ensureCurrentIndexValid();
   normalizeForCurrentTemplate();
   setSelectedItemIds(next_selected_ids, primary_selected_id);
+  ++autosave_revision_;
   document_passthrough_ = object;
   emit textStylesChanged();
   emit documentVariablesChanged();
@@ -21673,6 +23389,26 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
   }
 
   map.insert(QStringLiteral("index"), index);
+  map.insert(QStringLiteral("boardId"), slide != nullptr ? slide->edit_board_id : QString{});
+  const auto* image_media = group != nullptr ? &group->media : slide != nullptr ? &slide->primary : nullptr;
+  map.insert(QStringLiteral("imageFitMode"), image_media != nullptr ? fitModeName(image_media->fit_mode) : QStringLiteral("cover"));
+  map.insert(QStringLiteral("imageScale"), image_media != nullptr ? image_media->scale : 1.0);
+  map.insert(QStringLiteral("imageManualCrop"), image_media != nullptr && image_media->manual_crop);
+  map.insert(QStringLiteral("imageOffsetX"), image_media != nullptr ? image_media->offset_x : 0.0);
+  map.insert(QStringLiteral("imageOffsetY"), image_media != nullptr ? image_media->offset_y : 0.0);
+  map.insert(QStringLiteral("imageFocalX"), image_media != nullptr ? image_media->focal_x : 0.5);
+  map.insert(QStringLiteral("imageFocalY"), image_media != nullptr ? image_media->focal_y : 0.5);
+  map.insert(QStringLiteral("imageId"), group != nullptr ? group->id : slide != nullptr ? slide->edit_board_id : QString{});
+  map.insert(QStringLiteral("imageSpanStart"), group != nullptr ? group->start_index : index);
+  map.insert(QStringLiteral("imageSpanCount"), group != nullptr ? group->span : 1);
+  const auto move_range = editBoardMoveRange(index);
+  map.insert(QStringLiteral("moveSpanStart"), move_range.first);
+  map.insert(QStringLiteral("moveSpanCount"), move_range.second);
+  map.insert(QStringLiteral("boardPixelWidth"), exportPixelSize().width());
+  map.insert(QStringLiteral("boardPixelHeight"), exportPixelSize().height());
+  map.insert(QStringLiteral("joinedPrevious"), group != nullptr ? index > group->start_index :
+      slide != nullptr && index > 0 && slide->edit_board_joined_previous &&
+      (slide->edit_board_previous_id.isEmpty() || slide->edit_board_previous_id == slides_.at(index - 1).edit_board_id));
   map.insert(QStringLiteral("slideNumber"), index + 1);
   map.insert(QStringLiteral("selected"), selected);
   map.insert(QStringLiteral("active"), index == current_index_);
@@ -21721,6 +23457,12 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
 
 QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
   QVariantMap map;
+  const auto resolved_text = item.kind == ItemKind::Text
+                                 ? resolvedTextForItem(item)
+                                 : QString{};
+  const auto text_layout = item.kind == ItemKind::Text
+                               ? textLayoutPresentation(item, resolved_text)
+                               : QVariantMap{};
   map.insert(QStringLiteral("itemId"), item.id);
   map.insert(QStringLiteral("objectGroupId"), item.object_group_id);
   map.insert(QStringLiteral("componentLinkId"), item.component_link_id);
@@ -21769,8 +23511,7 @@ QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
   map.insert(QStringLiteral("brandColorTokenId"), item.brand_color_token_id);
   map.insert(QStringLiteral("brandTypographyKitId"), item.brand_typography_kit_id);
   map.insert(QStringLiteral("brandTypographyTokenId"), item.brand_typography_token_id);
-  map.insert(QStringLiteral("resolvedText"),
-             item.kind == ItemKind::Text ? resolvedTextForItem(item) : QString{});
+  map.insert(QStringLiteral("resolvedText"), resolved_text);
   map.insert(QStringLiteral("textRole"), item.text_role);
   map.insert(QStringLiteral("textStyleId"), item.text_style_id);
   map.insert(QStringLiteral("textColor"), item.text_color);
@@ -21793,8 +23534,10 @@ QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
   map.insert(QStringLiteral("textListStyle"), item.text_list_style);
   map.insert(QStringLiteral("textHangingIndent"), item.text_hanging_indent);
   map.insert(QStringLiteral("textAutoNumberSource"), item.text_auto_number_source);
-  map.insert(QStringLiteral("textLayoutLines"), textLayoutLines(item));
-  map.insert(QStringLiteral("textVerticalOverflow"), textVerticallyOverflows(item));
+  map.insert(QStringLiteral("textLayoutLines"),
+              text_layout.value(QStringLiteral("lines")).toList());
+  map.insert(QStringLiteral("textVerticalOverflow"),
+              text_layout.value(QStringLiteral("verticalOverflow")).toBool());
   map.insert(QStringLiteral("textStrokeColor"), item.text_stroke_color);
   map.insert(QStringLiteral("textStrokeWidth"), item.text_stroke_width);
   map.insert(QStringLiteral("textBackgroundColor"), item.text_background_color);
@@ -22270,7 +24013,7 @@ QString CarouselDocumentController::templateNameForIndex(int index) const {
   return QStringLiteral("single");
 }
 
-QString CarouselDocumentController::fitModeName(FitMode fit_mode) const {
+QString CarouselDocumentController::fitModeName(FitMode fit_mode) {
   return fit_mode == FitMode::Contain ? QStringLiteral("contain") : QStringLiteral("cover");
 }
 
@@ -22278,7 +24021,7 @@ CarouselDocumentController::FitMode CarouselDocumentController::fitModeFromName(
   return fit_mode == QStringLiteral("contain") ? FitMode::Contain : FitMode::Cover;
 }
 
-QString CarouselDocumentController::groupKindName(GroupKind kind) const {
+QString CarouselDocumentController::groupKindName(GroupKind kind) {
   switch (kind) {
     case GroupKind::HorizontalPair:
       return QStringLiteral("linked-horizontal-pair");
@@ -22478,9 +24221,10 @@ QString CarouselDocumentController::textFitState(const CanvasItem& item) const {
   return QStringLiteral("Frame follows the content at %1 pt.").arg(point_size);
 }
 
-QVariantList CarouselDocumentController::textLayoutLines(const CanvasItem& item) const {
+QVariantMap CarouselDocumentController::textLayoutPresentation(
+    const CanvasItem& item,
+    const QString& resolved_text) const {
   auto resolved_item = item;
-  const auto resolved_text = resolvedTextForItem(item);
   resolved_item.text_spans = remap_rich_text_spans(item.text, resolved_text, item.text_spans);
   resolved_item.text = resolved_text;
   const auto layout = layout_carousel_text(resolved_item, resolved_item.bounds.width());
@@ -22524,10 +24268,21 @@ QVariantList CarouselDocumentController::textLayoutLines(const CanvasItem& item)
         {QStringLiteral("segments"), segments},
     });
   }
-  return lines;
+  return {{QStringLiteral("lines"), lines},
+          {QStringLiteral("verticalOverflow"),
+           layout.maximum_line_overflow ||
+               layout.full_height > item.bounds.height() + 1.0}};
 }
 
-bool CarouselDocumentController::textVerticallyOverflows(const CanvasItem& item) const {
+QVariantList CarouselDocumentController::textLayoutLines(
+    const CanvasItem& item) const {
+  return textLayoutPresentation(item, resolvedTextForItem(item))
+      .value(QStringLiteral("lines"))
+      .toList();
+}
+
+bool CarouselDocumentController::textVerticallyOverflows(
+    const CanvasItem& item) const {
   auto resolved_item = item;
   const auto resolved_text = resolvedTextForItem(item);
   resolved_item.text_spans = remap_rich_text_spans(item.text, resolved_text, item.text_spans);
@@ -22556,7 +24311,7 @@ QSize CarouselDocumentController::probeVideoSize(const QString& file_path) const
           QStringLiteral("csv=p=0:s=x"),
           file_path,
       });
-  if (!bounded_process_succeeded(&process, 3000)) {
+  if (!waitForExportProcess(&process, 3000)) {
     return {};
   }
 
@@ -22579,7 +24334,7 @@ double CarouselDocumentController::probeVideoDuration(const QString& file_path) 
        QStringLiteral("-show_entries"), QStringLiteral("format=duration"),
        QStringLiteral("-of"), QStringLiteral("default=noprint_wrappers=1:nokey=1"),
        file_path});
-  if (!bounded_process_succeeded(&process, 3000)) {
+  if (!waitForExportProcess(&process, 3000)) {
     return 0.0;
   }
   bool ok = false;
@@ -22691,11 +24446,7 @@ bool CarouselDocumentController::exportVideoSlide(
             << QStringLiteral("-pix_fmt") << QStringLiteral("yuv420p") << output_path;
   QProcess process;
   process.start(ffmpeg, arguments);
-  if (!process.waitForStarted(5000)) {
-    QFile::remove(overlay_path);
-    return false;
-  }
-  const bool succeeded = bounded_process_succeeded(&process, 120000);
+  const bool succeeded = waitForExportProcess(&process, -1);
   if (!overlay_path.isEmpty()) {
     QFile::remove(overlay_path);
   }
@@ -22734,7 +24485,7 @@ QImage CarouselDocumentController::renderSlideBaseImage(int index, const QSize& 
     const QPoint origin((index - group->start_index) * size.width(), 0);
     renderMediaIntoRect(&painter, QRect(QPoint(0, 0), size), group->media, virtual_size, origin, preview);
 
-    if (preview) {
+    if (preview && !group->edit_spread) {
       QPen guide_pen(QColor(QStringLiteral("#f0b35d")));
       guide_pen.setStyle(Qt::DashLine);
       guide_pen.setWidth(2);
@@ -22786,6 +24537,7 @@ QImage CarouselDocumentController::renderSlideBaseImage(int index, const QSize& 
 }
 
 QImage CarouselDocumentController::renderSlideImage(int index, const QSize& size, bool preview) const {
+  if (exportCancellationRequested()) return {};
   auto canvas = renderSlideBaseImage(index, size, preview);
   QPainter painter(&canvas);
   painter.setRenderHint(QPainter::Antialiasing, true);
@@ -22793,6 +24545,7 @@ QImage CarouselDocumentController::renderSlideImage(int index, const QSize& size
   painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
   for (const auto& item : items_) {
+    if (exportCancellationRequested()) return {};
     if (item.kind != ItemKind::Brush) {
       renderItemIntoSlide(&painter, item, index, size, preview);
     }
@@ -22803,6 +24556,7 @@ QImage CarouselDocumentController::renderSlideImage(int index, const QSize& size
   QPainter brush_painter(&brush_overlay);
   brush_painter.setRenderHint(QPainter::Antialiasing, true);
   for (const auto& item : items_) {
+    if (exportCancellationRequested()) return {};
     if (item.kind == ItemKind::Brush) {
       renderBrushItem(&brush_painter, item, index, size);
     }
@@ -22814,6 +24568,7 @@ QImage CarouselDocumentController::renderSlideImage(int index, const QSize& size
 }
 
 QImage CarouselDocumentController::renderSlideOverlayImage(int index, const QSize& size) const {
+  if (exportCancellationRequested()) return {};
   QImage overlay(size, QImage::Format_ARGB32_Premultiplied);
   overlay.fill(Qt::transparent);
   QPainter painter(&overlay);
@@ -22821,11 +24576,13 @@ QImage CarouselDocumentController::renderSlideOverlayImage(int index, const QSiz
   painter.setRenderHint(QPainter::TextAntialiasing, true);
   painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
   for (const auto& item : items_) {
+    if (exportCancellationRequested()) return {};
     if (item.kind != ItemKind::Brush) {
       renderItemIntoSlide(&painter, item, index, size, false);
     }
   }
   for (const auto& item : items_) {
+    if (exportCancellationRequested()) return {};
     if (item.kind == ItemKind::Brush) {
       renderBrushItem(&painter, item, index, size);
     }
@@ -23762,6 +25519,190 @@ void CarouselDocumentController::normalizeRepeatedElementLinks() {
   }
 }
 
+bool CarouselDocumentController::editBoardHasUnlockedPhotoTextLayer(
+    const Slide& slide, const QString& layer_id) const {
+  const auto normalized_layer_id = layer_id.trimmed();
+  if (normalized_layer_id.isEmpty() || slide.edit_board_id.trimmed().isEmpty() ||
+      slide.primary.type != MediaType::Image || slide.primary.adjustment_patch_json.isEmpty()) {
+    return false;
+  }
+  const auto decoded = parse_adjustment_patch_json(slide.primary.adjustment_patch_json);
+  if (!decoded.ok() || decoded.scope != AdjustmentPatchScope::AssetBound) return false;
+  for (const auto& value : decoded.state->layers) {
+    const auto layer = value.toMap();
+    if (layer.value(QStringLiteral("id")).toString().trimmed() == normalized_layer_id &&
+        layer.value(QStringLiteral("kind")).toString() == QStringLiteral("text")) {
+      return !layer.value(QStringLiteral("locked")).toBool();
+    }
+  }
+  return false;
+}
+
+int CarouselDocumentController::editBoardIndexForId(const QString& board_id) const {
+  const auto normalized_board_id = board_id.trimmed();
+  if (normalized_board_id.isEmpty()) return -1;
+  for (int index = 0; index < slides_.size(); ++index) {
+    if (slides_.at(index).edit_board_id == normalized_board_id) return index;
+  }
+  return -1;
+}
+
+void CarouselDocumentController::normalizePhotoTextLinks() {
+  QSet<QString> known_ids;
+  for (qsizetype index = photo_text_links_.size(); index > 0; --index) {
+    auto& link = photo_text_links_[index - 1];
+    link.id = link.id.trimmed();
+    link.name = normalized_board_name(link.name);
+    link.layer_id = link.layer_id.trimmed();
+    if (link.id.isEmpty() || link.name.isEmpty() || link.layer_id.isEmpty() ||
+        known_ids.contains(link.id)) {
+      photo_text_links_.removeAt(index - 1);
+      continue;
+    }
+    known_ids.insert(link.id);
+    QStringList valid_board_ids;
+    for (const auto& board_id : link.board_ids) {
+      const auto board_index = editBoardIndexForId(board_id);
+      if (board_index < 0 || groupForIndex(board_index) != nullptr ||
+          slides_.at(board_index).primary.type != MediaType::Image) {
+        continue;
+      }
+      const auto decoded = parse_adjustment_patch_json(
+          slides_.at(board_index).primary.adjustment_patch_json);
+      if (!decoded.ok() || decoded.scope != AdjustmentPatchScope::AssetBound) continue;
+      const auto has_text_layer = std::any_of(
+          decoded.state->layers.cbegin(), decoded.state->layers.cend(),
+          [&link](const QVariant& value) {
+            const auto layer = value.toMap();
+            return layer.value(QStringLiteral("id")).toString().trimmed() == link.layer_id &&
+                layer.value(QStringLiteral("kind")).toString() == QStringLiteral("text");
+          });
+      if (has_text_layer && !valid_board_ids.contains(board_id)) valid_board_ids.push_back(board_id);
+    }
+    link.board_ids = valid_board_ids;
+    if (link.board_ids.size() < 2) photo_text_links_.removeAt(index - 1);
+  }
+}
+
+bool CarouselDocumentController::prepareLinkedPhotoTextSync(
+    const QString& source_board_id,
+    const QString& before_adjustment_patch,
+    const QString& after_adjustment_patch,
+    QVector<QPair<int, QString>>* peer_patches,
+    QString* error) const {
+  if (peer_patches == nullptr) return false;
+  peer_patches->clear();
+  if (error != nullptr) error->clear();
+  const auto before = parse_adjustment_patch_json(before_adjustment_patch);
+  const auto after = parse_adjustment_patch_json(after_adjustment_patch);
+  if (!before.ok() || !after.ok() ||
+      before.scope != AdjustmentPatchScope::AssetBound ||
+      after.scope != AdjustmentPatchScope::AssetBound) {
+    if (error != nullptr) *error = QStringLiteral("The linked photo text recipe is invalid.");
+    return false;
+  }
+
+  QHash<QString, QVariantMap> before_text_layers;
+  for (const auto& value : before.state->layers) {
+    const auto layer = value.toMap();
+    const auto layer_id = layer.value(QStringLiteral("id")).toString().trimmed();
+    if (!layer_id.isEmpty() && layer.value(QStringLiteral("kind")).toString() == QStringLiteral("text") &&
+        !layer.value(QStringLiteral("locked")).toBool()) {
+      before_text_layers.insert(layer_id, layer);
+    }
+  }
+  QHash<QString, QString> changed_text;
+  for (const auto& value : after.state->layers) {
+    const auto layer = value.toMap();
+    const auto layer_id = layer.value(QStringLiteral("id")).toString().trimmed();
+    if (layer_id.isEmpty() || layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text") ||
+        layer.value(QStringLiteral("locked")).toBool() || !before_text_layers.contains(layer_id)) {
+      continue;
+    }
+    const auto next_text = layer.value(QStringLiteral("text")).toString();
+    if (before_text_layers.value(layer_id).value(QStringLiteral("text")).toString() != next_text) {
+      changed_text.insert(layer_id, next_text);
+    }
+  }
+  if (changed_text.isEmpty()) return true;
+
+  QHash<int, EditRecipeState> peer_states;
+  QHash<int, QStringList> peer_groups;
+  QHash<int, bool> peer_changed;
+  for (const auto& link : photo_text_links_) {
+    if (!link.board_ids.contains(source_board_id) || !changed_text.contains(link.layer_id)) continue;
+    const auto next_text = changed_text.value(link.layer_id);
+    for (const auto& board_id : link.board_ids) {
+      if (board_id == source_board_id) continue;
+      const auto board_index = editBoardIndexForId(board_id);
+      const auto board_number = board_index >= 0 ? board_index + 1 : 0;
+      if (board_index < 0 || groupForIndex(board_index) != nullptr ||
+          slides_.at(board_index).primary.type != MediaType::Image) {
+        if (error != nullptr) *error = QStringLiteral("Shared text could not reach linked board %1.").arg(board_number);
+        return false;
+      }
+      if (!peer_states.contains(board_index)) {
+        const auto decoded = parse_adjustment_patch_json(
+            slides_.at(board_index).primary.adjustment_patch_json);
+        if (!decoded.ok() || decoded.scope != AdjustmentPatchScope::AssetBound) {
+          if (error != nullptr) *error = QStringLiteral("The photo recipe on linked board %1 is invalid.").arg(board_number);
+          return false;
+        }
+        peer_states.insert(board_index, *decoded.state);
+        peer_groups.insert(board_index, decoded.groups);
+        peer_changed.insert(board_index, false);
+      }
+      auto state = peer_states.value(board_index);
+      bool found_layer = false;
+      for (qsizetype layer_index = 0; layer_index < state.layers.size(); ++layer_index) {
+        auto layer = state.layers.at(layer_index).toMap();
+        if (layer.value(QStringLiteral("id")).toString().trimmed() != link.layer_id ||
+            layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text")) {
+          continue;
+        }
+        found_layer = true;
+        if (layer.value(QStringLiteral("text")).toString() == next_text) break;
+        if (layer.value(QStringLiteral("locked")).toBool()) {
+          if (error != nullptr) *error = QStringLiteral("Unlock the matching text on board %1 before updating shared text.").arg(board_number);
+          return false;
+        }
+        layer.insert(QStringLiteral("text"), next_text);
+        if (layer.contains(QStringLiteral("textTypography")) &&
+            !photo_editor::desktop::fit_photo_point_text(&layer)) {
+          if (error != nullptr) *error = QStringLiteral("Shared text could not fit the style on board %1.").arg(board_number);
+          return false;
+        }
+        state.layers[layer_index] = layer;
+        peer_states.insert(board_index, state);
+        peer_changed[board_index] = true;
+        break;
+      }
+      if (!found_layer) {
+        if (error != nullptr) *error = QStringLiteral("The matching text layer is missing from board %1.").arg(board_number);
+        return false;
+      }
+    }
+  }
+
+  auto board_indexes = peer_states.keys();
+  std::sort(board_indexes.begin(), board_indexes.end());
+  for (const auto board_index : board_indexes) {
+    if (!peer_changed.value(board_index)) continue;
+    const auto patch = serialize_adjustment_patch_json(
+        peer_states.value(board_index), peer_groups.value(board_index),
+        AdjustmentPatchScope::AssetBound);
+    const auto validated = parse_adjustment_patch_json(patch);
+    if (patch.isEmpty() || !validated.ok() ||
+        validated.scope != AdjustmentPatchScope::AssetBound) {
+      if (error != nullptr) *error = QStringLiteral("The updated text recipe for board %1 could not be saved.").arg(board_index + 1);
+      peer_patches->clear();
+      return false;
+    }
+    peer_patches->push_back(qMakePair(board_index, patch));
+  }
+  return true;
+}
+
 void CarouselDocumentController::captureRepeatedElementSyncSources() {
   pending_repeated_element_sync_source_ids_.clear();
   for (const auto& item_id : selected_item_ids_) {
@@ -23908,7 +25849,7 @@ void CarouselDocumentController::pushUndoState(const QString& label, bool coales
   }
   history_coalesce_timer_->stop();
   history_coalesce_label_.clear();
-  appendUndoEntry({documentObject(), normalized_label});
+  appendUndoEntry({captureDocumentSnapshot(), normalized_label});
   if (coalesce) {
     history_coalesce_label_ = normalized_label;
     history_coalesce_timer_->start();
@@ -23929,16 +25870,22 @@ void CarouselDocumentController::restoreHistoryEntry(
     const QString& status_prefix) {
   restoring_history_ = true;
   preview_debounce_timer_->stop();
-  const bool restored = loadDocumentObject(entry.document);
+  const bool restored = loadDocumentObject(snapshotDocumentObject(*entry.document));
   if (restored) {
-    const bool structural_change = entry.label.contains(QStringLiteral("canvas"), Qt::CaseInsensitive) ||
-                                   entry.label == QStringLiteral("Change layout") ||
-                                   entry.label == QStringLiteral("Collapse spread");
-    if (structural_change) {
-      refreshPreviews();
-    } else {
-      refreshCurrentSelectionPreviews();
+    selected_slide_indices_.clear();
+    for (const auto index : entry.document->selected_slide_indices) {
+      if (index >= 0 && index < slides_.size() &&
+          !selected_slide_indices_.contains(index)) {
+        selected_slide_indices_.push_back(index);
+      }
     }
+    if (selected_slide_indices_.isEmpty()) {
+      selected_slide_indices_.push_back(current_index_);
+    }
+    std::sort(selected_slide_indices_.begin(), selected_slide_indices_.end());
+    // Loading the persisted snapshot clears every derived preview URL, including
+    // boards outside the selection. Rebuild them through the coalesced worker.
+    refreshPreviews();
     emit documentFormatChanged();
     emitCanvasStateChanged(true);
     setStatus(QStringLiteral("%1 %2.").arg(status_prefix, entry.label.toLower()));
@@ -23960,6 +25907,8 @@ void CarouselDocumentController::clearHistory() {
 }
 
 void CarouselDocumentController::emitItemGeometryChanged(bool slides_changed) {
+  ++autosave_revision_;
+  invalidatePreviewRefresh(false);
   synchronizePendingRepeatedElements();
   emit itemsChanged();
   emit selectionChanged();
@@ -23976,7 +25925,145 @@ void CarouselDocumentController::ensureCurrentIndexValid() {
   normalizeForCurrentTemplate();
 }
 
+void CarouselDocumentController::invalidatePreviewRefresh(bool reset_document) {
+  ++preview_request_revision_;
+  if (preview_task_state_) preview_task_state_->cancelled.store(true, std::memory_order_relaxed);
+  if (reset_document) {
+    pending_preview_boards_.clear();
+    pending_preview_items_.clear();
+    preview_file_owners_.clear();
+    if (preview_debounce_timer_) preview_debounce_timer_->stop();
+  }
+}
+
+void CarouselDocumentController::queuePreviewRefresh(
+    const QVector<int>& boards, const QSet<QString>& items) {
+  for (const auto board : boards) {
+    if (board >= 0 && board < slides_.size()) pending_preview_boards_.insert(board);
+  }
+  pending_preview_items_.unite(items);
+  invalidatePreviewRefresh(false);
+  preview_debounce_timer_->stop();
+  // Capture after the caller has finished its mutation and signal emission.
+  QTimer::singleShot(0, this, &CarouselDocumentController::startPendingPreviewRefresh);
+}
+
+void CarouselDocumentController::startPendingPreviewRefresh() {
+  if (preview_worker_active_ || preview_debounce_timer_->isActive() ||
+      (pending_preview_boards_.isEmpty() && pending_preview_items_.isEmpty())) return;
+  auto boards = pending_preview_boards_.values();
+  std::sort(boards.begin(), boards.end());
+  // Current board first; the remaining dirty boards follow in stable order.
+  if (boards.removeOne(current_index_)) boards.prepend(current_index_);
+  const auto item_ids = pending_preview_items_;
+  const auto revision = preview_request_revision_;
+  const auto snapshot = captureExportSnapshot();
+  const auto retained_files = preview_file_owners_;
+  const auto cache_root = previewsRoot();
+  preview_task_state_ = std::make_shared<ExportTaskState>();
+  const auto state = preview_task_state_;
+  preview_worker_active_ = true;
+  preview_watcher_->setFuture(QtConcurrent::run(&previewThreadPool(),
+      [snapshot, retained_files, boards, item_ids, revision, state, cache_root] {
+    Q_UNUSED(retained_files);
+    PreviewResult result;
+    result.revision = revision;
+    if (state->cancelled.load(std::memory_order_relaxed)) return result;
+    QDir().mkpath(cache_root);
+    QTemporaryDir directory(QDir(cache_root).filePath(QStringLiteral("render-XXXXXX")));
+    if (!directory.isValid()) {
+      result.diagnostics.insert(QStringLiteral("error"), QStringLiteral("Preview cache directory could not be created."));
+      return result;
+    }
+    result.files = std::make_shared<PreviewFiles>();
+    result.files->directory = directory.path();
+    directory.setAutoRemove(false);
+    CarouselDocumentController renderer(*snapshot);
+    renderer.preview_output_directory_ = result.files->directory;
+    renderer.preview_revision_ = 1; // The directory gives each publication a unique URL.
+    renderer.preview_request_revision_ = revision;
+    renderer.export_task_state_ = state;
+    renderer.beginPreviewDiagnostics(QStringLiteral("async-dirty-content"), boards);
+    for (auto& item : renderer.items_) {
+      if (!item_ids.contains(item.id)) continue;
+      if (state->cancelled.load(std::memory_order_relaxed)) return result;
+      renderer.refreshItemPreview(&item);
+      result.items.insert(item.id, {item.preview_source, item.preview_source_size});
+    }
+    for (const auto board : boards) {
+      if (state->cancelled.load(std::memory_order_relaxed)) return result;
+      if (board < 0 || board >= renderer.slides_.size()) continue;
+      renderer.slides_[board].preview_source.clear();
+      renderer.refreshPreviewAt(board);
+      result.boards.insert(board, renderer.slides_.at(board).preview_source);
+    }
+    renderer.finishPreviewDiagnostics();
+    result.diagnostics = renderer.preview_diagnostics_;
+    return result;
+  }));
+}
+
+void CarouselDocumentController::finishPreviewRefresh() {
+  auto result = preview_watcher_->future().takeResult();
+  preview_worker_active_ = false;
+  preview_task_state_.reset();
+  if (result.revision != preview_request_revision_) {
+    ++stale_preview_requests_dropped_;
+    startPendingPreviewRefresh();
+    return;
+  }
+  pending_preview_boards_.clear();
+  pending_preview_items_.clear();
+  QSet<QString> live_keys;
+  for (int index = 0; index < slides_.size(); ++index) live_keys.insert(QStringLiteral("board:%1").arg(index));
+  for (const auto& item : items_) live_keys.insert(QStringLiteral("item:") + item.id);
+  for (auto it = preview_file_owners_.begin(); it != preview_file_owners_.end();) {
+    if (!live_keys.contains(it.key())) it = preview_file_owners_.erase(it);
+    else ++it;
+  }
+  const auto retain_file = [&result](const QString& source) {
+    auto owner = std::make_shared<PreviewFiles>();
+    owner->file = QUrl(source).toLocalFile();
+    owner->parent = result.files;
+    return owner;
+  };
+  for (auto it = result.boards.cbegin(); it != result.boards.cend(); ++it) {
+    if (auto* slide = slideAt(it.key()); slide && !it.value().isEmpty()) {
+      slide->preview_source = it.value();
+      preview_file_owners_.insert(QStringLiteral("board:%1").arg(it.key()), retain_file(it.value()));
+    }
+  }
+  for (auto& item : items_) {
+    const auto it = result.items.constFind(item.id);
+    if (it == result.items.cend()) continue;
+    if (item.preview_source != it->first) {
+      const auto key = QStringLiteral("item:") + item.id;
+      if (it->first.isEmpty()) preview_file_owners_.remove(key);
+      else preview_file_owners_.insert(key, retain_file(it->first));
+    }
+    item.preview_source = it->first;
+    item.preview_source_size = it->second;
+  }
+  ++preview_revision_;
+  preview_diagnostics_ = std::move(result.diagnostics);
+  preview_diagnostics_.insert(QStringLiteral("revision"), preview_revision_);
+  preview_diagnostics_.insert(QStringLiteral("requestRevision"), static_cast<qulonglong>(preview_request_revision_));
+  preview_diagnostics_.insert(QStringLiteral("staleRequestsDropped"), stale_preview_requests_dropped_);
+  emit previewDiagnosticsChanged();
+  emit slidesChanged();
+  emit itemsChanged();
+  emit selectionChanged();
+}
+
 void CarouselDocumentController::refreshPreviews() {
+  if (!export_worker_context_) {
+    QVector<int> boards;
+    QSet<QString> items;
+    for (int index = 0; index < slides_.size(); ++index) boards.push_back(index);
+    for (const auto& item : items_) items.insert(item.id);
+    queuePreviewRefresh(boards, items);
+    return;
+  }
   QDir().mkpath(previewsRoot());
   QVector<int> board_indices;
   board_indices.reserve(slides_.size());
@@ -23995,6 +26082,10 @@ void CarouselDocumentController::refreshPreviews() {
 }
 
 void CarouselDocumentController::refreshPreviewAt(int index) {
+  if (!export_worker_context_) {
+    queuePreviewRefresh({index}, {});
+    return;
+  }
   if (index < 0 || index >= slides_.size()) {
     return;
   }
@@ -24033,7 +26124,7 @@ void CarouselDocumentController::refreshItemPreview(CanvasItem* item) {
     return;
   }
   if (!item->preview_source.isEmpty() && item->preview_source_size.isValid() &&
-      QFileInfo::exists(previewPathForItem(item->id))) {
+      QFileInfo::exists(QUrl(item->preview_source).toLocalFile())) {
     return;
   }
 
@@ -24063,7 +26154,6 @@ void CarouselDocumentController::refreshItemPreview(CanvasItem* item) {
 }
 
 void CarouselDocumentController::refreshCurrentSelectionPreviews() {
-  QDir().mkpath(previewsRoot());
   QSet<int> affected_boards;
   QSet<QString> affected_item_ids;
   const auto add_intersected_boards = [this, &affected_boards](const CanvasItem& item) {
@@ -24100,6 +26190,11 @@ void CarouselDocumentController::refreshCurrentSelectionPreviews() {
 
   auto ordered_boards = affected_boards.values();
   std::sort(ordered_boards.begin(), ordered_boards.end());
+  if (!export_worker_context_) {
+    queuePreviewRefresh(ordered_boards, affected_item_ids);
+    return;
+  }
+  QDir().mkpath(previewsRoot());
   beginPreviewDiagnostics(QStringLiteral("selected-content"), ordered_boards);
   for (const auto& item_id : affected_item_ids) {
     const auto item_index = indexOfItem(item_id);
@@ -24497,6 +26592,7 @@ const QJsonObject* CarouselDocumentController::brandKitById(const QString& brand
 }
 
 void CarouselDocumentController::emitCanvasStateChanged(bool slides_changed) {
+  invalidatePreviewRefresh(false);
   synchronizePendingRepeatedElements();
   updateDocumentDirty();
   scheduleAutosave();
@@ -24518,6 +26614,7 @@ void CarouselDocumentController::emitCanvasStateChanged(bool slides_changed) {
 }
 
 void CarouselDocumentController::markDocumentDirty() {
+  ++autosave_revision_;
   if (!has_active_carousel_ || (document_dirty_ && save_state_ == QStringLiteral("Unsaved"))) {
     scheduleAutosave();
     return;
@@ -24529,11 +26626,22 @@ void CarouselDocumentController::markDocumentDirty() {
   scheduleAutosave();
 }
 
+void CarouselDocumentController::rememberSavedContent() {
+  saved_content_values_ = captureDocumentSnapshot();
+  saved_content_snapshot_ = snapshotDocumentObject(*saved_content_values_);
+  saved_content_snapshot_.remove(QStringLiteral("currentIndex"));
+  saved_content_snapshot_.remove(QStringLiteral("activeSlot"));
+  saved_content_snapshot_.remove(QStringLiteral("selectedItemId"));
+  saved_content_snapshot_.remove(QStringLiteral("selectedItemIds"));
+}
+
 void CarouselDocumentController::updateDocumentDirty() {
+  ++autosave_revision_;
   if (!has_active_carousel_) {
     return;
   }
-  const bool next_dirty = saved_content_snapshot_.isEmpty() || persistentDocumentObject() != saved_content_snapshot_;
+  const bool next_dirty = !saved_content_values_ || !documentSnapshotsEqual(
+      *saved_content_values_, *captureDocumentSnapshot(), true, &saved_content_snapshot_);
   const auto next_state = next_dirty ? QStringLiteral("Unsaved") : QStringLiteral("Saved");
   if (document_dirty_ == next_dirty && save_state_ == next_state && save_error_.isEmpty()) {
     return;
@@ -24918,7 +27026,7 @@ void CarouselDocumentController::normalizeForCurrentTemplate() {
 void CarouselDocumentController::writePreviewForSlide(int index, const QImage& image) {
   const auto path = previewPathForSlide(index);
   QImageWriter writer(path, "png");
-  writer.write(image);
+  if (!writer.write(image)) return;
   if (auto* slide = slideAt(index)) {
     slide->preview_source = versionedLocalFile(path, preview_revision_);
   }

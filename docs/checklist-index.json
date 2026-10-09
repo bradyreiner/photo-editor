@@ -149,6 +149,13 @@
       "canonicalOwner": "docs/mask-layer-selection-checklist.md"
     },
     {
+      "id": "DOC-CREATIVE-TOOLS",
+      "path": "docs/creative-tools-plan.md",
+      "area": "creative-tools",
+      "state": "supporting",
+      "canonicalOwner": "docs/capability-verification-plan.md"
+    },
+    {
       "id": "DOC-LAYER-SPARSE-UI",
       "path": "docs/layer-system-sparse-ui-checklist.md",
       "area": "masking-layers",

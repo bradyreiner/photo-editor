@@ -90,17 +90,15 @@ Button {
     }
 
     background: CommandButtonSurface {
-        cornerRadius: theme.radius6
-        fillColor: root.down ? theme.surfaceInset
-                   : root.toolActive ? theme.interactionFill
-                   : root.hovered ? theme.surfaceTop : "transparent"
-        borderColor: root.visualFocus ? theme.focusRing
-                   : root.toolActive ? theme.alpha(theme.interaction400, 0.3) : "transparent"
-        borderWidth: root.visualFocus ? 2 : 1
-        accentColor: theme.interaction400
-        accentWidth: 2
-        accentOpacity: root.toolActive ? 0.8 : 0
-        topLineOpacity: root.hovered ? 0.1 : 0
+        cornerRadius: theme.radiusControl
+        hovered: root.hovered
+        pressed: root.down
+        selected: root.toolActive
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill("secondary", root.toolActive, root.hovered, root.down,
+                                     root.enabled, true)
+        borderWidth: theme.commandBorderWidth(root.visualFocus)
+        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
     }
 
     contentItem: Item {
@@ -108,8 +106,8 @@ Button {
             visible: root.toolIconName(root.toolValue).length > 0
             anchors.horizontalCenter: parent.horizontalCenter
             y: root.compactLabelMode ? 5 : Math.round((parent.height - height) / 2)
-            width: 16
-            height: 16
+            width: theme.scaled(18)
+            height: width
             name: root.toolIconName(root.toolValue)
             color: root.toolActive ? theme.accentWarm300 : theme.textMain
         }
@@ -130,21 +128,23 @@ Button {
             visible: root.compactLabelMode
             anchors.left: parent.left
             anchors.right: parent.right
+            anchors.rightMargin: root.compactLabelMode ? theme.scaled(14) : 0
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 3
             text: root.toolLabel
             color: root.toolActive ? theme.accentWarm300 : theme.textMuted
             font.family: theme.fontUi
-            font.pixelSize: 7
+            font.pixelSize: theme.typeMicro
             font.weight: root.toolActive ? Font.DemiBold : Font.Normal
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 6
+            minimumPixelSize: theme.typeMicro
             horizontalAlignment: Text.AlignHCenter
             maximumLineCount: 1
             elide: Text.ElideNone
         }
 
         Rectangle {
+            visible: root.hovered || carouselToolMenu.visible
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 3

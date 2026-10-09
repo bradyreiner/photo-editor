@@ -28,6 +28,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaType>
@@ -52,8 +53,11 @@
 #include "agent_edit_recipe_patch.h"
 #include "agent_image_validation.h"
 #include "agent_local_model.h"
+#include "agent_mcp_metadata_projection.h"
 #include "agent_memory.h"
 #include "agent_mcp_client.h"
+#include "agent_tool_call_recovery.h"
+#include "agent_tool_progress.h"
 #include "ai_model_runtime.h"
 #include "app_bootstrap.h"
 #include "brush_input_schema.h"
@@ -65,6 +69,7 @@
 #include "generated_mask_cleanup.h"
 #include "generated_mask_metadata.h"
 #include "observability.h"
+#include "object_pick_policy.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 #include "segmentation_result_schema.h"
@@ -74,14 +79,13 @@
 namespace photo_editor::desktop {
 namespace {
 
-constexpr int kMaxValidationRevisionIterations = 2;
 constexpr int kAgentBatchConcurrencyLimit = 1;
 constexpr int kInteractiveAgentRunBudgetMs = 30000;
 constexpr int kInteractiveAgentPerExtraAssetBudgetMs = 10000;
 constexpr int kAgentProofPreviewMaxEdge = 1600;
 constexpr int kFastVisualReferentProofMaxEdge = 512;
+constexpr qint64 kMaxAgentCompositionDetailSourcePixels = 32LL * 1024LL * 1024LL;
 constexpr int kMaxModelToolCallsPerTurn = 8;
-constexpr int kMaxModelRepairTurnsPerAsset = 2;
 constexpr qint64 kMaxAgentInpaintPatchPayloadBytes = 96 * 1024 * 1024;
 constexpr double kMinEditLoopScoreImprovement = 0.03;
 constexpr qint64 kAgentGibibyte = 1024LL * 1024LL * 1024LL;
@@ -267,6 +271,131 @@ constexpr qint64 kAgentGibibyte = 1024LL * 1024LL * 1024LL;
   constraints.insert(QStringLiteral("destructive_actions_still_require_approval"), true);
   style.insert(QStringLiteral("constraints"), constraints);
   style.insert(QStringLiteral("editingFreedom"), policy);
+  return style;
+}
+
+[[nodiscard]] QString normalized_task_capability_name(const QString& value) {
+  auto normalized = value.trimmed().toLower();
+  normalized.remove(QLatin1Char('_'));
+  normalized.remove(QLatin1Char('-'));
+  normalized.remove(QLatin1Char(' '));
+  normalized.remove(QLatin1Char('.'));
+  normalized.remove(QLatin1Char('/'));
+  return normalized;
+}
+
+[[nodiscard]] QVariantMap style_for_approved_task_capabilities(
+    QVariantMap style,
+    const QVariantMap& approved_snapshot,
+    const QString& editing_freedom) {
+  if (style.isEmpty() || approved_snapshot.isEmpty() ||
+      normalized_editing_freedom(editing_freedom) == QStringLiteral("protect")) {
+    return style;
+  }
+  QStringList requested = approved_snapshot
+                              .value(QStringLiteral("taskScopedCapabilities"))
+                              .toStringList();
+  if (requested.isEmpty()) {
+    for (const auto& value : approved_snapshot
+             .value(QStringLiteral("taskScopedCapabilities")).toList()) {
+      const auto capability = value.toString().trimmed();
+      if (!capability.isEmpty()) requested.append(capability);
+    }
+  }
+  if (requested.isEmpty()) {
+    return style;
+  }
+
+  static const QHash<QString, QStringList> capability_groups{
+      {QStringLiteral("global_color"), QStringList{QStringLiteral("globalcolor")}},
+      {QStringLiteral("curves"), QStringList{QStringLiteral("curves")}},
+      {QStringLiteral("hsl"), QStringList{QStringLiteral("hsl"), QStringLiteral("colormixer")}},
+      {QStringLiteral("color_grading"), QStringList{QStringLiteral("colorgrading")}},
+      {QStringLiteral("detail"), QStringList{QStringLiteral("detail")}},
+      {QStringLiteral("crop"), QStringList{QStringLiteral("crop"), QStringLiteral("framing")}},
+      {QStringLiteral("masks"), QStringList{QStringLiteral("masks"), QStringLiteral("localmasks"), QStringLiteral("masking")}},
+      {QStringLiteral("graphics"), QStringList{QStringLiteral("graphics"), QStringLiteral("text"), QStringLiteral("typography")}},
+      {QStringLiteral("layers_luts"), QStringList{QStringLiteral("layersluts"), QStringLiteral("layers"), QStringLiteral("luts"), QStringLiteral("photolayers"), QStringLiteral("effects")}},
+  };
+  static const QHash<QString, QStringList> capability_tools{
+      {QStringLiteral("global_color"), QStringList{QStringLiteral("global_color")}},
+      {QStringLiteral("curves"), QStringList{QStringLiteral("curves")}},
+      {QStringLiteral("hsl"), QStringList{QStringLiteral("hsl")}},
+      {QStringLiteral("color_grading"), QStringList{QStringLiteral("color_grading")}},
+      {QStringLiteral("detail"), QStringList{QStringLiteral("detail")}},
+      {QStringLiteral("crop"), QStringList{QStringLiteral("crop")}},
+      {QStringLiteral("masks"), QStringList{QStringLiteral("masks")}},
+      {QStringLiteral("graphics"), QStringList{QStringLiteral("graphics")}},
+      {QStringLiteral("layers_luts"), QStringList{QStringLiteral("layers_luts")}},
+  };
+  const auto constraints = style.value(QStringLiteral("constraints")).toMap();
+  QSet<QString> explicitly_denied_groups;
+  const auto append_names = [&explicitly_denied_groups](const QVariant& value) {
+    if (value.metaType().id() == QMetaType::QString) {
+      const auto normalized = normalized_task_capability_name(value.toString());
+      if (!normalized.isEmpty()) explicitly_denied_groups.insert(normalized);
+    } else if (value.metaType().id() == QMetaType::QStringList) {
+      for (const auto& entry : value.toStringList()) {
+        const auto normalized = normalized_task_capability_name(entry);
+        if (!normalized.isEmpty()) explicitly_denied_groups.insert(normalized);
+      }
+    } else if (value.metaType().id() == QMetaType::QVariantList) {
+      for (const auto& entry : value.toList()) {
+        const auto normalized = normalized_task_capability_name(entry.toString());
+        if (!normalized.isEmpty()) explicitly_denied_groups.insert(normalized);
+      }
+    } else if (value.metaType().id() == QMetaType::QVariantMap) {
+      const auto map = value.toMap();
+      for (auto iterator = map.cbegin(); iterator != map.cend(); ++iterator) {
+        if (iterator.value().toBool()) {
+          const auto normalized = normalized_task_capability_name(iterator.key());
+          if (!normalized.isEmpty()) explicitly_denied_groups.insert(normalized);
+        }
+      }
+    }
+  };
+  append_names(constraints.value(QStringLiteral("protectedChangeGroups")));
+  append_names(constraints.value(QStringLiteral("denyTools")));
+  append_names(style.value(QStringLiteral("denyTools")));
+  const auto explicit_denial_matches = [&](const QString& capability) {
+    auto aliases = capability_groups.value(capability);
+    aliases.append(normalized_task_capability_name(capability));
+    if (capability == QStringLiteral("graphics"))
+      aliases.append({QStringLiteral("photoeditcomposition"), QStringLiteral("addtext"), QStringLiteral("typography")});
+    if (capability == QStringLiteral("layers_luts"))
+      aliases.append({QStringLiteral("photoeditcomposition"), QStringLiteral("appinvokecommand")});
+    return std::any_of(aliases.cbegin(), aliases.cend(), [&](const QString& alias) {
+      return explicitly_denied_groups.contains(alias);
+    });
+  };
+
+  auto allowed_tools = style.value(QStringLiteral("allowedTools")).toMap();
+  QStringList granted;
+  for (const auto& requested_capability : requested) {
+    const auto capability = requested_capability.trimmed().toLower();
+    if (!capability_tools.contains(capability) || explicit_denial_matches(capability)) {
+      continue;
+    }
+    for (const auto& tool : capability_tools.value(capability)) {
+      allowed_tools.insert(tool, capability == QStringLiteral("crop")
+                                     ? QVariant(QStringLiteral("composition_safe"))
+                                     : QVariant(true));
+    }
+    if (!granted.contains(capability)) granted.append(capability);
+  }
+  if (granted.isEmpty()) {
+    return style;
+  }
+  style.insert(QStringLiteral("allowedTools"), allowed_tools);
+  // This grant exists only in the current controller's frozen task view. The
+  // stored style and all project constraints remain unchanged.
+  style.insert(QStringLiteral("taskScopedPermissions"), QVariantMap{
+      {QStringLiteral("contract"), QStringLiteral("approved-task-capabilities-v1")},
+      {QStringLiteral("source"), QStringLiteral("approved-typed-plan")},
+      {QStringLiteral("capabilities"), granted},
+      {QStringLiteral("explicitConstraintsPreserved"), true},
+      {QStringLiteral("editingFreedomPersisted"), false},
+  });
   return style;
 }
 
@@ -1733,7 +1862,17 @@ struct VisualReferentFastPlanResult final {
             SmartSelectPrompt{.x = std::clamp(center_x + radius_x * 1.35, 0.0, 1.0),
                               .y = center_y, .negative = true});
       }
-      auto guided_result = generate_smart_select_mask(source.guided_image, prompts);
+      const auto ai_status = ai_model_runtime_status();
+      auto guided_result = ai_status.smart_selection_available
+          ? generate_ai_smart_selection_mask(source.guided_image, prompts)
+          : generate_smart_select_mask(source.guided_image, prompts);
+      if (guided_result.success && ai_status.smart_selection_available &&
+          !smart_select_result_honors_prompts(guided_result, prompts)) {
+        guided_result.success = false;
+        guided_result.error_message = QStringLiteral(
+            "SAM Smart Select returned a fragmented mask or missed a prompt. "
+            "Add clearer evidence points or use a manual mask.");
+      }
       const auto guided_center_value = segmentation_mask_value_at_normalized(
           guided_result.mask_data,
           guided_result.width,
@@ -3651,11 +3790,12 @@ QVariantMap explicit_intent_match_report(
 
 QVariantMap edit_loop_budget_report() {
   return QVariantMap{
-      {QStringLiteral("maxAttempts"), kMaxValidationRevisionIterations + 1},
-      {QStringLiteral("maxValidationRevisionIterations"), kMaxValidationRevisionIterations},
-      {QStringLiteral("maxModelRepairTurns"), kMaxModelRepairTurnsPerAsset},
+      {QStringLiteral("maxAttempts"), -1},
+      {QStringLiteral("maxValidationRevisionIterations"), -1},
+      {QStringLiteral("maxModelRepairTurns"), -1},
       {QStringLiteral("minScoreImprovement"), kMinEditLoopScoreImprovement},
-      {QStringLiteral("hardLimit"), true},
+      {QStringLiteral("hardLimit"), false},
+      {QStringLiteral("progressPolicy"), QStringLiteral("until-clean-canceled-or-repeated-results")},
   };
 }
 
@@ -3974,9 +4114,12 @@ QVariantMap async_draft_execution_contract(const QString& request_id) {
        QStringList{
            QStringLiteral("primary-plan"),
            QStringLiteral("model-tool-follow-up"),
+           QStringLiteral("model-tool-follow-up-2"),
            QStringLiteral("batch-cluster-plan"),
            QStringLiteral("validation-repair"),
        }},
+      {QStringLiteral("dynamicModelStagePrefixes"), QStringList{QStringLiteral("model-tool-follow-up-")}},
+      {QStringLiteral("maxModelToolPlanningRounds"), -1},
       {QStringLiteral("modelStageReplayPolicy"),
        QStringLiteral("logical-stage-once-per-request")},
       {QStringLiteral("proofCritiqueReplayPolicy"),
@@ -5184,6 +5327,204 @@ QStringList sorted_recipe_patch_groups(const QVariantMap& recipe_patch) {
   return groups;
 }
 
+QVariantMap verified_native_composition_completion(
+    const QVariantMap& prompt_audit,
+    const QVariantMap& edit_intent,
+    const QVariantMap& recipe_patch,
+    const QVariantMap& model_tool_plan,
+    const QString& asset_id,
+    int asset_count) {
+  const auto requested = prompt_audit.value(QStringLiteral("nativeCompositionCompletion")).toMap();
+  const auto color_mode = edit_intent.value(QStringLiteral("colorMode")).toString();
+  const auto contrast = edit_intent.value(QStringLiteral("contrast")).toString();
+  const auto detail = edit_intent.value(QStringLiteral("detail")).toString();
+  const auto global_controls_neutral =
+      (color_mode == QStringLiteral("preserve") || color_mode == QStringLiteral("color")) &&
+      (contrast == QStringLiteral("preserve") || contrast == QStringLiteral("natural")) &&
+      edit_intent.value(QStringLiteral("brightness")).toString() == QStringLiteral("preserve") &&
+      edit_intent.value(QStringLiteral("palette")).toString() == QStringLiteral("preserve") &&
+      edit_intent.value(QStringLiteral("saturation")).toString() == QStringLiteral("preserve") &&
+      edit_intent.value(QStringLiteral("crop")).toString() == QStringLiteral("preserve") &&
+      (detail == QStringLiteral("preserve") || detail == QStringLiteral("natural")) &&
+      edit_intent.value(QStringLiteral("mood")).toString() == QStringLiteral("natural") &&
+      edit_intent.value(QStringLiteral("referenceStrength")).toDouble() <= 0.0;
+  if (requested.value(QStringLiteral("requested")).metaType().id() != QMetaType::Bool ||
+      !requested.value(QStringLiteral("requested")).toBool() || asset_count != 1 ||
+      asset_id.trimmed().isEmpty() || !recipe_patch.isEmpty() ||
+      requested.value(QStringLiteral("assetId")).toString() != asset_id ||
+      !requested.value(QStringLiteral("readbackConfirmed")).toBool() ||
+      prompt_audit.value(QStringLiteral("toolCallPlanRequired")).toBool() ||
+      edit_intent.value(QStringLiteral("globalChangePolicy")).toString() != QStringLiteral("preserve") ||
+      !global_controls_neutral ||
+      !edit_intent.value(QStringLiteral("localizedActions")).toList().isEmpty() ||
+      !edit_intent.value(QStringLiteral("retouchActions")).toList().isEmpty() ||
+      !edit_intent.value(QStringLiteral("requestedActions")).toStringList().isEmpty() ||
+      !edit_intent.value(QStringLiteral("requiresApproval")).toList().isEmpty() ||
+      !edit_intent.value(QStringLiteral("approvalActions")).toList().isEmpty() ||
+      !model_tool_plan.value(QStringLiteral("ok")).toBool()) {
+    return {};
+  }
+
+  static const QSet<QString> localized_operations{
+      QStringLiteral("add_text"), QStringLiteral("text"), QStringLiteral("typography"),
+      QStringLiteral("text_path"), QStringLiteral("transform"), QStringLiteral("perspective"),
+      QStringLiteral("move"), QStringLiteral("copy_selection"), QStringLiteral("erase_selection"),
+      QStringLiteral("select_subject"), QStringLiteral("lasso_selection"), QStringLiteral("blur"),
+      QStringLiteral("opacity"), QStringLiteral("paint"), QStringLiteral("add_effect"),
+      QStringLiteral("update_effect"), QStringLiteral("remove_effect"),
+      QStringLiteral("reorder_effect"), QStringLiteral("mask_effect"),
+      QStringLiteral("clear_effect_mask"),
+  };
+  const auto append_ids = [](QSet<QString>* target, const QVariant& value) {
+    if (target == nullptr || !value.isValid() || value.isNull()) return;
+    if (value.metaType().id() == QMetaType::QString) {
+      const auto id = value.toString().trimmed();
+      if (!id.isEmpty()) target->insert(id);
+      return;
+    }
+    for (const auto& id_value : value.toList()) {
+      const auto id = id_value.toString().trimmed();
+      if (!id.isEmpty()) target->insert(id);
+    }
+  };
+
+  auto reports = model_tool_plan.value(QStringLiteral("toolReports")).toList();
+  auto host_readback_accepted = false;
+  const auto rounds = model_tool_plan.value(QStringLiteral("rounds")).toList();
+  if (!rounds.isEmpty()) {
+    // The planner sees this genuine host inspection after a reviewed batch.
+    // Verify the same observation here rather than requiring an extra model
+    // inspection. Never accept an unbound or pre-mutation review receipt.
+    const auto round = rounds.last().toMap();
+    const auto assessment = round.value(QStringLiteral("compositionAssessment")).toMap();
+    const auto native_review = assessment.value(QStringLiteral("nativeReview")).toMap();
+    const auto critique = assessment.value(QStringLiteral("modelCritique")).toMap();
+    const auto visual = round.value(QStringLiteral("visualEvidence")).toMap();
+    const auto inspection = round.value(QStringLiteral("compositionInspectionReceipt")).toMap();
+    const auto content = inspection.value(QStringLiteral("structuredContent")).toMap();
+    const auto run_id = model_tool_plan.value(QStringLiteral("runId")).toString();
+    const auto recipe_sha = assessment.value(QStringLiteral("sourceRecipeSha256")).toString();
+    const auto proof_sha = assessment.value(QStringLiteral("sourceProofSha256")).toString();
+    const QRegularExpression sha_pattern(QStringLiteral("^[0-9a-f]{64}$"));
+    const auto round_number = round.value(QStringLiteral("round")).toInt();
+    const auto no_later_mutation = std::none_of(reports.cbegin(), reports.cend(), [round_number](const auto& value) {
+      const auto report = value.toMap();
+      return report.value(QStringLiteral("ok")).toBool() &&
+          report.value(QStringLiteral("toolName")).toString() == QStringLiteral("photo.edit_composition") &&
+          report.value(QStringLiteral("round")).toInt() > round_number;
+    });
+    QFile proof_file(visual.value(QStringLiteral("currentProofPath")).toString());
+    const auto proof_matches = sha_pattern.match(proof_sha).hasMatch() &&
+        proof_file.open(QIODevice::ReadOnly) && QString::fromLatin1(
+            QCryptographicHash::hash(proof_file.readAll(), QCryptographicHash::Sha256).toHex()) == proof_sha;
+    host_readback_accepted = no_later_mutation && round_number > 0 &&
+        assessment.value(QStringLiteral("kind")).toString() == QStringLiteral("current-composition-assessment") &&
+        assessment.value(QStringLiteral("contract")).toString() == QStringLiteral("agent-current-composition-assessment-v1") &&
+        assessment.value(QStringLiteral("batchRound")).toInt() > 0 &&
+        assessment.value(QStringLiteral("batchRound")).toInt() <= round_number &&
+        assessment.value(QStringLiteral("assetId")).toString() == asset_id &&
+        native_review.value(QStringLiteral("ok")).toBool() && native_review.value(QStringLiteral("complete")).toBool() &&
+        critique.value(QStringLiteral("ok")).toBool() && critique.value(QStringLiteral("pass")).toBool() &&
+        !critique.value(QStringLiteral("needsUserReview")).toBool() &&
+        !assessment.value(QStringLiteral("requireProductivePlan")).toBool() &&
+        inspection.value(QStringLiteral("ok")).toBool() &&
+        inspection.value(QStringLiteral("toolName")).toString() == QStringLiteral("photo.inspect_composition") &&
+        inspection.value(QStringLiteral("arguments")).toMap().value(QStringLiteral("assetId")).toString() == asset_id &&
+        !run_id.isEmpty() && inspection.value(QStringLiteral("runId")).toString() == run_id &&
+        content.value(QStringLiteral("assetId")).toString() == asset_id &&
+        content.value(QStringLiteral("paintBusy")) == QVariant(false) &&
+        content.value(QStringLiteral("paintError")).toString().isEmpty() &&
+        sha_pattern.match(recipe_sha).hasMatch() &&
+        content.value(QStringLiteral("taskStateHash")).toString() == recipe_sha &&
+        visual.value(QStringLiteral("taskStateHash")).toString() == recipe_sha &&
+        visual.value(QStringLiteral("assetId")).toString() == asset_id &&
+        visual.value(QStringLiteral("sourceRecipeSha256")).toString() == recipe_sha &&
+        visual.value(QStringLiteral("proofSha256")).toString() == proof_sha && proof_matches;
+    if (host_readback_accepted) reports.append(inspection);
+  }
+  QSet<QString> mutated_layer_ids;
+  QSet<QString> mutated_mask_ids;
+  QStringList operation_names;
+  auto mutation_count = 0;
+  auto last_mutation_index = -1;
+  auto latest_readback_index = -1;
+  auto readback_confirmed = false;
+  for (qsizetype index = 0; index < reports.size(); ++index) {
+    const auto report = reports.at(index).toMap();
+    const auto tool_name = report.value(QStringLiteral("toolName")).toString();
+    const auto arguments = report.value(QStringLiteral("arguments")).toMap();
+    const auto content = report.value(QStringLiteral("structuredContent")).toMap();
+    if (tool_name == QStringLiteral("photo.edit_composition")) {
+      const auto operation = arguments.value(QStringLiteral("operation")).toString();
+      if (!report.value(QStringLiteral("ok")).toBool() ||
+          arguments.value(QStringLiteral("assetId")).toString() != asset_id ||
+          !localized_operations.contains(operation) ||
+          content.value(QStringLiteral("recoverableError")).toBool() ||
+          content.value(QStringLiteral("mutationNotApplied")).toBool()) {
+        continue;
+      }
+      const auto created_layer_ids = content.value(QStringLiteral("createdLayerIds"));
+      const auto created_mask_ids = content.value(QStringLiteral("createdMaskIds"));
+      const auto has_created_ids =
+          !content.value(QStringLiteral("createdLayerId")).toString().trimmed().isEmpty() ||
+          !created_layer_ids.toList().isEmpty() ||
+          !content.value(QStringLiteral("createdMaskId")).toString().trimmed().isEmpty() ||
+          !created_mask_ids.toList().isEmpty();
+      if (!content.value(QStringLiteral("changed")).toBool() && !has_created_ids) continue;
+
+      ++mutation_count;
+      if (!operation_names.contains(operation)) operation_names.append(operation);
+      append_ids(&mutated_layer_ids, arguments.value(QStringLiteral("layerId")));
+      append_ids(&mutated_layer_ids, content.value(QStringLiteral("createdLayerId")));
+      append_ids(&mutated_layer_ids, created_layer_ids);
+      append_ids(&mutated_mask_ids, arguments.value(QStringLiteral("maskId")));
+      append_ids(&mutated_mask_ids, content.value(QStringLiteral("createdMaskId")));
+      append_ids(&mutated_mask_ids, created_mask_ids);
+      last_mutation_index = static_cast<int>(index);
+      readback_confirmed = false;
+      continue;
+    }
+    if (tool_name != QStringLiteral("photo.inspect_composition") || mutation_count == 0 ||
+        arguments.value(QStringLiteral("assetId")).toString() != asset_id) {
+      continue;
+    }
+
+    latest_readback_index = static_cast<int>(index);
+    if (!report.value(QStringLiteral("ok")).toBool() ||
+        content.value(QStringLiteral("assetId")).toString() != asset_id) {
+      readback_confirmed = false;
+      continue;
+    }
+    QSet<QString> inspected_layer_ids;
+    for (const auto& layer_value : content.value(QStringLiteral("layers")).toList())
+      append_ids(&inspected_layer_ids, layer_value.toMap().value(QStringLiteral("id")));
+    QSet<QString> inspected_mask_ids;
+    for (const auto& mask_value : content.value(QStringLiteral("masks")).toList())
+      append_ids(&inspected_mask_ids, mask_value.toMap().value(QStringLiteral("id")));
+    const auto identities_known = !mutated_layer_ids.isEmpty() || !mutated_mask_ids.isEmpty();
+    const auto layers_match = std::all_of(mutated_layer_ids.cbegin(), mutated_layer_ids.cend(),
+            [&inspected_layer_ids](const QString& id) { return inspected_layer_ids.contains(id); });
+    const auto masks_match = std::all_of(mutated_mask_ids.cbegin(), mutated_mask_ids.cend(),
+        [&inspected_mask_ids](const QString& id) { return inspected_mask_ids.contains(id); });
+    readback_confirmed = identities_known && layers_match && masks_match;
+  }
+
+  const auto reported_operations = requested.value(QStringLiteral("operationNames")).toStringList();
+  if (mutation_count == 0 || operation_names.isEmpty() ||
+      requested.value(QStringLiteral("acceptedMutationCount")).toInt() != mutation_count ||
+      reported_operations != operation_names || !readback_confirmed ||
+      latest_readback_index <= last_mutation_index) {
+    return {};
+  }
+  auto verified = requested;
+  verified.insert(QStringLiteral("controllerVerified"), true);
+  verified.insert(QStringLiteral("readbackSource"), host_readback_accepted
+      ? QStringLiteral("host-current-composition-review") : QStringLiteral("model-requested-native-inspection"));
+  verified.insert(QStringLiteral("verificationContract"),
+                  QStringLiteral("agent-native-composition-completion-controller-v1"));
+  return verified;
+}
+
 bool recipe_patch_contains_any_group(
     const QVariantMap& recipe_patch,
     const QStringList& groups) {
@@ -5202,8 +5543,10 @@ QVariantMap agent_edit_strategy_route(
     const QString& scope,
     int asset_count,
     const QVariantMap& batch_metadata,
-    const QVariantMap& risk_assessment = {}) {
+    const QVariantMap& risk_assessment = {},
+    bool allow_native_composition_completion = false) {
   const auto patch_groups = sorted_recipe_patch_groups(recipe_patch);
+  const auto native_completion_only = allow_native_composition_completion && recipe_patch.isEmpty();
   const auto localized_actions =
       edit_intent.value(QStringLiteral("localizedActions")).toList();
   const auto localized_only =
@@ -5247,14 +5590,19 @@ QVariantMap agent_edit_strategy_route(
           "The requested localized-only edit did not compile to an isolated mask path."));
     }
   }
-  if (recipe_patch.isEmpty()) {
+  if (recipe_patch.isEmpty() && !native_completion_only) {
     errors.append(QStringLiteral("No executable recipe groups reached the edit-path router."));
   }
 
   QString primary_path;
   QString label;
   QString reason;
-  if (outlier_repair) {
+  if (native_completion_only) {
+    primary_path = QStringLiteral("native-composition-completion");
+    label = QStringLiteral("Verify native composition");
+    reason = QStringLiteral(
+        "Successful localized native edits and a matching live readback are ready for rendered proof review.");
+  } else if (outlier_repair) {
     primary_path = QStringLiteral("outlier-repair");
     label = QStringLiteral("Per-photo repair");
     reason = QStringLiteral(
@@ -5360,6 +5708,13 @@ QVariantMap agent_edit_strategy_route(
         QStringLiteral("Accept the repair only when its individual proof improves."),
         {});
   }
+  if (native_completion_only) {
+    append_step(
+        QStringLiteral("proof"),
+        QStringLiteral("Review rendered composition"),
+        QStringLiteral("Validate the already applied native layers against the fresh rendered proof."),
+        {});
+  }
 
   QStringList preserved;
   if (localized_only) {
@@ -5373,6 +5728,10 @@ QVariantMap agent_edit_strategy_route(
   }
   if (!has_masks) {
     preserved.append(QStringLiteral("Local masks"));
+  }
+  if (native_completion_only) {
+    preserved.append(QStringLiteral("Global photo color and framing"));
+    preserved.append(QStringLiteral("Regions outside the accepted native composition"));
   }
 
   return QVariantMap{
@@ -5399,6 +5758,7 @@ QVariantMap agent_edit_strategy_route(
       {QStringLiteral("routePolicy"),
        QStringLiteral("least-invasive-capable-path-before-draft")},
       {QStringLiteral("executionPatchHash"), stable_variant_hash(recipe_patch)},
+      {QStringLiteral("nativeCompositionCompletionOnly"), native_completion_only},
       {QStringLiteral("approvalRequired"),
        risk_assessment.value(QStringLiteral("approvalRequired")).toBool()},
       {QStringLiteral("approvalTypes"),
@@ -7185,7 +7545,8 @@ QVariantMap active_project_scope_context(
   const auto scope_escapes_active_project =
       normalized_scope != QStringLiteral("project") &&
       normalized_scope != QStringLiteral("current-photo") &&
-      normalized_scope != QStringLiteral("selected-assets");
+      normalized_scope != QStringLiteral("selected-assets") &&
+      normalized_scope != QStringLiteral("confirmed-assets");
   context.insert(QStringLiteral("scopeEscapesActiveProject"), scope_escapes_active_project);
   context.insert(
       QStringLiteral("outsideActiveProject"),
@@ -7372,7 +7733,9 @@ bool apply_consistency_recipe_delta(
 QVariantMap revise_recipe_patch_from_validation(
     QVariantMap patch,
     const QVariantMap& validation_report) {
-  const auto warnings = validation_report.value(QStringLiteral("warnings")).toStringList();
+  auto warnings = validation_report.value(QStringLiteral("warnings")).toStringList();
+  warnings.append(validation_report.value(QStringLiteral("compositionReview")).toMap()
+                      .value(QStringLiteral("warnings")).toStringList());
   const auto joined = warnings.join(QStringLiteral("; "));
   if (joined.contains(QStringLiteral("highlight clipping"), Qt::CaseInsensitive)) {
     adjust_patch_number(
@@ -7647,9 +8010,42 @@ QVariantMap model_repair_recipe_patch_from_validation(
   auto repair_asset = asset;
   const auto artifacts = validation_report.value(QStringLiteral("artifacts")).toMap();
   const auto after_proof_path = artifacts.value(QStringLiteral("afterProofPath")).toString();
-  if (!after_proof_path.trimmed().isEmpty()) {
-    repair_asset.insert(QStringLiteral("proofImagePath"), after_proof_path);
-    repair_asset.insert(QStringLiteral("afterProofPath"), after_proof_path);
+  QFile proof_file(after_proof_path);
+  if (after_proof_path.trimmed().isEmpty() || !proof_file.open(QIODevice::ReadOnly)) {
+    report.insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+    report.insert(QStringLiteral("errors"), QStringList{QStringLiteral(
+        "Validation repair requires the current rendered after proof; the source photo cannot substitute for it.")});
+    return report;
+  }
+  const auto proof_bytes = proof_file.readAll();
+  if (proof_bytes.isEmpty()) {
+    report.insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+    report.insert(QStringLiteral("errors"), QStringList{QStringLiteral(
+        "The current rendered after proof is empty or unreadable.")});
+    return report;
+  }
+  const auto proof_sha256 = QString::fromLatin1(
+      QCryptographicHash::hash(proof_bytes, QCryptographicHash::Sha256).toHex());
+  repair_asset.insert(QStringLiteral("proofImagePath"), after_proof_path);
+  repair_asset.insert(QStringLiteral("afterProofPath"), after_proof_path);
+  repair_asset.insert(QStringLiteral("planningProofRequired"), true);
+  repair_asset.insert(QStringLiteral("planningProofSha256"), proof_sha256);
+  repair_asset.insert(QStringLiteral("currentProofSha256"), proof_sha256);
+  repair_asset.insert(QStringLiteral("visualEvidence"),
+                      validation_report.value(QStringLiteral("liveRepairEvidence")).toMap());
+  const auto composition_review =
+      validation_report.value(QStringLiteral("compositionReview")).toMap();
+  if (!composition_review.isEmpty()) {
+    repair_asset.insert(QStringLiteral("compositionReview"), composition_review);
+    const auto detail_paths = composition_review.value(QStringLiteral("detailProofImagePaths")).toStringList();
+    repair_asset.insert(QStringLiteral("detailProofImagePaths"), detail_paths);
+    repair_asset.insert(QStringLiteral("additionalProofImagePaths"), detail_paths);
+    auto evidence = repair_asset.value(QStringLiteral("visualEvidence")).toMap();
+    evidence.insert(QStringLiteral("targetedDetailProofs"),
+                    composition_review.value(QStringLiteral("targetedDetailProofs")));
+    evidence.insert(QStringLiteral("requiredCompositionChecks"),
+                    composition_review.value(QStringLiteral("requiredChecks")));
+    repair_asset.insert(QStringLiteral("visualEvidence"), evidence);
   }
 
   AgentLocalModelPlanRequest request;
@@ -7658,26 +8054,45 @@ QVariantMap model_repair_recipe_patch_from_validation(
   request.asset = repair_asset;
   request.current_adjustment_patch_json =
       current_adjustment_patch_json;
-  request.allow_tool_call_plan = false;
-  request.available_tool_schemas =
-      repair_context.value(QStringLiteral("availableToolSchemas")).toList();
+  request.available_tool_schemas = agent_planning_tool_schemas_for_approved_task(
+      repair_context.value(QStringLiteral("availableToolSchemas")).toList(),
+      repair_context.value(QStringLiteral("approvedTaskSnapshot")).toMap());
+  request.allow_tool_call_plan =
+      repair_context.value(QStringLiteral("allowToolCallPlan")).toBool() &&
+      !request.available_tool_schemas.isEmpty();
+  request.require_tool_call_plan = request.allow_tool_call_plan &&
+      repair_context.value(QStringLiteral("requireCompositionToolPlan")).toBool();
+  report.insert(QStringLiteral("toolCallPlanRequired"), request.require_tool_call_plan);
+  report.insert(QStringLiteral("toolCallPlanAllowed"), request.allow_tool_call_plan);
   request.strategy_phase = QStringLiteral("revision");
   request.force_model_planning = true;
   request.memory_packet = repair_context.value(QStringLiteral("memoryPacket")).toMap();
-  request.prior_tool_results = QVariantList{
-      QVariantMap{
+  request.prior_tool_results = repair_context.value(QStringLiteral("priorToolResults")).toList();
+  request.prior_tool_results.append(QVariantMap{
           {QStringLiteral("kind"), QStringLiteral("validation-repair")},
           {QStringLiteral("warnings"), warnings},
           {QStringLiteral("currentPatch"), current_patch},
           {QStringLiteral("validationReport"), validation_report},
           {QStringLiteral("previousAttempts"), previous_attempts},
-      },
-  };
+  });
+  const auto approved_snapshot =
+      repair_context.value(QStringLiteral("approvedTaskSnapshot")).toMap();
+  if (!approved_snapshot.isEmpty()) {
+    request.prior_tool_results.append(QVariantMap{
+        {QStringLiteral("kind"), QStringLiteral("approved-task-snapshot")},
+        {QStringLiteral("authority"), QStringLiteral("approved-brief-and-deliverables")},
+        {QStringLiteral("snapshot"), approved_snapshot},
+    });
+  }
   // Scope inference must only inspect the user's request. Machine evidence
   // (including prior prompts and mask payloads) already travels through the
   // bounded prior_tool_results serializer. Pasting it into user_instructions
   // both bypasses that bound and turns diagnostic words into editing authority.
-  request.user_instructions = repair_context.value(QStringLiteral("userInstructions")).toString();
+  request.user_instructions = approved_snapshot
+      .value(QStringLiteral("approvedInstructions")).toString().trimmed();
+  if (request.user_instructions.isEmpty())
+    request.user_instructions =
+        repair_context.value(QStringLiteral("capturedInstructions")).toString();
 
   const auto worker_result =
       plan_runner ? plan_runner(request)
@@ -7702,8 +8117,33 @@ QVariantMap model_repair_recipe_patch_from_validation(
     report.insert(QStringLiteral("errors"), QStringList{plan.error_message});
     return report;
   }
+  if (plan.decision == QStringLiteral("tool_call_plan")) {
+    if (!request.allow_tool_call_plan || plan.tool_call_plan.isEmpty()) {
+      report.insert(QStringLiteral("errors"), QStringList{QStringLiteral(
+          "Model repair requested native tools without an active revision tool plan.")});
+      return report;
+    }
+    report.insert(QStringLiteral("ok"), true);
+    report.insert(QStringLiteral("toolCallPlan"), plan.tool_call_plan);
+    report.insert(QStringLiteral("toolCallPlanOnly"), true);
+    return report;
+  }
+  if (plan.decision == QStringLiteral("cannot_complete_safely") ||
+      plan.decision == QStringLiteral("needs_user_input")) {
+    report.insert(QStringLiteral("errorCode"), QStringLiteral("composition_repair_incomplete"));
+    report.insert(QStringLiteral("cannotCompleteSafely"),
+                  plan.decision == QStringLiteral("cannot_complete_safely"));
+    report.insert(QStringLiteral("needsUserInput"),
+                  plan.decision == QStringLiteral("needs_user_input"));
+    report.insert(QStringLiteral("userQuestions"), plan.user_questions);
+    report.insert(QStringLiteral("failureReason"), plan.safe_stop_reason);
+    report.insert(QStringLiteral("errors"), QStringList{plan.safe_stop_reason.isEmpty()
+        ? QStringLiteral("The approved composition remains incomplete and needs additional input.")
+        : plan.safe_stop_reason});
+    return report;
+  }
   if (plan.decision != QStringLiteral("recipe_patch")) {
-    report.insert(QStringLiteral("errors"), QStringList{QStringLiteral("Model repair must return decision=recipe_patch.")});
+    report.insert(QStringLiteral("errors"), QStringList{QStringLiteral("Model repair must return decision=recipe_patch or tool_call_plan.")});
     return report;
   }
   if (plan.style_constraint_citations.isEmpty()) {
@@ -8124,6 +8564,10 @@ QString model_install_status_from_progress(
 QStringList read_only_mcp_observation_tools() {
   return {
       QStringLiteral("photo.live_status"),
+      // Composition inspection is a fresh observation of the live rendered
+      // state. Repairs must be able to inspect after every mutation without
+      // tripping the successful-mutation replay guard.
+      QStringLiteral("photo.inspect_composition"),
       QStringLiteral("photo.get_style_rulebook"),
       QStringLiteral("photo.get_recipe_patch_schema"),
   };
@@ -8170,6 +8614,12 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
         QStringLiteral("photo.read_adjustments"),
         QStringLiteral("photo.read_asset"),
         QStringLiteral("photo.read_recipe"),
+        QStringLiteral("photo.inspect_composition"),
+        QStringLiteral("photo.edit_composition"),
+        QStringLiteral("app.list_commands"),
+        QStringLiteral("app.command_schema"),
+        QStringLiteral("app.inspect_command"),
+        QStringLiteral("app.invoke_command"),
         QStringLiteral("photo.render_current_proof"),
         QStringLiteral("photo.get_style_rulebook"),
         QStringLiteral("photo.get_recipe_patch_schema"),
@@ -8189,6 +8639,12 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
         QStringLiteral("photo.read_adjustments"),
         QStringLiteral("photo.read_asset"),
         QStringLiteral("photo.read_recipe"),
+        QStringLiteral("photo.inspect_composition"),
+        QStringLiteral("photo.edit_composition"),
+        QStringLiteral("app.list_commands"),
+        QStringLiteral("app.command_schema"),
+        QStringLiteral("app.inspect_command"),
+        QStringLiteral("app.invoke_command"),
         QStringLiteral("photo.render_current_proof"),
         QStringLiteral("photo.get_style_rulebook"),
         QStringLiteral("photo.get_recipe_patch_schema"),
@@ -8208,6 +8664,12 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
         QStringLiteral("photo.live_status"),
         QStringLiteral("photo.read_asset"),
         QStringLiteral("photo.read_recipe"),
+        QStringLiteral("photo.inspect_composition"),
+        QStringLiteral("photo.edit_composition"),
+        QStringLiteral("app.list_commands"),
+        QStringLiteral("app.command_schema"),
+        QStringLiteral("app.inspect_command"),
+        QStringLiteral("app.invoke_command"),
         QStringLiteral("photo.render_current_proof"),
         QStringLiteral("photo.get_style_rulebook"),
         QStringLiteral("photo.get_recipe_patch_schema"),
@@ -8235,6 +8697,12 @@ QStringList mcp_tools_for_agent_phase(const QString& phase) {
       QStringLiteral("photo.read_adjustments"),
       QStringLiteral("photo.read_asset"),
       QStringLiteral("photo.read_recipe"),
+        QStringLiteral("photo.inspect_composition"),
+        QStringLiteral("photo.edit_composition"),
+        QStringLiteral("app.list_commands"),
+        QStringLiteral("app.command_schema"),
+        QStringLiteral("app.inspect_command"),
+        QStringLiteral("app.invoke_command"),
       QStringLiteral("photo.render_current_proof"),
       QStringLiteral("photo.get_style_rulebook"),
       QStringLiteral("photo.get_recipe_patch_schema"),
@@ -8258,6 +8726,253 @@ QVariantList filter_mcp_tools_for_phase(const QVariantList& tools, const QString
       filtered.append(tool);
     }
   }
+  return filtered;
+}
+
+bool approved_task_is_composition_only(const QVariantMap& approved_snapshot) {
+  if (approved_snapshot.isEmpty()) return false;
+  QStringList capabilities;
+  const auto raw_capabilities =
+      approved_snapshot.value(QStringLiteral("taskScopedCapabilities"));
+  if (raw_capabilities.metaType().id() == QMetaType::QString) {
+    capabilities.append(raw_capabilities.toString());
+  } else if (raw_capabilities.metaType().id() == QMetaType::QStringList) {
+    capabilities = raw_capabilities.toStringList();
+  } else if (raw_capabilities.metaType().id() == QMetaType::QVariantList) {
+    for (const auto& value : raw_capabilities.toList())
+      capabilities.append(value.toString());
+  }
+
+  QSet<QString> normalized_capabilities;
+  for (const auto& capability : capabilities) {
+    const auto normalized = normalized_task_capability_name(capability);
+    if (!normalized.isEmpty()) normalized_capabilities.insert(normalized);
+  }
+  const QSet<QString> composition_capabilities{
+      QStringLiteral("graphics"), QStringLiteral("layersluts")};
+  if (normalized_capabilities.isEmpty() ||
+      !std::all_of(normalized_capabilities.cbegin(), normalized_capabilities.cend(),
+          [&composition_capabilities](const QString& capability) {
+            return composition_capabilities.contains(capability);
+          }))
+    return false;
+
+  // Only narrow prompts when the frozen task plan explicitly contains text
+  // and/or layer construction. Unknown action kinds may need other tools.
+  const auto approved_plan = approved_snapshot.value(QStringLiteral("plan")).toMap();
+  const auto actions = approved_plan.value(QStringLiteral("actions")).toList();
+  if (actions.isEmpty()) return false;
+  for (const auto& action_value : actions) {
+    const auto action = action_value.toMap();
+    const auto kind = normalized_task_capability_name(
+        action.value(QStringLiteral("kind")).toString());
+    if (kind != QStringLiteral("text") && kind != QStringLiteral("typography") &&
+        kind != QStringLiteral("layers") && kind != QStringLiteral("layer"))
+      return false;
+  }
+  return true;
+}
+
+bool approved_task_has_graphic_text_action(const QVariantMap& approved_snapshot) {
+  if (approved_snapshot.isEmpty()) return false;
+  QStringList capabilities;
+  const auto raw_capabilities =
+      approved_snapshot.value(QStringLiteral("taskScopedCapabilities"));
+  if (raw_capabilities.metaType().id() == QMetaType::QString) {
+    capabilities.append(raw_capabilities.toString());
+  } else if (raw_capabilities.metaType().id() == QMetaType::QStringList) {
+    capabilities = raw_capabilities.toStringList();
+  } else if (raw_capabilities.metaType().id() == QMetaType::QVariantList) {
+    for (const auto& value : raw_capabilities.toList())
+      capabilities.append(value.toString());
+  }
+  const auto has_graphics_capability = std::any_of(
+      capabilities.cbegin(), capabilities.cend(), [](const QString& capability) {
+        return normalized_task_capability_name(capability) == QStringLiteral("graphics");
+      });
+  if (!has_graphics_capability) return false;
+  const auto actions = approved_snapshot.value(QStringLiteral("plan")).toMap()
+      .value(QStringLiteral("actions")).toList();
+  return std::any_of(actions.cbegin(), actions.cend(), [](const QVariant& action_value) {
+    const auto kind = normalized_task_capability_name(
+        action_value.toMap().value(QStringLiteral("kind")).toString());
+    return kind == QStringLiteral("text") || kind == QStringLiteral("typography");
+  });
+}
+
+bool approved_task_has_explicit_photo_quality_scope(const QVariantMap& approved_snapshot) {
+  for (const auto& key : {QStringLiteral("photoQualityScope"),
+                          QStringLiteral("photographicQualityScope"),
+                          QStringLiteral("photoQualityRequested"),
+                          QStringLiteral("photographicQualityRequested")}) {
+    const auto value = approved_snapshot.value(key);
+    if (value.metaType().id() == QMetaType::Bool && value.toBool()) return true;
+    if (value.metaType().id() == QMetaType::QString && !value.toString().trimmed().isEmpty()) return true;
+  }
+  const auto approved_plan = approved_snapshot.value(QStringLiteral("plan")).toMap();
+  for (const auto& key : {QStringLiteral("photoQualityScope"),
+                          QStringLiteral("photographicQualityScope"),
+                          QStringLiteral("photoQualityRequested"),
+                          QStringLiteral("photographicQualityRequested")}) {
+    const auto value = approved_plan.value(key);
+    if (value.metaType().id() == QMetaType::Bool && value.toBool()) return true;
+    if (value.metaType().id() == QMetaType::QString && !value.toString().trimmed().isEmpty()) return true;
+  }
+  // The approved execution instructions also serialize model-authored plan
+  // prose. Layout advice about text contrast cannot request photo-tone work.
+  auto request_text = approved_snapshot.value(QStringLiteral("prompt")).toString().trimmed();
+  if (request_text.isEmpty()) {
+    const auto instructions = approved_snapshot.value(QStringLiteral("approvedInstructions")).toString();
+    const auto brief_marker = QStringLiteral("Approved brief:");
+    const auto brief_offset = instructions.indexOf(brief_marker);
+    if (brief_offset >= 0) {
+      const auto brief = QJsonDocument::fromJson(
+          instructions.mid(brief_offset + brief_marker.size()).trimmed().toUtf8());
+      if (!brief.isObject() || !brief.object().value(QStringLiteral("prompt")).isString())
+        return true;
+      request_text = brief.object().value(QStringLiteral("prompt")).toString();
+    } else {
+      request_text = instructions;
+    }
+  }
+  request_text = request_text.toLower();
+  static const QStringList photographic_controls{
+      QStringLiteral("exposure"), QStringLiteral("white balance"), QStringLiteral("whitebalance"),
+      QStringLiteral("brightness"), QStringLiteral("contrast"), QStringLiteral("saturation"),
+      QStringLiteral("highlights"), QStringLiteral("shadows"), QStringLiteral("color grade"),
+      QStringLiteral("colour grade"), QStringLiteral("crop"), QStringLiteral("sharpen"),
+      QStringLiteral("sharpness"), QStringLiteral("dehaze"), QStringLiteral("clarity"),
+      QStringLiteral("noise reduction"), QStringLiteral("skin tone"), QStringLiteral("skin tones"),
+      QStringLiteral("color"), QStringLiteral("colour"), QStringLiteral("tone"), QStringLiteral("tones"),
+      QStringLiteral("temperature"), QStringLiteral("tint"), QStringLiteral("vibrance"),
+      QStringLiteral("brighten"), QStringLiteral("brighter"), QStringLiteral("darken"), QStringLiteral("darker"),
+      QStringLiteral("warm"), QStringLiteral("cool"),
+  };
+  static const QRegularExpression text_subject(
+      QStringLiteral("\\b(text|type|typography|headline|title|caption|copy|font|lettering|kicker|footer|letters?|ink|overlay)\\b"));
+  static const QRegularExpression preservation(
+      QStringLiteral("\\b(preserve|retain|maintain|keep|leave|unchanged)\\b"));
+  static const QRegularExpression requested_change(
+      QStringLiteral("\\b(adjust|change|fix|correct|increase|decrease|reduce|recover|lift|brighten|darken|improve|boost|lower|raise|set|apply|grade|balance|sharpen|warm|cool|make)\\b"));
+  const QSet<QString> generic_controls{QStringLiteral("color"), QStringLiteral("colour"),
+      QStringLiteral("tone"), QStringLiteral("tones"), QStringLiteral("warm"), QStringLiteral("cool")};
+  const auto clauses = request_text.split(
+      QRegularExpression(QStringLiteral("[.;,\\n]|\\b(but|while)\\b")), Qt::SkipEmptyParts);
+  for (const auto& clause : clauses) {
+    if (preservation.match(clause).hasMatch() && !requested_change.match(clause).hasMatch())
+      continue;
+    for (const auto& control : photographic_controls) {
+      const QRegularExpression control_pattern(
+          QStringLiteral("\\b%1\\b").arg(QRegularExpression::escape(control)));
+      if (!control_pattern.match(clause).hasMatch()) continue;
+      const QRegularExpression negated_control(QStringLiteral(
+          "\\b(do not|don't|never|without|avoid)\\b(?:(?!\\b(and|but|while)\\b).){0,80}\\b%1\\b")
+              .arg(QRegularExpression::escape(control)));
+      if (negated_control.match(clause).hasMatch()) continue;
+      const QRegularExpression photo_control_target(QStringLiteral(
+          "\\b(photo|photograph|photographic|image|sky|foreground|background|tones?)(?:['’]s)?\\s+(?:\\w+\\s+){0,2}%1\\b|"
+          "\\b%1\\s+(?:of|in|on|for)\\s+(?:the\\s+)?(photo|photograph|image|sky|foreground|background)\\b|"
+          "\\b%1\\s+(?:up\\s+|down\\s+)?(?:the\\s+)?(photo|photograph|image)\\b")
+              .arg(QRegularExpression::escape(control)));
+      if (text_subject.match(clause).hasMatch() && !photo_control_target.match(clause).hasMatch())
+        continue;
+      if (generic_controls.contains(control) && !requested_change.match(clause).hasMatch())
+        continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+QVariantList composition_only_schemas_for_approved_task(
+    const QVariantList& phase_schemas,
+    const QVariantMap& approved_snapshot) {
+  if (approved_snapshot.isEmpty()) return phase_schemas;
+
+  const QSet<QString> unowned_file_operations{
+      QStringLiteral("save_photo_fragment_preset"),
+      QStringLiteral("delete_photo_fragment_preset"),
+      QStringLiteral("import_photo_fragment_preset"),
+      QStringLiteral("export_photo_fragment_preset"),
+  };
+  QVariantList guarded_schemas;
+  guarded_schemas.reserve(phase_schemas.size());
+  for (const auto& schema_value : phase_schemas) {
+    auto schema = schema_value.toMap();
+    if (schema.value(QStringLiteral("name")).toString() == QStringLiteral("photo.edit_composition")) {
+      auto input_schema = schema.value(QStringLiteral("inputSchema")).toMap();
+      auto properties = input_schema.value(QStringLiteral("properties")).toMap();
+      auto operation_schema = properties.value(QStringLiteral("operation")).toMap();
+      auto operation_values = operation_schema.value(QStringLiteral("enum")).toList();
+      QVariantList guarded_operations;
+      guarded_operations.reserve(operation_values.size());
+      for (const auto& operation_value : operation_values) {
+        if (!unowned_file_operations.contains(operation_value.toString()))
+          guarded_operations.append(operation_value);
+      }
+      if (operation_schema.contains(QStringLiteral("enum")))
+        operation_schema.insert(QStringLiteral("enum"), guarded_operations);
+      properties.insert(QStringLiteral("operation"), operation_schema);
+      input_schema.insert(QStringLiteral("properties"), properties);
+
+      QVariantList guarded_conditions;
+      const auto conditions = input_schema.value(QStringLiteral("allOf")).toList();
+      guarded_conditions.reserve(conditions.size());
+      for (const auto& condition_value : conditions) {
+        auto condition = condition_value.toMap();
+        auto predicate = condition.value(QStringLiteral("if")).toMap();
+        auto predicate_properties = predicate.value(QStringLiteral("properties")).toMap();
+        auto operation_predicate = predicate_properties.value(QStringLiteral("operation")).toMap();
+        if (operation_predicate.contains(QStringLiteral("const")) &&
+            unowned_file_operations.contains(
+                operation_predicate.value(QStringLiteral("const")).toString()))
+          continue;
+        if (operation_predicate.contains(QStringLiteral("enum"))) {
+          const auto predicate_values = operation_predicate.value(QStringLiteral("enum")).toList();
+          QVariantList guarded_predicate_values;
+          guarded_predicate_values.reserve(predicate_values.size());
+          for (const auto& operation_value : predicate_values) {
+            if (!unowned_file_operations.contains(operation_value.toString()))
+              guarded_predicate_values.append(operation_value);
+          }
+          if (guarded_predicate_values.isEmpty()) continue;
+          operation_predicate.insert(QStringLiteral("enum"), guarded_predicate_values);
+          predicate_properties.insert(QStringLiteral("operation"), operation_predicate);
+          predicate.insert(QStringLiteral("properties"), predicate_properties);
+          condition.insert(QStringLiteral("if"), predicate);
+        }
+        guarded_conditions.append(condition);
+      }
+      if (input_schema.contains(QStringLiteral("allOf")))
+        input_schema.insert(QStringLiteral("allOf"), guarded_conditions);
+      schema.insert(QStringLiteral("inputSchema"), input_schema);
+    }
+    guarded_schemas.append(schema);
+  }
+
+  if (!approved_task_is_composition_only(approved_snapshot))
+    return guarded_schemas;
+
+  const QSet<QString> composition_tools{
+      QStringLiteral("photo.inspect_composition"),
+      QStringLiteral("photo.edit_composition"),
+      QStringLiteral("app.list_commands"),
+      QStringLiteral("app.command_schema"),
+      QStringLiteral("app.inspect_command"),
+      QStringLiteral("app.invoke_command"),
+  };
+  QVariantList filtered;
+  QSet<QString> included_names;
+  for (const auto& schema_value : guarded_schemas) {
+    const auto schema = schema_value.toMap();
+    const auto name = schema.value(QStringLiteral("name")).toString();
+    if (!composition_tools.contains(name) || included_names.contains(name)) continue;
+    included_names.insert(name);
+    filtered.append(schema_value);
+  }
+  if (!included_names.contains(QStringLiteral("photo.inspect_composition")) ||
+      !included_names.contains(QStringLiteral("photo.edit_composition")))
+    return guarded_schemas;
   return filtered;
 }
 
@@ -8353,6 +9068,974 @@ QVariantMap compact_mcp_tool_report(const QString& tool_name, const QVariantMap&
   return report;
 }
 
+QVariantMap inspect_live_agent_composition(
+    const QString& endpoint,
+    const QString& endpoint_kind,
+    const QString& bearer_token,
+    const QString& run_id,
+    const QString& asset_id,
+    const QStringList& allowed_tools,
+    const AgentCancellationCallback& cancellation_requested) {
+  if (!allowed_tools.contains(QStringLiteral("photo.inspect_composition")))
+    return {{QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("Composition inspection is not allowed in the repair phase.")}};
+  AgentMcpClient client;
+  client.setEndpoint(endpoint);
+  client.setBearerToken(bearer_token);
+  client.setTimeoutMs(-1);
+  client.setAllowedTools(allowed_tools);
+  client.setCancellationPredicate(cancellation_requested);
+  const auto discovery = client.refreshToolCache(run_id);
+  if (!discovery.value(QStringLiteral("ok")).toBool())
+    return {{QStringLiteral("ok"), false},
+            {QStringLiteral("error"), discovery.value(QStringLiteral("error"))},
+            {QStringLiteral("endpointKind"), endpoint_kind}};
+  if (!client.hasCachedTool(QStringLiteral("photo.inspect_composition")))
+    return {{QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("The live composition inspection tool is missing from the current schema.")},
+            {QStringLiteral("endpointKind"), endpoint_kind}};
+  const auto call = client.callTool(
+      QStringLiteral("photo.inspect_composition"),
+      {{QStringLiteral("assetId"), asset_id}});
+  auto report = compact_mcp_tool_report(QStringLiteral("photo.inspect_composition"), call);
+  report.insert(QStringLiteral("arguments"), QVariantMap{{QStringLiteral("assetId"), asset_id}});
+  report.insert(QStringLiteral("endpointKind"), endpoint_kind);
+  report.insert(QStringLiteral("runId"), run_id);
+  if (report.value(QStringLiteral("ok")).toBool()) {
+    const auto content = report.value(QStringLiteral("structuredContent")).toMap();
+    if (content.value(QStringLiteral("assetId")).toString() != asset_id ||
+        content.value(QStringLiteral("layers")).metaType().id() != QMetaType::QVariantList) {
+      report.insert(QStringLiteral("ok"), false);
+      report.insert(QStringLiteral("error"), QStringLiteral(
+          "Live composition inspection did not confirm the requested asset and layer collection."));
+    }
+  }
+  return report;
+}
+
+QVariantMap render_agent_composition_detail_proofs(
+    const QString& overview_path,
+    const QString& file_path,
+    const QString& recipe_json,
+    const QVariantList& graphic_layers,
+    const QString& run_id,
+    const QString& asset_id,
+    const std::atomic_bool* cancellation_requested = nullptr) {
+  QVariantMap result{
+      {QStringLiteral("contract"), QStringLiteral("agent-targeted-detail-proof-v1")},
+      {QStringLiteral("overviewPath"), overview_path},
+      {QStringLiteral("renderSource"), QStringLiteral("full-resolution-current-composition")},
+      {QStringLiteral("requiredChecks"), QStringList{
+          QStringLiteral("exact-copy"),
+          QStringLiteral("scale-and-rotation-aware-layer-raster-frame"),
+          QStringLiteral("effective-typography-size"),
+          QStringLiteral("safe-margins"), QStringLiteral("layer-order"),
+          QStringLiteral("legibility-at-detail")}},
+  };
+  const auto graphic_layers_json = QJsonDocument::fromVariant(graphic_layers)
+                                       .toJson(QJsonDocument::Compact);
+  const auto graphic_layers_sha = QString::fromLatin1(
+      QCryptographicHash::hash(graphic_layers_json, QCryptographicHash::Sha256).toHex());
+  result.insert(QStringLiteral("graphicLayersSha256"), graphic_layers_sha);
+  QImage overview;
+  if (overview_path.isEmpty() || !overview.load(overview_path)) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("The current overview proof could not be decoded for detail crops."));
+    return result;
+  }
+  QFile overview_file(overview_path);
+  if (!overview_file.open(QIODevice::ReadOnly)) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("The current overview proof could not be read for detail crops."));
+    return result;
+  }
+  const auto overview_sha = QString::fromLatin1(
+      QCryptographicHash::hash(overview_file.readAll(), QCryptographicHash::Sha256).toHex());
+  result.insert(QStringLiteral("overviewSha256"), overview_sha);
+  result.insert(QStringLiteral("overviewWidth"), overview.width());
+  result.insert(QStringLiteral("overviewHeight"), overview.height());
+  if (graphic_layers.isEmpty()) {
+    result.insert(QStringLiteral("available"), true);
+    result.insert(QStringLiteral("detailProofImagePaths"), QStringList{});
+    result.insert(QStringLiteral("targetedDetailProofs"), QVariantList{});
+    result.insert(QStringLiteral("detailProofCount"), 0);
+    result.insert(QStringLiteral("assetId"), asset_id);
+    return result;
+  }
+  if (cancellation_requested != nullptr &&
+      cancellation_requested->load(std::memory_order_relaxed)) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("canceled"), true);
+    result.insert(QStringLiteral("error"), QStringLiteral("Targeted composition detail rendering was canceled."));
+    return result;
+  }
+  const auto parsed_recipe = parse_adjustment_patch_json(recipe_json);
+  if (recipe_json.trimmed().isEmpty() || !parsed_recipe.ok() || !parsed_recipe.state.has_value()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("The current composition recipe is unavailable for full-resolution detail rendering."));
+    return result;
+  }
+  const auto source_size = source_image_size(file_path);
+  const auto source_pixels = static_cast<qint64>(source_size.width()) *
+                             static_cast<qint64>(source_size.height());
+  if (!source_size.isValid() || source_pixels <= 0 ||
+      source_pixels > kMaxAgentCompositionDetailSourcePixels) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), source_size.isValid()
+        ? QStringLiteral("The source exceeds the bounded 32-megapixel composition-detail render limit.")
+        : QStringLiteral("The source dimensions are unavailable for composition-detail rendering."));
+    result.insert(QStringLiteral("sourcePixelCount"), source_pixels);
+    result.insert(QStringLiteral("sourcePixelLimit"), kMaxAgentCompositionDetailSourcePixels);
+    return result;
+  }
+  QImage full_resolution_source;
+  photo_editor::pipeline::DecodedImageMetadata full_resolution_metadata;
+  if (!decode_source_image(
+          file_path, &full_resolution_source, 0, *parsed_recipe.state,
+          &full_resolution_metadata,
+          photo_editor::pipeline::CancellationToken{
+              .cancellation_requested = cancellation_requested})) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("canceled"), cancellation_requested != nullptr &&
+        cancellation_requested->load(std::memory_order_relaxed));
+    result.insert(QStringLiteral("error"), QStringLiteral("The source could not be decoded at full resolution for required composition detail."));
+    return result;
+  }
+  const auto full_resolution_proof = render_agent_proof_image(
+      full_resolution_source, file_path, asset_id, *parsed_recipe.state,
+      &full_resolution_metadata, cancellation_requested);
+  const auto& rendered_composition = full_resolution_proof.image;
+  if (rendered_composition.isNull()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("canceled"), cancellation_requested != nullptr &&
+        cancellation_requested->load(std::memory_order_relaxed));
+    result.insert(QStringLiteral("error"), full_resolution_proof.error.isEmpty()
+        ? QStringLiteral("The current composition could not be rendered at full resolution.")
+        : full_resolution_proof.error);
+    return result;
+  }
+  const auto rendered_byte_count = rendered_composition.sizeInBytes();
+  if (rendered_byte_count <= 0 || rendered_byte_count > std::numeric_limits<int>::max()) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("The full-resolution composition exceeds the bounded detail-proof buffer size."));
+    return result;
+  }
+  const auto rendered_bytes = QByteArray::fromRawData(
+      reinterpret_cast<const char*>(rendered_composition.constBits()),
+      static_cast<int>(rendered_byte_count));
+  const auto rendered_composition_sha = QString::fromLatin1(
+      QCryptographicHash::hash(rendered_bytes, QCryptographicHash::Sha256).toHex());
+  const auto source_recipe_sha = QString::fromLatin1(
+      QCryptographicHash::hash(recipe_json.toUtf8(), QCryptographicHash::Sha256).toHex());
+  result.insert(QStringLiteral("sourceRecipeSha256"), source_recipe_sha);
+  result.insert(QStringLiteral("renderedCompositionSha256"), rendered_composition_sha);
+  result.insert(QStringLiteral("renderedCompositionWidth"), rendered_composition.width());
+  result.insert(QStringLiteral("renderedCompositionHeight"), rendered_composition.height());
+  result.insert(QStringLiteral("renderedCompositionPixels"), rendered_composition.width() *
+      static_cast<qint64>(rendered_composition.height()));
+  QVariantList crop_reports;
+  QStringList crop_paths;
+  const auto detail_directory = QFileInfo(overview_path).dir().filePath(
+      QStringLiteral("composition-details/%1/%2-%3")
+          .arg(safe_artifact_id(run_id, QStringLiteral("run")),
+               overview_sha.left(16), rendered_composition_sha.left(16)));
+  if (!QDir().mkpath(detail_directory)) {
+    result.insert(QStringLiteral("available"), false);
+    result.insert(QStringLiteral("error"), QStringLiteral("Unable to create the targeted detail proof directory."));
+    return result;
+  }
+  for (qsizetype index = 0; index < graphic_layers.size(); ++index) {
+    const auto layer = graphic_layers.at(index).toMap();
+    const auto layout = agent_graphic_proof_layout_metrics(layer);
+    QVariantMap crop{
+        {QStringLiteral("layerId"), layer.value(QStringLiteral("id"))},
+        {QStringLiteral("layerName"), layer.value(QStringLiteral("name"))},
+        {QStringLiteral("expectedText"), layer.value(QStringLiteral("text"))},
+        {QStringLiteral("position"), layer.value(QStringLiteral("position"))},
+        {QStringLiteral("order"), layer.value(QStringLiteral("order"))},
+        {QStringLiteral("layerScale"), layout.value(QStringLiteral("scale"))},
+        {QStringLiteral("layerRotation"), layout.value(QStringLiteral("rotation"))},
+        {QStringLiteral("boundsBasis"), layout.value(QStringLiteral("boundsBasis"))},
+        {QStringLiteral("effectPaddingIncluded"),
+         layout.value(QStringLiteral("effectPaddingIncluded"))},
+        {QStringLiteral("visibleInkBoundsAvailable"),
+         layout.value(QStringLiteral("visibleInkBoundsAvailable"))},
+        {QStringLiteral("renderedBounds"), layout.value(QStringLiteral("renderedBounds"))},
+        {QStringLiteral("sourceOverviewSha256"), overview_sha},
+    };
+    if (!layout.value(QStringLiteral("available")).toBool()) {
+      crop.insert(QStringLiteral("available"), false);
+      crop.insert(QStringLiteral("omitted"), true);
+      crop.insert(QStringLiteral("error"), layout.value(QStringLiteral("error")));
+      crop_reports.append(crop);
+      continue;
+    }
+    const auto canvas_width = layout.value(QStringLiteral("canvasWidth")).toDouble();
+    const auto canvas_height = layout.value(QStringLiteral("canvasHeight")).toDouble();
+    const auto rendered_bounds = layout.value(QStringLiteral("renderedBounds")).toMap();
+    const auto x = rendered_bounds.value(QStringLiteral("x")).toDouble();
+    const auto y = rendered_bounds.value(QStringLiteral("y")).toDouble();
+    const auto width = rendered_bounds.value(QStringLiteral("width")).toDouble();
+    const auto height = rendered_bounds.value(QStringLiteral("height")).toDouble();
+    const auto sx = static_cast<double>(rendered_composition.width()) / canvas_width;
+    const auto sy = static_cast<double>(rendered_composition.height()) / canvas_height;
+    const auto padding_x = std::max(16.0, width * 0.3);
+    const auto padding_y = std::max(16.0, height * 0.3);
+    const auto left = std::clamp((x - padding_x) * sx, 0.0, static_cast<double>(rendered_composition.width() - 1));
+    const auto top = std::clamp((y - padding_y) * sy, 0.0, static_cast<double>(rendered_composition.height() - 1));
+    const auto right = std::clamp((x + width + padding_x) * sx, left + 1.0, static_cast<double>(rendered_composition.width()));
+    const auto bottom = std::clamp((y + height + padding_y) * sy, top + 1.0, static_cast<double>(rendered_composition.height()));
+    const QRect crop_rect(static_cast<int>(std::floor(left)), static_cast<int>(std::floor(top)),
+        std::max(1, static_cast<int>(std::ceil(right - left))),
+        std::max(1, static_cast<int>(std::ceil(bottom - top))));
+    const auto bounded_rect = crop_rect.intersected(rendered_composition.rect());
+    if (bounded_rect.isEmpty()) {
+      crop.insert(QStringLiteral("available"), false);
+      crop.insert(QStringLiteral("omitted"), true);
+      crop.insert(QStringLiteral("error"), QStringLiteral("The declared layer bounds fall outside the rendered overview."));
+      crop_reports.append(crop);
+      continue;
+    }
+    const auto layer_token = safe_artifact_id(layer.value(QStringLiteral("id")).toString(), QStringLiteral("layer"));
+    const auto crop_path = QDir(detail_directory).filePath(QStringLiteral("%1-%2.png").arg(index).arg(layer_token));
+    const auto detail_image = rendered_composition.copy(bounded_rect);
+    if (!detail_image.save(crop_path, "PNG")) {
+      crop.insert(QStringLiteral("available"), false);
+      crop.insert(QStringLiteral("omitted"), true);
+      crop.insert(QStringLiteral("error"), QStringLiteral("Unable to save the targeted composition detail crop."));
+      crop_reports.append(crop);
+      continue;
+    }
+    QFile crop_file(crop_path);
+    if (!crop_file.open(QIODevice::ReadOnly)) {
+      crop.insert(QStringLiteral("available"), false);
+      crop.insert(QStringLiteral("error"), QStringLiteral("Unable to read the targeted composition detail crop."));
+      crop_reports.append(crop);
+      continue;
+    }
+    crop.insert(QStringLiteral("available"), true);
+    crop.insert(QStringLiteral("omitted"), false);
+    crop.insert(QStringLiteral("imagePath"), crop_path);
+    crop.insert(QStringLiteral("pixelBounds"), QVariantMap{
+        {QStringLiteral("x"), bounded_rect.x()}, {QStringLiteral("y"), bounded_rect.y()},
+        {QStringLiteral("width"), bounded_rect.width()}, {QStringLiteral("height"), bounded_rect.height()}});
+    crop.insert(QStringLiteral("sourceRenderedSha256"), rendered_composition_sha);
+    crop.insert(QStringLiteral("sourceRecipeSha256"), source_recipe_sha);
+    crop.insert(QStringLiteral("renderSource"), QStringLiteral("full-resolution-current-composition"));
+    crop.insert(QStringLiteral("fullResolutionSourceSize"), QSize(rendered_composition.size()));
+    crop.insert(QStringLiteral("imageSha256"), QString::fromLatin1(
+        QCryptographicHash::hash(crop_file.readAll(), QCryptographicHash::Sha256).toHex()));
+    crop_paths.append(crop_path);
+    crop_reports.append(crop);
+  }
+  result.insert(QStringLiteral("available"), true);
+  result.insert(QStringLiteral("detailProofImagePaths"), crop_paths);
+  result.insert(QStringLiteral("targetedDetailProofs"), crop_reports);
+  result.insert(QStringLiteral("detailProofCount"), crop_paths.size());
+  result.insert(QStringLiteral("assetId"), asset_id);
+  return result;
+}
+
+QVariantMap review_live_agent_composition(
+    const QVariantMap& inspection,
+    const QVariantMap& approved_snapshot,
+    const QStringList& known_text_layer_ids) {
+  const auto content = inspection.value(QStringLiteral("structuredContent")).toMap();
+  const auto layers = content.value(QStringLiteral("layers")).toList();
+  const auto graphic_layers = agent_graphic_proof_layers(layers, known_text_layer_ids);
+  QVariantList expected_copy;
+  const auto copy_value = approved_snapshot.value(QStringLiteral("exactCopy"));
+  const auto append_copy = [&expected_copy](const QVariant& value) {
+    if (value.metaType().id() == QMetaType::QString) {
+      const auto text = value.toString();
+      if (!text.trimmed().isEmpty()) expected_copy.append(text);
+    } else if (value.metaType().id() == QMetaType::QVariantMap) {
+      const auto map = value.toMap();
+      const auto text = map.value(QStringLiteral("text"), map.value(QStringLiteral("copy"))).toString();
+      if (!text.trimmed().isEmpty()) expected_copy.append(text);
+    }
+  };
+  if (copy_value.metaType().id() == QMetaType::QVariantList) {
+    for (const auto& value : copy_value.toList()) append_copy(value);
+  } else {
+    append_copy(copy_value);
+  }
+  QStringList observed_copy;
+  for (const auto& layer_value : layers) {
+    const auto layer = layer_value.toMap();
+    if (layer.value(QStringLiteral("kind")).toString() == QStringLiteral("text"))
+      observed_copy.append(layer.value(QStringLiteral("text")).toString());
+  }
+  QVariantList missing_copy;
+  for (const auto& value : expected_copy) {
+    if (!observed_copy.contains(value.toString())) missing_copy.append(value);
+  }
+  QVariantList duplicate_copy;
+  for (const auto& value : expected_copy) {
+    const auto text = value.toString();
+    if (observed_copy.count(text) > 1) duplicate_copy.append(text);
+  }
+  QVariantList out_of_bounds_layers;
+  QVariantList unavailable_geometry_layers;
+  QVariantList invalid_transform_layers;
+  QVariantList graphic_geometry;
+  QStringList observed_layer_order;
+  for (const auto& layer_value : layers) {
+    const auto layer = layer_value.toMap();
+    const auto id = layer.value(QStringLiteral("id")).toString();
+    if (!id.isEmpty()) observed_layer_order.append(id);
+  }
+  QStringList expected_layer_order;
+  const auto expected_plan = approved_snapshot.value(QStringLiteral("plan")).toMap();
+  for (const auto& key : {QStringLiteral("expectedLayerOrder"),
+                           QStringLiteral("layerOrder"),
+                           QStringLiteral("stackOrder")}) {
+    expected_layer_order = expected_plan.value(key).toStringList();
+    if (!expected_layer_order.isEmpty()) break;
+  }
+  bool layer_order_matches = true;
+  QStringList missing_order_ids;
+  qsizetype previous_order_index = -1;
+  for (const auto& expected_id : expected_layer_order) {
+    const auto found_index = observed_layer_order.indexOf(expected_id);
+    if (found_index < 0) {
+      missing_order_ids.append(expected_id);
+      layer_order_matches = false;
+    } else if (found_index <= previous_order_index) {
+      layer_order_matches = false;
+    }
+    previous_order_index = found_index;
+  }
+  for (const auto& layer_value : graphic_layers) {
+    const auto layer = layer_value.toMap();
+    const auto layout = agent_graphic_proof_layout_metrics(layer);
+    const auto rendered_bounds = layout.value(QStringLiteral("renderedBounds")).toMap();
+    const auto geometry_available = layout.value(QStringLiteral("available")).toBool();
+    const auto raster_frame_within_canvas = geometry_available &&
+        layout.value(QStringLiteral("rasterFrameWithinCanvas")).toBool();
+    graphic_geometry.append(QVariantMap{
+        {QStringLiteral("layerId"), layer.value(QStringLiteral("id"))},
+        {QStringLiteral("available"), geometry_available},
+        {QStringLiteral("rasterFrameWithinCanvas"), raster_frame_within_canvas},
+        {QStringLiteral("boundsBasis"), layout.value(QStringLiteral("boundsBasis"))},
+        {QStringLiteral("effectPaddingIncluded"),
+         layout.value(QStringLiteral("effectPaddingIncluded"))},
+        {QStringLiteral("visibleInkBoundsAvailable"),
+         layout.value(QStringLiteral("visibleInkBoundsAvailable"))},
+        {QStringLiteral("transformAvailable"),
+         layout.value(QStringLiteral("transformAvailable"))},
+        {QStringLiteral("layoutError"), layout.value(QStringLiteral("error"))},
+        {QStringLiteral("layerScale"), layout.value(QStringLiteral("scale"))},
+        {QStringLiteral("layerRotation"), layout.value(QStringLiteral("rotation"))},
+        {QStringLiteral("renderedBounds"), rendered_bounds},
+        {QStringLiteral("effectiveTypographySize"),
+         layout.value(QStringLiteral("effectiveTypographySize"))},
+        {QStringLiteral("canvasWidth"), layout.value(QStringLiteral("canvasWidth"))},
+        {QStringLiteral("canvasHeight"), layout.value(QStringLiteral("canvasHeight"))},
+    });
+    if (!layout.value(QStringLiteral("transformAvailable")).toBool())
+      invalid_transform_layers.append(layer.value(QStringLiteral("id")));
+    if (!geometry_available)
+      unavailable_geometry_layers.append(layer.value(QStringLiteral("id")));
+    else if (!raster_frame_within_canvas)
+      out_of_bounds_layers.append(layer.value(QStringLiteral("id")));
+  }
+  const auto approved_plan = approved_snapshot.value(QStringLiteral("plan")).toMap();
+  QStringList approved_constraints;
+  for (const auto& value : approved_plan.value(QStringLiteral("constraints")).toList())
+    if (!value.toString().trimmed().isEmpty()) approved_constraints.append(value.toString());
+  auto requirement_text = approved_constraints.join(QLatin1Char('\n'));
+  requirement_text += QLatin1Char('\n') + approved_snapshot.value(QStringLiteral("approvedInstructions")).toString();
+  requirement_text = requirement_text.toLower();
+  const auto explicit_font_pair_required = requirement_text.contains(QStringLiteral("font")) &&
+      requirement_text.contains(QStringLiteral("family")) && requirement_text.contains(QStringLiteral("face")) &&
+      (requirement_text.contains(QStringLiteral("explicit")) || requirement_text.contains(QStringLiteral("both")));
+  QVariantMap available_faces_by_family;
+  for (const auto& face_entry_value : content.value(QStringLiteral("fontFaces")).toList()) {
+    const auto face_entry = face_entry_value.toMap();
+    const auto family = face_entry.value(QStringLiteral("family")).toString().trimmed();
+    if (family.isEmpty()) continue;
+    QStringList faces;
+    for (const auto& face_value : face_entry.value(QStringLiteral("faces")).toList()) {
+      const auto face = face_value.toString().trimmed();
+      if (!face.isEmpty()) faces.append(face);
+    }
+    available_faces_by_family.insert(family, faces);
+  }
+  QVariantList font_face_readback;
+  QVariantList missing_family_face_copy;
+  for (const auto& layer_value : layers) {
+    const auto layer = layer_value.toMap();
+    if (layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text")) continue;
+    const auto typography = layer.value(QStringLiteral("textTypography")).toMap();
+    const auto family = typography.value(QStringLiteral("family"),
+        layer.value(QStringLiteral("fontFamily")).toString()).toString().trimmed();
+    const auto face = typography.value(QStringLiteral("face")).toString().trimmed();
+    const auto family_faces = available_faces_by_family.value(family).toStringList();
+    const auto family_available = available_faces_by_family.contains(family);
+    const auto face_available = family_available && !face.isEmpty() && family_faces.contains(face);
+    font_face_readback.append(QVariantMap{
+        {QStringLiteral("text"), layer.value(QStringLiteral("text"))},
+        {QStringLiteral("layerId"), layer.value(QStringLiteral("id"))},
+        {QStringLiteral("family"), family}, {QStringLiteral("face"), face},
+        {QStringLiteral("familyAvailable"), family_available},
+        {QStringLiteral("faceAvailable"), face_available},
+    });
+    if (explicit_font_pair_required && (!family_available || !face_available))
+      missing_family_face_copy.append(layer.value(QStringLiteral("text")));
+  }
+  const auto plan_actions = approved_plan.value(QStringLiteral("actions")).toList();
+  const auto role_copy = agent_detail::approved_typography_role_copy(plan_actions, expected_copy);
+  const auto hierarchy_constraint = requirement_text.contains(QStringLiteral("headline")) &&
+      (requirement_text.contains(QStringLiteral("kicker")) || requirement_text.contains(QStringLiteral("footer"))) &&
+      (requirement_text.contains(QStringLiteral("hierarchy")) || requirement_text.contains(QStringLiteral("size")));
+  auto minimum_hierarchy_ratio = 3.0;
+  const QRegularExpression ratio_expression(QStringLiteral("([0-9]+(?:\\.[0-9]+)?)\\s*x"));
+  const auto ratio_match = ratio_expression.match(requirement_text);
+  if (ratio_match.hasMatch()) {
+    bool ratio_ok = false;
+    const auto ratio = ratio_match.captured(1).toDouble(&ratio_ok);
+    if (ratio_ok && ratio > 0.0 && ratio <= 20.0) minimum_hierarchy_ratio = ratio;
+  }
+  QVariantMap role_sizes;
+  QVariantMap hierarchy_fit_guidance;
+  QVariantMap layer_by_text;
+  for (const auto& layer_value : layers) {
+    const auto layer = layer_value.toMap();
+    if (layer.value(QStringLiteral("kind")).toString() == QStringLiteral("text"))
+      layer_by_text.insert(layer.value(QStringLiteral("text")).toString(), layer);
+  }
+  auto hierarchy_available = false;
+  auto hierarchy_passed = false;
+  if (hierarchy_constraint && role_copy.contains(QStringLiteral("headline")) &&
+      role_copy.contains(QStringLiteral("kicker")) && role_copy.contains(QStringLiteral("footer"))) {
+    const auto headline_layer = layer_by_text.value(role_copy.value(QStringLiteral("headline")).toString()).toMap();
+    const auto kicker_layer = layer_by_text.value(role_copy.value(QStringLiteral("kicker")).toString()).toMap();
+    const auto footer_layer = layer_by_text.value(role_copy.value(QStringLiteral("footer")).toString()).toMap();
+    const auto effective_size = [](const QVariantMap& layer) {
+      return agent_graphic_proof_layout_metrics(layer).value(QStringLiteral("effectiveTypographySize")).toDouble();
+    };
+    const auto headline_size = effective_size(headline_layer);
+    const auto kicker_size = effective_size(kicker_layer);
+    const auto footer_size = effective_size(footer_layer);
+    hierarchy_available = !headline_layer.isEmpty() && !kicker_layer.isEmpty() && !footer_layer.isEmpty() &&
+        headline_size > 0.0 && kicker_size > 0.0 && footer_size > 0.0;
+    hierarchy_passed = hierarchy_available && headline_size >= minimum_hierarchy_ratio * kicker_size &&
+        headline_size >= minimum_hierarchy_ratio * footer_size;
+    hierarchy_fit_guidance = agent_detail::typography_hierarchy_fit_guidance(
+        headline_layer, minimum_hierarchy_ratio);
+    role_sizes = QVariantMap{
+        {QStringLiteral("headlineEffectiveSize"), headline_size},
+        {QStringLiteral("kickerEffectiveSize"), kicker_size},
+        {QStringLiteral("footerEffectiveSize"), footer_size},
+    };
+  }
+  const auto warnings = [&]() {
+    QStringList result;
+    if (!missing_copy.isEmpty())
+      result.append(QStringLiteral("Rendered composition is missing approved exact copy: %1")
+                        .arg(QJsonDocument::fromVariant(missing_copy).toJson(QJsonDocument::Compact)));
+    if (!duplicate_copy.isEmpty())
+      result.append(QStringLiteral("Rendered composition duplicates approved exact copy: %1")
+                        .arg(QJsonDocument::fromVariant(duplicate_copy).toJson(QJsonDocument::Compact)));
+    if (!out_of_bounds_layers.isEmpty())
+      result.append(QStringLiteral("Rendered composition has text-layer raster frames outside the canvas bounds: %1")
+                        .arg(QJsonDocument::fromVariant(out_of_bounds_layers).toJson(QJsonDocument::Compact)));
+    if (!unavailable_geometry_layers.isEmpty())
+      result.append(QStringLiteral("Rendered composition is missing required text-layer geometry: %1")
+                        .arg(QJsonDocument::fromVariant(unavailable_geometry_layers).toJson(QJsonDocument::Compact)));
+    if (!invalid_transform_layers.isEmpty())
+      result.append(QStringLiteral("Rendered composition has invalid text-layer scale or rotation: %1")
+                        .arg(QJsonDocument::fromVariant(invalid_transform_layers).toJson(QJsonDocument::Compact)));
+    if (!layer_order_matches)
+      result.append(QStringLiteral("Rendered composition does not match the approved top-first layer order; missing ids: %1")
+                        .arg(missing_order_ids.join(QStringLiteral(", "))));
+    if (!missing_family_face_copy.isEmpty())
+      result.append(QStringLiteral("Approved typography requires an installed explicit font family and face for each text layer; unresolved copy: %1")
+                        .arg(QJsonDocument::fromVariant(missing_family_face_copy).toJson(QJsonDocument::Compact)));
+    if (hierarchy_constraint && !missing_copy.isEmpty()) {
+      // A partially constructed text stack is a repairable progress state;
+      // report the hierarchy check as pending without rejecting the already
+      // applied layers as a failed proof boundary.
+    } else if (hierarchy_constraint && !hierarchy_available) {
+      result.append(QStringLiteral("The approved headline-to-kicker/footer size hierarchy could not be verified from current text readback."));
+    } else if (hierarchy_constraint && !hierarchy_passed) {
+      result.append(QStringLiteral("The approved headline typography size is below the required %1x kicker/footer ratio.")
+                        .arg(minimum_hierarchy_ratio));
+    }
+    return result;
+  }();
+  const auto complete = missing_copy.isEmpty() && duplicate_copy.isEmpty();
+  return QVariantMap{
+      {QStringLiteral("available"), inspection.value(QStringLiteral("ok")).toBool()},
+      {QStringLiteral("ok"), inspection.value(QStringLiteral("ok")).toBool() && warnings.isEmpty()},
+      {QStringLiteral("complete"), complete},
+      {QStringLiteral("assetId"), content.value(QStringLiteral("assetId"))},
+      {QStringLiteral("requiredChecks"), QStringList{
+          QStringLiteral("exact-copy"),
+          QStringLiteral("scale-and-rotation-aware-layer-raster-frame"),
+          QStringLiteral("effective-typography-size"),
+          QStringLiteral("safe-margins"), QStringLiteral("layer-order"),
+          QStringLiteral("mask-and-stack-integrity"), QStringLiteral("legibility-at-detail")}},
+      {QStringLiteral("expectedCopy"), expected_copy},
+      {QStringLiteral("observedCopy"), observed_copy},
+      {QStringLiteral("missingExpectedCopy"), missing_copy},
+      {QStringLiteral("duplicateExpectedCopy"), duplicate_copy},
+      {QStringLiteral("outOfBoundsRasterFrameLayerIds"), out_of_bounds_layers},
+      {QStringLiteral("unavailableGraphicGeometryLayerIds"), unavailable_geometry_layers},
+      {QStringLiteral("invalidGraphicTransformLayerIds"), invalid_transform_layers},
+      {QStringLiteral("expectedLayoutAndStack"), approved_snapshot.value(QStringLiteral("plan"))},
+      {QStringLiteral("geometryChecks"), graphic_geometry},
+      {QStringLiteral("typography"), QVariantMap{
+          {QStringLiteral("explicitFamilyFaceRequired"), explicit_font_pair_required},
+          {QStringLiteral("missingFamilyFaceCopy"), missing_family_face_copy},
+          {QStringLiteral("familyFaceReadback"), font_face_readback},
+          {QStringLiteral("requiredHierarchyAvailable"), hierarchy_constraint},
+          {QStringLiteral("hierarchyAvailable"), hierarchy_available},
+          {QStringLiteral("hierarchyPassed"), hierarchy_passed},
+          {QStringLiteral("minimumRatio"), minimum_hierarchy_ratio},
+          {QStringLiteral("hierarchy"), role_sizes},
+          {QStringLiteral("roleCopy"), role_copy},
+          {QStringLiteral("layoutFitGuidance"), hierarchy_fit_guidance},
+      }},
+      {QStringLiteral("observedLayerOrderIdsTopFirst"), observed_layer_order},
+      {QStringLiteral("expectedLayerOrderIdsTopFirst"), expected_layer_order},
+      {QStringLiteral("layerOrderMatches"), layer_order_matches},
+      {QStringLiteral("layerOrderCheckAvailable"), !expected_layer_order.isEmpty()},
+      {QStringLiteral("expectedDeliverables"), approved_snapshot.value(QStringLiteral("deliverables"))},
+      {QStringLiteral("observedGraphicLayers"), graphic_layers},
+      {QStringLiteral("observedLayerOrder"), QStringLiteral("top-first")},
+      {QStringLiteral("maskState"), content.value(QStringLiteral("masks"))},
+      {QStringLiteral("inspection"), inspection},
+      {QStringLiteral("warnings"), warnings},
+  };
+}
+
+QVariantMap proof_critique_validation_projection(const QVariantMap& validation_report) {
+  return agent_detail::proof_critique_validation_projection(validation_report);
+}
+
+QString sha256_file_contents(const QString& file_path) {
+  QFile file(file_path);
+  if (file_path.trimmed().isEmpty() || !file.open(QIODevice::ReadOnly)) return {};
+  QCryptographicHash hash(QCryptographicHash::Sha256);
+  while (!file.atEnd()) {
+    const auto block = file.read(1024 * 1024);
+    if (block.isEmpty()) {
+      if (file.error() != QFile::NoError) return {};
+      break;
+    }
+    hash.addData(block);
+  }
+  return QString::fromLatin1(hash.result().toHex());
+}
+
+QString normalized_photo_composition_recipe_json(
+    const QString& recipe_json,
+    bool* contains_text_layers = nullptr) {
+  if (contains_text_layers != nullptr) *contains_text_layers = false;
+  QJsonParseError parse_error;
+  auto document = QJsonDocument::fromJson(recipe_json.toUtf8(), &parse_error);
+  if (parse_error.error != QJsonParseError::NoError || !document.isObject()) return {};
+  auto root = document.object();
+  auto state = root.value(QStringLiteral("adjustmentState")).toObject();
+  const auto layers_value = state.value(QStringLiteral("layers"));
+  const auto photo_layers_value = state.value(QStringLiteral("photoLayers"));
+  if (state.isEmpty() || !layers_value.isArray() || !photo_layers_value.isArray() ||
+      layers_value.toArray() != photo_layers_value.toArray()) {
+    return {};
+  }
+  auto layers = layers_value.toArray();
+  QJsonArray retained_layers;
+  for (const auto& value : layers) {
+    if (!value.isObject()) return {};
+    if (value.toObject().value(QStringLiteral("kind")).toString() == QStringLiteral("text")) {
+      if (contains_text_layers != nullptr) *contains_text_layers = true;
+      continue;
+    }
+    retained_layers.append(value);
+  }
+  state.insert(QStringLiteral("layers"), retained_layers);
+  state.insert(QStringLiteral("photoLayers"), retained_layers);
+  // History is a non-rendering checkpoint log. All recipe fields, including
+  // every non-text layer/effect/mask, stay in the fingerprint.
+  state.remove(QStringLiteral("history"));
+  root.insert(QStringLiteral("adjustmentState"), state);
+  document.setObject(root);
+  return QString::fromUtf8(document.toJson(QJsonDocument::Compact));
+}
+
+QString sha256_text(const QString& value) {
+  return QString::fromLatin1(
+      QCryptographicHash::hash(value.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+
+bool is_sha256_hex(const QString& value) {
+  return value.size() == 64 &&
+      QRegularExpression(QStringLiteral("^[0-9a-fA-F]{64}$")).match(value).hasMatch();
+}
+
+bool validation_errors_are_empty(const QVariantMap& validation) {
+  if (!validation.contains(QStringLiteral("errors"))) return false;
+  const auto errors = validation.value(QStringLiteral("errors"));
+  if (errors.metaType().id() == QMetaType::QStringList)
+    return errors.toStringList().isEmpty();
+  if (errors.metaType().id() != QMetaType::QVariantList) return false;
+  const auto values = errors.toList();
+  return std::all_of(values.cbegin(), values.cend(), [](const QVariant& value) {
+    return value.metaType().id() == QMetaType::QString && value.toString().isEmpty();
+  });
+}
+
+bool verified_composition_photo_baseline(
+    const QVariantMap& baseline,
+    const QString& expected_request_id = {},
+    const QString& expected_run_id = {},
+    const QString& expected_asset_id = {},
+    const QString& expected_task_id = {}) {
+  const auto asset_id = baseline.value(QStringLiteral("assetId")).toString();
+  const auto request_id = baseline.value(QStringLiteral("requestId")).toString();
+  const auto run_id = baseline.value(QStringLiteral("runId")).toString();
+  const auto source_recipe = baseline.value(QStringLiteral("sourceRecipeJson")).toString();
+  const auto source_recipe_sha = baseline.value(QStringLiteral("sourceRecipeSha256")).toString();
+  const auto normalized_recipe_sha = baseline.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString();
+  const auto proof_sha = baseline.value(QStringLiteral("proofSha256")).toString();
+  const auto proof_path = baseline.value(QStringLiteral("proofPath")).toString();
+  const auto task_state_hash = baseline.value(QStringLiteral("taskStateHash")).toString();
+  const auto task_id = baseline.value(QStringLiteral("taskId")).toString();
+  const auto source_file_sha = baseline.value(QStringLiteral("sourceFileSha256")).toString();
+  const auto source_file_path = baseline.value(QStringLiteral("sourceFilePath")).toString();
+  const auto style_fingerprint = baseline.value(QStringLiteral("styleFingerprint")).toString();
+  const auto inspection = baseline.value(QStringLiteral("preMutationInspectionReceipt")).toMap();
+  const auto inspection_content = inspection.value(QStringLiteral("structuredContent")).toMap();
+  const auto inspection_layers = inspection_content.value(QStringLiteral("layers")).toList();
+  auto contains_text = true;
+  const auto normalized_recipe = normalized_photo_composition_recipe_json(source_recipe, &contains_text);
+  const auto inspection_has_text = std::any_of(
+      inspection_layers.cbegin(), inspection_layers.cend(), [](const QVariant& value) {
+        return value.toMap().value(QStringLiteral("kind")).toString() == QStringLiteral("text");
+      });
+  const auto inspection_sha = sha256_text(QString::fromUtf8(
+      QJsonDocument::fromVariant(inspection).toJson(QJsonDocument::Compact)));
+  const auto validation = baseline.value(QStringLiteral("validationReport")).toMap();
+  const auto validation_observation_is_well_formed =
+      validation.contains(QStringLiteral("ok")) &&
+      validation.value(QStringLiteral("ok")).metaType().id() == QMetaType::Bool &&
+      validation_errors_are_empty(validation) &&
+      !validation.value(QStringLiteral("imageStats")).toMap().isEmpty();
+  const auto source_identity_matches =
+      !asset_id.isEmpty() && !request_id.isEmpty() && !run_id.isEmpty() &&
+      (expected_request_id.isEmpty() || request_id == expected_request_id) &&
+      (expected_run_id.isEmpty() || run_id == expected_run_id) &&
+      (expected_asset_id.isEmpty() || asset_id == expected_asset_id) &&
+      (expected_task_id.isEmpty() || task_id == expected_task_id);
+  const auto inspection_matches =
+      !inspection.isEmpty() &&
+      inspection.value(QStringLiteral("ok")).toBool() &&
+      inspection.value(QStringLiteral("toolName")).toString() == QStringLiteral("photo.inspect_composition") &&
+      inspection.value(QStringLiteral("runId")).toString() == run_id &&
+      inspection.value(QStringLiteral("arguments")).toMap().value(QStringLiteral("assetId")).toString() == asset_id &&
+      inspection_content.value(QStringLiteral("assetId")).toString() == asset_id &&
+      inspection_content.value(QStringLiteral("taskStateHash")).toString() == task_state_hash &&
+      !inspection_content.value(QStringLiteral("paintBusy")).toBool() &&
+      inspection_content.value(QStringLiteral("paintError")).toString().isEmpty() &&
+      inspection_content.value(QStringLiteral("layers")).metaType().id() == QMetaType::QVariantList &&
+      !inspection_has_text &&
+      inspection_layers.size() == baseline.value(QStringLiteral("preMutationLayerCount")).toInt() &&
+      baseline.value(QStringLiteral("preMutationInspectionVerified")).toBool() &&
+      baseline.value(QStringLiteral("preMutationInspectionRunId")).toString() == run_id &&
+      baseline.value(QStringLiteral("preMutationInspectionAssetId")).toString() == asset_id &&
+      baseline.value(QStringLiteral("preMutationInspectionTaskStateHash")).toString() == task_state_hash &&
+      baseline.value(QStringLiteral("preMutationInspectionNoTextLayers")).toBool() &&
+      baseline.value(QStringLiteral("preMutationInspectionLayerCount")).toInt() == inspection_layers.size() &&
+      is_sha256_hex(baseline.value(QStringLiteral("preMutationInspectionReceiptSha256")).toString()) &&
+      baseline.value(QStringLiteral("preMutationInspectionReceiptSha256")).toString() == inspection_sha;
+  return baseline.value(QStringLiteral("contract")).toString() ==
+          QStringLiteral("unchanged-pre-text-composition-photographic-baseline-v1") &&
+      source_identity_matches &&
+      baseline.value(QStringLiteral("snapshotSource")).toString() == QStringLiteral("native-photo") &&
+      !baseline.value(QStringLiteral("explicitPhotoQualityScope")).toBool() &&
+      !source_file_path.isEmpty() &&
+      !proof_path.isEmpty() &&
+      baseline.value(QStringLiteral("sourceRecipeFingerprintVerified")).toBool() &&
+      !source_recipe.isEmpty() && !contains_text && !normalized_recipe.isEmpty() &&
+      source_recipe_sha == sha256_text(source_recipe) &&
+      normalized_recipe_sha == sha256_text(normalized_recipe) &&
+      is_sha256_hex(proof_sha) && is_sha256_hex(task_state_hash) &&
+      is_sha256_hex(source_file_sha) && is_sha256_hex(style_fingerprint) &&
+      [&]() {
+        QFile proof_file(proof_path);
+        if (!proof_file.open(QIODevice::ReadOnly)) return false;
+        return QString::fromLatin1(QCryptographicHash::hash(
+            proof_file.readAll(), QCryptographicHash::Sha256).toHex()) == proof_sha;
+      }() &&
+      inspection_matches &&
+      validation_observation_is_well_formed;
+}
+
+bool verified_revision_composition_photo_binding(
+    const QVariantMap& baseline,
+    const QString& expected_request_id,
+    const QString& expected_task_id,
+    const QString& expected_source_run_id,
+    const QString& expected_asset_id,
+    const QString& expected_mcp_run_id) {
+  const auto binding = baseline.value(QStringLiteral("revisionBinding")).toMap();
+  const auto inspection = binding.value(QStringLiteral("inspectionReceipt")).toMap();
+  const auto inspection_content = inspection.value(QStringLiteral("structuredContent")).toMap();
+  const auto proof_recipe = binding.value(QStringLiteral("sourceRecipeJson")).toString();
+  auto proof_has_text = true;
+  const auto normalized_proof_recipe = normalized_photo_composition_recipe_json(
+      proof_recipe, &proof_has_text);
+  const auto inspection_sha = sha256_text(QString::fromUtf8(
+      QJsonDocument::fromVariant(inspection).toJson(QJsonDocument::Compact)));
+  const auto asset_id = baseline.value(QStringLiteral("assetId")).toString();
+  const auto source_recipe_sha = binding.value(QStringLiteral("sourceRecipeSha256")).toString();
+  const auto source_file_sha = binding.value(QStringLiteral("sourceFileSha256")).toString();
+  const auto proof_sha = binding.value(QStringLiteral("proofSha256")).toString();
+  const auto proof_path = binding.value(QStringLiteral("proofPath")).toString();
+  const auto task_state_hash = binding.value(QStringLiteral("taskStateHash")).toString();
+  const auto style_fingerprint = binding.value(QStringLiteral("styleFingerprint")).toString();
+  const auto normalized_sha = sha256_text(normalized_proof_recipe);
+  const auto expected_run_id = expected_mcp_run_id;
+  return !expected_request_id.isEmpty() && !expected_task_id.isEmpty() &&
+      !expected_source_run_id.isEmpty() && !expected_asset_id.isEmpty() &&
+      !expected_run_id.isEmpty() && !binding.isEmpty() &&
+      binding.value(QStringLiteral("contract")).toString() ==
+          QStringLiteral("agent-composition-photo-revision-binding-v1") &&
+      binding.value(QStringLiteral("requestId")).toString() == expected_request_id &&
+      binding.value(QStringLiteral("runId")).toString() == expected_run_id &&
+      binding.value(QStringLiteral("taskId")).toString() == expected_task_id &&
+      binding.value(QStringLiteral("sourceRunId")).toString() == expected_source_run_id &&
+      binding.value(QStringLiteral("assetId")).toString() == expected_asset_id &&
+      baseline.value(QStringLiteral("assetId")).toString() == asset_id &&
+      binding.value(QStringLiteral("proofSha256")).toString() == proof_sha &&
+      binding.value(QStringLiteral("sourceRecipeSha256")).toString() == source_recipe_sha &&
+      binding.value(QStringLiteral("sourceFileSha256")).toString() == source_file_sha &&
+      binding.value(QStringLiteral("styleFingerprint")).toString() == style_fingerprint &&
+      binding.value(QStringLiteral("taskStateHash")).toString() == task_state_hash &&
+      binding.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString() == normalized_sha &&
+      normalized_sha == baseline.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString() &&
+      !proof_recipe.isEmpty() && proof_has_text &&
+      binding.value(QStringLiteral("sourceFilePath")).toString() ==
+          baseline.value(QStringLiteral("sourceFilePath")).toString() &&
+      source_file_sha == baseline.value(QStringLiteral("sourceFileSha256")).toString() &&
+      style_fingerprint == baseline.value(QStringLiteral("styleFingerprint")).toString() &&
+      source_recipe_sha == sha256_text(proof_recipe) &&
+      is_sha256_hex(proof_sha) && is_sha256_hex(task_state_hash) &&
+      is_sha256_hex(source_file_sha) && is_sha256_hex(style_fingerprint) &&
+      [&]() {
+        QFile proof_file(proof_path);
+        if (!proof_file.open(QIODevice::ReadOnly)) return false;
+        return QString::fromLatin1(QCryptographicHash::hash(
+            proof_file.readAll(), QCryptographicHash::Sha256).toHex()) == proof_sha;
+      }() &&
+      !inspection.isEmpty() &&
+      binding.value(QStringLiteral("inspectionReceiptSha256")).toString() == inspection_sha &&
+      inspection.value(QStringLiteral("ok")).toBool() &&
+      inspection.value(QStringLiteral("toolName")).toString() == QStringLiteral("photo.inspect_composition") &&
+      inspection.value(QStringLiteral("runId")).toString() == expected_run_id &&
+      inspection.value(QStringLiteral("arguments")).toMap().value(QStringLiteral("assetId")).toString() == asset_id &&
+      inspection_content.value(QStringLiteral("assetId")).toString() == asset_id &&
+      inspection_content.value(QStringLiteral("taskStateHash")).toString() == task_state_hash &&
+      !inspection_content.value(QStringLiteral("paintBusy")).toBool() &&
+      inspection_content.value(QStringLiteral("paintError")).toString().isEmpty() &&
+      inspection_content.value(QStringLiteral("layers")).metaType().id() == QMetaType::QVariantList;
+}
+
+QVariantMap composition_photo_quality_validation_projection(
+    const QVariantMap& validation_report,
+    const QVariantMap& baseline,
+    const QVariantMap& current_proof) {
+  const auto asset_id = current_proof.value(QStringLiteral("assetId")).toString();
+  const auto baseline_validation = baseline.value(QStringLiteral("validationReport")).toMap();
+  const auto baseline_recipe = baseline.value(QStringLiteral("sourceRecipeJson")).toString();
+  const auto current_recipe = current_proof.value(QStringLiteral("sourceRecipeJson")).toString();
+  auto baseline_has_text = true;
+  auto current_has_text = false;
+  const auto normalized_baseline = normalized_photo_composition_recipe_json(
+      baseline_recipe, &baseline_has_text);
+  const auto normalized_current = normalized_photo_composition_recipe_json(
+      current_recipe, &current_has_text);
+  const auto current_normalized_sha = sha256_text(normalized_current);
+  const auto baseline_proof_sha = baseline.value(QStringLiteral("proofSha256")).toString();
+  const auto baseline_source_recipe_sha = baseline.value(QStringLiteral("sourceRecipeSha256")).toString();
+  const auto baseline_task_state_hash = baseline.value(QStringLiteral("taskStateHash")).toString();
+  const auto baseline_source_file_sha = baseline.value(QStringLiteral("sourceFileSha256")).toString();
+  const auto baseline_inspection_receipt_sha =
+      baseline.value(QStringLiteral("preMutationInspectionReceiptSha256")).toString();
+  const auto baseline_recipe_fingerprint_verified =
+      verified_composition_photo_baseline(baseline) &&
+      baseline.value(QStringLiteral("sourceRecipeFingerprintVerified")).toBool() &&
+      !baseline_has_text && !normalized_baseline.isEmpty() &&
+      baseline_source_recipe_sha == sha256_text(baseline_recipe) &&
+      baseline.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString() ==
+          sha256_text(normalized_baseline);
+  const auto revision_binding = baseline.value(QStringLiteral("revisionBinding")).toMap();
+  const auto revision_binding_required =
+      current_proof.value(QStringLiteral("requestId")).toString() !=
+          baseline.value(QStringLiteral("requestId")).toString();
+  const auto revision_binding_verified =
+      ((!revision_binding_required && revision_binding.isEmpty()) ||
+      verified_revision_composition_photo_binding(
+          baseline,
+          current_proof.value(QStringLiteral("requestId")).toString(),
+          current_proof.value(QStringLiteral("taskId")).toString(),
+          baseline.value(QStringLiteral("latestAcceptedRunId"),
+              baseline.value(QStringLiteral("sourceRunId"))).toString(),
+          asset_id,
+          current_proof.value(QStringLiteral("mcpRunId")).toString()));
+  const auto revision_binding_matches_final_proof = !revision_binding_required && revision_binding.isEmpty() ? true :
+      (revision_binding_verified &&
+       current_proof.value(QStringLiteral("requestId")).toString() ==
+           revision_binding.value(QStringLiteral("requestId")).toString() &&
+       current_proof.value(QStringLiteral("taskId")).toString() ==
+           revision_binding.value(QStringLiteral("taskId")).toString() &&
+       current_proof.value(QStringLiteral("mcpRunId")).toString() ==
+           revision_binding.value(QStringLiteral("runId")).toString() &&
+       current_proof.value(QStringLiteral("assetId")).toString() ==
+           revision_binding.value(QStringLiteral("assetId")).toString() &&
+       current_proof.value(QStringLiteral("sourceFilePath")).toString() ==
+           revision_binding.value(QStringLiteral("sourceFilePath")).toString() &&
+       current_proof.value(QStringLiteral("sourceFileSha256")).toString() ==
+           revision_binding.value(QStringLiteral("sourceFileSha256")).toString() &&
+       current_proof.value(QStringLiteral("styleFingerprint")).toString() ==
+           revision_binding.value(QStringLiteral("styleFingerprint")).toString() &&
+       current_normalized_sha ==
+           revision_binding.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString());
+  const auto baseline_bound =
+      baseline_recipe_fingerprint_verified &&
+      !baseline.value(QStringLiteral("explicitPhotoQualityScope")).toBool() &&
+      baseline.value(QStringLiteral("assetId")).toString() == asset_id &&
+      baseline.value(QStringLiteral("sourceFilePath")).toString() ==
+          current_proof.value(QStringLiteral("sourceFilePath")).toString() &&
+      is_sha256_hex(baseline_source_recipe_sha) && is_sha256_hex(baseline_proof_sha) &&
+      is_sha256_hex(baseline_task_state_hash) && is_sha256_hex(baseline_source_file_sha) &&
+      !baseline_source_file_sha.isEmpty() && !baseline.value(QStringLiteral("sourceFilePath")).toString().isEmpty() &&
+      baseline_validation.contains(QStringLiteral("ok")) &&
+      baseline_validation.value(QStringLiteral("ok")).metaType().id() == QMetaType::Bool &&
+      !baseline_validation.value(QStringLiteral("imageStats")).toMap().isEmpty() &&
+      validation_errors_are_empty(baseline_validation);
+  const auto current_bound =
+      baseline_bound && revision_binding_matches_final_proof &&
+      current_has_text && !normalized_current.isEmpty() &&
+      current_normalized_sha == baseline.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString() &&
+      current_proof.value(QStringLiteral("snapshotSource")).toString() == QStringLiteral("native-photo") &&
+      current_proof.value(QStringLiteral("sourceRecipeSha256")).toString() == sha256_text(current_recipe) &&
+      current_proof.value(QStringLiteral("sourceFileSha256")).toString() == baseline_source_file_sha &&
+      current_proof.value(QStringLiteral("sourceFilePath")).toString() == baseline.value(QStringLiteral("sourceFilePath")).toString() &&
+      current_proof.value(QStringLiteral("styleFingerprint")).toString() ==
+          baseline.value(QStringLiteral("styleFingerprint")).toString() &&
+      is_sha256_hex(current_proof.value(QStringLiteral("proofSha256")).toString()) &&
+      is_sha256_hex(current_proof.value(QStringLiteral("taskStateHash")).toString());
+  if (!current_bound) return validation_report;
+
+  const auto baseline_stats = baseline_validation.value(QStringLiteral("imageStats")).toMap();
+  const auto composite_stats = validation_report.value(QStringLiteral("imageStats")).toMap();
+  const auto baseline_warnings = baseline_validation.value(QStringLiteral("warnings")).toStringList();
+  const auto composite_warnings = validation_report.value(QStringLiteral("warnings")).toStringList();
+  QStringList introduced_warnings;
+  for (const auto& warning : composite_warnings)
+    if (!baseline_warnings.contains(warning)) introduced_warnings.append(warning);
+  static const QStringList photometric_warning_prefixes{
+      QStringLiteral("highlight clipping "), QStringLiteral("shadow clipping "),
+      QStringLiteral("extreme saturation covers "),
+      QStringLiteral("large average channel imbalance "),
+      QStringLiteral("compressed histogram shape:"),
+      QStringLiteral("white balance plausibility risk:"),
+      QStringLiteral("skin tone plausibility risk:"),
+  };
+  const auto is_photometric_warning = [](const QString& warning) {
+    return std::any_of(photometric_warning_prefixes.cbegin(), photometric_warning_prefixes.cend(),
+        [&warning](const QString& prefix) { return warning.startsWith(prefix, Qt::CaseInsensitive); });
+  };
+  auto review_warnings = QStringList{};
+  for (const auto& warning : baseline_warnings)
+    if (!is_photometric_warning(warning)) review_warnings.append(warning);
+  for (const auto& warning : composite_warnings) {
+    if (!is_photometric_warning(warning) && !review_warnings.contains(warning))
+      review_warnings.append(warning);
+  }
+  auto baseline_quality_report = baseline_validation.value(QStringLiteral("qualityScoreReport")).toMap();
+  const auto baseline_needs_review = baseline_validation.value(QStringLiteral("needsUserReview")).toBool() ||
+      baseline_quality_report.value(QStringLiteral("needsUserReview")).toBool();
+  // The source photograph's pre-existing review flag remains explicit evidence
+  // below. It cannot block a composition-only task from finishing when the
+  // unchanged photo's only warnings are photographic metrics.
+  const auto review_needs_review = !review_warnings.isEmpty();
+  if (!baseline_quality_report.isEmpty()) {
+    baseline_quality_report.insert(QStringLiteral("warningCount"), review_warnings.size());
+    baseline_quality_report.insert(QStringLiteral("needsUserReview"), review_needs_review);
+  }
+  auto projected = validation_report;
+  projected.insert(QStringLiteral("assetId"), asset_id);
+  projected.insert(QStringLiteral("compositeImageStats"), composite_stats);
+  projected.insert(QStringLiteral("compositeWarnings"), composite_warnings);
+  projected.insert(QStringLiteral("compositeQualityScoreReport"),
+      validation_report.value(QStringLiteral("qualityScoreReport")));
+  projected.insert(QStringLiteral("imageStats"), baseline_stats);
+  projected.insert(QStringLiteral("warnings"), review_warnings);
+  projected.insert(QStringLiteral("reviewWarnings"), review_warnings);
+  for (const auto& key : {QStringLiteral("highlightClipPercent"),
+                          QStringLiteral("highlightClipLimitPercent"),
+                          QStringLiteral("shadowClipPercent"),
+                          QStringLiteral("shadowClipLimitPercent"),
+                          QStringLiteral("saturationExtremePercent"),
+                          QStringLiteral("averageRed"), QStringLiteral("averageGreen"),
+                          QStringLiteral("averageBlue"), QStringLiteral("averageLuma"),
+                          QStringLiteral("lumaRange"), QStringLiteral("lumaStddev"),
+                          QStringLiteral("channelImbalance"), QStringLiteral("redBlueCast"),
+                          QStringLiteral("greenCast"), QStringLiteral("skinToneCheckRequired"),
+                          QStringLiteral("skinToneCandidatePercent"), QStringLiteral("averageSkinHue"),
+                          QStringLiteral("averageSkinSaturation"), QStringLiteral("averageSkinLuma"),
+                          QStringLiteral("skinTonePlausible")}) {
+    if (baseline_validation.contains(key)) projected.insert(key, baseline_validation.value(key));
+  }
+  for (const auto& key : {QStringLiteral("qualityScore"), QStringLiteral("qualityScorePercent")}) {
+    if (baseline_validation.contains(key)) projected.insert(key, baseline_validation.value(key));
+  }
+  projected.insert(QStringLiteral("qualityScoreReport"), baseline_quality_report);
+  projected.insert(QStringLiteral("needsUserReview"), review_needs_review);
+  projected.insert(QStringLiteral("photographicQualityEvidence"), QVariantMap{
+      {QStringLiteral("contract"), QStringLiteral("unchanged-pre-text-composition-photographic-baseline-v1")},
+      {QStringLiteral("basis"), QStringLiteral("unchanged-pre-text-composition")},
+      {QStringLiteral("assetId"), asset_id},
+      {QStringLiteral("baselineSourceRecipeSha256"), baseline_source_recipe_sha},
+      {QStringLiteral("baselineProofSha256"), baseline_proof_sha},
+      {QStringLiteral("baselineTaskStateHash"), baseline_task_state_hash},
+      {QStringLiteral("baselineSourceFileSha256"), baseline_source_file_sha},
+      {QStringLiteral("sourceRecipeFingerprintVerified"), baseline_recipe_fingerprint_verified},
+      {QStringLiteral("preMutationInspectionReceiptSha256"), baseline_inspection_receipt_sha},
+      {QStringLiteral("normalizedPhotoCompositionSha256"), baseline.value(QStringLiteral("normalizedPhotoCompositionSha256"))},
+      {QStringLiteral("baselineImageStats"), baseline_stats},
+      {QStringLiteral("baselineWarnings"), baseline_warnings},
+      {QStringLiteral("baselineQualityScoreReport"), baseline_validation.value(QStringLiteral("qualityScoreReport"))},
+      {QStringLiteral("baselineNeedsUserReview"), baseline_needs_review},
+      {QStringLiteral("currentCompositeImageStats"), composite_stats},
+      {QStringLiteral("currentCompositeWarnings"), composite_warnings},
+      {QStringLiteral("introducedCompositeWarnings"), introduced_warnings},
+      {QStringLiteral("baselineHighlightClipPercent"), baseline_validation.value(QStringLiteral("highlightClipPercent"))},
+      {QStringLiteral("compositeHighlightClipPercent"), validation_report.value(QStringLiteral("highlightClipPercent"))},
+      {QStringLiteral("highlightClipLimitPercent"), baseline_validation.value(QStringLiteral("highlightClipLimitPercent"))},
+      {QStringLiteral("baselineShadowClipPercent"), baseline_validation.value(QStringLiteral("shadowClipPercent"))},
+      {QStringLiteral("compositeShadowClipPercent"), validation_report.value(QStringLiteral("shadowClipPercent"))},
+      {QStringLiteral("shadowClipLimitPercent"), baseline_validation.value(QStringLiteral("shadowClipLimitPercent"))},
+      {QStringLiteral("photoRecipeUnchanged"), true},
+      {QStringLiteral("explicitPhotoQualityScope"), false},
+      {QStringLiteral("compositePhotoMetricsChangedOnlyByApprovedText"), true},
+      {QStringLiteral("currentSourceRecipeSha256"), current_proof.value(QStringLiteral("sourceRecipeSha256"))},
+      {QStringLiteral("currentProofSha256"), current_proof.value(QStringLiteral("proofSha256"))},
+      {QStringLiteral("currentTaskStateHash"), current_proof.value(QStringLiteral("taskStateHash"))},
+      {QStringLiteral("currentRequestId"), current_proof.value(QStringLiteral("requestId"))},
+      {QStringLiteral("currentTaskId"), current_proof.value(QStringLiteral("taskId"))},
+      {QStringLiteral("revisionBindingVerified"), revision_binding_verified},
+      {QStringLiteral("currentSourceFileSha256"), current_proof.value(QStringLiteral("sourceFileSha256"))},
+      {QStringLiteral("styleFingerprintSha256"), current_proof.value(QStringLiteral("styleFingerprint"))},
+      {QStringLiteral("currentNormalizedPhotoCompositionSha256"), current_normalized_sha},
+  });
+  return projected;
+}
+
 QVariantMap execute_model_mcp_tool_plan(
     const QString& endpoint,
     const QString& endpoint_kind,
@@ -8361,7 +10044,12 @@ QVariantMap execute_model_mcp_tool_plan(
     const QStringList& allowed_tools,
     const QVariantList& cached_tools,
     const QVariantList& requested_tool_calls,
-    const AgentCancellationCallback& cancellation_requested) {
+    const AgentCancellationCallback& cancellation_requested,
+    const std::function<void(const QString&, const QVariantMap&, const QString&)>& tool_progress = {},
+    bool allow_composition_pending = false,
+    const QVariantMap& previous_execution = {},
+    bool execute_remaining_calls = true,
+    const QVariantList& prior_successful_mutations = {}) {
   const auto effective_allowed_tools =
       allowed_tools.isEmpty() ? read_only_mcp_observation_tools() : allowed_tools;
   QVariantMap report{
@@ -8392,14 +10080,31 @@ QVariantMap execute_model_mcp_tool_plan(
     report.insert(QStringLiteral("toolReports"), QVariantList{});
     return report;
   }
+  if (requested_tool_calls.size() > kMaxModelToolCallsPerTurn) {
+    const auto error = QStringLiteral("Split this batch into at most eight calls; the task has no total step limit.");
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("errors"), QStringList{error});
+    report.insert(QStringLiteral("recoverableError"), true);
+    report.insert(QStringLiteral("executionComplete"), true);
+    report.insert(QStringLiteral("toolReports"), QVariantList{QVariantMap{
+        {QStringLiteral("toolName"), QStringLiteral("batch-admission")}, {QStringLiteral("ok"), false},
+        {QStringLiteral("error"), error}, {QStringLiteral("arguments"), QVariantMap{{QStringLiteral("calls"), requested_tool_calls}}},
+        {QStringLiteral("structuredContent"), QVariantMap{{QStringLiteral("recoverableError"), true},
+            {QStringLiteral("mutationNotApplied"), true}}}}});
+    report.insert(QStringLiteral("unattemptedToolCalls"), requested_tool_calls);
+    return report;
+  }
 
   AgentMcpClient client;
   client.setEndpoint(endpoint);
   client.setBearerToken(bearer_token);
-  client.setTimeoutMs(3000);
+  client.setTimeoutMs(-1);
   client.setAllowedTools(effective_allowed_tools);
   client.setCancellationPredicate(cancellation_requested);
-  const auto tools_report = client.refreshToolCache(run_id);
+  // Reuse the authenticated discovery from this request's accepted execution.
+  // Waiting for one pixel job must not repeatedly rediscover every tool.
+  const auto tools_report = previous_execution.isEmpty()
+      ? client.refreshToolCache(run_id) : previous_execution.value(QStringLiteral("toolCache")).toMap();
   report.insert(QStringLiteral("toolCache"), tools_report);
   if (!tools_report.value(QStringLiteral("ok")).toBool()) {
     report.insert(QStringLiteral("ok"), false);
@@ -8410,15 +10115,65 @@ QVariantMap execute_model_mcp_tool_plan(
             : QStringLiteral("failed"));
     report.insert(QStringLiteral("canceled"), tools_report.value(QStringLiteral("canceled")));
     report.insert(QStringLiteral("errors"), QStringList{tools_report.value(QStringLiteral("error")).toString()});
-    report.insert(QStringLiteral("toolReports"), QVariantList{});
+    report.insert(QStringLiteral("toolReports"), previous_execution.value(QStringLiteral("toolReports"), QVariantList{}));
+    report.insert(QStringLiteral("attemptedCount"), previous_execution.value(QStringLiteral("attemptedCount"), 0));
+    report.insert(QStringLiteral("successCount"), previous_execution.value(QStringLiteral("successCount"), 0));
+    report.insert(QStringLiteral("completionChecks"), previous_execution.value(QStringLiteral("completionChecks"), QVariantMap{}));
     return report;
   }
 
-  QVariantList tool_reports;
-  QStringList errors;
-  auto success_count = 0;
-  auto attempted_count = 0;
-  for (const auto& request_value : requested_tool_calls) {
+  auto tool_reports = previous_execution.value(QStringLiteral("toolReports")).toList();
+  auto errors = previous_execution.value(QStringLiteral("errors")).toStringList();
+  auto success_count = previous_execution.value(QStringLiteral("successCount")).toInt();
+  auto attempted_count = previous_execution.value(QStringLiteral("attemptedCount")).toInt();
+  auto next_call_index = previous_execution.value(QStringLiteral("nextToolCallIndex")).toLongLong();
+  auto composition_pending = false;
+  auto completion_checks = previous_execution.value(QStringLiteral("completionChecks")).toMap();
+  auto completed_mutations = prior_successful_mutations;
+  if (previous_execution.value(QStringLiteral("compositionPending")).toBool() && !tool_reports.isEmpty()) {
+    auto queued_report = tool_reports.last().toMap();
+    const auto arguments = queued_report.value(QStringLiteral("arguments")).toMap();
+    const auto asset_id = arguments.value(QStringLiteral("assetId")).toString();
+    if (!effective_allowed_tools.contains(QStringLiteral("photo.inspect_composition")) || asset_id.isEmpty()) {
+      errors.append(QStringLiteral("Composition completion requires the allowed inspection tool and an asset ID."));
+    } else {
+      const auto inspection = client.callTool(QStringLiteral("photo.inspect_composition"),
+          {{QStringLiteral("assetId"), asset_id}});
+      const auto content = inspection.value(QStringLiteral("structuredContent")).toMap();
+      completion_checks.insert(QStringLiteral("pollCount"), completion_checks.value(QStringLiteral("pollCount")).toInt() + 1);
+      completion_checks.insert(QStringLiteral("lastInspection"), compact_mcp_tool_report(QStringLiteral("photo.inspect_composition"), inspection));
+      if (!inspection.value(QStringLiteral("ok")).toBool()) {
+        errors.append(QStringLiteral("Could not check composition completion: %1").arg(inspection.value(QStringLiteral("error")).toString()));
+      } else if (content.value(QStringLiteral("assetId")).toString() != asset_id ||
+                 content.value(QStringLiteral("paintBusy")).metaType().id() != QMetaType::Bool) {
+        errors.append(QStringLiteral("Composition inspection did not confirm processing state for the requested photo."));
+      } else if (!content.value(QStringLiteral("paintError")).toString().isEmpty()) {
+        errors.append(content.value(QStringLiteral("paintError")).toString());
+      } else {
+        composition_pending = content.value(QStringLiteral("paintBusy")).toBool();
+        if (!composition_pending) {
+          auto updated_content = queued_report.value(QStringLiteral("structuredContent")).toMap();
+          for (auto it = content.cbegin(); it != content.cend(); ++it) updated_content.insert(it.key(), it.value());
+          queued_report.insert(QStringLiteral("structuredContent"), updated_content);
+          queued_report.remove(QStringLiteral("content"));
+          queued_report.insert(QStringLiteral("completionConfirmed"), true);
+          tool_reports.last() = queued_report;
+          if (tool_progress) tool_progress(queued_report.value(QStringLiteral("toolName")).toString(), arguments, QStringLiteral("complete"));
+        }
+      }
+    }
+    if (!errors.isEmpty()) {
+      queued_report.insert(QStringLiteral("ok"), false);
+      queued_report.insert(QStringLiteral("error"), errors.join(QStringLiteral("; ")));
+      queued_report.insert(QStringLiteral("completionConfirmed"), false);
+      tool_reports.last() = queued_report;
+      --success_count;
+      if (tool_progress) tool_progress(queued_report.value(QStringLiteral("toolName")).toString(), arguments, QStringLiteral("failed"));
+    }
+  }
+  for (qsizetype call_index = static_cast<qsizetype>(next_call_index);
+       execute_remaining_calls && errors.isEmpty() && !composition_pending && call_index < requested_tool_calls.size(); ++call_index) {
+    const auto request_value = requested_tool_calls.at(call_index);
     if (cancellation_requested && cancellation_requested()) {
       errors.append(QStringLiteral("MCP model tool-call execution was canceled."));
       break;
@@ -8428,11 +10183,12 @@ QVariantMap execute_model_mcp_tool_plan(
       break;
     }
     const auto request = request_value.toMap();
+    next_call_index = call_index + 1;
     const auto tool_name = request.value(QStringLiteral("name")).toString().trimmed();
     const auto arguments = request.value(QStringLiteral("arguments")).toMap();
     if (tool_name.isEmpty()) {
       errors.append(QStringLiteral("Model requested a tool call without a name."));
-      continue;
+      break;
     }
     ++attempted_count;
     if (!effective_allowed_tools.contains(tool_name)) {
@@ -8442,38 +10198,185 @@ QVariantMap execute_model_mcp_tool_plan(
           {QStringLiteral("ok"), false},
           {QStringLiteral("blockedByAllowlist"), true},
       });
-      continue;
+      break;
     }
-    if (!client.hasCachedTool(tool_name)) {
+    const auto discovered_tools = tools_report.value(QStringLiteral("tools")).toList();
+    const auto discovered = std::any_of(discovered_tools.cbegin(), discovered_tools.cend(), [&tool_name](const auto& value) {
+      return value.toMap().value(QStringLiteral("name")).toString() == tool_name;
+    });
+    if (!discovered) {
       errors.append(QStringLiteral("MCP tool is missing from cache: %1").arg(tool_name));
       tool_reports.append(QVariantMap{
           {QStringLiteral("toolName"), tool_name},
           {QStringLiteral("ok"), false},
           {QStringLiteral("missingFromToolCache"), true},
       });
-      continue;
+      break;
     }
+    const auto read_only_tool = read_only_mcp_observation_tools().contains(tool_name);
+    const auto requested_identity = QJsonDocument::fromVariant(
+        QVariantMap{{QStringLiteral("toolName"), tool_name},
+                    {QStringLiteral("arguments"), arguments}}).toJson(QJsonDocument::Compact);
+    QVariantMap prior_receipt;
+    if (!read_only_tool) {
+      for (const auto& prior_value : completed_mutations) {
+        const auto prior = prior_value.toMap();
+        const auto prior_name = prior.value(QStringLiteral("toolName"), prior.value(QStringLiteral("name"))).toString();
+        if (!prior.value(QStringLiteral("ok")).toBool() || prior_name != tool_name) continue;
+        const auto prior_identity = QJsonDocument::fromVariant(
+            QVariantMap{{QStringLiteral("toolName"), prior_name},
+                        {QStringLiteral("arguments"), prior.value(QStringLiteral("arguments"))}})
+                .toJson(QJsonDocument::Compact);
+        if (prior_identity == requested_identity) {
+          prior_receipt = prior;
+          break;
+        }
+      }
+    }
+    auto replay_state_verified_different = false;
+    if (!prior_receipt.isEmpty() && tool_name == QStringLiteral("photo.edit_composition") &&
+        arguments.value(QStringLiteral("operation")).toString() == QStringLiteral("typography") &&
+        effective_allowed_tools.contains(QStringLiteral("photo.inspect_composition"))) {
+      // A setter A is no longer a replay after B changed its target. Verify the
+      // live requested fields; creation/deletion/relative operations stay guarded.
+      const auto asset_id = arguments.value(QStringLiteral("assetId")).toString();
+      const auto layer_id = arguments.value(QStringLiteral("layerId")).toString();
+      const auto values = arguments.value(QStringLiteral("values")).toMap();
+      if (!asset_id.isEmpty() && !layer_id.isEmpty() && !values.isEmpty()) {
+        const auto inspection = client.callTool(QStringLiteral("photo.inspect_composition"),
+                                                {{QStringLiteral("assetId"), asset_id}});
+        const auto state = inspection.value(QStringLiteral("structuredContent")).toMap();
+        if (inspection.value(QStringLiteral("ok")).toBool() &&
+            state.value(QStringLiteral("assetId")).toString() == asset_id &&
+            state.value(QStringLiteral("paintBusy")) == QVariant(false) &&
+            state.value(QStringLiteral("paintError")).toString().isEmpty()) {
+          for (const auto& layer_value : state.value(QStringLiteral("layers")).toList()) {
+            const auto layer = layer_value.toMap();
+            if (layer.value(QStringLiteral("id")).toString() != layer_id ||
+                layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text")) continue;
+            const auto typography = layer.value(QStringLiteral("textTypography")).toMap();
+            auto all_fields_available = true;
+            auto any_field_different = false;
+            for (auto it = values.cbegin(); it != values.cend(); ++it) {
+              if (!typography.contains(it.key())) { all_fields_available = false; break; }
+              const auto observed = typography.value(it.key());
+              if (it.key() == QStringLiteral("color")) {
+                const QColor wanted_color(it.value().toString());
+                const QColor observed_color(observed.toString());
+                if (!wanted_color.isValid() || !observed_color.isValid()) {
+                  all_fields_available = false; break;
+                }
+                any_field_different = any_field_different || wanted_color != observed_color;
+              } else if (it.value().metaType().id() == QMetaType::Double ||
+                         it.value().metaType().id() == QMetaType::Int ||
+                         it.value().metaType().id() == QMetaType::LongLong) {
+                bool wanted_ok = false, observed_ok = false;
+                const auto wanted = it.value().toDouble(&wanted_ok);
+                const auto current = observed.toDouble(&observed_ok);
+                if (!wanted_ok || !observed_ok || !std::isfinite(wanted) || !std::isfinite(current)) {
+                  all_fields_available = false; break;
+                }
+                any_field_different = any_field_different || std::abs(wanted - current) > 1e-7;
+              } else {
+                any_field_different = any_field_different || it.value() != observed;
+              }
+            }
+            replay_state_verified_different = all_fields_available && any_field_different;
+            break;
+          }
+        }
+      }
+      if (replay_state_verified_different) prior_receipt.clear();
+    }
+    if (!prior_receipt.isEmpty()) {
+      const auto error = QStringLiteral(
+          "This exact mutation already completed. Continue from its returned IDs and current inspection without replaying it.");
+      const auto prior_content = prior_receipt.value(QStringLiteral("structuredContent")).toMap();
+      QVariantMap prior_ids;
+      for (auto it = prior_content.cbegin(); it != prior_content.cend(); ++it) {
+        if (it.key().endsWith(QStringLiteral("Id")) ||
+            it.key().endsWith(QStringLiteral("Ids")))
+          prior_ids.insert(it.key(), it.value());
+      }
+      auto compact_report = QVariantMap{
+          {QStringLiteral("toolName"), tool_name},
+          {QStringLiteral("ok"), false},
+          {QStringLiteral("arguments"), arguments},
+          {QStringLiteral("replayPrevented"), true},
+          {QStringLiteral("error"), error},
+          {QStringLiteral("structuredContent"), QVariantMap{
+               {QStringLiteral("recoverableError"), true},
+               {QStringLiteral("mutationNotApplied"), true},
+               {QStringLiteral("replayPrevented"), true},
+               {QStringLiteral("alreadyCompleted"), true},
+               {QStringLiteral("priorResult"), prior_content},
+               {QStringLiteral("priorReturnedIds"), prior_ids},
+           }},
+      };
+      tool_reports.append(compact_report);
+      errors.append(QStringLiteral("%1: %2").arg(tool_name, error));
+      if (tool_progress) tool_progress(tool_name, arguments, QStringLiteral("failed"));
+      break;
+    }
+    if (tool_progress) tool_progress(tool_name, arguments, QStringLiteral("running"));
     const auto call_report = client.callTool(tool_name, arguments);
     auto compact_report = compact_mcp_tool_report(tool_name, call_report);
+    compact_report.insert(QStringLiteral("arguments"), arguments);
+    if (replay_state_verified_different)
+      compact_report.insert(QStringLiteral("stateVerifiedRepeatSetter"), true);
     compact_report.insert(QStringLiteral("reason"), request.value(QStringLiteral("reason")));
+    const auto content = compact_report.value(QStringLiteral("structuredContent")).toMap();
+    const auto operation = arguments.value(QStringLiteral("operation")).toString();
+    if (compact_report.value(QStringLiteral("ok")).toBool() && tool_name == QStringLiteral("photo.edit_composition") &&
+        (operation == QStringLiteral("copy_selection") || operation == QStringLiteral("paint") || operation == QStringLiteral("erase_selection")) &&
+        !content.value(QStringLiteral("paintError")).toString().isEmpty()) {
+      errors.append(content.value(QStringLiteral("paintError")).toString());
+      compact_report.insert(QStringLiteral("ok"), false);
+      compact_report.insert(QStringLiteral("error"), content.value(QStringLiteral("paintError")));
+    }
+    composition_pending = compact_report.value(QStringLiteral("ok")).toBool() &&
+        (tool_name == QStringLiteral("photo.edit_composition") || tool_name == QStringLiteral("photo.inspect_composition")) &&
+        content.value(QStringLiteral("paintBusy")).toBool();
+    if (composition_pending && !allow_composition_pending) {
+      errors.append(QStringLiteral("Composition pixels are still processing; continue with an asynchronous agent run."));
+      composition_pending = false;
+    }
+    if (tool_progress) tool_progress(tool_name, arguments,
+        composition_pending ? QStringLiteral("pending") : compact_report.value(QStringLiteral("ok")).toBool() && errors.isEmpty() ? QStringLiteral("complete") : QStringLiteral("failed"));
     tool_reports.append(compact_report);
     if (compact_report.value(QStringLiteral("ok")).toBool()) {
       ++success_count;
+      if (!read_only_tool)
+        completed_mutations.append(compact_report);
     } else {
-      errors.append(call_report.value(QStringLiteral("error")).toString());
+      errors.append(QStringLiteral("%1: %2").arg(tool_name, compact_report.value(QStringLiteral("error")).toString()));
     }
   }
   const auto canceled = cancellation_requested && cancellation_requested();
-  report.insert(QStringLiteral("ok"), success_count > 0 && errors.isEmpty() && !canceled);
+  report.insert(QStringLiteral("ok"), success_count > 0 && errors.isEmpty() && !canceled && !composition_pending);
   report.insert(
       QStringLiteral("status"),
-      canceled ? QStringLiteral("canceled") : errors.isEmpty() ? QStringLiteral("ok") : QStringLiteral("partial"));
+      canceled ? QStringLiteral("canceled") : composition_pending ? QStringLiteral("pending") : errors.isEmpty() ? QStringLiteral("ok") : QStringLiteral("partial"));
+  report.insert(QStringLiteral("compositionPending"), composition_pending && !canceled);
+  report.insert(QStringLiteral("executionComplete"), next_call_index >= requested_tool_calls.size() && !composition_pending);
+  report.insert(QStringLiteral("nextToolCallIndex"), next_call_index);
+  report.insert(QStringLiteral("completionChecks"), completion_checks);
   report.insert(QStringLiteral("canceled"), canceled);
   report.insert(QStringLiteral("attemptedCount"), attempted_count);
   report.insert(QStringLiteral("successCount"), success_count);
   report.insert(QStringLiteral("requestedToolCalls"), requested_tool_calls);
   report.insert(QStringLiteral("toolReports"), tool_reports);
   report.insert(QStringLiteral("errors"), errors);
+  const auto failure = tool_reports.isEmpty() ? QVariantMap{} : tool_reports.last().toMap();
+  const auto failure_content = failure.value(QStringLiteral("structuredContent")).toMap();
+  report.insert(QStringLiteral("recoverableError"), !errors.isEmpty() && !canceled && !composition_pending &&
+      !failure.value(QStringLiteral("ok")).toBool() &&
+      failure_content.value(QStringLiteral("recoverableError")) == QVariant(true) &&
+      failure_content.value(QStringLiteral("mutationNotApplied")) == QVariant(true) &&
+      !failure_content.value(QStringLiteral("recoveryRequired")).toBool() &&
+      !failure_content.value(QStringLiteral("paintBusy")).toBool() &&
+      failure_content.value(QStringLiteral("paintError")).toString().isEmpty());
+  report.insert(QStringLiteral("unattemptedToolCalls"), requested_tool_calls.mid(static_cast<qsizetype>(next_call_index)));
   report.insert(QStringLiteral("cachedTools"), cached_tools);
   return report;
 }
@@ -8483,13 +10386,21 @@ QVariantMap observe_mcp_tools(
     const QString& endpoint_kind,
     const QString& bearer_token,
     const QString& run_id,
+    const QString& asset_id,
     const AgentCancellationCallback& cancellation_requested) {
+  auto observation_tools = read_only_mcp_observation_tools();
+  QStringList skipped_tools;
+  if (asset_id.trimmed().isEmpty()) {
+    observation_tools.removeAll(QStringLiteral("photo.inspect_composition"));
+    skipped_tools.append(QStringLiteral("photo.inspect_composition"));
+  }
   QVariantMap report{
       {QStringLiteral("mode"), QStringLiteral("mcp-observation")},
       {QStringLiteral("endpoint"), endpoint},
       {QStringLiteral("endpointKind"), endpoint_kind},
       {QStringLiteral("runId"), run_id},
-      {QStringLiteral("allowedTools"), read_only_mcp_observation_tools()},
+      {QStringLiteral("allowedTools"), observation_tools},
+      {QStringLiteral("skippedTools"), skipped_tools},
   };
   if (endpoint.trimmed().isEmpty()) {
     report.insert(QStringLiteral("ok"), false);
@@ -8502,8 +10413,8 @@ QVariantMap observe_mcp_tools(
   AgentMcpClient client;
   client.setEndpoint(endpoint);
   client.setBearerToken(bearer_token);
-  client.setTimeoutMs(3000);
-  client.setAllowedTools(read_only_mcp_observation_tools());
+  client.setTimeoutMs(-1);
+  client.setAllowedTools(observation_tools);
   client.setCancellationPredicate(cancellation_requested);
   const auto tools_report = client.refreshToolCache(run_id);
   report.insert(QStringLiteral("toolCache"), tools_report);
@@ -8523,7 +10434,7 @@ QVariantMap observe_mcp_tools(
   QVariantList tool_reports;
   QStringList errors;
   auto success_count = 0;
-  for (const auto& tool_name : read_only_mcp_observation_tools()) {
+  for (const auto& tool_name : observation_tools) {
     if (cancellation_requested && cancellation_requested()) {
       errors.append(QStringLiteral("MCP observation was canceled."));
       break;
@@ -8537,8 +10448,12 @@ QVariantMap observe_mcp_tools(
       });
       continue;
     }
-    const auto call_report = client.callTool(tool_name);
-    const auto compact_report = compact_mcp_tool_report(tool_name, call_report);
+    const QVariantMap arguments = tool_name == QStringLiteral("photo.inspect_composition")
+        ? QVariantMap{{QStringLiteral("assetId"), asset_id}}
+        : QVariantMap{};
+    const auto call_report = client.callTool(tool_name, arguments);
+    auto compact_report = compact_mcp_tool_report(tool_name, call_report);
+    if (!arguments.isEmpty()) compact_report.insert(QStringLiteral("arguments"), arguments);
     tool_reports.append(compact_report);
     if (compact_report.value(QStringLiteral("ok")).toBool()) {
       ++success_count;
@@ -8596,6 +10511,7 @@ QVariantList mcp_model_tool_plan_call_records(const QVariantMap& tool_plan) {
             {QStringLiteral("blockedByAllowlist"), tool_report.value(QStringLiteral("blockedByAllowlist"))},
             {QStringLiteral("missingFromToolCache"), tool_report.value(QStringLiteral("missingFromToolCache"))},
             {QStringLiteral("error"), tool_report.value(QStringLiteral("error"))},
+            {QStringLiteral("arguments"), tool_report.value(QStringLiteral("arguments"))},
             {QStringLiteral("reason"), tool_report.value(QStringLiteral("reason"))},
         }));
   }
@@ -8623,6 +10539,15 @@ void log_agent_run_started(
 void log_agent_tool_calls(const QString& run_id, const QVariantList& tool_calls) {
   for (const auto& value : tool_calls) {
     const auto tool_call = value.toMap();
+    const auto outcome = tool_call.value(QStringLiteral("outcome")).toMap();
+    if (tool_call.value(QStringLiteral("status")).toString() == QStringLiteral("failed")) {
+      observability::logWarning(
+          photoEditorAppLog(),
+          QStringLiteral("agent.edit.tool_failed"),
+          {{QStringLiteral("run_id"), run_id},
+           {QStringLiteral("tool_name"), tool_call.value(QStringLiteral("name"))},
+           {QStringLiteral("reason"), outcome.value(QStringLiteral("error"))}});
+    }
     observability::logInfo(
         photoEditorAppLog(),
         QStringLiteral("agent.edit.tool_call"),
@@ -8888,6 +10813,14 @@ void write_agent_run_manifest(
   }
 
   const QVariantMap manifest{
+      {QStringLiteral("ok"), report->value(QStringLiteral("ok"))},
+      {QStringLiteral("requestId"), report->value(QStringLiteral("requestId"))},
+      {QStringLiteral("taskId"), report->value(QStringLiteral("taskId"))},
+      {QStringLiteral("revisedFromRunId"), report->value(QStringLiteral("revisedFromRunId"))},
+      {QStringLiteral("revisionFeedback"), report->value(QStringLiteral("revisionFeedback"))},
+      {QStringLiteral("originalRollbackRetained"), report->value(QStringLiteral("originalRollbackRetained"))},
+      {QStringLiteral("pendingProjectCorrection"), report->value(QStringLiteral("pendingProjectCorrection"))},
+      {QStringLiteral("taskTransaction"), report->value(QStringLiteral("taskTransaction"))},
       {QStringLiteral("runId"), run_id},
       {QStringLiteral("mode"), report->value(QStringLiteral("mode"))},
       {QStringLiteral("scope"), report->value(QStringLiteral("scope"))},
@@ -8979,8 +10912,17 @@ QVariantMap render_agent_analysis_artifacts(
     const QVariantMap& style,
     const QString& run_id,
     const QString& asset_id,
-    const QVariantMap& base_report) {
+    const QVariantMap& base_report,
+    const std::atomic_bool* cancellation_requested = nullptr) {
   QVariantMap report = base_report;
+  const auto canceled = [&]() {
+    if (!cancellation_requested || !cancellation_requested->load(std::memory_order_relaxed)) return false;
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("canceled"), true);
+    report.insert(QStringLiteral("errors"), QStringList{QStringLiteral("Planning proof canceled.")});
+    return true;
+  };
+  if (canceled()) return report;
   QStringList warnings = report.value(QStringLiteral("warnings")).toStringList();
   const auto safe_run_id = safe_artifact_id(run_id, QStringLiteral("analysis"));
   const auto safe_asset_id = safe_artifact_id(asset_id, QStringLiteral("asset"));
@@ -9019,6 +10961,7 @@ QVariantMap render_agent_analysis_artifacts(
     report.insert(QStringLiteral("warnings"), warnings);
     return report;
   }
+  if (canceled()) return report;
   const auto proof = render_agent_proof_image(
       source,
       file_path,
@@ -9047,8 +10990,12 @@ QVariantMap render_agent_analysis_artifacts(
         proof.canonical_plan_cache_key);
   }
 
+  if (canceled()) return report;
   if (!rendered.save(proof_path, "PNG")) {
     warnings.append(QStringLiteral("Unable to save analysis proof: %1").arg(proof_path));
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("errors"), warnings);
+    return report;
   }
   auto validation_report = validate_agent_edit_image(rendered, state, style);
   const auto style_match =
@@ -9170,6 +11117,10 @@ QVariantMap render_agent_proof_artifacts(
 
   QImage source;
   photo_editor::pipeline::DecodedImageMetadata decoded_metadata;
+  const auto capture_composition_source_fingerprint =
+      edit_intent.value(QStringLiteral("compositionPhotoBaselineSourceHashRequested")).toBool();
+  const auto composition_source_file_sha_before = capture_composition_source_fingerprint
+      ? sha256_file_contents(file_path) : QString{};
   if (canceled_at(QStringLiteral("before-decode"), &report)) {
     return report;
   }
@@ -9374,6 +11325,16 @@ QVariantMap render_agent_proof_artifacts(
   report.insert(QStringLiteral("proofHeight"), after_rendered.height());
   report.insert(QStringLiteral("artifacts"), artifacts);
   report.insert(QStringLiteral("recipeDiff"), recipe_diff);
+  if (capture_composition_source_fingerprint) {
+    const auto composition_source_file_sha_after = sha256_file_contents(file_path);
+    report.insert(QStringLiteral("compositionPhotoSourceFileSha256"),
+        !composition_source_file_sha_before.isEmpty() &&
+                composition_source_file_sha_before == composition_source_file_sha_after
+            ? composition_source_file_sha_before : QString{});
+    report.insert(QStringLiteral("compositionPhotoSourceFileStableDuringProof"),
+        !composition_source_file_sha_before.isEmpty() &&
+            composition_source_file_sha_before == composition_source_file_sha_after);
+  }
   write_json_artifact(validation_path, report, &validation_warnings);
   report.insert(QStringLiteral("warnings"), validation_warnings);
   return report;
@@ -9453,6 +11414,25 @@ QVariantMap render_agent_proof_artifacts(
 }
 
 }  // namespace
+
+QVariantMap agent_detail::native_composition_completion_evidence(
+    const QVariantMap& prompt_audit, const QVariantMap& edit_intent,
+    const QVariantMap& recipe_patch, const QVariantMap& model_tool_plan,
+    const QString& asset_id, int asset_count) {
+  return verified_native_composition_completion(
+      prompt_audit, edit_intent, recipe_patch, model_tool_plan, asset_id, asset_count);
+}
+
+QVariantList agent_planning_tool_schemas_for_approved_task(
+    const QVariantList& phase_schemas,
+    const QVariantMap& approved_snapshot) {
+  return composition_only_schemas_for_approved_task(
+      phase_schemas, approved_snapshot);
+}
+
+bool agent_approved_task_has_explicit_photo_quality_scope(const QVariantMap& approved_snapshot) {
+  return approved_task_has_explicit_photo_quality_scope(approved_snapshot);
+}
 
 QVariantMap agent_proof_worker_active_clock_sample(
     qint64 observed_interval_ms,
@@ -10190,6 +12170,17 @@ QString AgentEditController::errorMessage() const { return error_message_; }
 
 bool AgentEditController::running() const { return running_; }
 
+bool AgentEditController::canRevertTask() const {
+  const auto task_id = task_transaction_state_.value(QStringLiteral("taskId")).toString();
+  const auto status = task_transaction_state_.value(QStringLiteral("status")).toString();
+  return !task_id.isEmpty() && task_id == task_transaction_id_ &&
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool() &&
+      !running_ && !draft_request_pending_ && active_draft_request_id_.isEmpty() &&
+      pending_task_finalization_.isEmpty() &&
+      status != QStringLiteral("committed") && status != QStringLiteral("reverted") &&
+      status != QStringLiteral("abandoned");
+}
+
 bool AgentEditController::cancellationRequested() const { return cancellation_requested_; }
 
 bool AgentEditController::manualEditingActive() const { return manual_editing_active_; }
@@ -10304,6 +12295,10 @@ QVariantMap AgentEditController::progressivePreview() const {
 
 QString AgentEditController::activeDraftRequestId() const {
   return active_draft_request_id_;
+}
+
+QString AgentEditController::activeTaskId() const {
+  return !task_transaction_handler_ || active_draft_request_id_.isEmpty() ? QString{} : active_request_task_id_;
 }
 
 bool AgentEditController::draftRequestPending() const {
@@ -13357,6 +15352,75 @@ void AgentEditController::setUserInstructions(const QString& instructions) {
   emit userInstructionsChanged();
 }
 
+QVariantMap AgentEditController::setApprovedTaskSnapshot(
+    const QVariantMap& snapshot) {
+  if (running_ || draft_request_pending_ ||
+      !active_draft_request_id_.isEmpty() || draftActive() ||
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool()) {
+    return result_map(false, {QStringLiteral(
+        "The approved task can only be changed before a reversible task starts.")});
+  }
+  const auto approved_instructions =
+      snapshot.value(QStringLiteral("approvedInstructions")).toString().trimmed();
+  if (snapshot.isEmpty() || approved_instructions.isEmpty()) {
+    return result_map(false, {QStringLiteral(
+        "An approved task snapshot with approvedInstructions is required.")});
+  }
+  approved_task_snapshot_ = snapshot;
+  approved_task_snapshot_history_.clear();
+  return result_map(true);
+}
+
+QVariantMap AgentEditController::approveTaskRevision(
+    const QVariantMap& snapshot,
+    const QString& expected_task_id) {
+  const auto expected_id = expected_task_id.trimmed();
+  if (expected_id.isEmpty() || expected_id != task_transaction_id_ ||
+      task_transaction_state_.value(QStringLiteral("taskId")).toString() != expected_id ||
+      !task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool())
+    return result_map(false, {QStringLiteral(
+        "The revision must continue the same active reversible task and resource checkpoints.")});
+  if (running_ || draft_request_pending_ || !active_draft_request_id_.isEmpty())
+    return result_map(false, {QStringLiteral(
+        "Wait for the current task operation to finish before approving a revision.")});
+  const auto instructions = snapshot.value(QStringLiteral("approvedInstructions")).toString().trimmed();
+  const auto revision_targets = snapshot.value(QStringLiteral("targetIds")).toStringList();
+  QStringList active_targets = confirmed_asset_ids_;
+  if (active_targets.isEmpty())
+    active_targets = task_transaction_state_.value(QStringLiteral("targetIds")).toStringList();
+  if (active_targets.isEmpty())
+    active_targets = last_run_report_.value(QStringLiteral("assetIds")).toStringList();
+  if (active_targets.isEmpty()) active_targets = async_draft_asset_ids_;
+  auto sorted_revision_targets = revision_targets;
+  auto sorted_active_targets = active_targets;
+  std::sort(sorted_revision_targets.begin(), sorted_revision_targets.end());
+  std::sort(sorted_active_targets.begin(), sorted_active_targets.end());
+  if (instructions.isEmpty() || revision_targets.isEmpty() ||
+      sorted_revision_targets != sorted_active_targets)
+    return result_map(false, {QStringLiteral(
+        "The approved revision must include instructions and the exact target IDs from the active task.")});
+
+  if (!approved_task_snapshot_.isEmpty()) {
+    auto prior = approved_task_snapshot_;
+    prior.remove(QStringLiteral("approvedRevisionHistory"));
+    approved_task_snapshot_history_.append(prior);
+  }
+  auto frozen = snapshot;
+  frozen.insert(QStringLiteral("continuationTaskId"), expected_id);
+  frozen.insert(QStringLiteral("isRevision"), true);
+  frozen.insert(QStringLiteral("revisionNumber"), approved_task_snapshot_history_.size());
+  frozen.insert(QStringLiteral("approvedRevisionHistory"), approved_task_snapshot_history_);
+  approved_task_snapshot_ = frozen;
+  return QVariantMap{
+      {QStringLiteral("ok"), true},
+      {QStringLiteral("approved"), true},
+      {QStringLiteral("taskId"), expected_id},
+      {QStringLiteral("targetIds"), sorted_active_targets},
+      {QStringLiteral("revisionNumber"), frozen.value(QStringLiteral("revisionNumber"))},
+      {QStringLiteral("originalBaselineRetained"), true},
+  };
+}
+
 void AgentEditController::setRecipeBaseMode(const QString& mode) {
   const auto normalized = normalized_recipe_base_mode(mode);
   if (recipe_base_mode_ == normalized) {
@@ -14309,7 +16373,7 @@ QVariantMap AgentEditController::refreshMcpTools() {
   AgentMcpClient client;
   client.setEndpoint(mcp_endpoint_);
   client.setBearerToken(mcp_bearer_token_);
-  client.setTimeoutMs(3000);
+  client.setTimeoutMs(-1);
   client.setCancellationPredicate([this]() { return cancellation_requested_.load(); });
   const auto tools_report = client.refreshToolCache(QStringLiteral("agent-ui-status"));
   if (!tools_report.value(QStringLiteral("ok")).toBool()) {
@@ -14617,7 +16681,7 @@ QVariantMap AgentEditController::installSelectedModel(bool confirmed) {
 
   connect(process, &QProcess::readyReadStandardOutput, this, [this, process, installing_model]() {
     const auto chunk = QString::fromUtf8(process->readAllStandardOutput());
-    const auto output = (model_install_output_ + chunk).right(65536).trimmed();
+    const auto output = (model_install_output_ + chunk).right(65536);
     auto progress = parse_ollama_pull_progress(output);
     progress.insert(QStringLiteral("ollamaModel"), installing_model);
     if (!progress.contains(QStringLiteral("progress")) &&
@@ -14645,7 +16709,7 @@ QVariantMap AgentEditController::installSelectedModel(bool confirmed) {
   connect(process, &QProcess::finished, this, [this, process, installing_model](int exit_code, QProcess::ExitStatus exit_status) {
     if (model_install_process_ != process) return;
     const auto output =
-        (model_install_output_ + QString::fromUtf8(process->readAllStandardOutput())).right(65536).trimmed();
+        (model_install_output_ + QString::fromUtf8(process->readAllStandardOutput())).right(65536);
     const bool canceled = process->property("cancelRequested").toBool();
     const auto ok = !canceled && exit_status == QProcess::NormalExit && exit_code == 0;
     auto progress = parse_ollama_pull_progress(output);
@@ -17375,6 +19439,35 @@ QVariantMap AgentEditController::editingFreedomPolicy() const {
   return policy;
 }
 
+QVariantMap AgentEditController::authorizeNativeEditingCommand(const QString& name, bool property) const {
+  const auto style = activeRunStyle();
+  const auto allowed = style.value("allowedTools").toMap();
+  QStringList required;
+  if (property) {
+    static const QSet<QString> detail{"texture", "clarity", "dehaze", "sharpening", "sharpenRadius", "sharpenDetail",
+        "sharpenMasking", "luminanceNr", "colorNr", "grainAmount", "grainSize", "grainRoughness",
+        "lensDistortion", "lensVignette", "chromaticAberration", "vignetteAmount", "vignetteMidpoint",
+        "vignetteRoundness", "vignetteFeather", "vignetteHighlights"};
+    required.append(name.startsWith("perspective") || name.startsWith("transform") ? "crop" :
+        detail.contains(name) ? "detail" : "global_color");
+  } else if (name == "applyCurvePreset") {
+    required.append("curves");
+  } else {
+    required.append("layers_luts");
+    if (name.contains("Text") || name.contains("Typography") || name.contains("Shape")) required.append("graphics");
+    if (name.contains("Mask") || name.contains("Selection")) required.append("masks");
+  }
+  for (const auto& tool : required) {
+    const auto value = allowed.value(tool);
+    const auto text = value.toString().trimmed().toLower();
+    if (!value.isValid() || (value.metaType().id() == QMetaType::Bool ? !value.toBool() :
+        text.isEmpty() || text == "false" || text == "off" || text == "none"))
+      return {{"ok", false}, {"error", QStringLiteral("The active editing freedom/style does not permit %1.").arg(tool)},
+          {"blockedByStyle", true}};
+  }
+  return {{"ok", true}};
+}
+
 QVariantMap AgentEditController::validateRecipePatch(const QVariantMap& patch) const {
   const auto validation = validate_agent_recipe_patch(patch, activeRunStyle());
   auto report = result_map(validation.valid, validation.errors,
@@ -18448,6 +20541,25 @@ bool AgentEditController::takeOrStartRequestOwnedWorkerStage(
         draft_request_pending_ = false;
         emit draftRequestChanged();
         setStatus(QStringLiteral("Resuming draft"));
+        QVariantMap completion_evidence{
+            {QStringLiteral("requestId"), request_id},
+            {QStringLiteral("stage"), stage_name},
+            {QStringLiteral("contract"),
+             QStringLiteral("agent-request-owned-worker-continuation-v1")},
+            {QStringLiteral("staleRequestRejected"), true},
+        };
+        if (stage_result.contains(QStringLiteral("ok")))
+          completion_evidence.insert(QStringLiteral("stageOk"), stage_result.value(QStringLiteral("ok")));
+        for (const auto& key : {QStringLiteral("errorCode"), QStringLiteral("error"),
+                                QStringLiteral("proofSha256"), QStringLiteral("recipeSha256")}) {
+          if (stage_result.contains(key)) completion_evidence.insert(key, stage_result.value(key));
+        }
+        auto stage_messages = stage_result.value(QStringLiteral("errors")).toStringList();
+        if (stage_messages.isEmpty())
+          stage_messages = stage_result.value(QStringLiteral("warnings")).toStringList();
+        while (stage_messages.size() > 3) stage_messages.removeLast();
+        if (!stage_messages.isEmpty())
+          completion_evidence.insert(QStringLiteral("stageMessages"), stage_messages);
         appendRunEvent(
             event_stage,
             QStringLiteral("Work in background"),
@@ -18455,14 +20567,7 @@ bool AgentEditController::takeOrStartRequestOwnedWorkerStage(
             QStringLiteral(
                 "The copied %1 request finished; resuming on the workspace thread.")
                 .arg(stage_name),
-            QVariantMap{
-                {QStringLiteral("requestId"), request_id},
-                {QStringLiteral("stage"), stage_name},
-                {QStringLiteral("contract"),
-                 QStringLiteral(
-                     "agent-request-owned-worker-continuation-v1")},
-                {QStringLiteral("staleRequestRejected"), true},
-            });
+            completion_evidence);
         QTimer::singleShot(
             0,
             this,
@@ -18501,7 +20606,6 @@ bool AgentEditController::takeOrStartRequestOwnedPlanStage(
     result->safe_stop_reason = QStringLiteral("stale_request_context");
     return true;
   }
-  const auto request_fingerprint = agent_plan_request_fingerprint(request);
   const auto stage_key = stage_name;
   const auto cached = async_model_stage_results_.constFind(stage_key);
   if (cached != async_model_stage_results_.cend() &&
@@ -18514,6 +20618,10 @@ bool AgentEditController::takeOrStartRequestOwnedPlanStage(
     return false;
   }
 
+  // Cached stages are already owned by this request and are never redispatched.
+  // Serialize the copied context only when dispatching new work; rehashing every
+  // old stage on every continuation makes long tasks grow quadratically worse.
+  const auto request_fingerprint = agent_plan_request_fingerprint(request);
   const auto request_id = active_draft_request_id_;
   auto cancellation_token = std::make_shared<std::atomic_bool>(
       cancellation_requested_.load());
@@ -18596,6 +20704,9 @@ bool AgentEditController::takeOrStartRequestOwnedPlanStage(
             QVariantMap{
                 {QStringLiteral("requestId"), request_id},
                 {QStringLiteral("stage"), stage_name},
+                {QStringLiteral("modelOutput"), stage_result.plan_summary},
+                {QStringLiteral("modelOutputAvailable"), stage_result.ok &&
+                     !stage_result.plan_summary.trimmed().isEmpty()},
                 {QStringLiteral("contract"),
                  QStringLiteral(
                      "agent-request-owned-planning-continuation-v2")},
@@ -18611,6 +20722,203 @@ bool AgentEditController::takeOrStartRequestOwnedPlanStage(
   watcher->setFuture(QtConcurrent::run(
       [worker_request]() { return plan_agent_recipe_patch(worker_request); }));
   return false;
+}
+
+QVariantMap AgentEditController::planningRecipeSnapshot(const QVariantMap& asset) const {
+  const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
+  const auto live_asset = catalog_model_ ? catalog_model_->assetById(asset_id) : QVariantMap{};
+  const auto catalog_recipe = [&]() {
+    // The quick look is a provisional overlay, not the task's editing base.
+    // Exclude it only while the exact authored preview is still current; this
+    // also lets independent preview rejection restore the base without making
+    // a correctly captured planning proof stale. Other changes remain conflicts.
+    if (progressive_preview_.value(QStringLiteral("twoSpeedContract")) == QStringLiteral("agent-two-speed-planning-preview-v1") &&
+        async_progressive_preview_originals_.contains(asset_id) &&
+        live_asset.value(QStringLiteral("adjustmentPatchJson")).toString() == async_progressive_preview_authored_.value(asset_id))
+      return async_progressive_preview_originals_.value(asset_id);
+    return asset_bound_adjustment_patch_for_asset(live_asset);
+  };
+  if (planning_snapshot_handler_) {
+    auto snapshot = planning_snapshot_handler_(asset_id);
+    if (snapshot.value(QStringLiteral("ok")).toBool() && snapshot.value(QStringLiteral("source")) == QStringLiteral("catalog-photo"))
+      snapshot.insert(QStringLiteral("recipeJson"), catalog_recipe());
+    return snapshot;
+  }
+  return {{QStringLiteral("ok"), !live_asset.isEmpty()}, {QStringLiteral("assetId"), asset_id},
+      {QStringLiteral("recipeJson"), catalog_recipe()},
+      {QStringLiteral("source"), QStringLiteral("catalog-photo")}};
+}
+
+bool AgentEditController::takeOrStartPlanningProof(
+    const QString& stage, const QVariantMap& asset, const QVariantMap& style,
+    const QString& run_id, const QString& scope, bool validate_live, QVariantMap* report,
+    const QVariantMap& overlay_patch) {
+  const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
+  const auto stage_key = QStringLiteral("planning-proof:%1").arg(stage);
+  const auto fail = [&](const QString& message) {
+    *report = result_map(false, {message});
+    report->insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+    return true;
+  };
+  const auto hash_recipe = [](const QString& recipe) {
+    return QString::fromLatin1(QCryptographicHash::hash(recipe.toUtf8(), QCryptographicHash::Sha256).toHex());
+  };
+  const auto snapshot = planningRecipeSnapshot(asset);
+  if (!snapshot.value(QStringLiteral("ok")).toBool() || snapshot.value(QStringLiteral("assetId")).toString() != asset_id ||
+      snapshot.value(QStringLiteral("paintBusy")).toBool())
+    return fail(snapshot.value(QStringLiteral("error"), QStringLiteral("The planning document is unavailable or still processing.")).toString());
+  const auto recipe = snapshot.value(QStringLiteral("recipeJson")).toString();
+  const auto decoded = compatibility_adjustments_for_asset({{QStringLiteral("adjustmentPatchJson"), recipe}});
+  if (recipe.isEmpty() || !decoded.ok()) return fail(QStringLiteral("The live planning recipe could not be read."));
+  const auto recipe_hash = hash_recipe(recipe);
+  const auto checkpoint_hash = snapshot.value(QStringLiteral("taskStateHash")).toString();
+  if (snapshot.value(QStringLiteral("source")) == QStringLiteral("native-photo") &&
+      !checkpoint_hash.isEmpty() && checkpoint_hash != recipe_hash)
+    return fail(QStringLiteral("The live photo no longer matches its task checkpoint. Current edits were preserved."));
+  auto cached = async_request_worker_stage_results_.constFind(stage_key);
+  if (async_model_planning_enabled_ && cached != async_request_worker_stage_results_.cend()) {
+    const auto cached_snapshot_is_current = !cached.value().value(QStringLiteral("ok")).toBool() ||
+        (cached.value().value(QStringLiteral("sourceRecipeSha256")).toString() == recipe_hash &&
+         cached.value().value(QStringLiteral("snapshotSource")).toString() ==
+             snapshot.value(QStringLiteral("source")).toString() &&
+         cached.value().value(QStringLiteral("taskStateHash")).toString() == checkpoint_hash);
+    if (cached_snapshot_is_current) {
+      *report = cached.value();
+    } else {
+      // The same logical repair round can resume after one of its already
+      // accepted native operations. Refresh only after the native owner proves
+      // its current checkpoint still matches the live recipe above; an
+      // unowned manual edit cannot be silently adopted as the new proof base.
+      async_request_worker_stage_results_.remove(stage_key);
+      cached = async_request_worker_stage_results_.cend();
+    }
+  }
+  if (!async_model_planning_enabled_ || cached == async_request_worker_stage_results_.cend()) {
+    const auto file_path = asset.value(QStringLiteral("filePath")).toString();
+    const auto state = *decoded.state;
+    const auto overlay_hash = overlay_patch.isEmpty() ? QString() : stable_variant_hash(overlay_patch);
+    const auto artifact_run_id = QStringLiteral("%1-%2-%3-%4").arg(run_id, stage, recipe_hash.left(16), overlay_hash.left(12));
+    const auto capture_source_file_fingerprint =
+        asset.value(QStringLiteral("captureCompositionSourceFingerprint")).toBool();
+    const auto worker = [state, overlay_patch, style, file_path, artifact_run_id, asset_id, recipe, recipe_hash, overlay_hash, stage, snapshot, hash_recipe, capture_source_file_fingerprint](
+        const std::shared_ptr<std::atomic_bool>& token) {
+      const auto source_file_sha_before = capture_source_file_fingerprint
+          ? sha256_file_contents(file_path) : QString{};
+      auto effective_state = state;
+      if (!overlay_patch.isEmpty()) apply_agent_recipe_patch(&effective_state, overlay_patch);
+      const auto effective_recipe_json = serialize_adjustment_patch_json(
+          effective_state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+      const auto effective_recipe_hash = hash_recipe(effective_recipe_json);
+      auto rendered = render_agent_analysis_artifacts(file_path, effective_state, style, artifact_run_id, asset_id,
+          {{QStringLiteral("ok"), true}, {QStringLiteral("mode"), QStringLiteral("planning-state-proof")},
+              {QStringLiteral("assetId"), asset_id}, {QStringLiteral("stage"), stage},
+              {QStringLiteral("recipeSha256"), recipe_hash},
+              {QStringLiteral("overlayPatchSha256"), overlay_hash},
+              {QStringLiteral("snapshotSource"), snapshot.value(QStringLiteral("source"))},
+              {QStringLiteral("taskStateHash"), snapshot.value(QStringLiteral("taskStateHash"))}}, token.get());
+      if (!rendered.value(QStringLiteral("ok")).toBool()) return rendered;
+      QFile file(rendered.value(QStringLiteral("currentProofPath")).toString());
+      if (!file.open(QIODevice::ReadOnly) || rendered.value(QStringLiteral("proofWidth")).toInt() <= 0 ||
+          rendered.value(QStringLiteral("proofHeight")).toInt() <= 0) {
+        rendered.insert(QStringLiteral("ok"), false);
+        rendered.insert(QStringLiteral("errors"), QStringList{QStringLiteral("The completed planning proof could not be read.")});
+        return rendered;
+      }
+      rendered.insert(QStringLiteral("proofSha256"), QString::fromLatin1(
+          QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256).toHex()));
+      // Keep exact render input local; model metadata receives its digest.
+      rendered.insert(QStringLiteral("sourceRecipeJson"), recipe);
+      rendered.insert(QStringLiteral("sourceRecipeSha256"), recipe_hash);
+      rendered.insert(QStringLiteral("sourceSnapshotRecipeSha256"), recipe_hash);
+      rendered.insert(QStringLiteral("renderRecipeSha256"), effective_recipe_hash);
+      rendered.insert(QStringLiteral("sourceFilePath"), file_path);
+      if (capture_source_file_fingerprint) {
+        const auto source_file_sha_after = sha256_file_contents(file_path);
+        rendered.insert(QStringLiteral("sourceFileSha256"),
+            !source_file_sha_before.isEmpty() && source_file_sha_before == source_file_sha_after
+                ? source_file_sha_before : QString{});
+      }
+      rendered.insert(QStringLiteral("planningRecipeJson"), effective_recipe_json);
+      return rendered;
+    };
+    if (async_model_planning_enabled_) {
+      if (!takeOrStartRequestOwnedWorkerStage(stage_key, scope, worker, report)) return false;
+    } else {
+      *report = worker(std::make_shared<std::atomic_bool>(cancellation_requested_.load()));
+    }
+  }
+  if (!report->value(QStringLiteral("ok")).toBool()) {
+    auto errors = report->value(QStringLiteral("errors")).toStringList();
+    if (errors.isEmpty()) {
+      const auto error = report->value(QStringLiteral("error")).toString().trimmed();
+      if (!error.isEmpty()) errors.append(error);
+    }
+    if (errors.isEmpty()) {
+      errors = report->value(QStringLiteral("warnings")).toStringList();
+    }
+    if (errors.isEmpty()) {
+      errors.append(QStringLiteral(
+          "The fresh rendered composition proof did not return a certified result. Earlier successful edits remain applied and can be reviewed or reverted."));
+    }
+    report->insert(QStringLiteral("errors"), errors);
+    report->insert(QStringLiteral("failureReason"), errors.join(QStringLiteral("; ")));
+    if (report->value(QStringLiteral("errorCode")).toString().isEmpty())
+      report->insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+    report->insert(QStringLiteral("proofBoundaryFailed"), true);
+    report->insert(QStringLiteral("proofStage"), stage);
+    return true;
+  }
+  if (validate_live) {
+    const auto live = planningRecipeSnapshot(asset);
+    const auto live_recipe_sha = hash_recipe(live.value(QStringLiteral("recipeJson")).toString());
+    const auto persisted_source_recipe_sha = report->value(QStringLiteral("sourceRecipeSha256")).toString();
+    const auto source_recipe_json = report->value(QStringLiteral("sourceRecipeJson")).toString();
+    const auto expected_recipe_sha = !persisted_source_recipe_sha.isEmpty()
+        ? persisted_source_recipe_sha
+        : source_recipe_json.isEmpty()
+            ? report->value(QStringLiteral("recipeSha256")).toString()
+            : hash_recipe(source_recipe_json);
+    const auto effective_recipe_sha = hash_recipe(
+        report->value(QStringLiteral("planningRecipeJson")).toString());
+    const auto expected_render_recipe_sha = report->value(QStringLiteral("renderRecipeSha256")).toString();
+    const auto expected_task_state_hash = report->value(QStringLiteral("taskStateHash")).toString();
+    const auto live_task_state_hash = live.value(QStringLiteral("taskStateHash")).toString();
+    const auto unavailable = !live.value(QStringLiteral("ok")).toBool() ||
+        live.value(QStringLiteral("assetId")).toString() != asset_id ||
+        live.value(QStringLiteral("paintBusy")).toBool();
+    const auto recipe_changed = expected_recipe_sha.isEmpty() || live_recipe_sha != expected_recipe_sha;
+    const auto checkpoint_changed = !expected_task_state_hash.isEmpty() &&
+        !live_task_state_hash.isEmpty() && expected_task_state_hash != live_task_state_hash;
+    const auto render_input_changed = !expected_render_recipe_sha.isEmpty() &&
+        effective_recipe_sha != expected_render_recipe_sha;
+    if (unavailable || recipe_changed || checkpoint_changed || render_input_changed) {
+      const auto reason = unavailable
+          ? QStringLiteral("The document became unavailable while its planning proof was rendering. Current edits were preserved.")
+          : QStringLiteral("The document or its rendered planning input changed while its proof was rendering. Current edits were preserved.");
+      *report = result_map(false, {reason});
+      report->insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+      report->insert(QStringLiteral("proofSourceConflict"), QVariantMap{
+          {QStringLiteral("assetId"), asset_id},
+          {QStringLiteral("liveAssetId"), live.value(QStringLiteral("assetId"))},
+          {QStringLiteral("source"), live.value(QStringLiteral("source"))},
+          {QStringLiteral("snapshotAvailable"), live.value(QStringLiteral("ok"))},
+          {QStringLiteral("paintBusy"), live.value(QStringLiteral("paintBusy"))},
+          {QStringLiteral("recipeChanged"), recipe_changed},
+          {QStringLiteral("expectedRecipeSha256"), expected_recipe_sha},
+          {QStringLiteral("liveRecipeSha256"), live_recipe_sha},
+          {QStringLiteral("renderInputChanged"), render_input_changed},
+          {QStringLiteral("expectedRenderRecipeSha256"), expected_render_recipe_sha},
+          {QStringLiteral("liveRenderRecipeSha256"), effective_recipe_sha},
+          {QStringLiteral("checkpointChanged"), checkpoint_changed},
+          {QStringLiteral("expectedTaskStateHash"), expected_task_state_hash},
+          {QStringLiteral("liveTaskStateHash"), live_task_state_hash},
+      });
+      report->insert(QStringLiteral("proofBoundaryFailed"), true);
+      report->insert(QStringLiteral("proofStage"), stage);
+      return true;
+    }
+  }
+  return true;
 }
 
 QVariantMap AgentEditController::planDraftForScope(
@@ -18637,37 +20945,139 @@ QVariantMap AgentEditController::planDraftForScope(
   }
   const auto representative_asset = scoped_assets.first().toMap();
   auto model_asset = representative_asset;
+  auto* mutable_this = const_cast<AgentEditController*>(this);
+  const auto planning_run_id = active_draft_request_id_.isEmpty()
+      ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+      : active_draft_request_id_;
+  const auto allow_tool_call_plan =
+      mcp_context.value(QStringLiteral("allowToolCallPlan"), false).toBool();
+  const auto single_asset_composition_task = allow_tool_call_plan && scoped_assets.size() == 1 &&
+      approved_task_is_composition_only(approved_task_snapshot_) &&
+      !approved_task_has_explicit_photo_quality_scope(approved_task_snapshot_);
+  auto planning_proof_asset = representative_asset;
+  if (single_asset_composition_task)
+    planning_proof_asset.insert(QStringLiteral("captureCompositionSourceFingerprint"), true);
   QVariantMap planning_proof_report;
-  const auto representative_adjustments =
-      compatibility_adjustments_for_asset(
-          representative_asset);
-  const auto representative_adjustment_patch_json =
-      asset_bound_adjustment_patch_for_asset(
-          representative_asset);
-  if (representative_adjustments.ok()) {
-    const auto planning_run_id =
-        mcp_context.value(QStringLiteral("runId")).toString().trimmed().isEmpty()
-            ? QUuid::createUuid().toString(QUuid::WithoutBraces)
-            : mcp_context.value(QStringLiteral("runId")).toString();
-    planning_proof_report = render_agent_analysis_artifacts(
-        representative_asset.value(QStringLiteral("filePath")).toString(),
-        *representative_adjustments.state,
-        style,
-        planning_run_id,
-        representative_asset.value(QStringLiteral("assetId")).toString(),
-        QVariantMap{
-            {QStringLiteral("ok"), true},
-            {QStringLiteral("mode"), QStringLiteral("model-input-proof")},
-            {QStringLiteral("scope"), report_scope},
-            {QStringLiteral("assetId"), representative_asset.value(QStringLiteral("assetId"))},
-        });
-    const auto current_proof_path =
-        planning_proof_report.value(QStringLiteral("currentProofPath")).toString();
-    if (!current_proof_path.trimmed().isEmpty()) {
-      model_asset.insert(QStringLiteral("proofImagePath"), current_proof_path);
-      model_asset.insert(QStringLiteral("currentProofPath"), current_proof_path);
+  if (!mutable_this->takeOrStartPlanningProof(QStringLiteral("primary-plan"), planning_proof_asset, style,
+          planning_run_id, scope, !async_model_stage_results_.contains(QStringLiteral("primary-plan")), &planning_proof_report))
+    return mutable_this->requestOwnedWorkerPendingReport(QStringLiteral("planning-proof:primary-plan"), report_scope);
+  if (!planning_proof_report.value(QStringLiteral("ok")).toBool()) return planning_proof_report;
+  QVariantMap composition_photo_baseline;
+  const auto composition_photo_baseline_key = QStringLiteral("composition-photo-quality-baseline");
+  if (single_asset_composition_task) {
+    const auto revision_baseline = async_revision_context_
+        .value(QStringLiteral("compositionPhotoBaseline")).toMap();
+    const auto revision_task_id = async_revision_context_
+        .value(QStringLiteral("taskId")).toString();
+    const auto revision_baseline_latest_run = revision_baseline
+        .value(QStringLiteral("latestAcceptedRunId"),
+               revision_baseline.value(QStringLiteral("sourceRunId"))).toString();
+    if (!revision_baseline.isEmpty() &&
+        revision_baseline_latest_run ==
+            async_revision_context_.value(QStringLiteral("revisedFromRunId")).toString() &&
+        revision_baseline.value(QStringLiteral("sourceProjectKey")).toString() ==
+            currentContinuityProjectKey() &&
+        verified_composition_photo_baseline(
+            revision_baseline,
+            revision_baseline.value(QStringLiteral("requestId")).toString(),
+            revision_baseline.value(QStringLiteral("runId")).toString(),
+            representative_asset.value(QStringLiteral("assetId")).toString(),
+            revision_task_id)) {
+      composition_photo_baseline = revision_baseline;
+      const auto cached_revision_baseline = async_request_worker_stage_results_
+          .value(composition_photo_baseline_key);
+      auto cached_original = cached_revision_baseline;
+      cached_original.remove(QStringLiteral("revisionBinding"));
+      auto expected_original = revision_baseline;
+      expected_original.remove(QStringLiteral("revisionBinding"));
+      if (cached_original == expected_original &&
+          verified_composition_photo_baseline(cached_revision_baseline,
+              revision_baseline.value(QStringLiteral("requestId")).toString(),
+              revision_baseline.value(QStringLiteral("runId")).toString(),
+              representative_asset.value(QStringLiteral("assetId")).toString(), revision_task_id) &&
+          verified_revision_composition_photo_binding(cached_revision_baseline,
+              planning_run_id, revision_task_id, revision_baseline_latest_run,
+              representative_asset.value(QStringLiteral("assetId")).toString(),
+              mcp_context.value(QStringLiteral("runId")).toString()))
+        composition_photo_baseline = cached_revision_baseline;
+    } else {
+      const auto cached_baseline = async_request_worker_stage_results_.constFind(
+          composition_photo_baseline_key);
+      if (async_revision_context_.isEmpty() &&
+          cached_baseline != async_request_worker_stage_results_.cend()) {
+        composition_photo_baseline = cached_baseline.value();
+      } else if (async_revision_context_.isEmpty()) {
+        const auto source_recipe = planning_proof_report.value(QStringLiteral("sourceRecipeJson")).toString();
+        auto source_has_text = true;
+        const auto normalized_source_recipe = normalized_photo_composition_recipe_json(
+            source_recipe, &source_has_text);
+        const auto source_recipe_document = QJsonDocument::fromJson(source_recipe.toUtf8());
+        const auto source_recipe_layer_count = source_recipe_document.object()
+            .value(QStringLiteral("adjustmentState")).toObject()
+            .value(QStringLiteral("layers")).toArray().size();
+        const auto validation = planning_proof_report.value(QStringLiteral("validationReport")).toMap();
+        const auto source_recipe_sha = planning_proof_report.value(QStringLiteral("sourceRecipeSha256")).toString();
+        const auto proof_sha = planning_proof_report.value(QStringLiteral("proofSha256")).toString();
+        const auto task_state_hash = planning_proof_report.value(QStringLiteral("taskStateHash")).toString();
+        const auto source_file_sha = planning_proof_report.value(QStringLiteral("sourceFileSha256")).toString();
+        if (planning_proof_report.value(QStringLiteral("snapshotSource")).toString() ==
+                QStringLiteral("native-photo") &&
+            planning_proof_report.value(QStringLiteral("assetId")).toString() ==
+                representative_asset.value(QStringLiteral("assetId")).toString() &&
+            !source_has_text && !normalized_source_recipe.isEmpty() &&
+            source_recipe_sha == sha256_text(source_recipe) &&
+            is_sha256_hex(proof_sha) && is_sha256_hex(task_state_hash) &&
+            is_sha256_hex(source_file_sha) &&
+            validation.contains(QStringLiteral("ok")) &&
+            validation.value(QStringLiteral("ok")).metaType().id() == QMetaType::Bool &&
+            validation_errors_are_empty(validation) &&
+            !validation.value(QStringLiteral("imageStats")).toMap().isEmpty()) {
+          composition_photo_baseline = QVariantMap{
+              {QStringLiteral("contract"), QStringLiteral("unchanged-pre-text-composition-photographic-baseline-v1")},
+              {QStringLiteral("requestId"), planning_run_id},
+              {QStringLiteral("runId"), mcp_context.value(QStringLiteral("runId"))},
+              {QStringLiteral("taskId"), activeTaskId()},
+              {QStringLiteral("assetId"), representative_asset.value(QStringLiteral("assetId"))},
+              {QStringLiteral("sourceProjectKey"), currentContinuityProjectKey()},
+              {QStringLiteral("sourceFilePath"), planning_proof_report.value(QStringLiteral("sourceFilePath"))},
+              {QStringLiteral("sourceFileSha256"), source_file_sha},
+              {QStringLiteral("styleFingerprint"), sha256_text(QString::fromUtf8(
+                   QJsonDocument::fromVariant(style).toJson(QJsonDocument::Compact)))},
+              {QStringLiteral("sourceRecipeJson"), source_recipe},
+              {QStringLiteral("sourceRecipeSha256"), source_recipe_sha},
+              {QStringLiteral("sourceRecipeFingerprintVerified"), true},
+              {QStringLiteral("normalizedPhotoCompositionSha256"), sha256_text(normalized_source_recipe)},
+              {QStringLiteral("proofSha256"), proof_sha},
+              {QStringLiteral("proofPath"), planning_proof_report.value(QStringLiteral("currentProofPath"))},
+              {QStringLiteral("taskStateHash"), task_state_hash},
+              {QStringLiteral("snapshotSource"), planning_proof_report.value(QStringLiteral("snapshotSource"))},
+              {QStringLiteral("validationReport"), validation},
+              {QStringLiteral("preMutationInspectionVerified"), false},
+              {QStringLiteral("preMutationLayerCount"), source_recipe_layer_count},
+              {QStringLiteral("explicitPhotoQualityScope"), false},
+          };
+          if (async_model_planning_enabled_)
+            mutable_this->async_request_worker_stage_results_.insert(
+                composition_photo_baseline_key, composition_photo_baseline);
+        }
+      }
     }
   }
+  const auto attach_proof = [single_asset_composition_task](AgentLocalModelPlanRequest* target, const QVariantMap& proof) {
+    QVariantMap evidence;
+    for (const auto& key : {QStringLiteral("assetId"), QStringLiteral("stage"), QStringLiteral("recipeSha256"),
+        QStringLiteral("sourceRecipeSha256"), QStringLiteral("sourceSnapshotRecipeSha256"),
+        QStringLiteral("renderRecipeSha256"), QStringLiteral("proofSha256"), QStringLiteral("taskStateHash"), QStringLiteral("snapshotSource"),
+        QStringLiteral("currentProofPath"), QStringLiteral("proofWidth"), QStringLiteral("proofHeight")})
+      evidence.insert(key, proof.value(key));
+    target->asset.insert(QStringLiteral("proofImagePath"), proof.value(QStringLiteral("currentProofPath")));
+    target->asset.insert(QStringLiteral("currentProofPath"), proof.value(QStringLiteral("currentProofPath")));
+    target->asset.insert(QStringLiteral("planningProofRequired"), true);
+    target->asset.insert(QStringLiteral("planningProofSha256"), proof.value(QStringLiteral("proofSha256")));
+    target->asset.insert(QStringLiteral("visualEvidence"), evidence);
+    target->current_adjustment_patch_json = single_asset_composition_task
+        ? QString{} : proof.value(QStringLiteral("planningRecipeJson")).toString();
+  };
   const auto insert_planning_proof_metadata = [&](QVariantMap* report) {
     if (report == nullptr || planning_proof_report.isEmpty()) {
       return;
@@ -18682,6 +21092,202 @@ QVariantMap AgentEditController::planDraftForScope(
           planning_proof_report.value(QStringLiteral("currentProofPath")));
     }
   };
+  QVariantList model_tool_plan_reports;
+  const auto activate_pre_mutation_photo_baseline = [&]() {
+    if (composition_photo_baseline.isEmpty() ||
+        composition_photo_baseline.value(QStringLiteral("preMutationInspectionVerified")).toBool() ||
+        composition_photo_baseline.value(QStringLiteral("requestId")).toString() != planning_run_id ||
+        composition_photo_baseline.value(QStringLiteral("runId")).toString() !=
+            mcp_context.value(QStringLiteral("runId")).toString()) {
+      return;
+    }
+    QVariantMap initial_inspection;
+    for (const auto& report_value : model_tool_plan_reports) {
+      const auto report = report_value.toMap();
+      const auto tool_name = report.value(QStringLiteral("toolName")).toString();
+      if (tool_name == QStringLiteral("photo.inspect_composition")) {
+        if (!report.value(QStringLiteral("ok")).toBool() ||
+            report.value(QStringLiteral("runId")).toString() !=
+                composition_photo_baseline.value(QStringLiteral("runId")).toString()) {
+          return;
+        }
+        initial_inspection = report;
+        break;
+      }
+      if (tool_name != QStringLiteral("app.list_commands") &&
+          tool_name != QStringLiteral("app.command_schema") &&
+          tool_name != QStringLiteral("app.inspect_command")) {
+        // Any unknown operation before readback means the proof cannot be
+        // certified as the no-text, pre-mutation photo baseline.
+        return;
+      }
+    }
+    if (initial_inspection.isEmpty()) return;
+    const auto content = initial_inspection.value(QStringLiteral("structuredContent")).toMap();
+    const auto layers = content.value(QStringLiteral("layers")).toList();
+    const auto has_text_layer = std::any_of(
+        layers.cbegin(), layers.cend(), [](const QVariant& value) {
+          return value.toMap().value(QStringLiteral("kind")).toString() == QStringLiteral("text");
+        });
+    const auto task_state_hash = composition_photo_baseline.value(QStringLiteral("taskStateHash")).toString();
+    if (initial_inspection.value(QStringLiteral("arguments")).toMap()
+                .value(QStringLiteral("assetId")).toString() !=
+            composition_photo_baseline.value(QStringLiteral("assetId")).toString() ||
+        content.value(QStringLiteral("assetId")).toString() !=
+            composition_photo_baseline.value(QStringLiteral("assetId")).toString() ||
+        content.value(QStringLiteral("taskStateHash")).toString() != task_state_hash ||
+        content.value(QStringLiteral("paintBusy")).toBool() ||
+        !content.value(QStringLiteral("paintError")).toString().isEmpty() ||
+        content.value(QStringLiteral("layers")).metaType().id() != QMetaType::QVariantList ||
+        has_text_layer ||
+        layers.size() != composition_photo_baseline.value(QStringLiteral("preMutationLayerCount"), -1).toInt()) {
+      return;
+    }
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionVerified"), true);
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionReceipt"), initial_inspection);
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionReceiptSha256"),
+        sha256_text(QString::fromUtf8(
+            QJsonDocument::fromVariant(initial_inspection).toJson(QJsonDocument::Compact))));
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionRunId"), initial_inspection.value(QStringLiteral("runId")));
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionAssetId"), content.value(QStringLiteral("assetId")));
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionTaskStateHash"), content.value(QStringLiteral("taskStateHash")));
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionNoTextLayers"), !has_text_layer);
+    composition_photo_baseline.insert(QStringLiteral("preMutationInspectionLayerCount"), layers.size());
+    composition_photo_baseline.insert(QStringLiteral("preMutationLayerCount"), layers.size());
+    if (async_model_planning_enabled_)
+      mutable_this->async_request_worker_stage_results_.insert(
+          composition_photo_baseline_key, composition_photo_baseline);
+  };
+  const auto bind_revision_photo_baseline = [&]() {
+    if (async_revision_context_.isEmpty() ||
+        composition_photo_baseline.isEmpty() ||
+        composition_photo_baseline.contains(QStringLiteral("revisionBinding"))) {
+      return;
+    }
+    const auto asset_id = representative_asset.value(QStringLiteral("assetId")).toString();
+    const auto task_id = task_transaction_id_;
+    const auto source_run_id = async_revision_context_.value(QStringLiteral("revisedFromRunId")).toString();
+    const auto latest_accepted_run_id = composition_photo_baseline
+        .value(QStringLiteral("latestAcceptedRunId"),
+               composition_photo_baseline.value(QStringLiteral("sourceRunId")))
+        .toString();
+    const auto revision_asset_ids = async_revision_context_.value(QStringLiteral("assetIds")).toStringList();
+    auto owned_asset_ids = QStringList{};
+    for (const auto& resource_value : task_transaction_state_.value(QStringLiteral("resources")).toList())
+      owned_asset_ids.append(resource_value.toMap().value(QStringLiteral("id")).toString());
+    auto sorted_revision_asset_ids = revision_asset_ids;
+    auto sorted_owned_asset_ids = owned_asset_ids;
+    std::sort(sorted_revision_asset_ids.begin(), sorted_revision_asset_ids.end());
+    std::sort(sorted_owned_asset_ids.begin(), sorted_owned_asset_ids.end());
+    if (activeTaskId().isEmpty() || activeTaskId() != task_id ||
+        task_transaction_state_.value(QStringLiteral("taskId")).toString() != task_id ||
+        !task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool() ||
+        task_id.isEmpty() || asset_id.isEmpty() ||
+        sorted_revision_asset_ids != sorted_owned_asset_ids ||
+        sorted_revision_asset_ids != QStringList{asset_id} ||
+        composition_photo_baseline.value(QStringLiteral("taskId")).toString() != task_id ||
+        latest_accepted_run_id.isEmpty() || latest_accepted_run_id != source_run_id ||
+        composition_photo_baseline.value(QStringLiteral("sourceProjectKey")).toString() != currentContinuityProjectKey() ||
+        !verified_composition_photo_baseline(
+            composition_photo_baseline,
+            composition_photo_baseline.value(QStringLiteral("requestId")).toString(),
+            composition_photo_baseline.value(QStringLiteral("runId")).toString(),
+            asset_id,
+            task_id)) {
+      return;
+    }
+    const auto source_recipe = planning_proof_report.value(QStringLiteral("sourceRecipeJson")).toString();
+    auto source_has_text = false;
+    const auto normalized_source_recipe = normalized_photo_composition_recipe_json(
+        source_recipe, &source_has_text);
+    const auto source_recipe_sha = planning_proof_report.value(QStringLiteral("sourceRecipeSha256")).toString();
+    const auto source_file_sha = planning_proof_report.value(QStringLiteral("sourceFileSha256")).toString();
+    const auto proof_sha = planning_proof_report.value(QStringLiteral("proofSha256")).toString();
+    const auto task_state_hash = planning_proof_report.value(QStringLiteral("taskStateHash")).toString();
+    const auto style_fingerprint = sha256_text(QString::fromUtf8(
+        QJsonDocument::fromVariant(style).toJson(QJsonDocument::Compact)));
+    if (!source_has_text || source_recipe.isEmpty() ||
+        planning_proof_report.value(QStringLiteral("snapshotSource")).toString() != QStringLiteral("native-photo") ||
+        planning_proof_report.value(QStringLiteral("assetId")).toString() != asset_id ||
+        planning_proof_report.value(QStringLiteral("sourceFilePath")).toString() !=
+            composition_photo_baseline.value(QStringLiteral("sourceFilePath")).toString() ||
+        source_file_sha != composition_photo_baseline.value(QStringLiteral("sourceFileSha256")).toString() ||
+        style_fingerprint != composition_photo_baseline.value(QStringLiteral("styleFingerprint")).toString() ||
+        source_recipe_sha != sha256_text(source_recipe) ||
+        sha256_text(normalized_source_recipe) !=
+            composition_photo_baseline.value(QStringLiteral("normalizedPhotoCompositionSha256")).toString() ||
+        !is_sha256_hex(proof_sha) || !is_sha256_hex(task_state_hash)) {
+      return;
+    }
+    QVariantMap revision_inspection;
+    for (const auto& report_value : model_tool_plan_reports) {
+      const auto report = report_value.toMap();
+      const auto tool_name = report.value(QStringLiteral("toolName")).toString();
+      if (tool_name == QStringLiteral("photo.inspect_composition")) {
+        if (!report.value(QStringLiteral("ok")).toBool() ||
+            report.value(QStringLiteral("runId")).toString() !=
+                mcp_context.value(QStringLiteral("runId")).toString())
+          return;
+        revision_inspection = report;
+        break;
+      }
+      if (tool_name != QStringLiteral("app.list_commands") &&
+          tool_name != QStringLiteral("app.command_schema") &&
+          tool_name != QStringLiteral("app.inspect_command"))
+        return;
+    }
+    if (revision_inspection.isEmpty()) return;
+    const auto inspection_content = revision_inspection.value(QStringLiteral("structuredContent")).toMap();
+    const auto inspection_layers = inspection_content.value(QStringLiteral("layers")).toList();
+    const auto source_recipe_document = QJsonDocument::fromJson(source_recipe.toUtf8());
+    const auto source_recipe_layer_count = source_recipe_document.object()
+        .value(QStringLiteral("adjustmentState")).toObject()
+        .value(QStringLiteral("layers")).toArray().size();
+    if (revision_inspection.value(QStringLiteral("arguments")).toMap()
+                .value(QStringLiteral("assetId")).toString() != asset_id ||
+        inspection_content.value(QStringLiteral("assetId")).toString() != asset_id ||
+        inspection_content.value(QStringLiteral("taskStateHash")).toString() != task_state_hash ||
+        inspection_content.value(QStringLiteral("paintBusy")).toBool() ||
+        !inspection_content.value(QStringLiteral("paintError")).toString().isEmpty() ||
+        inspection_content.value(QStringLiteral("layers")).metaType().id() != QMetaType::QVariantList ||
+        inspection_layers.size() != source_recipe_layer_count ||
+        !std::any_of(inspection_layers.cbegin(), inspection_layers.cend(), [](const QVariant& value) {
+          return value.toMap().value(QStringLiteral("kind")).toString() == QStringLiteral("text");
+        })) {
+      return;
+    }
+    QVariantMap binding{
+        {QStringLiteral("contract"), QStringLiteral("agent-composition-photo-revision-binding-v1")},
+        {QStringLiteral("requestId"), planning_run_id},
+        {QStringLiteral("runId"), mcp_context.value(QStringLiteral("runId"))},
+        {QStringLiteral("taskId"), task_id},
+        {QStringLiteral("sourceRunId"), source_run_id},
+        {QStringLiteral("assetId"), asset_id},
+        {QStringLiteral("sourceFilePath"), planning_proof_report.value(QStringLiteral("sourceFilePath"))},
+        {QStringLiteral("sourceFileSha256"), source_file_sha},
+        {QStringLiteral("styleFingerprint"), style_fingerprint},
+        {QStringLiteral("sourceRecipeJson"), source_recipe},
+        {QStringLiteral("sourceRecipeSha256"), source_recipe_sha},
+        {QStringLiteral("normalizedPhotoCompositionSha256"), sha256_text(normalized_source_recipe)},
+        {QStringLiteral("proofSha256"), proof_sha},
+        {QStringLiteral("proofPath"), planning_proof_report.value(QStringLiteral("currentProofPath"))},
+        {QStringLiteral("taskStateHash"), task_state_hash},
+        {QStringLiteral("inspectionReceipt"), revision_inspection},
+        {QStringLiteral("inspectionReceiptSha256"), sha256_text(QString::fromUtf8(
+             QJsonDocument::fromVariant(revision_inspection).toJson(QJsonDocument::Compact)))},
+    };
+    composition_photo_baseline.insert(QStringLiteral("revisionBinding"), binding);
+    if (!verified_revision_composition_photo_binding(
+            composition_photo_baseline, planning_run_id, task_id, source_run_id,
+            asset_id, mcp_context.value(QStringLiteral("runId")).toString())) {
+      composition_photo_baseline.remove(QStringLiteral("revisionBinding"));
+    } else if (async_model_planning_enabled_) {
+      // Keep this request's pre-mutation binding across asynchronous critique
+      // and planner resumes. Later proofs describe the mutated text state.
+      mutable_this->async_request_worker_stage_results_.insert(
+          composition_photo_baseline_key, composition_photo_baseline);
+    }
+  };
 
   AgentLocalModelPlanRequest request;
   request.model_id = selected_model_id_;
@@ -18689,12 +21295,29 @@ QVariantMap AgentEditController::planDraftForScope(
   request.style = style;
   request.asset = model_asset;
   request.current_adjustment_patch_json =
-      representative_adjustment_patch_json;
+      planning_proof_report.value(QStringLiteral("planningRecipeJson")).toString();
+  attach_proof(&request, planning_proof_report);
   request.user_instructions = instructions.trimmed().isEmpty() ? user_instructions_ : instructions;
-  request.available_tool_schemas =
-      mcp_context.value(QStringLiteral("availableToolSchemas")).toList();
+  if (!async_revision_context_.isEmpty())
+    request.user_instructions += QStringLiteral("\nRevise the current composition in place. Use its existing layer and mask IDs, preserve work outside the requested correction, and do not recreate existing elements.");
+  request.available_tool_schemas = agent_planning_tool_schemas_for_approved_task(
+      mcp_context.value(QStringLiteral("availableToolSchemas")).toList(),
+      approved_task_snapshot_);
   request.prior_tool_results =
       mcp_context.value(QStringLiteral("priorToolResults")).toList();
+  if (!approved_task_snapshot_.isEmpty()) {
+    request.prior_tool_results.append(QVariantMap{
+        {QStringLiteral("kind"), QStringLiteral("approved-task-snapshot")},
+        {QStringLiteral("authority"), QStringLiteral("approved-brief-and-deliverables")},
+        {QStringLiteral("snapshot"), approved_task_snapshot_},
+    });
+  }
+  if (!async_revision_context_.isEmpty()) {
+    auto model_revision_context = async_revision_context_;
+    model_revision_context.remove(QStringLiteral("compositionPhotoBaseline"));
+    request.prior_tool_results.append(QVariantMap{{QStringLiteral("kind"), QStringLiteral("draft-revision")},
+        {QStringLiteral("context"), model_revision_context}, {QStringLiteral("recipeBaseMode"), QStringLiteral("current")}});
+  }
   const auto current_validation_report =
       planning_proof_report.value(QStringLiteral("validationReport")).toMap();
   if (!current_validation_report.isEmpty()) {
@@ -18710,8 +21333,12 @@ QVariantMap AgentEditController::planDraftForScope(
         {QStringLiteral("styleMatch"), current_validation_report.value(QStringLiteral("styleMatch"))},
     });
   }
-  request.allow_tool_call_plan =
-      mcp_context.value(QStringLiteral("allowToolCallPlan"), false).toBool();
+  request.allow_tool_call_plan = allow_tool_call_plan;
+  const auto composition_text_review_enabled = allow_tool_call_plan && scoped_assets.size() == 1 &&
+      approved_task_has_graphic_text_action(approved_task_snapshot_);
+  const auto composition_quality_review_enabled = composition_text_review_enabled;
+  if (composition_quality_review_enabled)
+    request.allow_deterministic_fallback = false;
   const auto mcp_tool_phase =
       mcp_context.value(QStringLiteral("toolPhase"), QStringLiteral("sample")).toString();
   request.strategy_phase = mcp_tool_phase;
@@ -18725,9 +21352,6 @@ QVariantMap AgentEditController::planDraftForScope(
       mcp_allowed_tools,
       static_cast<int>(request.available_tool_schemas.size()));
   WorkerPlanResult worker_result;
-  const auto request_fingerprint =
-      agent_plan_request_fingerprint(request);
-  auto* mutable_this = const_cast<AgentEditController*>(this);
   if (mutable_this->async_model_planning_enabled_) {
     if (!mutable_this->takeOrStartRequestOwnedPlanStage(
             QStringLiteral("primary-plan"),
@@ -18751,17 +21375,239 @@ QVariantMap AgentEditController::planDraftForScope(
           : QStringLiteral("worker-thread");
   QVariantMap model_tool_plan;
   QVariantList model_tool_plan_calls;
-  if (plan.ok && plan.decision == QStringLiteral("tool_call_plan")) {
-    const auto model_tool_plan_cache_key =
-        QStringLiteral("mcp-tool-plan:%1").arg(request_fingerprint);
+  QVariantList model_tool_plan_rounds;
+  QVariantList requested_model_tool_calls;
+  auto model_tool_call_count = 0;
+  auto model_tool_attempted_count = 0;
+  auto model_tool_round = 0;
+  auto recovered_tool_failures = 0;
+  auto recovered_validation_failures = 0;
+  auto pending_validation_recovery_count = 0;
+  auto validation_recovery_turn_count = 0;
+  auto current_plan_stage = QStringLiteral("primary-plan");
+  auto awaiting_tool_correction = false;
+  AgentToolProgress tool_progress;
+  struct ValidationRecoveryEpisode final {
+    int rejected_plan_count = 0;
+    QSet<QByteArray> fingerprints;
+  } validation_recovery_episode;
+  QVariantList planner_validation_rejections;
+  QVariantList validation_recovery_envelopes;
+  const auto reports_show_native_progress = [](const QVariantList& reports) {
+    return std::any_of(reports.cbegin(), reports.cend(), [](const auto& report_value) {
+      const auto report = report_value.toMap();
+      if (!report.value(QStringLiteral("ok")).toBool()) return false;
+      const auto content = report.value(QStringLiteral("structuredContent")).toMap();
+      if (content.value(QStringLiteral("changed")).toBool()) return true;
+      for (const auto& id_key : {QStringLiteral("createdLayerId"),
+               QStringLiteral("createdMaskId"), QStringLiteral("effectId"),
+               QStringLiteral("createdClipId"), QStringLiteral("resourceId")}) {
+        if (!content.value(id_key).toString().trimmed().isEmpty()) return true;
+      }
+      return false;
+    });
+  };
+  const auto reports_show_composition_mutation_progress = [](const QVariantList& reports) {
+    return std::any_of(reports.cbegin(), reports.cend(), [](const auto& report_value) {
+      const auto report = report_value.toMap();
+      if (!report.value(QStringLiteral("ok")).toBool()) return false;
+      const auto tool_name = report.value(QStringLiteral("toolName")).toString();
+      if (tool_name != QStringLiteral("photo.edit_composition") &&
+          tool_name != QStringLiteral("app.invoke_command")) return false;
+      const auto content = report.value(QStringLiteral("structuredContent")).toMap();
+      if (content.value(QStringLiteral("changed")).toBool()) return true;
+      for (const auto& id_key : {QStringLiteral("createdLayerId"), QStringLiteral("createdMaskId"),
+               QStringLiteral("effectId"), QStringLiteral("resourceId")}) {
+        if (!content.value(id_key).toString().trimmed().isEmpty()) return true;
+      }
+      return false;
+    });
+  };
+  const auto validation_episode_before_stage = [&](const QString& stage) {
+    ValidationRecoveryEpisode episode;
+    if (!mutable_this->async_model_planning_enabled_) return episode;
+    const auto tool_round_after_stage = [](const QString& completed_stage) {
+      const auto prefix = QStringLiteral("model-tool-follow-up");
+      if (completed_stage == prefix) return 1;
+      const auto numbered_prefix = prefix + QLatin1Char('-');
+      if (!completed_stage.startsWith(numbered_prefix)) return 0;
+      bool ok = false;
+      const auto round = completed_stage.mid(numbered_prefix.size()).toInt(&ok);
+      return ok && round > 0 ? round : 0;
+    };
+    for (const auto& completed_stage : async_model_completed_stages_) {
+      const auto tool_round = tool_round_after_stage(completed_stage);
+      if (tool_round > 0) {
+        const auto execution = async_model_tool_plan_results_.value(
+            QStringLiteral("mcp-tool-plan:%1").arg(tool_round));
+        if (reports_show_native_progress(
+                execution.value(QStringLiteral("toolReports")).toList())) {
+          episode.rejected_plan_count = 0;
+          episode.fingerprints.clear();
+        }
+      }
+      if (completed_stage == stage) break;
+      const auto completed_plan = async_model_stage_results_.value(completed_stage);
+      if (!completed_plan) continue;
+      const auto fingerprint = agent_tool_call_validation_recovery_fingerprint(*completed_plan);
+      if (fingerprint.isEmpty()) continue;
+      ++episode.rejected_plan_count;
+      episode.fingerprints.insert(fingerprint);
+    }
+    return episode;
+  };
+  const auto add_plan_validation_receipts = [&]() {
+    if (model_tool_plan.isEmpty()) {
+      model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+    }
+    model_tool_plan.insert(QStringLiteral("plannerValidationRejections"), planner_validation_rejections);
+    model_tool_plan.insert(QStringLiteral("validationRecoveryTurnCount"), validation_recovery_turn_count);
+    model_tool_plan.insert(QStringLiteral("recoveredValidationFailureCount"), recovered_validation_failures);
+  };
+  while (true) {
+    if (agent_has_tool_call_validation_rejection(plan)) {
+      const auto fingerprint = agent_tool_call_validation_recovery_fingerprint(plan);
+      if (mutable_this->async_model_planning_enabled_)
+        validation_recovery_episode = validation_episode_before_stage(current_plan_stage);
+      const auto repeated_rejection = validation_recovery_episode.fingerprints.contains(fingerprint);
+      if (repeated_rejection) {
+        planner_validation_rejections.append(QVariantMap{
+            {QStringLiteral("stage"), current_plan_stage},
+            {QStringLiteral("error"), plan.error_message},
+            {QStringLiteral("toolCallValidation"), agent_tool_call_validation_audit(plan)},
+            {QStringLiteral("repeated"), true},
+            {QStringLiteral("wholeGeneratedPlanWithheld"), true},
+        });
+        if (model_tool_plan.isEmpty()) model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+        model_tool_plan.insert(QStringLiteral("ok"), false);
+        model_tool_plan.insert(QStringLiteral("errorCode"), QStringLiteral("repeated_tool_plan_validation"));
+        auto repeated_errors = model_tool_plan.value(QStringLiteral("errors")).toStringList();
+        repeated_errors.append(QStringLiteral(
+            "The local model repeated the same invalid tool-call plan. No rejected calls were executed; accepted earlier edits remain available for review or Revert."));
+        model_tool_plan.insert(QStringLiteral("errors"), repeated_errors);
+        add_plan_validation_receipts();
+        break;
+      }
+      validation_recovery_episode.fingerprints.insert(fingerprint);
+      ++validation_recovery_episode.rejected_plan_count;
+      const auto recovery_turn = validation_recovery_episode.rejected_plan_count;
+      validation_recovery_turn_count = recovery_turn;
+      if (recovery_turn > 3) {
+        planner_validation_rejections.append(QVariantMap{
+            {QStringLiteral("stage"), current_plan_stage},
+            {QStringLiteral("error"), plan.error_message},
+            {QStringLiteral("toolCallValidation"), agent_tool_call_validation_audit(plan)},
+            {QStringLiteral("recoveryLimitReached"), true},
+            {QStringLiteral("wholeGeneratedPlanWithheld"), true},
+        });
+        if (model_tool_plan.isEmpty()) model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+        model_tool_plan.insert(QStringLiteral("ok"), false);
+        model_tool_plan.insert(QStringLiteral("errorCode"), QStringLiteral("tool_plan_validation_recovery_limit"));
+        auto limit_errors = model_tool_plan.value(QStringLiteral("errors")).toStringList();
+        limit_errors.append(QStringLiteral(
+            "The local model could not produce a valid tool-call plan after three correction turns. Accepted earlier edits remain available for review or Revert."));
+        model_tool_plan.insert(QStringLiteral("errors"), limit_errors);
+        add_plan_validation_receipts();
+        break;
+      }
+
+      const auto recovery_envelope = agent_tool_call_validation_recovery_envelope(
+          plan, request.available_tool_schemas);
+      if (recovery_envelope.isEmpty()) {
+        if (model_tool_plan.isEmpty()) model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+        model_tool_plan.insert(QStringLiteral("ok"), false);
+        model_tool_plan.insert(QStringLiteral("errorCode"), QStringLiteral("tool_plan_validation_context_missing"));
+        auto context_errors = model_tool_plan.value(QStringLiteral("errors")).toStringList();
+        context_errors.append(QStringLiteral(
+            "The invalid tool-call plan did not include a usable validation receipt. No rejected calls were executed; accepted earlier edits remain available for review or Revert."));
+        model_tool_plan.insert(QStringLiteral("errors"), context_errors);
+        add_plan_validation_receipts();
+        break;
+      }
+      validation_recovery_envelopes.append(recovery_envelope);
+      ++pending_validation_recovery_count;
+      planner_validation_rejections.append(QVariantMap{
+          {QStringLiteral("stage"), current_plan_stage},
+          {QStringLiteral("error"), plan.error_message},
+          {QStringLiteral("toolCallValidation"), agent_tool_call_validation_audit(plan)},
+          {QStringLiteral("recoveryEnvelope"), recovery_envelope},
+          {QStringLiteral("wholeGeneratedPlanWithheld"), true},
+          {QStringLiteral("acceptedMutationCount"), static_cast<int>(std::count_if(
+              model_tool_plan_reports.cbegin(), model_tool_plan_reports.cend(), [](const auto& value) {
+                return value.toMap().value(QStringLiteral("ok")).toBool();
+              }))},
+      });
+      mutable_this->appendRunEvent(
+          QStringLiteral("model-tool-plan-validation"),
+          QStringLiteral("Correcting the tool plan"),
+          QStringLiteral("running"),
+          QStringLiteral("The entire invalid plan was withheld; the agent is correcting it from the current schemas and earlier accepted receipts."),
+          QVariantMap{{QStringLiteral("recoveryTurn"), recovery_turn},
+              {QStringLiteral("rejectedCallCount"), agent_tool_call_validation_audit(plan)
+                   .value(QStringLiteral("rejectedCalls")).toList().size()},
+              {QStringLiteral("acceptedMutationCount"), static_cast<int>(std::count_if(
+                  model_tool_plan_reports.cbegin(), model_tool_plan_reports.cend(), [](const auto& value) {
+                    return value.toMap().value(QStringLiteral("ok")).toBool();
+                  }))}});
+
+      auto recovery_request = request;
+      recovery_request.allow_tool_call_plan = true;
+      recovery_request.require_tool_call_plan = true;
+      recovery_request.prior_tool_results = request.prior_tool_results;
+      for (const auto& result_value : model_tool_plan_reports)
+        recovery_request.prior_tool_results.append(result_value);
+      for (const auto& envelope_value : validation_recovery_envelopes)
+        recovery_request.prior_tool_results.append(envelope_value);
+      if (awaiting_tool_correction) {
+        recovery_request.prior_tool_results.append(QVariantMap{
+            {QStringLiteral("kind"), QStringLiteral("tool-correction-required")},
+            {QStringLiteral("errors"), model_tool_plan.value(QStringLiteral("errors"))},
+            {QStringLiteral("unattemptedToolCalls"), model_tool_plan.value(QStringLiteral("unattemptedToolCalls"))},
+            {QStringLiteral("completedOperationsRemainApplied"), true},
+            {QStringLiteral("instruction"), QStringLiteral(
+                "Correct the rejected native command using its actual error and current schema. Earlier successful calls are applied; later calls were withheld. Do not replay completed mutations or declare completion before addressing the failure.")},
+        });
+      }
+      attach_proof(&recovery_request, planning_proof_report);
+
+      const auto recovery_stage = QStringLiteral("model-tool-validation-recovery-%1").arg(recovery_turn);
+      WorkerPlanResult recovery_result;
+      if (mutable_this->async_model_planning_enabled_) {
+        if (!mutable_this->takeOrStartRequestOwnedPlanStage(
+                recovery_stage, recovery_request, scope, instructions, &recovery_result.plan)) {
+          add_plan_validation_receipts();
+          auto pending = mutable_this->requestOwnedPlanPendingReport(recovery_stage, report_scope);
+          pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+          pending.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+          pending.insert(QStringLiteral("plannerValidationRejections"), planner_validation_rejections);
+          return pending;
+        }
+        recovery_result.request_owned_continuation = true;
+      } else {
+        recovery_result = plan_agent_recipe_patch_on_worker(recovery_request);
+      }
+      plan = recovery_result.plan;
+      current_plan_stage = recovery_stage;
+      continue;
+    }
+
+    if (!plan.ok || plan.decision != QStringLiteral("tool_call_plan")) break;
+    ++model_tool_round;
+    // This cache is cleared with the request-owned planning state. Match the
+    // model stage's logical identity: live context changes after tool calls,
+    // so fingerprinting it would replay successful mutations on continuation.
+    const auto model_tool_plan_cache_key = QStringLiteral("mcp-tool-plan:%1").arg(model_tool_round);
+    QVariantMap round_tool_plan;
     if (mutable_this->async_model_planning_enabled_ &&
-        mutable_this->async_model_tool_plan_results_.contains(
-            model_tool_plan_cache_key)) {
-      model_tool_plan =
-          mutable_this->async_model_tool_plan_results_.value(
-              model_tool_plan_cache_key);
-    } else {
-      model_tool_plan = execute_model_mcp_tool_plan(
+        mutable_this->async_model_tool_plan_results_.contains(model_tool_plan_cache_key)) {
+      round_tool_plan = mutable_this->async_model_tool_plan_results_.value(model_tool_plan_cache_key);
+    }
+    if (round_tool_plan.isEmpty() || round_tool_plan.value(QStringLiteral("compositionPending")).toBool() ||
+               (!round_tool_plan.value(QStringLiteral("executionComplete")).toBool() &&
+                round_tool_plan.value(QStringLiteral("errors")).toStringList().isEmpty() &&
+                !round_tool_plan.value(QStringLiteral("canceled")).toBool())) {
+      const auto previous_execution = round_tool_plan;
+      round_tool_plan = execute_model_mcp_tool_plan(
           mcp_context.value(QStringLiteral("endpoint")).toString(),
           mcp_context.value(QStringLiteral("endpointKind")).toString(),
           mutable_this->mcp_bearer_token_,
@@ -18769,36 +21615,630 @@ QVariantMap AgentEditController::planDraftForScope(
           mcp_context.value(QStringLiteral("allowedTools")).toStringList(),
           request.available_tool_schemas,
           plan.tool_call_plan,
-          [this]() { return cancellation_requested_.load(); });
+          [this]() { return cancellation_requested_.load(); },
+          [mutable_this](const QString& tool_name, const QVariantMap& arguments, const QString& status) {
+            const auto operation = arguments.value(QStringLiteral("operation")).toString();
+            const auto action = operation.isEmpty() ? tool_name : operation;
+            mutable_this->appendRunEvent(
+                QStringLiteral("tool"), action, status,
+                status == QStringLiteral("running") ? QStringLiteral("Using %1.").arg(action)
+                    : status == QStringLiteral("pending") ? QStringLiteral("Waiting for %1 pixels to finish.").arg(action)
+                    : status == QStringLiteral("complete") ? QStringLiteral("Completed %1.").arg(action)
+                    : QStringLiteral("Could not complete %1.").arg(action),
+                QVariantMap{{QStringLiteral("toolName"), tool_name}, {QStringLiteral("operation"), operation}});
+          }, mutable_this->async_model_planning_enabled_, previous_execution, true,
+          model_tool_plan_reports);
+      if (mutable_this->async_model_planning_enabled_)
+        mutable_this->async_model_tool_plan_results_.insert(model_tool_plan_cache_key, round_tool_plan);
+    }
+    if (round_tool_plan.value(QStringLiteral("compositionPending")).toBool()) {
+      mutable_this->draft_request_pending_ = true;
+      emit mutable_this->draftRequestChanged();
+      mutable_this->setStatus(QStringLiteral("Finishing cutout or paint"));
+      mutable_this->scheduleCompositionContinuation(mutable_this->active_draft_request_id_, scope,
+          mutable_this->async_draft_instructions_, model_tool_plan_cache_key);
+      auto pending = mutable_this->requestOwnedPlanPendingReport(QStringLiteral("composition-ready"), report_scope);
+      pending.insert(QStringLiteral("compositionCompletion"), round_tool_plan);
+      insert_planning_proof_metadata(&pending);
+      return pending;
+    }
+    model_tool_call_count += plan.tool_call_plan.size();
+    model_tool_attempted_count += round_tool_plan.value(QStringLiteral("attemptedCount")).toInt();
+    for (const auto& requested_call : plan.tool_call_plan)
+      requested_model_tool_calls.append(requested_call);
+    for (const auto& report_value : round_tool_plan.value(QStringLiteral("toolReports")).toList()) {
+      auto report = report_value.toMap();
+      report.insert(QStringLiteral("round"), model_tool_round);
+      report.insert(QStringLiteral("runId"), mcp_context.value(QStringLiteral("runId")));
+      model_tool_plan_reports.append(report);
+    }
+    model_tool_plan_rounds.append(QVariantMap{
+        {QStringLiteral("round"), model_tool_round},
+        {QStringLiteral("planSummary"), plan.plan_summary},
+        {QStringLiteral("toolCallCorrections"), plan.prompt_audit.value(QStringLiteral("toolCallCorrections"))},
+        {QStringLiteral("requestedToolCalls"), plan.tool_call_plan},
+        {QStringLiteral("execution"), round_tool_plan},
+    });
+    const auto successful_call_count = static_cast<int>(std::count_if(
+        model_tool_plan_reports.cbegin(), model_tool_plan_reports.cend(), [](const auto& value) {
+          return value.toMap().value(QStringLiteral("ok")).toBool();
+        }));
+    activate_pre_mutation_photo_baseline();
+    bind_revision_photo_baseline();
+    model_tool_plan = round_tool_plan;
+    if (pending_validation_recovery_count > 0 &&
+        round_tool_plan.value(QStringLiteral("successCount")).toInt() > 0) {
+      recovered_validation_failures += pending_validation_recovery_count;
+      pending_validation_recovery_count = 0;
+    }
+    if (round_tool_plan.value(QStringLiteral("ok")).toBool()) {
+      if (awaiting_tool_correction) ++recovered_tool_failures;
+      awaiting_tool_correction = false;
+    } else if (round_tool_plan.value(QStringLiteral("recoverableError")).toBool()) {
+      awaiting_tool_correction = true;
+    }
+    // Failed receipts remain in the audit after a corrected turn. Their mere
+    // presence must not poison every later round or replay successful edits.
+    model_tool_plan.insert(QStringLiteral("recoveredFailureCount"), recovered_tool_failures);
+    model_tool_plan.insert(QStringLiteral("requestedToolCalls"), requested_model_tool_calls);
+    model_tool_plan.insert(QStringLiteral("toolReports"), model_tool_plan_reports);
+    model_tool_plan.insert(QStringLiteral("rounds"), model_tool_plan_rounds);
+    // This key is controller-owned even if an untrusted tool result happens to
+    // contain a same-named field. Keep only a sanitized copy in the audit.
+    model_tool_plan.remove(QStringLiteral("compositionPhotoBaseline"));
+    const auto revision_baseline_report_valid = async_revision_context_.isEmpty()
+        ? verified_composition_photo_baseline(
+              composition_photo_baseline, planning_run_id,
+              mcp_context.value(QStringLiteral("runId")).toString(),
+              representative_asset.value(QStringLiteral("assetId")).toString(),
+              activeTaskId())
+        : verified_composition_photo_baseline(
+              composition_photo_baseline,
+              composition_photo_baseline.value(QStringLiteral("requestId")).toString(),
+              composition_photo_baseline.value(QStringLiteral("runId")).toString(),
+              representative_asset.value(QStringLiteral("assetId")).toString(),
+              activeTaskId()) &&
+              verified_revision_composition_photo_binding(
+                  composition_photo_baseline, planning_run_id, activeTaskId(),
+                  async_revision_context_.value(QStringLiteral("revisedFromRunId")).toString(),
+                  representative_asset.value(QStringLiteral("assetId")).toString(),
+                  mcp_context.value(QStringLiteral("runId")).toString());
+    if (revision_baseline_report_valid) {
+      auto report_baseline = composition_photo_baseline;
+      report_baseline.remove(QStringLiteral("sourceRecipeJson"));
+      report_baseline.remove(QStringLiteral("preMutationInspectionReceipt"));
+      report_baseline.remove(QStringLiteral("revisionBinding"));
+      model_tool_plan.insert(QStringLiteral("compositionPhotoBaseline"), report_baseline);
+    }
+    model_tool_plan.insert(QStringLiteral("attemptedCount"), model_tool_attempted_count);
+    model_tool_plan.insert(QStringLiteral("requestedToolCallCount"), model_tool_call_count);
+    model_tool_plan.insert(QStringLiteral("successCount"), successful_call_count);
+    model_tool_plan.insert(QStringLiteral("toolBudget"), QVariantMap{
+        {QStringLiteral("maxModelToolCallsPerTurn"), kMaxModelToolCallsPerTurn},
+        {QStringLiteral("requestedToolCallCount"), model_tool_call_count},
+        {QStringLiteral("maxRounds"), -1},
+        {QStringLiteral("maxTotalModelToolCalls"), -1},
+        {QStringLiteral("roundCount"), model_tool_round},
+        {QStringLiteral("hardLimit"), false},
+        {QStringLiteral("batchHardLimit"), true},
+        {QStringLiteral("progressPolicy"), QStringLiteral("continue-until-complete-canceled-or-repeated-results")},
+    });
+    add_plan_validation_receipts();
+    model_tool_plan_calls = mcp_model_tool_plan_call_records(model_tool_plan);
+    if (!round_tool_plan.value(QStringLiteral("ok")).toBool() &&
+        !round_tool_plan.value(QStringLiteral("recoverableError")).toBool()) break;
+    if (!tool_progress.record(round_tool_plan.value(QStringLiteral("toolReports")).toList())) {
+      model_tool_plan.insert(QStringLiteral("ok"), false);
+      model_tool_plan.insert(QStringLiteral("errorCode"), QStringLiteral("repeated_tool_results"));
+      model_tool_plan.insert(QStringLiteral("errors"), QStringList{QStringLiteral(
+          "The agent repeated completed tool results without making progress. Its work is available to review or revert.")});
+      model_tool_plan.insert(QStringLiteral("repeatedRounds"), tool_progress.repeatedRounds());
+      break;
+    }
+    if (!mutable_this->async_model_planning_enabled_ &&
+        reports_show_native_progress(round_tool_plan.value(QStringLiteral("toolReports")).toList())) {
+      validation_recovery_episode.rejected_plan_count = 0;
+      validation_recovery_episode.fingerprints.clear();
+      validation_recovery_turn_count = 0;
+    }
+
+    auto follow_up_request = request;
+    follow_up_request.allow_tool_call_plan = request.allow_tool_call_plan;
+    follow_up_request.prior_tool_results = request.prior_tool_results;
+    for (const auto& result_value : model_tool_plan_reports)
+      follow_up_request.prior_tool_results.append(result_value);
+    for (const auto& envelope_value : validation_recovery_envelopes)
+      follow_up_request.prior_tool_results.append(envelope_value);
+    if (awaiting_tool_correction) {
+      follow_up_request.require_tool_call_plan = true;
+      follow_up_request.prior_tool_results.append(QVariantMap{
+          {QStringLiteral("kind"), QStringLiteral("tool-correction-required")},
+          {QStringLiteral("errors"), round_tool_plan.value(QStringLiteral("errors"))},
+          {QStringLiteral("unattemptedToolCalls"), round_tool_plan.value(QStringLiteral("unattemptedToolCalls"))},
+          {QStringLiteral("completedOperationsRemainApplied"), true},
+          {QStringLiteral("instruction"), QStringLiteral(
+              "Correct the rejected command using current state/schema. Earlier successful calls are applied; later calls were withheld. Do not replay completed mutations or declare completion before addressing the failure.")}});
+    }
+    const auto follow_up_stage = model_tool_round == 1
+        ? QStringLiteral("model-tool-follow-up")
+        : QStringLiteral("model-tool-follow-up-%1").arg(model_tool_round);
+    const auto saved_composition_review =
+        round_tool_plan.value(QStringLiteral("agentCompositionReviewRecord")).toMap();
+    const auto saved_composition_assessment =
+        saved_composition_review.value(QStringLiteral("compositionAssessment")).toMap();
+    const auto saved_composition_receipt =
+        saved_composition_review.value(QStringLiteral("compositionInspectionReceipt")).toMap();
+    const auto saved_composition_visual_evidence =
+        saved_composition_review.value(QStringLiteral("visualEvidence")).toMap();
+    const auto saved_review_round =
+        saved_composition_review.value(QStringLiteral("round")).toInt();
+    const auto saved_assessment_round =
+        saved_composition_assessment.value(QStringLiteral("batchRound")).toInt();
+    const auto saved_assessment_retained =
+        saved_composition_review.value(QStringLiteral("assessmentRetained")).toBool();
+    const auto saved_receipt_content =
+        saved_composition_receipt.value(QStringLiteral("structuredContent")).toMap();
+    const auto saved_receipt_arguments =
+        saved_composition_receipt.value(QStringLiteral("arguments")).toMap();
+    const auto saved_receipt_run_id =
+        saved_composition_receipt.value(QStringLiteral("runId")).toString();
+    const auto saved_composition_review_is_complete =
+        saved_composition_review.value(QStringLiteral("contract")).toString() ==
+            QStringLiteral("agent-composition-round-review-v1") &&
+        saved_composition_assessment.value(QStringLiteral("kind")).toString() ==
+            QStringLiteral("current-composition-assessment") &&
+        saved_composition_assessment.value(QStringLiteral("contract")).toString() ==
+            QStringLiteral("agent-current-composition-assessment-v1") &&
+        saved_composition_assessment.value(QStringLiteral("assetId")).toString() ==
+            representative_asset.value(QStringLiteral("assetId")).toString() &&
+        saved_review_round == model_tool_round &&
+        (saved_assessment_retained
+             ? saved_assessment_round > 0 && saved_assessment_round < model_tool_round
+             : saved_assessment_round == model_tool_round) &&
+        !saved_composition_assessment.value(QStringLiteral("sourceProofSha256")).toString().isEmpty() &&
+        !saved_composition_assessment.value(QStringLiteral("sourceRecipeSha256")).toString().isEmpty() &&
+        saved_composition_visual_evidence.value(QStringLiteral("assetId")).toString() ==
+            representative_asset.value(QStringLiteral("assetId")).toString() &&
+        saved_composition_visual_evidence.value(QStringLiteral("proofSha256")).toString() ==
+            saved_composition_assessment.value(QStringLiteral("sourceProofSha256")).toString() &&
+        saved_composition_visual_evidence.value(QStringLiteral("sourceRecipeSha256")).toString() ==
+            saved_composition_assessment.value(QStringLiteral("sourceRecipeSha256")).toString() &&
+        !saved_composition_visual_evidence.value(QStringLiteral("currentProofPath")).toString().isEmpty() &&
+        saved_composition_receipt.value(QStringLiteral("ok")).toBool() &&
+        saved_composition_receipt.value(QStringLiteral("toolName")).toString() ==
+            QStringLiteral("photo.inspect_composition") &&
+        saved_receipt_run_id ==
+            mcp_context.value(QStringLiteral("runId")).toString() &&
+        saved_receipt_arguments.value(QStringLiteral("assetId")).toString() ==
+            representative_asset.value(QStringLiteral("assetId")).toString() &&
+        saved_receipt_content.value(QStringLiteral("assetId")).toString() ==
+            representative_asset.value(QStringLiteral("assetId")).toString() &&
+        saved_receipt_content.value(QStringLiteral("layers")).metaType().id() ==
+            QMetaType::QVariantList;
+    // A continuation replays completed tool rounds from request-owned receipts.
+    // Once the next planner result is cached, preserve that round's exact review
+    // record instead of reassessing its old mutation against later live edits.
+    const auto reuse_historical_composition_review =
+        composition_quality_review_enabled &&
+        async_model_stage_results_.contains(follow_up_stage) &&
+        saved_composition_review_is_complete;
+    QVariantMap round_proof;
+    if (!mutable_this->takeOrStartPlanningProof(follow_up_stage, planning_proof_asset, style, planning_run_id,
+            scope, !async_model_stage_results_.contains(follow_up_stage), &round_proof)) {
+      auto pending = mutable_this->requestOwnedWorkerPendingReport(
+          QStringLiteral("planning-proof:%1").arg(follow_up_stage), report_scope);
+      pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+      return pending;
+    }
+    if (!round_proof.value(QStringLiteral("ok")).toBool()) {
+      auto proof_errors = round_proof.value(QStringLiteral("errors")).toStringList();
+      if (proof_errors.isEmpty()) {
+        const auto proof_error = round_proof.value(QStringLiteral("error")).toString().trimmed();
+        if (!proof_error.isEmpty()) proof_errors.append(proof_error);
+      }
+      if (proof_errors.isEmpty())
+        proof_errors.append(QStringLiteral(
+            "The fresh live composition proof for %1 could not be certified; prior successful mutations remain applied and were not replayed.")
+                .arg(follow_up_stage));
+      round_proof.insert(QStringLiteral("errors"), proof_errors);
+      round_proof.insert(QStringLiteral("failureReason"), proof_errors.join(QStringLiteral("; ")));
+      round_proof.insert(QStringLiteral("proofBoundaryFailed"), true);
+      round_proof.insert(QStringLiteral("proofStage"), follow_up_stage);
+      round_proof.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+      return round_proof;
+    }
+    attach_proof(&follow_up_request, round_proof);
+    QVariantMap composition_assessment_envelope;
+    QVariantMap composition_inspection_receipt;
+    auto composition_assessment_retained = false;
+    if (reuse_historical_composition_review) {
+      composition_assessment_envelope = saved_composition_assessment;
+      composition_inspection_receipt = saved_composition_receipt;
+      composition_assessment_retained = saved_assessment_retained;
+    }
+    if (!reuse_historical_composition_review && composition_quality_review_enabled &&
+        reports_show_composition_mutation_progress(
+            round_tool_plan.value(QStringLiteral("toolReports")).toList())) {
+      const auto asset_id = representative_asset.value(QStringLiteral("assetId")).toString();
+      const auto proof_path = round_proof.value(QStringLiteral("currentProofPath")).toString();
+      const auto proof_sha = round_proof.value(QStringLiteral("proofSha256")).toString();
+      const auto source_recipe = round_proof.value(QStringLiteral("sourceRecipeJson")).toString();
+      const auto source_recipe_sha = round_proof.value(QStringLiteral("sourceRecipeSha256")).toString();
+      const auto task_state_hash = round_proof.value(QStringLiteral("taskStateHash")).toString();
+      const auto hash_recipe_json = [](const QString& json) {
+        return QString::fromLatin1(QCryptographicHash::hash(json.toUtf8(), QCryptographicHash::Sha256).toHex());
+      };
+      const auto live_before_review = mutable_this->planningRecipeSnapshot(representative_asset);
+      const auto live_before_recipe = live_before_review.value(QStringLiteral("recipeJson")).toString();
+      const auto review_source_matches = live_before_review.value(QStringLiteral("ok")).toBool() &&
+          live_before_review.value(QStringLiteral("assetId")).toString() == asset_id &&
+          !live_before_review.value(QStringLiteral("paintBusy")).toBool() &&
+          !source_recipe_sha.isEmpty() && hash_recipe_json(live_before_recipe) == source_recipe_sha &&
+          (task_state_hash.isEmpty() || live_before_review.value(QStringLiteral("taskStateHash")).toString() == task_state_hash);
+      if (!review_source_matches) {
+        auto stopped = result_map(false, {QStringLiteral(
+            "Composition review stopped because the live native state no longer matches the fresh rendered proof. Earlier successful edits remain applied and were not replayed.")});
+        stopped.insert(QStringLiteral("proofBoundaryFailed"), true);
+        stopped.insert(QStringLiteral("errorCode"), QStringLiteral("composition_review_source_conflict"));
+        stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+        stopped.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+        stopped.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+        insert_planning_proof_metadata(&stopped);
+        return stopped;
+      }
+
+      const auto assessment_stage = QStringLiteral("composition-quality-assessment:%1:%2:%3")
+          .arg(asset_id, QString::number(model_tool_round), proof_sha.left(16));
+      const auto endpoint = mcp_context.value(QStringLiteral("endpoint")).toString();
+      const auto endpoint_kind = mcp_context.value(QStringLiteral("endpointKind")).toString();
+      const auto bearer_token = mutable_this->mcp_bearer_token_;
+      const auto run_id = mcp_context.value(QStringLiteral("runId")).toString();
+      const auto allowed_tools = mcp_context.value(QStringLiteral("allowedTools")).toStringList();
+      const auto file_path = representative_asset.value(QStringLiteral("filePath")).toString();
+      auto known_text_layer_ids = agent_composition_text_layer_ids(model_tool_plan_reports);
+      const auto revision_baseline = async_revision_context_
+          .value(QStringLiteral("revisionCompositionBaseline")).toMap();
+      for (const auto& id : revision_baseline.value(QStringLiteral("layerIdsTopFirst")).toStringList())
+        if (!id.isEmpty() && !known_text_layer_ids.contains(id)) known_text_layer_ids.append(id);
+      const auto assessment_worker = [endpoint, endpoint_kind, bearer_token, run_id, asset_id,
+          allowed_tools, approved_snapshot = approved_task_snapshot_, known_text_layer_ids,
+          proof_path, source_recipe, file_path, task_state_hash](
+              const std::shared_ptr<std::atomic_bool>& token) {
+        const auto canceled = [weak_token = std::weak_ptr<std::atomic_bool>(token)]() {
+          const auto locked = weak_token.lock();
+          return locked == nullptr || locked->load(std::memory_order_relaxed);
+        };
+        if (canceled()) return QVariantMap{{QStringLiteral("ok"), false},
+            {QStringLiteral("canceled"), true},
+            {QStringLiteral("error"), QStringLiteral("Current composition review was canceled.")}};
+        const auto inspection = inspect_live_agent_composition(
+            endpoint, endpoint_kind, bearer_token, run_id, asset_id, allowed_tools, canceled);
+        if (!inspection.value(QStringLiteral("ok")).toBool())
+          return QVariantMap{{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), inspection.value(QStringLiteral("error"))},
+              {QStringLiteral("inspection"), inspection}};
+        auto review = review_live_agent_composition(inspection, approved_snapshot, known_text_layer_ids);
+        review.insert(QStringLiteral("sourceTaskStateHash"), task_state_hash);
+        const auto graphic_layers = review.value(QStringLiteral("observedGraphicLayers")).toList();
+        auto details = render_agent_composition_detail_proofs(
+            proof_path, file_path, source_recipe, graphic_layers, run_id, asset_id, token.get());
+        if (!details.value(QStringLiteral("available")).toBool())
+          return QVariantMap{{QStringLiteral("ok"), false},
+              {QStringLiteral("error"), details.value(QStringLiteral("error"))},
+              {QStringLiteral("inspection"), inspection},
+              {QStringLiteral("compositionReview"), review},
+              {QStringLiteral("detailProofReport"), details}};
+        review.insert(QStringLiteral("detailProofAvailable"), true);
+        review.insert(QStringLiteral("detailProofReport"), details);
+        review.insert(QStringLiteral("detailProofImagePaths"), details.value(QStringLiteral("detailProofImagePaths")));
+        review.insert(QStringLiteral("targetedDetailProofs"), details.value(QStringLiteral("targetedDetailProofs")));
+        return QVariantMap{{QStringLiteral("ok"), true},
+            {QStringLiteral("inspection"), inspection},
+            {QStringLiteral("compositionReview"), review},
+            {QStringLiteral("detailProofReport"), details}};
+      };
+      QVariantMap current_assessment;
+      if (mutable_this->async_model_planning_enabled_ && !endpoint.startsWith(QStringLiteral("in-process:"))) {
+        if (!mutable_this->takeOrStartRequestOwnedWorkerStage(
+                assessment_stage, scope, assessment_worker, &current_assessment)) {
+          auto pending = mutable_this->requestOwnedWorkerPendingReport(assessment_stage, report_scope);
+          pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+          pending.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+          pending.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+          insert_planning_proof_metadata(&pending);
+          return pending;
+        }
+      } else {
+        current_assessment = assessment_worker(
+            std::make_shared<std::atomic_bool>(mutable_this->cancellation_requested_.load()));
+      }
+      if (!current_assessment.value(QStringLiteral("ok")).toBool()) {
+        auto stopped = result_map(false, {QStringLiteral(
+            "Composition review stopped because fresh native readback or its bound detail proof was unavailable: %1")
+            .arg(current_assessment.value(QStringLiteral("error")).toString())});
+        stopped.insert(QStringLiteral("proofBoundaryFailed"), true);
+        stopped.insert(QStringLiteral("errorCode"), current_assessment.value(QStringLiteral("canceled")).toBool()
+            ? QStringLiteral("canceled") : QStringLiteral("composition_review_unavailable"));
+        stopped.insert(QStringLiteral("compositionAssessment"), current_assessment);
+        stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+        stopped.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+        stopped.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+        insert_planning_proof_metadata(&stopped);
+        return stopped;
+      }
+      const auto live_after_review = mutable_this->planningRecipeSnapshot(representative_asset);
+      const auto live_after_recipe = live_after_review.value(QStringLiteral("recipeJson")).toString();
+      const auto review_state_stable = live_after_review.value(QStringLiteral("ok")).toBool() &&
+          live_after_review.value(QStringLiteral("assetId")).toString() == asset_id &&
+          !live_after_review.value(QStringLiteral("paintBusy")).toBool() &&
+          hash_recipe_json(live_after_recipe) == source_recipe_sha &&
+          (task_state_hash.isEmpty() || live_after_review.value(QStringLiteral("taskStateHash")).toString() == task_state_hash);
+      if (!review_state_stable) {
+        auto stopped = result_map(false, {QStringLiteral(
+            "Composition review stopped because the document changed while current native layers were being assessed. Earlier successful edits remain applied and were not replayed.")});
+        stopped.insert(QStringLiteral("proofBoundaryFailed"), true);
+        stopped.insert(QStringLiteral("errorCode"), QStringLiteral("composition_review_source_conflict"));
+        stopped.insert(QStringLiteral("compositionAssessment"), current_assessment);
+        stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+        stopped.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+        stopped.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+        insert_planning_proof_metadata(&stopped);
+        return stopped;
+      }
+
+      auto composition_review = current_assessment.value(QStringLiteral("compositionReview")).toMap();
+      const QStringList detail_paths =
+          composition_review.value(QStringLiteral("detailProofImagePaths")).toStringList();
+      const auto inspection_layers = current_assessment.value(QStringLiteral("inspection")).toMap()
+          .value(QStringLiteral("structuredContent")).toMap().value(QStringLiteral("layers")).toList();
+      auto critique_asset = follow_up_request.asset;
+      critique_asset.insert(QStringLiteral("proofImagePath"), proof_path);
+      critique_asset.insert(QStringLiteral("afterProofPath"), proof_path);
+      critique_asset.insert(QStringLiteral("additionalProofImagePaths"), detail_paths);
+      critique_asset.insert(QStringLiteral("planningProofRequired"), true);
+      critique_asset.insert(QStringLiteral("planningProofSha256"), proof_sha);
+      auto visual_evidence = critique_asset.value(QStringLiteral("visualEvidence")).toMap();
+      visual_evidence.insert(QStringLiteral("source"), QStringLiteral("fresh-model-tool-batch-render-and-native-readback"));
+      visual_evidence.insert(QStringLiteral("assetId"), asset_id);
+      visual_evidence.insert(QStringLiteral("proofSha256"), proof_sha);
+      visual_evidence.insert(QStringLiteral("requiredChecks"), composition_review.value(QStringLiteral("requiredChecks")));
+      visual_evidence.insert(QStringLiteral("targetedDetailProofs"), composition_review.value(QStringLiteral("targetedDetailProofs")));
+      critique_asset.insert(QStringLiteral("visualEvidence"), visual_evidence);
+      AgentLocalModelProofCritiqueRequest critique_request;
+      critique_request.model_id = plan.model_id.isEmpty() ? request.model_id : plan.model_id;
+      critique_request.style = style;
+      critique_request.asset = critique_asset;
+      critique_request.user_instructions = approved_task_snapshot_.value(QStringLiteral("approvedInstructions")).toString();
+      critique_request.graphic_layers = agent_graphic_proof_layers(inspection_layers, known_text_layer_ids);
+      auto critique_validation = round_proof.value(QStringLiteral("validationReport")).toMap();
+      critique_validation.insert(QStringLiteral("ok"),
+          critique_validation.value(QStringLiteral("ok")).toBool() && composition_review.value(QStringLiteral("ok")).toBool());
+      critique_validation.insert(QStringLiteral("compositionReview"), composition_review);
+      critique_validation.insert(QStringLiteral("liveRepairEvidence"), QVariantMap{
+          {QStringLiteral("source"), QStringLiteral("fresh-model-tool-batch-render-and-native-readback")},
+          {QStringLiteral("assetId"), asset_id}, {QStringLiteral("proofSha256"), proof_sha},
+          {QStringLiteral("compositionReview"), composition_review},
+          {QStringLiteral("targetedDetailProofs"), composition_review.value(QStringLiteral("targetedDetailProofs"))},
+      });
+      auto current_composition_proof = round_proof;
+      current_composition_proof.insert(QStringLiteral("requestId"), planning_run_id);
+      current_composition_proof.insert(QStringLiteral("taskId"), activeTaskId());
+      current_composition_proof.insert(QStringLiteral("mcpRunId"), run_id);
+      current_composition_proof.insert(QStringLiteral("styleFingerprint"), sha256_text(QString::fromUtf8(
+          QJsonDocument::fromVariant(style).toJson(QJsonDocument::Compact))));
+      critique_request.validation_report = proof_critique_validation_projection(
+          composition_photo_quality_validation_projection(
+              critique_validation, composition_photo_baseline, current_composition_proof));
+      critique_request.cancellation_requested = [this]() { return cancellation_requested_.load(); };
+      const auto critique_stage = QStringLiteral("composition-quality-critique:%1:%2:%3")
+          .arg(asset_id, QString::number(model_tool_round), proof_sha.left(16));
+      auto critique_worker = [critique_request](const std::shared_ptr<std::atomic_bool>& token) mutable {
+        critique_request.cancellation_requested = [weak_token = std::weak_ptr<std::atomic_bool>(token)]() {
+          const auto locked = weak_token.lock();
+          return locked == nullptr || locked->load(std::memory_order_relaxed);
+        };
+        const auto critique = critique_agent_rendered_proof(critique_request);
+        return QVariantMap{
+            {QStringLiteral("ok"), critique.ok}, {QStringLiteral("modelId"), critique.model_id},
+            {QStringLiteral("pass"), critique.pass}, {QStringLiteral("needsUserReview"), critique.needs_user_review},
+            {QStringLiteral("summary"), critique.summary}, {QStringLiteral("issues"), critique.issues},
+            {QStringLiteral("repairHints"), critique.repair_hints}, {QStringLiteral("error"), critique.error_message},
+            {QStringLiteral("promptAudit"), critique.prompt_audit},
+        };
+      };
+      QVariantMap model_critique;
       if (mutable_this->async_model_planning_enabled_) {
-        mutable_this->async_model_tool_plan_results_.insert(
-            model_tool_plan_cache_key, model_tool_plan);
+        if (!mutable_this->takeOrStartRequestOwnedWorkerStage(
+                critique_stage, scope, critique_worker, &model_critique)) {
+          auto pending = mutable_this->requestOwnedWorkerPendingReport(critique_stage, report_scope);
+          pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+          pending.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+          pending.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+          insert_planning_proof_metadata(&pending);
+          return pending;
+        }
+      } else {
+        model_critique = critique_worker(
+            std::make_shared<std::atomic_bool>(mutable_this->cancellation_requested_.load()));
+      }
+      if (!model_critique.value(QStringLiteral("ok")).toBool()) {
+        auto stopped = result_map(false, {QStringLiteral(
+            "Composition review could not complete its local rendered-proof critique: %1. Earlier successful edits remain available for review or Revert.")
+            .arg(model_critique.value(QStringLiteral("error")).toString())});
+        stopped.insert(QStringLiteral("proofBoundaryFailed"), true);
+        stopped.insert(QStringLiteral("needsUserReview"), true);
+        stopped.insert(QStringLiteral("errorCode"), QStringLiteral("composition_critique_unavailable"));
+        stopped.insert(QStringLiteral("compositionAssessment"), current_assessment);
+        stopped.insert(QStringLiteral("modelCritique"), model_critique);
+        stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+        stopped.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+        stopped.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+        insert_planning_proof_metadata(&stopped);
+        return stopped;
+      }
+
+      const auto bounded_messages = [](const QVariant& value) {
+        QVariantList values;
+        if (value.metaType().id() == QMetaType::QStringList) {
+          for (const auto& message : value.toStringList()) values.append(message);
+        } else if (value.metaType().id() == QMetaType::QVariantList) {
+          values = value.toList();
+        }
+        while (values.size() > 6) values.removeLast();
+        return values;
+      };
+      const auto native_warnings = bounded_messages(composition_review.value(QStringLiteral("warnings")));
+      const auto critique_issues = bounded_messages(model_critique.value(QStringLiteral("issues")));
+      const auto critique_hints = bounded_messages(model_critique.value(QStringLiteral("repairHints")));
+      const auto productive_plan_required = !composition_review.value(QStringLiteral("ok")).toBool() ||
+          !model_critique.value(QStringLiteral("pass")).toBool() ||
+          model_critique.value(QStringLiteral("needsUserReview")).toBool();
+      QStringList assessment_messages;
+      for (const auto& message : native_warnings) assessment_messages.append(message.toString());
+      for (const auto& message : critique_issues) assessment_messages.append(message.toString());
+      for (const auto& message : critique_hints) assessment_messages.append(message.toString());
+      auto instruction = productive_plan_required
+          ? QStringLiteral("Fresh native and rendered review after the last accepted mutation found unresolved composition requirements. Make a productive correction using the current readback IDs; earlier successful mutations remain applied, so never replay them or repeat the initial font inventory. Use only approved tools and facts. Do not declare completion until a fresh review passes.")
+          : QStringLiteral("Fresh native and rendered review after the last accepted mutation passed. Use this current readback for any next step; do not repeat successful operations or the initial font inventory. If all approved checks remain satisfied, you may report completion without another mutation.");
+      if (!assessment_messages.isEmpty()) instruction += QStringLiteral(" Current findings: ") + assessment_messages.join(QStringLiteral("; "));
+      const auto full_critique_audit = model_critique.value(QStringLiteral("promptAudit")).toMap();
+      QVariantMap verification_audit;
+      for (const auto& key : {QStringLiteral("metadataEvidenceComplete"),
+               QStringLiteral("reportDetailBindingsComplete"), QStringLiteral("scopedUnchangedPhotoGraphicReview"),
+               QStringLiteral("photoBaselineScopeAudit"), QStringLiteral("responseAttemptCount"),
+               QStringLiteral("responseDoneReason"), QStringLiteral("outputRecoveryMaxOutputTokens")})
+        if (full_critique_audit.contains(key)) verification_audit.insert(key, full_critique_audit.value(key));
+      QVariantList output_attempts;
+      for (const auto& value : full_critique_audit.value(QStringLiteral("responseAttempts")).toList()) {
+        const auto full_attempt = value.toMap();
+        QVariantMap attempt;
+        for (const auto& key : {QStringLiteral("attempt"), QStringLiteral("maxOutputTokens"),
+                 QStringLiteral("estimatedContextTokens"), QStringLiteral("doneReason"),
+                 QStringLiteral("evalCount"), QStringLiteral("promptEvalCount"), QStringLiteral("structuredObjectFound")})
+          if (full_attempt.contains(key)) attempt.insert(key, full_attempt.value(key));
+        output_attempts.append(attempt);
+      }
+      verification_audit.insert(QStringLiteral("outputAttempts"), output_attempts);
+      const auto text_layer_ids = known_text_layer_ids;
+      composition_assessment_envelope = QVariantMap{
+          {QStringLiteral("kind"), QStringLiteral("current-composition-assessment")},
+          {QStringLiteral("contract"), QStringLiteral("agent-current-composition-assessment-v1")},
+          {QStringLiteral("assetId"), asset_id},
+          {QStringLiteral("batchRound"), model_tool_round},
+          {QStringLiteral("sourceProofSha256"), proof_sha},
+          {QStringLiteral("sourceRecipeSha256"), source_recipe_sha},
+          {QStringLiteral("textLayerIds"), text_layer_ids},
+          {QStringLiteral("geometryChecks"), composition_review.value(QStringLiteral("geometryChecks"))},
+          {QStringLiteral("nativeReview"), QVariantMap{
+              {QStringLiteral("ok"), composition_review.value(QStringLiteral("ok"))},
+              {QStringLiteral("complete"), composition_review.value(QStringLiteral("complete"))},
+              {QStringLiteral("missingExpectedCopy"), composition_review.value(QStringLiteral("missingExpectedCopy"))},
+              {QStringLiteral("duplicateExpectedCopy"), composition_review.value(QStringLiteral("duplicateExpectedCopy"))},
+              {QStringLiteral("typography"), composition_review.value(QStringLiteral("typography"))},
+              {QStringLiteral("warnings"), native_warnings},
+          }},
+          {QStringLiteral("modelCritique"), QVariantMap{
+              {QStringLiteral("available"), true}, {QStringLiteral("ok"), true},
+              {QStringLiteral("pass"), model_critique.value(QStringLiteral("pass"))},
+              {QStringLiteral("needsUserReview"), model_critique.value(QStringLiteral("needsUserReview"))},
+              {QStringLiteral("summary"), model_critique.value(QStringLiteral("summary"))},
+              {QStringLiteral("issues"), critique_issues}, {QStringLiteral("repairHints"), critique_hints},
+              {QStringLiteral("promptAudit"), verification_audit},
+          }},
+          {QStringLiteral("requireProductivePlan"), productive_plan_required},
+          {QStringLiteral("instruction"), instruction},
+      };
+      if (!revision_baseline.isEmpty())
+        composition_assessment_envelope.insert(QStringLiteral("revisionBaseline"), revision_baseline);
+      composition_inspection_receipt = current_assessment.value(QStringLiteral("inspection")).toMap();
+      follow_up_request.require_tool_call_plan = follow_up_request.require_tool_call_plan || productive_plan_required;
+    } else if (!reuse_historical_composition_review && composition_quality_review_enabled) {
+      // A read-only planner round can occur between a fresh review and its
+      // correction. Keep the latest review attached when its rendered proof
+      // and native recipe still identify this exact live state; do not rerun
+      // the critic or carry feedback across a changed document.
+      const auto current_asset_id = representative_asset.value(QStringLiteral("assetId")).toString();
+      const auto current_proof_sha = round_proof.value(QStringLiteral("proofSha256")).toString();
+      const auto current_recipe_sha = round_proof.value(QStringLiteral("sourceRecipeSha256")).toString();
+      if (!current_asset_id.isEmpty() && !current_proof_sha.isEmpty() && !current_recipe_sha.isEmpty()) {
+        for (qsizetype index = model_tool_plan_rounds.size(); index > 0; --index) {
+          const auto prior_round = model_tool_plan_rounds.at(index - 1).toMap();
+          const auto prior_assessment = prior_round.value(QStringLiteral("compositionAssessment")).toMap();
+          if (prior_assessment.value(QStringLiteral("kind")).toString() !=
+                  QStringLiteral("current-composition-assessment") ||
+              prior_assessment.value(QStringLiteral("contract")).toString() !=
+                  QStringLiteral("agent-current-composition-assessment-v1") ||
+              prior_assessment.value(QStringLiteral("assetId")).toString() != current_asset_id ||
+              prior_assessment.value(QStringLiteral("sourceProofSha256")).toString() != current_proof_sha ||
+              prior_assessment.value(QStringLiteral("sourceRecipeSha256")).toString() != current_recipe_sha)
+            continue;
+
+          const auto prior_inspection = prior_round.value(QStringLiteral("compositionInspectionReceipt")).toMap();
+          const auto prior_inspection_content = prior_inspection.value(QStringLiteral("structuredContent")).toMap();
+          const auto prior_inspection_arguments = prior_inspection.value(QStringLiteral("arguments")).toMap();
+          if (!prior_inspection.value(QStringLiteral("ok")).toBool() ||
+              prior_inspection.value(QStringLiteral("toolName")).toString() !=
+                  QStringLiteral("photo.inspect_composition") ||
+              prior_inspection_arguments.value(QStringLiteral("assetId")).toString() != current_asset_id ||
+              prior_inspection_content.value(QStringLiteral("assetId")).toString() != current_asset_id ||
+              prior_inspection_content.value(QStringLiteral("layers")).metaType().id() != QMetaType::QVariantList)
+            continue;
+
+          composition_assessment_envelope = prior_assessment;
+          composition_inspection_receipt = prior_inspection;
+          composition_assessment_retained = true;
+          follow_up_request.require_tool_call_plan = follow_up_request.require_tool_call_plan ||
+              prior_assessment.value(QStringLiteral("requireProductivePlan")).toBool();
+          break;
+        }
       }
     }
-    model_tool_plan_calls = mcp_model_tool_plan_call_records(model_tool_plan);
-    auto follow_up_request = request;
-    follow_up_request.allow_tool_call_plan = false;
-    follow_up_request.prior_tool_results = model_tool_plan.value(QStringLiteral("toolReports")).toList();
-    follow_up_request.user_instructions =
-        QStringLiteral("%1\n\nMCP tool results JSON:\n%2")
-            .arg(
-                request.user_instructions,
-                QString::fromUtf8(
-                    QJsonDocument::fromVariant(follow_up_request.prior_tool_results)
-                        .toJson(QJsonDocument::Compact)));
+    // Keep the fresh assessment's native observation after all tool receipts
+    // from the current round, so the model sees current state before its
+    // review-bound interpretation.
+    if (composition_inspection_receipt.value(QStringLiteral("ok")).toBool())
+      follow_up_request.prior_tool_results.append(composition_inspection_receipt);
+    if (!composition_assessment_envelope.isEmpty())
+      follow_up_request.prior_tool_results.append(composition_assessment_envelope);
+    // Keep the proof actually consumed by the final model turn. The first
+    // proof can predate successful native tool calls, so its recipe is not a
+    // safe source checkpoint for the eventual apply step.
+    planning_proof_report = round_proof;
+    auto round_record = model_tool_plan_rounds.last().toMap();
+    const auto round_visual_evidence = reuse_historical_composition_review
+        ? QVariant(saved_composition_visual_evidence)
+        : follow_up_request.asset.value(QStringLiteral("visualEvidence"));
+    round_record.insert(QStringLiteral("visualEvidence"), round_visual_evidence);
+    if (!composition_assessment_envelope.isEmpty())
+      round_record.insert(QStringLiteral("compositionAssessment"), composition_assessment_envelope);
+    if (composition_assessment_retained)
+      round_record.insert(QStringLiteral("compositionAssessmentRetained"), true);
+    if (composition_inspection_receipt.value(QStringLiteral("ok")).toBool())
+      round_record.insert(QStringLiteral("compositionInspectionReceipt"), composition_inspection_receipt);
+    model_tool_plan_rounds.last() = round_record;
+    if (mutable_this->async_model_planning_enabled_ &&
+        composition_quality_review_enabled &&
+        !composition_assessment_envelope.isEmpty()) {
+      round_tool_plan.insert(QStringLiteral("agentCompositionReviewRecord"), QVariantMap{
+          {QStringLiteral("contract"), QStringLiteral("agent-composition-round-review-v1")},
+          {QStringLiteral("round"), model_tool_round},
+          {QStringLiteral("visualEvidence"), round_visual_evidence},
+          {QStringLiteral("compositionAssessment"), composition_assessment_envelope},
+          {QStringLiteral("compositionInspectionReceipt"), composition_inspection_receipt},
+          {QStringLiteral("assessmentRetained"), composition_assessment_retained},
+      });
+      mutable_this->async_model_tool_plan_results_.insert(
+          model_tool_plan_cache_key, round_tool_plan);
+    }
+    model_tool_plan.insert(QStringLiteral("rounds"), model_tool_plan_rounds);
     if (mutable_this->async_model_planning_enabled_) {
       AgentLocalModelPlanResult follow_up_plan;
       if (!mutable_this->takeOrStartRequestOwnedPlanStage(
-              QStringLiteral("model-tool-follow-up"),
-              follow_up_request,
-              scope,
-              instructions,
-              &follow_up_plan)) {
-        auto pending = mutable_this->requestOwnedPlanPendingReport(
-            QStringLiteral("model-tool-follow-up"), report_scope);
+              follow_up_stage, follow_up_request, scope, instructions, &follow_up_plan)) {
+        auto pending = mutable_this->requestOwnedPlanPendingReport(follow_up_stage, report_scope);
         pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
-        pending.insert(QStringLiteral("modelToolPlanCalls"),
-                       model_tool_plan_calls);
+        pending.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+        pending.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
         insert_planning_proof_metadata(&pending);
         return pending;
       }
@@ -18808,9 +22248,58 @@ QVariantMap AgentEditController::planDraftForScope(
       worker_result = plan_agent_recipe_patch_on_worker(follow_up_request);
     }
     plan = worker_result.plan;
+    current_plan_stage = follow_up_stage;
+  }
+  if (!model_tool_plan.isEmpty() && !model_tool_plan.value(QStringLiteral("ok")).toBool()) {
+    auto tool_errors = model_tool_plan.value(QStringLiteral("errors")).toStringList();
+    if (tool_errors.isEmpty()) {
+      for (const auto& report_value : model_tool_plan.value(QStringLiteral("toolReports")).toList()) {
+        const auto tool_report = report_value.toMap();
+        if (tool_report.value(QStringLiteral("ok")).toBool()) continue;
+        const auto error = tool_report.value(QStringLiteral("error")).toString().trimmed();
+        if (!error.isEmpty()) tool_errors.append(error);
+      }
+    }
+    if (tool_errors.isEmpty()) {
+      const auto status = model_tool_plan.value(QStringLiteral("status")).toString();
+      const auto canceled = model_tool_plan.value(QStringLiteral("canceled")).toBool();
+      tool_errors.append(canceled
+          ? QStringLiteral("MCP tool planning was canceled before this turn could finish.")
+          : status.isEmpty()
+              ? QStringLiteral("MCP tool planning stopped without a certified result. Earlier successful mutations remain applied and were not replayed.")
+              : QStringLiteral("MCP tool planning ended with status '%1' without a certified result. Earlier successful mutations remain applied and were not replayed.").arg(status));
+    }
+    auto failed_tools = result_map(false, tool_errors);
+    failed_tools.insert(QStringLiteral("modelId"), plan.model_id);
+    if (!plan.prompt_audit.isEmpty())
+      failed_tools.insert(QStringLiteral("modelPromptAudit"), plan.prompt_audit);
+    failed_tools.insert(QStringLiteral("mcpToolPhase"), mcp_tool_phase);
+    failed_tools.insert(QStringLiteral("mcpToolBudget"), model_tool_plan.value(QStringLiteral("toolBudget")));
+    failed_tools.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+    failed_tools.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+    failed_tools.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+    failed_tools.insert(QStringLiteral("errorCode"), model_tool_plan.value(QStringLiteral("errorCode")));
+    return failed_tools;
   }
   if (!plan.ok) {
-    auto failed = result_map(false, {plan.error_message});
+    auto planner_error = plan.error_message.trimmed();
+    if (planner_error.isEmpty()) {
+      const auto transport = plan.prompt_audit.value(QStringLiteral("transport")).toMap();
+      planner_error = plan.prompt_audit.value(QStringLiteral("responseError")).toString().trimmed();
+      if (planner_error.isEmpty())
+        planner_error = transport.value(QStringLiteral("error")).toString().trimmed();
+      if (planner_error.isEmpty())
+        planner_error = plan.safe_stop_reason.trimmed();
+      if (planner_error.isEmpty())
+        planner_error = plan.plan_summary.trimmed();
+      if (planner_error.isEmpty()) {
+        const auto decision = plan.prompt_audit.value(QStringLiteral("responseDecision")).toString();
+        planner_error = decision.isEmpty()
+            ? QStringLiteral("The local model did not return a usable planning result. Earlier successful composition edits remain applied and can be reviewed or reverted.")
+            : QStringLiteral("The local model returned an unusable '%1' planning result. Earlier successful composition edits remain applied and can be reviewed or reverted.").arg(decision);
+      }
+    }
+    auto failed = result_map(false, {planner_error});
     const auto transport = plan.prompt_audit.value(QStringLiteral("transport")).toMap();
     failed.insert(QStringLiteral("modelId"), plan.model_id);
     failed.insert(QStringLiteral("modelPromptAudit"), plan.prompt_audit);
@@ -18827,9 +22316,19 @@ QVariantMap AgentEditController::planDraftForScope(
     failed.insert(QStringLiteral("mcpAvailableToolCount"), request.available_tool_schemas.size());
     failed.insert(QStringLiteral("mcpToolBudget"), mcp_tool_budget);
     insert_planning_proof_metadata(&failed);
+    if (!planner_validation_rejections.isEmpty()) {
+      if (model_tool_plan.isEmpty()) {
+        model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+        model_tool_plan.insert(QStringLiteral("ok"), false);
+        model_tool_plan.insert(QStringLiteral("errors"), QStringList{planner_error});
+        model_tool_plan.insert(QStringLiteral("errorCode"), QStringLiteral("tool_plan_validation_recovery_failed"));
+      }
+      add_plan_validation_receipts();
+    }
     if (!model_tool_plan.isEmpty()) {
       failed.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
       failed.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+      failed.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
     }
     return failed;
   }
@@ -18872,19 +22371,60 @@ QVariantMap AgentEditController::planDraftForScope(
     stopped.insert(QStringLiteral("resumeScope"), report_scope);
     stopped.insert(QStringLiteral("resumeInstructions"), request.user_instructions);
     insert_planning_proof_metadata(&stopped);
+    if (!planner_validation_rejections.isEmpty()) {
+      if (model_tool_plan.isEmpty())
+        model_tool_plan.insert(QStringLiteral("mode"), QStringLiteral("mcp-model-tool-plan"));
+      add_plan_validation_receipts();
+      stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+      stopped.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+    }
     if (!model_tool_plan.isEmpty()) {
       stopped.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
       stopped.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
     }
     return stopped;
   }
+  QVariantMap native_composition_completion;
+  if (plan.decision == QStringLiteral("recipe_patch") && plan.recipe_patch.isEmpty()) {
+    native_composition_completion = verified_native_composition_completion(
+        plan.prompt_audit,
+        plan.edit_intent,
+        plan.recipe_patch,
+        model_tool_plan,
+        representative_asset.value(QStringLiteral("assetId")).toString(),
+        static_cast<int>(scoped_assets.size()));
+  }
   if (plan.style_constraint_citations.isEmpty()) {
     return result_map(false, {QStringLiteral("The local model did not cite active style constraints.")});
   }
 
-  const auto patch_validation = validate_agent_recipe_patch(plan.recipe_patch, style);
+  auto patch_validation = validate_agent_recipe_patch(plan.recipe_patch, style);
+  if (!native_composition_completion.isEmpty() && plan.recipe_patch.isEmpty()) {
+    patch_validation.valid = true;
+    patch_validation.errors.clear();
+  }
   if (!patch_validation.valid) {
-    return result_map(false, patch_validation.errors, patch_validation.warnings);
+    // Preserve the planning and live-review evidence at a rejected handoff.
+    // A bare patch error otherwise erases the diagnostics after native edits.
+    auto failed = result_map(false, patch_validation.errors, patch_validation.warnings);
+    insert_planning_proof_metadata(&failed);
+    failed.insert(QStringLiteral("decision"), plan.decision);
+    failed.insert(QStringLiteral("modelId"), plan.model_id);
+    failed.insert(QStringLiteral("modelPromptAudit"), plan.prompt_audit);
+    failed.insert(QStringLiteral("editIntent"), plan.edit_intent);
+    failed.insert(QStringLiteral("planSummary"), plan.plan_summary);
+    failed.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+    failed.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+    failed.insert(QStringLiteral("modelToolPlanRounds"), model_tool_plan_rounds);
+    failed.insert(QStringLiteral("nativeCompletionVerification"), QVariantMap{
+        {QStringLiteral("requestedEvidence"), plan.prompt_audit.value(QStringLiteral("nativeCompositionCompletion"))},
+        {QStringLiteral("controllerVerified"), !native_composition_completion.isEmpty()},
+        {QStringLiteral("recipePatchEmpty"), plan.recipe_patch.isEmpty()},
+    });
+    failed.insert(QStringLiteral("errorCode"), plan.recipe_patch.isEmpty()
+        ? QStringLiteral("native_composition_completion_unverified")
+        : QStringLiteral("recipe_patch_validation_failed"));
+    return failed;
   }
   const auto current_adjustments =
       parse_adjustment_patch_json(
@@ -18910,6 +22450,8 @@ QVariantMap AgentEditController::planDraftForScope(
   report.insert(QStringLiteral("scope"), report_scope);
   report.insert(QStringLiteral("planSummary"), plan.plan_summary);
   report.insert(QStringLiteral("editIntent"), plan.edit_intent);
+  if (!native_composition_completion.isEmpty())
+    report.insert(QStringLiteral("nativeCompositionCompletion"), native_composition_completion);
   report.insert(
       QStringLiteral("editGoals"),
       agent_edit_goals(style, request.user_instructions, plan.recipe_patch));
@@ -18932,11 +22474,11 @@ QVariantMap AgentEditController::planDraftForScope(
   }
   report.insert(QStringLiteral("styleConstraintCitations"), plan.style_constraint_citations);
   report.insert(QStringLiteral("recipePatch"), plan.recipe_patch);
-  report.insert(QStringLiteral("recipeBaseMode"), recipe_base_mode_);
+  report.insert(QStringLiteral("recipeBaseMode"), async_revision_context_.isEmpty() ? recipe_base_mode_ : QStringLiteral("current"));
   report.insert(QStringLiteral("editingFreedom"), editing_freedom_);
   report.insert(QStringLiteral("editingFreedomPolicy"),
                 editingFreedomPolicy());
-  report.insert(QStringLiteral("manualEditPolicy"), manual_edit_policy_for_base_mode(recipe_base_mode_));
+  report.insert(QStringLiteral("manualEditPolicy"), manual_edit_policy_for_base_mode(async_revision_context_.isEmpty() ? recipe_base_mode_ : QStringLiteral("current")));
   report.insert(QStringLiteral("modelRunnerMode"), model_runner_mode);
   if (worker_result.request_owned_continuation) {
     report.insert(QStringLiteral("planningContinuation"),
@@ -18946,6 +22488,23 @@ QVariantMap AgentEditController::planDraftForScope(
   if (!model_tool_plan.isEmpty()) {
     report.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
     report.insert(QStringLiteral("modelToolPlanCalls"), model_tool_plan_calls);
+  }
+  const auto baseline_is_revision = !async_revision_context_.isEmpty();
+  const auto baseline_has_current_revision_binding = !baseline_is_revision ||
+      verified_revision_composition_photo_binding(
+          composition_photo_baseline, planning_run_id, activeTaskId(),
+          async_revision_context_.value(QStringLiteral("revisedFromRunId")).toString(),
+          representative_asset.value(QStringLiteral("assetId")).toString(),
+          mcp_context.value(QStringLiteral("runId")).toString());
+  const auto baseline_original_identity_valid = verified_composition_photo_baseline(
+      composition_photo_baseline,
+      composition_photo_baseline.value(QStringLiteral("requestId")).toString(),
+      composition_photo_baseline.value(QStringLiteral("runId")).toString(),
+      representative_asset.value(QStringLiteral("assetId")).toString(),
+      activeTaskId());
+  if (baseline_original_identity_valid && baseline_has_current_revision_binding) {
+    report.insert(QStringLiteral("_controllerOwnedCompositionPhotoBaseline"),
+                  composition_photo_baseline);
   }
   return report;
 }
@@ -18960,12 +22519,14 @@ QVariantMap AgentEditController::startDraftOnSelected(
 }
 
 QVariantList AgentEditController::scopedAssetMaps(const QString& scope) const {
-  if (normalized_agent_scope(scope) != QStringLiteral("confirmed-assets")) {
+  const auto revising = async_model_planning_enabled_ && !async_revision_context_.isEmpty();
+  if (!revising && normalized_agent_scope(scope) != QStringLiteral("confirmed-assets")) {
     return scoped_asset_maps(catalog_model_, scope);
   }
   QVariantList assets;
   if (catalog_model_ == nullptr) return assets;
-  for (const auto& id : confirmed_asset_ids_) {
+  const auto target_ids = revising ? async_revision_context_.value(QStringLiteral("assetIds")).toStringList() : confirmed_asset_ids_;
+  for (const auto& id : target_ids) {
     const auto asset = catalog_model_->assetById(id);
     // Fail the whole set if a confirmed original disappears; never retarget.
     if (asset.isEmpty() || asset.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo")) return {};
@@ -19000,6 +22561,94 @@ QVariantMap AgentEditController::startDraftForConfirmedAssets(
   const auto result = startDraftForScope(QStringLiteral("confirmed-assets"), instructions);
   if (!result.value(QStringLiteral("accepted")).toBool()) confirmed_asset_ids_ = previous;
   return result;
+}
+
+QVariantMap AgentEditController::startDraftForPreparedTask(
+    const QStringList& asset_ids,
+    const QString& instructions,
+    const QString& prepared_task_id) {
+  const auto fail = [](const QString& message, const QString& code = QString()) {
+    auto report = result_map(false, {message});
+    report.insert(QStringLiteral("accepted"), false);
+    if (!code.isEmpty()) report.insert(QStringLiteral("errorCode"), code);
+    return report;
+  };
+  const auto task_id = prepared_task_id.trimmed();
+  if (access_policy_ && !access_policy_())
+    return fail(QStringLiteral("Activate or refresh a license with AI Edit access in Preferences → Account."),
+                QStringLiteral("access_required"));
+  if (task_id.isEmpty() || asset_ids.isEmpty() || instructions.trimmed().isEmpty())
+    return fail(QStringLiteral("A prepared task ID, confirmed target IDs, and instructions are required."));
+  if (running_ || draft_request_pending_ || !active_draft_request_id_.isEmpty() ||
+      manual_editing_active_ || draftActive())
+    return fail(QStringLiteral("Finish or discard current agent work before adopting a prepared task."),
+                QStringLiteral("task_in_progress"));
+  if (!task_transaction_handler_)
+    return fail(QStringLiteral("Prepared tasks require the task journal and resource checkpoint handler."),
+                QStringLiteral("task_journal_unavailable"));
+  if (catalog_model_ == nullptr)
+    return fail(QStringLiteral("The catalog is not connected to validate prepared targets."));
+
+  QStringList pinned_asset_ids;
+  QSet<QString> seen;
+  for (const auto& asset_id : asset_ids) {
+    const auto id = asset_id.trimmed();
+    const auto asset = catalog_model_->assetById(id);
+    if (id.isEmpty() || seen.contains(id) || asset.isEmpty() ||
+        !asset.value(QStringLiteral("online")).toBool() ||
+        asset.value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo"))
+      return fail(QStringLiteral("Every prepared target must be a unique, available photo resource."));
+    seen.insert(id);
+    pinned_asset_ids.append(id);
+  }
+  if (!approved_task_snapshot_.isEmpty()) {
+    auto approved_ids = approved_task_snapshot_.value(QStringLiteral("targetIds")).toStringList();
+    auto expected_ids = pinned_asset_ids;
+    std::sort(approved_ids.begin(), approved_ids.end());
+    std::sort(expected_ids.begin(), expected_ids.end());
+    if (approved_ids.isEmpty() || approved_ids != expected_ids)
+      return fail(QStringLiteral("Prepared target IDs must match the approved task snapshot."),
+                  QStringLiteral("approved_target_mismatch"));
+  }
+
+  const auto adoption = task_transaction_handler_(
+      QStringLiteral("adopt_prepared"), task_id, pinned_asset_ids,
+      QVariantMap{
+          {QStringLiteral("preparedTaskId"), task_id},
+          {QStringLiteral("requireExistingJournal"), true},
+          {QStringLiteral("requireResourceCheckpoints"), true},
+          {QStringLiteral("approvedTaskSnapshot"), approved_task_snapshot_},
+      });
+  if (!adoption.value(QStringLiteral("ok")).toBool() ||
+      adoption.value(QStringLiteral("adopted")).metaType().id() != QMetaType::Bool ||
+      !adoption.value(QStringLiteral("adopted")).toBool() ||
+      adoption.value(QStringLiteral("taskId")).toString() != task_id ||
+      !adoption.value(QStringLiteral("revertAvailable")).toBool()) {
+    auto report = adoption;
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("accepted"), false);
+    report.insert(QStringLiteral("errorCode"), QStringLiteral("prepared_task_adoption_failed"));
+    if (report.value(QStringLiteral("errors")).toStringList().isEmpty())
+      report.insert(QStringLiteral("errors"), QStringList{QStringLiteral(
+          "The prepared task journal or its resource checkpoints could not be verified.")});
+    return report;
+  }
+
+  confirmed_asset_ids_ = pinned_asset_ids;
+  task_transaction_id_ = task_id;
+  task_transaction_state_ = adoption;
+  const auto before_recipe = adoption.value(QStringLiteral("beforeRecipeJson")).toString();
+  const auto before_asset_id = adoption.value(QStringLiteral("assetId")).toString();
+  if (!before_recipe.isEmpty() && !before_asset_id.isEmpty())
+    task_original_adjustment_patches_.insert(before_asset_id, before_recipe);
+  emit taskTransactionChanged();
+
+  const auto request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  auto report = enqueueDraftRequest(
+      QStringLiteral("confirmed-assets"), instructions, request_id);
+  report.insert(QStringLiteral("preparedTaskId"), task_id);
+  report.insert(QStringLiteral("taskId"), task_id);
+  return report;
 }
 
 QVariantMap AgentEditController::startDraftForScope(
@@ -19046,14 +22695,33 @@ QVariantMap AgentEditController::startDraftForScope(
 
   const auto request_id =
       QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto transaction = beginTaskTransaction(request_id, asset_ids_from_maps(scopedAssetMaps(normalized_scope)));
+  if (!transaction.value(QStringLiteral("ok")).toBool()) {
+    report.insert(QStringLiteral("ok"), false);
+    report.insert(QStringLiteral("accepted"), false);
+    report.insert(QStringLiteral("errors"), QStringList{transaction.value(QStringLiteral("error")).toString()});
+    return report;
+  }
+  return enqueueDraftRequest(normalized_scope, instructions, request_id);
+}
+
+QVariantMap AgentEditController::enqueueDraftRequest(const QString& normalized_scope,
+    const QString& instructions, const QString& request_id) {
+  auto report = async_draft_execution_contract({});
+  report.insert(QStringLiteral("mode"), QStringLiteral("draft-start"));
+  report.insert(QStringLiteral("scope"), normalized_scope);
   clearAsyncModelPlanningState();
+  active_request_task_id_ = task_transaction_id_;
   async_model_planning_enabled_ = true;
   async_draft_project_key_ = currentContinuityProjectKey();
   async_draft_style_id_ = selected_style_id_;
   async_draft_model_id_ = selected_model_id_;
   async_draft_scope_ = normalized_scope;
-  async_draft_instructions_ =
-      instructions.trimmed().isEmpty() ? user_instructions_ : instructions;
+  const auto approved_instructions = approved_task_snapshot_
+      .value(QStringLiteral("approvedInstructions")).toString().trimmed();
+  async_draft_instructions_ = !approved_instructions.isEmpty()
+      ? approved_instructions
+      : instructions.trimmed().isEmpty() ? user_instructions_ : instructions;
   async_draft_asset_ids_ = asset_ids_from_maps(
       scopedAssetMaps(normalized_scope));
   async_draft_run_timer_.start();
@@ -19080,6 +22748,7 @@ QVariantMap AgentEditController::startDraftForScope(
   report.insert(QStringLiteral("accepted"), true);
   report.insert(QStringLiteral("queued"), true);
   report.insert(QStringLiteral("requestId"), request_id);
+  report.insert(QStringLiteral("taskId"), activeTaskId());
   report.insert(QStringLiteral("running"), true);
 
   QTimer::singleShot(
@@ -19089,6 +22758,51 @@ QVariantMap AgentEditController::startDraftForScope(
         continueDraftRequest(request_id, normalized_scope, instructions);
       });
   return report;
+}
+
+void AgentEditController::scheduleCompositionContinuation(
+    const QString& request_id, const QString& scope,
+    const QString& instructions, const QString& tool_plan_key) {
+  if (async_composition_resume_scheduled_) return;
+  async_composition_resume_scheduled_ = true;
+  const auto previous = async_model_tool_plan_results_.value(tool_plan_key);
+  const auto poll_count = previous.value(QStringLiteral("completionChecks")).toMap().value(QStringLiteral("pollCount")).toInt();
+  // Native tools are in process. Back off the optional HTTP route so a long
+  // pixel job cannot exhaust the bridge's request admission window.
+  const auto delay_ms = previous.value(QStringLiteral("endpoint")).toString().startsWith(QStringLiteral("in-process:")) || poll_count == 0
+      ? 50 : std::min(2000, 100 * (1 << std::min(poll_count, 5)));
+  QTimer::singleShot(delay_ms, this, [this, request_id, scope, instructions, tool_plan_key]() {
+    if (active_draft_request_id_ != request_id) return;
+    async_composition_resume_scheduled_ = false;
+    auto execution = async_model_tool_plan_results_.value(tool_plan_key);
+    if (!execution.value(QStringLiteral("compositionPending")).toBool()) return;
+    {
+      const auto previous_execution = execution;
+      execution = execute_model_mcp_tool_plan(
+          execution.value(QStringLiteral("endpoint")).toString(),
+          execution.value(QStringLiteral("endpointKind")).toString(), mcp_bearer_token_,
+          execution.value(QStringLiteral("runId")).toString(),
+          execution.value(QStringLiteral("allowedTools")).toStringList(),
+          execution.value(QStringLiteral("cachedTools")).toList(),
+          execution.value(QStringLiteral("requestedToolCalls")).toList(),
+          [this]() { return cancellation_requested_.load(); },
+          [this](const QString& tool_name, const QVariantMap& arguments, const QString& status) {
+            const auto operation = arguments.value(QStringLiteral("operation")).toString();
+            appendRunEvent(QStringLiteral("tool"), operation, status,
+                status == QStringLiteral("complete") ? QStringLiteral("Completed %1.").arg(operation)
+                    : QStringLiteral("Could not complete %1.").arg(operation),
+                {{QStringLiteral("toolName"), tool_name}, {QStringLiteral("operation"), operation}});
+          }, true, previous_execution, false);
+    }
+    async_model_tool_plan_results_.insert(tool_plan_key, execution);
+    if (execution.value(QStringLiteral("compositionPending")).toBool()) {
+      scheduleCompositionContinuation(request_id, scope, instructions, tool_plan_key);
+      return;
+    }
+    // Resume through the normal request/context guard before another mutation.
+    async_model_continuation_resume_pending_ = true;
+    continueDraftRequest(request_id, scope, instructions);
+  });
 }
 
 void AgentEditController::continueDraftRequest(
@@ -19117,19 +22831,34 @@ void AgentEditController::continueDraftRequest(
     canceled.insert(QStringLiteral("mode"), QStringLiteral("draft"));
     canceled.insert(QStringLiteral("scope"), scope);
     canceled.insert(QStringLiteral("requestId"), request_id);
+    canceled.insert(QStringLiteral("taskId"), activeTaskId());
     canceled.insert(QStringLiteral("cancellationReason"), reason);
     canceled.insert(QStringLiteral("canceledBeforeExecution"), true);
-    canceled.insert(
-        QStringLiteral("asyncDraft"),
-        async_draft_execution_contract(request_id));
+    if (draftActive()) {
+      const auto restored = rollbackDraft(reason);
+      canceled.insert(QStringLiteral("rollbackReport"), restored);
+      canceled.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+    } else if (task_transaction_handler_ && !activeTaskId().isEmpty()) {
+      task_transaction_state_ = task_transaction_handler_(QStringLiteral("revert"), activeTaskId(), {}, {});
+      if (task_transaction_state_.value(QStringLiteral("ok")).toBool() &&
+          !task_transaction_state_.value(QStringLiteral("pending")).toBool()) {
+        approved_task_snapshot_.clear();
+        approved_task_snapshot_history_.clear();
+      }
+      canceled.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+      emit taskTransactionChanged();
+    }
+    attachRevisionOutcome(&canceled);
+    canceled.insert(QStringLiteral("requestId"), request_id);
+    canceled.insert(QStringLiteral("asyncDraft"), async_draft_execution_contract(request_id));
+    if (finalizeTaskTransaction(request_id, &canceled, true)) return;
     cancellation_requested_ = false;
     rollback_on_cancel_ = false;
     cancellation_reason_.clear();
     emit cancellationChanged();
     setRunning(false);
     setStatus(QStringLiteral("Canceled"));
-    setErrorMessage(
-        canceled.value(QStringLiteral("failureReason")).toString());
+    setErrorMessage(canceled.value(QStringLiteral("failureReason")).toString());
     active_draft_request_id_.clear();
     clearAsyncModelPlanningState();
     emit draftRequestChanged();
@@ -19148,13 +22877,14 @@ void AgentEditController::continueDraftRequest(
     return;
   }
   completed.insert(QStringLiteral("requestId"), request_id);
-  completed.insert(
-      QStringLiteral("asyncDraft"),
-      async_draft_execution_contract(request_id));
+  attachRevisionOutcome(&completed);
+  completed.insert(QStringLiteral("asyncDraft"), async_draft_execution_contract(request_id));
+  if (finalizeTaskTransaction(request_id, &completed, true)) return;
   active_draft_request_id_.clear();
   clearAsyncModelPlanningState();
   emit draftRequestChanged();
   completed = finalizeDraftDirectionComparison(request_id, completed);
+  setLastRunReport(completed);
   emit draftRunFinished(request_id, completed);
 }
 
@@ -19166,6 +22896,8 @@ void AgentEditController::clearAsyncModelPlanningState() {
     async_fast_preview_validation_token_->store(true, std::memory_order_relaxed);
   }
   async_model_planning_enabled_ = false;
+  active_request_task_id_.clear();
+  async_revision_context_.clear();
   async_model_planning_in_flight_ = false;
   async_request_worker_in_flight_ = false;
   async_model_continuation_resume_pending_ = false;
@@ -19180,13 +22912,23 @@ void AgentEditController::clearAsyncModelPlanningState() {
   async_draft_scope_.clear();
   async_draft_instructions_.clear();
   async_draft_asset_ids_.clear();
+  async_mcp_context_request_id_.clear();
+  async_mcp_context_key_.clear();
+  async_mcp_discovery_.clear();
+  async_mcp_observation_.clear();
   async_model_stage_results_.clear();
   async_model_tool_plan_results_.clear();
+  async_composition_repair_round_cursors_.clear();
+  async_composition_repair_progress_snapshots_.clear();
+  async_composition_repair_plan_signatures_.clear();
+  async_composition_repair_accepted_recipe_results_.clear();
+  async_composition_resume_scheduled_ = false;
   async_model_proof_critique_results_.clear();
   async_model_completed_stages_.clear();
   async_request_worker_stage_results_.clear();
   async_request_worker_completed_stages_.clear();
   async_progressive_preview_originals_.clear();
+  async_progressive_preview_authored_.clear();
   async_fast_preview_validation_in_flight_ = false;
   async_fast_preview_validation_request_id_.clear();
   async_fast_preview_validation_report_.clear();
@@ -19924,7 +23666,375 @@ QVariantMap AgentEditController::prepareRejectedRetouchRepairAtPoint(
   return pending;
 }
 
-QVariantMap AgentEditController::runDraftForScope(
+QVariantMap AgentEditController::beginTaskTransaction(const QString& request_id, const QStringList& asset_ids) {
+  if (task_composition_photo_baseline_.value(QStringLiteral("taskId")).toString() != request_id)
+    task_composition_photo_baseline_.clear();
+  if (!task_transaction_handler_) return {{"ok", true}};
+  QVariantMap context;
+  if (!approved_task_snapshot_.isEmpty()) {
+    context.insert(QStringLiteral("approvedTaskSnapshot"), approved_task_snapshot_);
+    context.insert(QStringLiteral("taskBaselineContract"),
+                   QStringLiteral("approved-task-snapshot-v1"));
+  }
+  auto transaction = task_transaction_handler_(QStringLiteral("begin"), request_id, asset_ids, context);
+  if (!transaction.value(QStringLiteral("ok")).toBool()) return transaction;
+  task_transaction_id_ = request_id;
+  task_original_adjustment_patches_.clear();
+  task_expected_adjustment_patches_.clear();
+  const auto original = transaction.take(QStringLiteral("beforeRecipeJson")).toString();
+  if (!original.isEmpty())
+    task_original_adjustment_patches_.insert(transaction.value(QStringLiteral("assetId")).toString(), original);
+  task_transaction_state_ = transaction;
+  emit taskTransactionChanged();
+  return transaction;
+}
+
+int AgentEditController::applyTaskOwnedAdjustmentPatchJson(
+    const QStringList& asset_ids,
+    const QString& patch_json,
+    const QStringList& adjustment_groups) {
+  if (catalog_model_ == nullptr) return 0;
+  const auto owns_reversible_task = task_transaction_handler_ &&
+      !task_transaction_id_.isEmpty() &&
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool();
+  if (owns_reversible_task) {
+    const auto state_task_id =
+        task_transaction_state_.value(QStringLiteral("taskId")).toString();
+    if (!state_task_id.isEmpty() && state_task_id != task_transaction_id_) return 0;
+    const auto request_task_id = activeTaskId();
+    if (!request_task_id.isEmpty() && request_task_id != task_transaction_id_) return 0;
+    const auto task_id = request_task_id.isEmpty() ? task_transaction_id_ : request_task_id;
+    return catalog_model_->applyAgentAdjustmentPatchJsonToAssetIds(
+        task_id, asset_ids, patch_json, adjustment_groups);
+  }
+  return catalog_model_->applyAdjustmentPatchJsonToAssetIds(
+      asset_ids, patch_json, adjustment_groups);
+}
+
+bool AgentEditController::retainPendingTaskFinalization(
+    const QString& task_id,
+    const QVariantMap& receipt,
+    const QString& request_id,
+    const QString& action,
+    const QVariantMap& report,
+    bool emit_completion,
+    bool clear_draft_on_success) {
+  const auto receipt_id = receipt.value(QStringLiteral("receiptId")).toString().trimmed();
+  if (task_id.isEmpty() || receipt_id.isEmpty() ||
+      receipt.value(QStringLiteral("taskId")).toString() != task_id ||
+      !receipt.value(QStringLiteral("pending")).toBool())
+    return false;
+
+  pending_task_finalization_ = QVariantMap{
+      {QStringLiteral("taskId"), task_id},
+      {QStringLiteral("requestId"), request_id},
+      {QStringLiteral("receiptId"), receipt_id},
+      {QStringLiteral("action"), action},
+      {QStringLiteral("report"), report},
+      {QStringLiteral("emitCompletion"), emit_completion},
+      {QStringLiteral("clearDraftOnSuccess"), clear_draft_on_success},
+  };
+  task_transaction_state_ = receipt;
+  auto pending_report = report;
+  pending_report.insert(QStringLiteral("ok"), false);
+  pending_report.insert(QStringLiteral("pending"), true);
+  pending_report.insert(QStringLiteral("taskSettlementPending"), true);
+  pending_report.insert(QStringLiteral("taskId"), task_id);
+  pending_report.insert(QStringLiteral("receiptId"), receipt_id);
+  pending_report.insert(QStringLiteral("taskTransaction"), receipt);
+  pending_report.insert(QStringLiteral("status"), QStringLiteral("settling"));
+  pending_report.remove(QStringLiteral("success"));
+  if (action == QStringLiteral("revert"))
+    pending_report.insert(QStringLiteral("draftActive"), draftActive());
+  setLastRunReport(pending_report);
+  setRunning(true);
+  draft_request_pending_ = true;
+  emit draftRequestChanged();
+  setStatus(QStringLiteral("Saving agent task"));
+  setErrorMessage(QString());
+  emit taskTransactionChanged();
+  emit draftChanged();
+  return true;
+}
+
+bool AgentEditController::finalizeTaskTransaction(
+    const QString& request_id,
+    QVariantMap* report,
+    bool emit_completion) {
+  if (!report || active_draft_request_id_ != request_id) return false;
+  const auto canceled = !report->value(QStringLiteral("cancellationReason")).toString().isEmpty();
+  auto rollback_attempted = false;
+  if (canceled && draftActive()) {
+    rollback_attempted = true;
+    const auto restored = rollbackDraft(report->value(QStringLiteral("cancellationReason")).toString());
+    report->insert(QStringLiteral("rollbackReport"), restored);
+    report->insert(QStringLiteral("draftActive"), draftActive());
+    if (!restored.value(QStringLiteral("ok")).toBool() &&
+        !restored.value(QStringLiteral("pending")).toBool()) {
+      task_transaction_state_.insert(QStringLiteral("ok"), false);
+      task_transaction_state_.insert(QStringLiteral("error"), restored.value(QStringLiteral("error"), restored.value(QStringLiteral("failureReason"))));
+    }
+  }
+  const auto owns_task = task_transaction_handler_ && !activeTaskId().isEmpty() && activeTaskId() == task_transaction_id_;
+  if (owns_task) report->insert(QStringLiteral("taskId"), activeTaskId());
+  const auto status = task_transaction_state_.value(QStringLiteral("status")).toString();
+  // A native rollback may already have settled the task. Never replay reversal.
+  if (owns_task && !rollback_attempted && status != QStringLiteral("reverted") && status != QStringLiteral("abandoned"))
+    task_transaction_state_ = task_transaction_handler_(
+        canceled ? QStringLiteral("revert") : report->value(QStringLiteral("ok")).toBool()
+            ? QStringLiteral("review") : QStringLiteral("interrupted"), activeTaskId(), {},
+        {{QStringLiteral("expectedRecipes"), QVariant(task_expected_adjustment_patches_)}});
+  const auto action = canceled ? QStringLiteral("revert")
+      : report->value(QStringLiteral("ok")).toBool()
+          ? QStringLiteral("review") : QStringLiteral("interrupted");
+  if (owns_task && task_transaction_state_.value(QStringLiteral("pending")).toBool()) {
+    report->insert(QStringLiteral("taskId"), activeTaskId());
+    report->insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+    if (retainPendingTaskFinalization(activeTaskId(), task_transaction_state_, request_id,
+            action, *report, emit_completion, canceled)) {
+      *report = last_run_report_;
+      return true;
+    }
+  }
+  if (owns_task) report->insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+  if (owns_task && !task_transaction_state_.value(QStringLiteral("ok")).toBool()) {
+    auto errors = report->value(QStringLiteral("errors")).toStringList();
+    errors.append(task_transaction_state_.value(QStringLiteral("error")).toString());
+    report->insert(QStringLiteral("errors"), errors);
+    report->insert(QStringLiteral("ok"), false);
+    report->insert(QStringLiteral("failureReason"), errors.join(QStringLiteral("; ")));
+    setErrorMessage(report->value(QStringLiteral("failureReason")).toString());
+    setStatus(QStringLiteral("Task needs recovery"));
+  }
+  if (action == QStringLiteral("review") && report->value(QStringLiteral("ok")).toBool())
+    recordAcceptedCompositionPhotoRevision(*report);
+  if (!report->value(QStringLiteral("ok")).toBool()) report->remove(QStringLiteral("pendingProjectCorrection"));
+  // The model/proof stage may already have written a manifest. Persist the
+  // native task outcome too, so recovery never reads an obsolete success.
+  if (!report->value(QStringLiteral("runId")).toString().isEmpty()) {
+    const auto model_id = report->value(QStringLiteral("modelId"), selected_model_id_).toString();
+    write_agent_run_manifest(report, activeRunStyle(), model_metadata_by_id(available_models_, model_id), model_id);
+  }
+  emit taskTransactionChanged();
+  return false;
+}
+
+void AgentEditController::recordAcceptedCompositionPhotoRevision(const QVariantMap& report) {
+  if (!report.value(QStringLiteral("ok")).toBool() ||
+      report.value(QStringLiteral("mode")).toString() != QStringLiteral("draft-revision") ||
+      !draftActive() || task_transaction_id_.isEmpty() ||
+      report.value(QStringLiteral("taskId")).toString() != task_transaction_id_ ||
+      task_transaction_state_.value(QStringLiteral("taskId")).toString() != task_transaction_id_ ||
+      task_transaction_state_.value(QStringLiteral("status")).toString() != QStringLiteral("review") ||
+      !task_transaction_state_.value(QStringLiteral("ok")).toBool() ||
+      !task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool())
+    return;
+
+  const auto completion = report.value(QStringLiteral("nativeCompositionCompletion")).toMap();
+  const auto baseline = task_composition_photo_baseline_;
+  const auto asset_id = baseline.value(QStringLiteral("assetId")).toString();
+  const auto run_id = report.value(QStringLiteral("runId")).toString();
+  const auto source_run_id = baseline.value(QStringLiteral("latestAcceptedRunId"),
+      baseline.value(QStringLiteral("sourceRunId"))).toString();
+  auto report_asset_ids = report.value(QStringLiteral("assetIds")).toStringList();
+  auto owned_asset_ids = QStringList{};
+  for (const auto& resource_value : task_transaction_state_.value(QStringLiteral("resources")).toList())
+    owned_asset_ids.append(resource_value.toMap().value(QStringLiteral("id")).toString());
+  std::sort(report_asset_ids.begin(), report_asset_ids.end());
+  std::sort(owned_asset_ids.begin(), owned_asset_ids.end());
+  const auto target_asset_ids = baseline.value(QStringLiteral("taskTargetIds")).toStringList();
+  auto sorted_target_asset_ids = target_asset_ids;
+  std::sort(sorted_target_asset_ids.begin(), sorted_target_asset_ids.end());
+  if (run_id.isEmpty() || run_id == source_run_id || source_run_id.isEmpty() || asset_id.isEmpty() ||
+      report.value(QStringLiteral("revisedFromRunId")).toString() != source_run_id ||
+      report_asset_ids != QStringList{asset_id} || owned_asset_ids != QStringList{asset_id} ||
+      sorted_target_asset_ids != QStringList{asset_id} ||
+      baseline.value(QStringLiteral("taskId")).toString() != task_transaction_id_ ||
+      baseline.value(QStringLiteral("sourceProjectKey")).toString() != currentContinuityProjectKey() ||
+      !verified_composition_photo_baseline(
+          baseline, baseline.value(QStringLiteral("requestId")).toString(),
+          baseline.value(QStringLiteral("runId")).toString(), asset_id, task_transaction_id_) ||
+      !completion.value(QStringLiteral("requested")).toBool() ||
+      !completion.value(QStringLiteral("controllerVerified")).toBool() ||
+      completion.value(QStringLiteral("verificationContract")).toString() !=
+          QStringLiteral("agent-native-composition-completion-controller-v1") ||
+      completion.value(QStringLiteral("assetId")).toString() != asset_id ||
+      completion.value(QStringLiteral("acceptedMutationCount")).toInt() <= 0 ||
+      !completion.value(QStringLiteral("readbackConfirmed")).toBool())
+    return;
+
+  auto updated_baseline = baseline;
+  updated_baseline.insert(QStringLiteral("latestAcceptedRunId"), run_id);
+  task_composition_photo_baseline_ = updated_baseline;
+}
+
+QVariantMap AgentEditController::settleTaskFinalization(
+    const QString& task_id,
+    const QVariantMap& receipt) {
+  const auto fail = [](const QString& message) {
+    return QVariantMap{{QStringLiteral("ok"), false},
+        {QStringLiteral("error"), message},
+        {QStringLiteral("errorCode"), QStringLiteral("task_settlement_receipt_mismatch")}};
+  };
+  if (pending_task_finalization_.isEmpty())
+    return fail(QStringLiteral("No task finalization is waiting for a receipt."));
+  const auto expected_task = pending_task_finalization_.value(QStringLiteral("taskId")).toString();
+  const auto expected_receipt = pending_task_finalization_.value(QStringLiteral("receiptId")).toString();
+  const auto request_id = pending_task_finalization_.value(QStringLiteral("requestId")).toString();
+  if (task_id != expected_task || receipt.value(QStringLiteral("taskId")).toString() != expected_task ||
+      receipt.value(QStringLiteral("receiptId")).toString() != expected_receipt)
+    return fail(QStringLiteral("The task finalization receipt does not match the pending task and receipt IDs."));
+
+  if (receipt.value(QStringLiteral("pending")).toBool()) {
+    const auto settlement_error = receipt.value(QStringLiteral("error")).toString().trimmed();
+    const auto retryable_failure = !settlement_error.isEmpty() ||
+        (receipt.contains(QStringLiteral("ok")) && !receipt.value(QStringLiteral("ok")).toBool());
+    auto pending = pending_task_finalization_.value(QStringLiteral("report")).toMap();
+    pending.insert(QStringLiteral("ok"), false);
+    pending.insert(QStringLiteral("pending"), true);
+    pending.insert(QStringLiteral("taskSettlementPending"), true);
+    pending.insert(QStringLiteral("taskId"), expected_task);
+    pending.insert(QStringLiteral("receiptId"), expected_receipt);
+    pending.insert(QStringLiteral("taskTransaction"), receipt);
+    if (!settlement_error.isEmpty()) {
+      pending.insert(QStringLiteral("settlementError"), settlement_error);
+      pending.insert(QStringLiteral("retryable"), receipt.value(QStringLiteral("retryable"), true));
+    }
+    task_transaction_state_ = receipt;
+    setLastRunReport(pending);
+    setStatus(retryable_failure ? QStringLiteral("Task needs recovery")
+                               : QStringLiteral("Saving agent task"));
+    setErrorMessage(settlement_error);
+    emit taskTransactionChanged();
+    QVariantMap response{
+        {QStringLiteral("ok"), !retryable_failure},
+        {QStringLiteral("pending"), true},
+        {QStringLiteral("taskId"), expected_task},
+        {QStringLiteral("receiptId"), expected_receipt}};
+    if (retryable_failure) {
+      response.insert(QStringLiteral("retryable"), receipt.value(QStringLiteral("retryable"), true));
+      response.insert(QStringLiteral("error"), settlement_error.isEmpty()
+          ? QStringLiteral("Task persistence has not settled successfully.") : settlement_error);
+    }
+    return response;
+  }
+  if (!receipt.value(QStringLiteral("ok")).toBool()) {
+    auto pending = pending_task_finalization_.value(QStringLiteral("report")).toMap();
+    pending.insert(QStringLiteral("ok"), false);
+    pending.insert(QStringLiteral("pending"), true);
+    pending.insert(QStringLiteral("taskSettlementPending"), true);
+    pending.insert(QStringLiteral("taskId"), expected_task);
+    pending.insert(QStringLiteral("receiptId"), expected_receipt);
+    pending.insert(QStringLiteral("taskTransaction"), receipt);
+    pending.insert(QStringLiteral("settlementError"), receipt.value(QStringLiteral("error")));
+    pending.insert(QStringLiteral("retryable"), receipt.value(QStringLiteral("retryable"), true));
+    task_transaction_state_ = receipt;
+    setLastRunReport(pending);
+    setStatus(QStringLiteral("Task needs recovery"));
+    setErrorMessage(receipt.value(QStringLiteral("error")).toString());
+    emit taskTransactionChanged();
+    return {{QStringLiteral("ok"), false}, {QStringLiteral("pending"), true},
+        {QStringLiteral("retryable"), receipt.value(QStringLiteral("retryable"), true)},
+        {QStringLiteral("taskId"), expected_task}, {QStringLiteral("receiptId"), expected_receipt},
+        {QStringLiteral("error"), receipt.value(QStringLiteral("error"))}};
+  }
+
+  const auto action = pending_task_finalization_.value(QStringLiteral("action")).toString();
+  const auto expected_status = action == QStringLiteral("revert")
+      ? QStringLiteral("reverted") : action;
+  if (receipt.value(QStringLiteral("status")).toString() != expected_status)
+    return fail(QStringLiteral("The task receipt settled to an unexpected final status."));
+
+  auto final_report = pending_task_finalization_.value(QStringLiteral("report")).toMap();
+  const auto emit_completion = pending_task_finalization_.value(QStringLiteral("emitCompletion")).toBool();
+  const auto clear_draft = pending_task_finalization_.value(QStringLiteral("clearDraftOnSuccess")).toBool() ||
+      action == QStringLiteral("revert");
+  final_report.remove(QStringLiteral("pending"));
+  final_report.remove(QStringLiteral("taskSettlementPending"));
+  final_report.remove(QStringLiteral("receiptId"));
+  final_report.insert(QStringLiteral("taskId"), expected_task);
+  final_report.insert(QStringLiteral("taskTransaction"), receipt);
+  final_report.insert(QStringLiteral("ok"), action == QStringLiteral("review") &&
+      pending_task_finalization_.value(QStringLiteral("report")).toMap().value(QStringLiteral("ok")).toBool());
+  if (action == QStringLiteral("revert")) {
+    const auto canceled = !final_report.value(QStringLiteral("cancellationReason")).toString().isEmpty();
+    final_report.insert(QStringLiteral("ok"), !canceled);
+    final_report.insert(QStringLiteral("draftActive"), false);
+    final_report.insert(QStringLiteral("status"), canceled ? QStringLiteral("canceled") : QStringLiteral("reverted"));
+  } else if (action == QStringLiteral("interrupted")) {
+    final_report.insert(QStringLiteral("ok"), false);
+    final_report.insert(QStringLiteral("status"), QStringLiteral("interrupted"));
+  }
+  if (action == QStringLiteral("review"))
+    final_report = finalizeDraftDirectionComparison(request_id, final_report);
+  if (clear_draft) {
+    draft_original_adjustment_patches_.clear();
+    draft_run_id_.clear();
+    draft_project_key_.clear();
+    task_composition_photo_baseline_.clear();
+    approved_task_snapshot_.clear();
+    approved_task_snapshot_history_.clear();
+    clearDraftDirectionComparison();
+    emit draftChanged();
+  }
+  task_transaction_state_ = receipt;
+  if (action == QStringLiteral("review") && final_report.value(QStringLiteral("ok")).toBool())
+    recordAcceptedCompositionPhotoRevision(final_report);
+  pending_task_finalization_.clear();
+  active_draft_request_id_.clear();
+  draft_request_pending_ = false;
+  cancellation_requested_ = false;
+  rollback_on_cancel_ = false;
+  cancellation_reason_.clear();
+  clearAsyncModelPlanningState();
+  emit draftRequestChanged();
+  emit cancellationChanged();
+  setRunning(false);
+  setStatus(action == QStringLiteral("revert")
+      ? (final_report.value(QStringLiteral("cancellationReason")).toString().isEmpty()
+             ? QStringLiteral("Reverted") : QStringLiteral("Canceled"))
+      : action == QStringLiteral("review") ? QStringLiteral("Draft ready")
+      : QStringLiteral("Task interrupted"));
+  if (action != QStringLiteral("interrupted")) setErrorMessage(QString());
+  setLastRunReport(final_report);
+  if (!final_report.value(QStringLiteral("runId")).toString().isEmpty()) {
+    const auto model_id = final_report.value(QStringLiteral("modelId"), selected_model_id_).toString();
+    write_agent_run_manifest(&final_report, activeRunStyle(), model_metadata_by_id(available_models_, model_id), model_id);
+    setLastRunReport(final_report);
+  }
+  emit taskTransactionChanged();
+  if (emit_completion) emit draftRunFinished(
+      final_report.value(QStringLiteral("requestId"), request_id).toString(), final_report);
+  return {{QStringLiteral("ok"), true}, {QStringLiteral("settled"), true},
+      {QStringLiteral("taskId"), expected_task}, {QStringLiteral("status"), expected_status}};
+}
+
+QVariantMap AgentEditController::runDraftForScope(const QString& scope, const QString& instructions) {
+  // Queued continuations already own their task. Legacy synchronous entry points
+  // must acquire exactly the same ownership before any model/tool mutation.
+  if (allow_queued_draft_entry_once_ || !task_transaction_handler_)
+    return executeDraftForScope(scope, instructions);
+  if (running_ || draft_request_pending_ || !active_draft_request_id_.isEmpty())
+    return result_map(false, {QStringLiteral("Another agent run is already in progress.")});
+  if (manual_editing_active_ || (access_policy_ && !access_policy_()))
+    return executeDraftForScope(scope, instructions);
+  const auto request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  const auto transaction = beginTaskTransaction(request_id, asset_ids_from_maps(scopedAssetMaps(scope)));
+  if (!transaction.value(QStringLiteral("ok")).toBool())
+    return result_map(false, {transaction.value(QStringLiteral("error")).toString()});
+  active_draft_request_id_ = request_id;
+  active_request_task_id_ = task_transaction_id_;
+  emit draftRequestChanged();
+  auto report = executeDraftForScope(scope, instructions);
+  report.insert(QStringLiteral("requestId"), request_id);
+  if (finalizeTaskTransaction(request_id, &report)) return report;
+  active_draft_request_id_.clear();
+  emit draftRequestChanged();
+  setLastRunReport(report);
+  return report;
+}
+
+QVariantMap AgentEditController::executeDraftForScope(
     const QString& scope,
     const QString& instructions) {
   const auto accepted_queued_entry = allow_queued_draft_entry_once_;
@@ -19991,11 +24101,35 @@ QVariantMap AgentEditController::runDraftForScope(
     beginRunEvents(scope);
   }
   rollback_on_cancel_ = false;
-  const auto requested_instructions =
-      instructions.trimmed().isEmpty() ? user_instructions_ : instructions;
+  const auto approved_instructions =
+      approved_task_snapshot_.value(QStringLiteral("approvedInstructions"))
+          .toString()
+          .trimmed();
+  const auto requested_instructions = !approved_instructions.isEmpty()
+      ? approved_instructions
+      : instructions.trimmed().isEmpty() ? user_instructions_ : instructions;
   const auto run_style = activeRunStyle();
   const auto planning_scoped_assets = scopedAssetMaps(scope);
   const auto planning_asset_ids = asset_ids_from_maps(planning_scoped_assets);
+  const auto async_mcp_context_key = [&]() {
+    const auto credential_fingerprint = QString::fromLatin1(
+        QCryptographicHash::hash(mcp_bearer_token_.toUtf8(), QCryptographicHash::Sha256)
+            .toHex());
+    const QVariantMap context{
+        {QStringLiteral("requestId"), active_draft_request_id_},
+        {QStringLiteral("taskId"), active_request_task_id_},
+        {QStringLiteral("endpoint"), mcp_endpoint_},
+        {QStringLiteral("endpointKind"), mcp_endpoint_kind_},
+        {QStringLiteral("credentialSha256"), credential_fingerprint},
+        {QStringLiteral("schemaRevision"), mcp_tool_schema_revision_},
+        {QStringLiteral("schemaFingerprint"), mcp_tool_schema_fingerprint_},
+        {QStringLiteral("scope"), normalized_agent_scope(scope)},
+        {QStringLiteral("assetIds"), planning_asset_ids},
+    };
+    return QString::fromLatin1(QCryptographicHash::hash(
+        QJsonDocument::fromVariant(context).toJson(QJsonDocument::Compact),
+        QCryptographicHash::Sha256).toHex());
+  };
   const auto planning_cluster_metadata =
       batch_cluster_metadata(planning_scoped_assets);
   const auto planning_story_map = assignmentStoryMapForAssets(
@@ -20144,6 +24278,30 @@ QVariantMap AgentEditController::runDraftForScope(
   }
   QElapsedTimer mcp_timer;
   mcp_timer.start();
+  const auto cached_mcp_identity_matches =
+      uses_async_request_clock &&
+      !active_draft_request_id_.isEmpty() &&
+      async_mcp_context_request_id_ == active_draft_request_id_ &&
+      !async_mcp_context_key_.isEmpty();
+  const auto cached_mcp_context_matches =
+      cached_mcp_identity_matches &&
+      async_mcp_context_key_ == async_mcp_context_key();
+  const auto cached_mcp_discovery_available =
+      cached_mcp_context_matches && !async_mcp_discovery_.isEmpty();
+  const auto cached_mcp_observation_available =
+      cached_mcp_context_matches && !async_mcp_observation_.isEmpty();
+  if (cached_mcp_identity_matches && !cached_mcp_context_matches) {
+    // A request continuation may reuse editor schemas and its initial
+    // observation only while the endpoint, credentials, schema revision,
+    // target, and request identity still match. Discard stale context before
+    // discovering the current endpoint again.
+    async_mcp_context_request_id_.clear();
+    async_mcp_context_key_.clear();
+    async_mcp_discovery_.clear();
+    async_mcp_observation_.clear();
+  }
+  auto discovery_reused = false;
+  auto observation_reused = false;
   auto mcp_discovery = visual_referent_fast_path_used
                            ? QVariantMap{
                                  {QStringLiteral("ready"), false},
@@ -20156,8 +24314,23 @@ QVariantMap AgentEditController::runDraftForScope(
                                  {QStringLiteral("tools"), QVariantList{}},
                                  {QStringLiteral("endpointKind"), mcp_endpoint_kind_},
                              }
-                           : ensureMcpReady(QStringLiteral("draft-run"), 3);
-  mcp_discovery.insert(QStringLiteral("durationMs"), mcp_timer.elapsed());
+                           : cached_mcp_discovery_available
+                               ? async_mcp_discovery_
+                               : ensureMcpReady(QStringLiteral("draft-run"), 3);
+  discovery_reused = !visual_referent_fast_path_used &&
+                     cached_mcp_discovery_available;
+  mcp_discovery.insert(QStringLiteral("durationMs"),
+                       discovery_reused ? 0 : mcp_timer.elapsed());
+  mcp_discovery.insert(QStringLiteral("requestContextReused"),
+                       discovery_reused);
+  mcp_discovery.insert(QStringLiteral("requestContextRequestId"),
+                       discovery_reused ? async_mcp_context_request_id_
+                                        : active_draft_request_id_);
+  if (!visual_referent_fast_path_used && uses_async_request_clock) {
+    async_mcp_context_request_id_ = active_draft_request_id_;
+    async_mcp_context_key_ = async_mcp_context_key();
+    async_mcp_discovery_ = mcp_discovery;
+  }
   const auto mcp_phase_asset_count = planning_scoped_assets.size();
   const auto mcp_tool_phase =
       mcp_phase_asset_count > 1 ? QStringLiteral("batch") : QStringLiteral("sample");
@@ -20181,28 +24354,69 @@ QVariantMap AgentEditController::runDraftForScope(
                                    {QStringLiteral("successCount"), 0},
                                    {QStringLiteral("toolNames"), QStringList{}},
                                }
-                             : observe_mcp_tools(
-                                   mcp_endpoint_,
-                                   mcp_endpoint_kind_,
-                                   mcp_bearer_token_,
-                                   QStringLiteral("agent-run-observe"),
-                                   [this]() {
-                                     return cancellation_requested_.load();
-                                   });
-  mcp_observation.insert(QStringLiteral("durationMs"), mcp_observation_timer.elapsed());
-  const auto mcp_observation_tool_calls = mcp_observation_tool_call_records(mcp_observation);
-  appendRunEvent(
-      QStringLiteral("observe"),
-      QStringLiteral("Observe"),
-      QStringLiteral("complete"),
-      visual_referent_fast_path_used
-          ? QStringLiteral("Used the confirmed object already grounded on this photo; no tool discovery was needed.")
-          : QStringLiteral("Collected photo context and inspected the editor tools available for this run."),
+                             : cached_mcp_observation_available
+                                 ? async_mcp_observation_
+                                 : observe_mcp_tools(
+                                       mcp_endpoint_,
+                                       mcp_endpoint_kind_,
+                                       mcp_bearer_token_,
+                                       QStringLiteral("agent-run-observe"),
+                                       planning_asset_ids.size() == 1
+                                           ? planning_asset_ids.first()
+                                           : QString{},
+                                       [this]() {
+                                         return cancellation_requested_.load();
+                                       });
+  observation_reused = !visual_referent_fast_path_used &&
+                       cached_mcp_observation_available;
+  mcp_observation.insert(QStringLiteral("durationMs"),
+                        observation_reused ? 0 : mcp_observation_timer.elapsed());
+  mcp_observation.insert(QStringLiteral("requestContextReused"),
+                         observation_reused);
+  mcp_observation.insert(QStringLiteral("requestContextRequestId"),
+                         observation_reused ? async_mcp_context_request_id_
+                                            : active_draft_request_id_);
+  if (!visual_referent_fast_path_used && uses_async_request_clock) {
+    async_mcp_context_request_id_ = active_draft_request_id_;
+    async_mcp_context_key_ = async_mcp_context_key();
+    async_mcp_discovery_ = mcp_discovery;
+    async_mcp_observation_ = mcp_observation;
+  }
+  const auto mcp_observation_tool_calls = observation_reused
+      ? QVariantList{}
+      : mcp_observation_tool_call_records(mcp_observation);
+  const auto mcp_discovery_tool_call = tool_call_record(
+      QStringLiteral("mcp.tools/list"),
+      discovery_reused
+          ? QStringLiteral("ok")
+          : mcp_discovery.value(QStringLiteral("ready")).toBool()
+                ? QStringLiteral("ok")
+                : QStringLiteral("unavailable"),
       QVariantMap{
-          {QStringLiteral("assetCount"), mcp_phase_asset_count},
-          {QStringLiteral("mcpReady"), mcp_discovery.value(QStringLiteral("ready"))},
+          {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
           {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
+          {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
+          {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
+          {QStringLiteral("requestContextReused"), discovery_reused},
+          {QStringLiteral("requestId"), mcp_discovery.value(QStringLiteral("requestContextRequestId"))},
+          {QStringLiteral("schemaRevision"), mcp_tool_schema_revision_},
+          {QStringLiteral("schemaFingerprint"), mcp_tool_schema_fingerprint_},
       });
+  if (!discovery_reused && !observation_reused) {
+    appendRunEvent(
+        QStringLiteral("observe"),
+        QStringLiteral("Observe"),
+        QStringLiteral("complete"),
+        visual_referent_fast_path_used
+            ? QStringLiteral("Used the confirmed object already grounded on this photo; no tool discovery was needed.")
+            : QStringLiteral("Collected photo context and inspected the editor tools available for this run."),
+        QVariantMap{
+            {QStringLiteral("assetCount"), mcp_phase_asset_count},
+            {QStringLiteral("mcpReady"), mcp_discovery.value(QStringLiteral("ready"))},
+            {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
+            {QStringLiteral("requestContextReused"), false},
+        });
+  }
   appendRunEvent(
       QStringLiteral("plan"),
       QStringLiteral("Plan"),
@@ -20216,7 +24430,10 @@ QVariantMap AgentEditController::runDraftForScope(
   QVariantMap mcp_planning_context{
       {QStringLiteral("endpoint"), mcp_endpoint_},
       {QStringLiteral("endpointKind"), mcp_endpoint_kind_},
-      {QStringLiteral("runId"), QStringLiteral("agent-run-model-tool-plan")},
+      {QStringLiteral("runId"), QStringLiteral("agent-run-model-tool-plan-%1").arg(
+           active_draft_request_id_.isEmpty()
+               ? QUuid::createUuid().toString(QUuid::WithoutBraces)
+               : active_draft_request_id_)},
       {QStringLiteral("toolPhase"), mcp_tool_phase},
       {QStringLiteral("allowedTools"), mcp_allowed_tool_names},
       {QStringLiteral("allowToolCallPlan"),
@@ -20232,6 +24449,9 @@ QVariantMap AgentEditController::runDraftForScope(
                {QStringLiteral("ready"), mcp_discovery.value(QStringLiteral("ready"))},
                {QStringLiteral("successCount"), mcp_observation.value(QStringLiteral("successCount"))},
                {QStringLiteral("toolNames"), mcp_observation.value(QStringLiteral("toolNames"))},
+               {QStringLiteral("requestId"), mcp_observation.value(QStringLiteral("requestContextRequestId"))},
+               {QStringLiteral("capturedBeforeMutations"), true},
+               {QStringLiteral("freshness"), QStringLiteral("request-start-read-only-observation")},
            },
       }},
   };
@@ -20279,6 +24499,46 @@ QVariantMap AgentEditController::runDraftForScope(
       QStringLiteral("async_stage_pending")) {
     plan.insert(QStringLiteral("runEvents"), run_events_);
     return plan;
+  }
+  // Pull the raw recipe and receipt only from the controller's private
+  // planning result. The model-facing/audit copy is deliberately sanitized,
+  // and any same-named model/tool field is never used as authority.
+  auto controller_composition_photo_baseline =
+      plan.take(QStringLiteral("_controllerOwnedCompositionPhotoBaseline")).toMap();
+  const auto expected_composition_asset_id = planning_asset_ids.size() == 1
+      ? planning_asset_ids.first() : QString{};
+  QString expected_revision_mcp_run_id;
+  const auto revision_tool_reports = plan.value(QStringLiteral("modelToolPlan")).toMap()
+      .value(QStringLiteral("toolReports")).toList();
+  for (const auto& report_value : revision_tool_reports) {
+    const auto report = report_value.toMap();
+    if (report.value(QStringLiteral("toolName")).toString() ==
+        QStringLiteral("photo.inspect_composition")) {
+      expected_revision_mcp_run_id = report.value(QStringLiteral("runId")).toString();
+      break;
+    }
+  }
+  const auto expected_composition_request_id = active_draft_request_id_.isEmpty()
+      ? controller_composition_photo_baseline.value(QStringLiteral("requestId")).toString()
+      : active_draft_request_id_;
+  const auto baseline_original_identity_valid = verified_composition_photo_baseline(
+      controller_composition_photo_baseline,
+      controller_composition_photo_baseline.value(QStringLiteral("requestId")).toString(),
+      controller_composition_photo_baseline.value(QStringLiteral("runId")).toString(),
+      expected_composition_asset_id,
+      task_transaction_id_);
+  const auto revision_binding_valid = async_revision_context_.isEmpty()
+      ? controller_composition_photo_baseline.value(QStringLiteral("requestId")).toString() ==
+            expected_composition_request_id
+      : verified_revision_composition_photo_binding(
+            controller_composition_photo_baseline,
+            expected_composition_request_id,
+            activeTaskId(),
+            async_revision_context_.value(QStringLiteral("revisedFromRunId")).toString(),
+            expected_composition_asset_id,
+            expected_revision_mcp_run_id);
+  if (!baseline_original_identity_valid || !revision_binding_valid) {
+    controller_composition_photo_baseline.clear();
   }
   if (!resolved_visual_referent.isEmpty()) {
     plan.insert(
@@ -20389,6 +24649,32 @@ QVariantMap AgentEditController::runDraftForScope(
       cancellation_requested_.load() ||
       plan.value(QStringLiteral("errorCode")).toString() == QStringLiteral("cancelled");
   if (!plan.value(QStringLiteral("ok")).toBool() && !planning_cancelled) {
+    auto errors = plan.value(QStringLiteral("errors")).toStringList();
+    if (errors.isEmpty()) {
+      auto reason = plan.value(QStringLiteral("failureReason")).toString().trimmed();
+      if (reason.isEmpty()) reason = plan.value(QStringLiteral("error")).toString().trimmed();
+      if (reason.isEmpty()) {
+        const auto audit = plan.value(QStringLiteral("modelPromptAudit")).toMap();
+        reason = audit.value(QStringLiteral("responseError")).toString().trimmed();
+        if (reason.isEmpty())
+          reason = audit.value(QStringLiteral("transport")).toMap()
+                       .value(QStringLiteral("error")).toString().trimmed();
+        if (reason.isEmpty())
+          reason = audit.value(QStringLiteral("responseDecision")).toString().trimmed();
+      }
+      if (reason.isEmpty()) {
+        const auto tool_plan = plan.value(QStringLiteral("modelToolPlan")).toMap();
+        const auto tool_errors = tool_plan.value(QStringLiteral("errors")).toStringList();
+        if (!tool_errors.isEmpty()) reason = tool_errors.join(QStringLiteral("; "));
+      }
+      if (reason.isEmpty())
+        reason = QStringLiteral(
+            "The selected local model's follow-up ended without a usable plan. Earlier successful composition changes remain applied and were not replayed.");
+      errors.append(reason);
+      plan.insert(QStringLiteral("errors"), errors);
+      plan.insert(QStringLiteral("failureReason"), errors.join(QStringLiteral("; ")));
+      plan.insert(QStringLiteral("planFailureFallbackUsed"), true);
+    }
     const auto restored_preview = restoreAsyncPlanningPreview(
         QStringLiteral("restored-after-planning-failure"),
         QStringLiteral("deep_plan_failed"));
@@ -20401,16 +24687,7 @@ QVariantMap AgentEditController::runDraftForScope(
         QStringLiteral("failed"),
         plan.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")),
         QVariantMap{{QStringLiteral("modelId"), selected_model_id_}});
-    const auto errors = plan.value(QStringLiteral("errors")).toStringList();
-    QVariantList failure_tool_calls{tool_call_record(
-        QStringLiteral("mcp.tools/list"),
-        mcp_discovery.value(QStringLiteral("ready")).toBool() ? QStringLiteral("ok") : QStringLiteral("unavailable"),
-        QVariantMap{
-            {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
-            {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
-            {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
-            {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
-        })};
+    QVariantList failure_tool_calls{mcp_discovery_tool_call};
     failure_tool_calls.append(mcp_observation_tool_calls);
     failure_tool_calls.append(plan.value(QStringLiteral("modelToolPlanCalls")).toList());
     plan.insert(QStringLiteral("toolCalls"), failure_tool_calls);
@@ -20504,15 +24781,7 @@ QVariantMap AgentEditController::runDraftForScope(
         {QStringLiteral("Agent run canceled: %1.").arg(cancellation_reason)});
     const auto model =
         model_metadata_by_id(available_models_, plan.value(QStringLiteral("modelId")).toString());
-    const auto mcp_tool_call = tool_call_record(
-        QStringLiteral("mcp.tools/list"),
-        mcp_discovery.value(QStringLiteral("ready")).toBool() ? QStringLiteral("ok") : QStringLiteral("unavailable"),
-        QVariantMap{
-            {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
-            {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
-            {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
-            {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
-        });
+    const auto mcp_tool_call = mcp_discovery_tool_call;
     const auto plan_tool_call = tool_call_record(
         QStringLiteral("plan_agent_recipe_patch"),
         QStringLiteral("canceled"),
@@ -20580,6 +24849,9 @@ QVariantMap AgentEditController::runDraftForScope(
 
   const auto scoped_assets = scopedAssetMaps(scope);
   auto batch_plan_metadata = batch_cluster_metadata(scoped_assets);
+  batch_plan_metadata.insert(QStringLiteral("capturedInstructions"), requested_instructions);
+  if (!async_revision_context_.isEmpty())
+    batch_plan_metadata.insert(QStringLiteral("forceCurrentRecipeBase"), true);
   const auto story_map =
       assignmentStoryMapForAssets(scoped_assets, batch_plan_metadata);
   const auto story_sample_asset_ids =
@@ -20767,15 +25039,7 @@ QVariantMap AgentEditController::runDraftForScope(
       const auto report_scope = report_scope_for_assets(scope, scoped_assets);
       const auto target_asset_ids = asset_ids_from_maps(scoped_assets);
       const auto model = model_metadata_by_id(available_models_, selected_model_id_);
-      QVariantList failure_tool_calls{tool_call_record(
-          QStringLiteral("mcp.tools/list"),
-          mcp_discovery.value(QStringLiteral("ready")).toBool() ? QStringLiteral("ok") : QStringLiteral("unavailable"),
-          QVariantMap{
-              {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
-              {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
-              {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
-              {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
-          })};
+      QVariantList failure_tool_calls{mcp_discovery_tool_call};
       failure_tool_calls.append(mcp_observation_tool_calls);
       failed_plan.insert(QStringLiteral("mode"), QStringLiteral("draft"));
       failed_plan.insert(QStringLiteral("runId"), run_id);
@@ -20898,13 +25162,40 @@ QVariantMap AgentEditController::runDraftForScope(
        {QStringLiteral("style_id"), selected_style_id_},
        {QStringLiteral("model_id"), plan.value(QStringLiteral("modelId")).toString()}});
   if (!visual_referent_fast_path_used) {
+    const auto planning_proof = plan.value(QStringLiteral("planningProofReport")).toMap();
+    QVariantMap apply_proof_checkpoint;
+    for (const auto& key : {QStringLiteral("assetId"), QStringLiteral("snapshotSource"),
+                            QStringLiteral("sourceRecipeJson"), QStringLiteral("sourceRecipeSha256"),
+                            QStringLiteral("taskStateHash"), QStringLiteral("proofSha256"),
+                            QStringLiteral("proofStage")}) {
+      if (planning_proof.contains(key))
+        apply_proof_checkpoint.insert(key, planning_proof.value(key));
+    }
     batch_plan_metadata.insert(
         QStringLiteral("modelRepairContext"),
         QVariantMap{
             {QStringLiteral("modelId"), plan.value(QStringLiteral("modelId"))},
             {QStringLiteral("userInstructions"), requested_instructions},
+            {QStringLiteral("capturedInstructions"), requested_instructions},
+            {QStringLiteral("approvedTaskSnapshot"), approved_task_snapshot_},
+            {QStringLiteral("planningProofCheckpoint"), apply_proof_checkpoint},
+            {QStringLiteral("compositionTextLayerIds"), agent_composition_text_layer_ids(
+                 plan.value(QStringLiteral("modelToolPlan")).toMap().value(QStringLiteral("toolReports")).toList())},
+            {QStringLiteral("compositionPhotoBaseline"),
+             controller_composition_photo_baseline},
+            {QStringLiteral("priorToolResults"),
+             plan.value(QStringLiteral("modelToolPlan")).toMap().value(QStringLiteral("toolReports")).toList()},
             {QStringLiteral("availableToolSchemas"),
              mcp_repair_available_tool_schemas},
+            {QStringLiteral("allowedTools"),
+             mcp_tools_for_agent_phase(QStringLiteral("revision"))},
+            {QStringLiteral("endpoint"), mcp_endpoint_},
+            {QStringLiteral("endpointKind"), mcp_endpoint_kind_},
+            {QStringLiteral("runId"), draft_run_id_},
+            {QStringLiteral("allowToolCallPlan"),
+             model_tool_planning_enabled &&
+                 mcp_discovery.value(QStringLiteral("ready")).toBool() &&
+                 !mcp_repair_available_tool_schemas.isEmpty()},
             {QStringLiteral("toolPhase"), QStringLiteral("revision")},
             {QStringLiteral("memoryPacket"),
              memoryPacketForPhase(QStringLiteral("revision"))},
@@ -20995,6 +25286,17 @@ QVariantMap AgentEditController::runDraftForScope(
             active_project_scope_context(catalog_model_, scope, scoped_assets),
             requested_instructions));
   }
+  const auto native_composition_completion = verified_native_composition_completion(
+      plan.value(QStringLiteral("modelPromptAudit")).toMap(),
+      plan.value(QStringLiteral("editIntent")).toMap(),
+      plan.value(QStringLiteral("recipePatch")).toMap(),
+      plan.value(QStringLiteral("modelToolPlan")).toMap(),
+      representative_asset_id,
+      static_cast<int>(scoped_assets.size()));
+  if (!native_composition_completion.isEmpty())
+    plan.insert(QStringLiteral("nativeCompositionCompletion"), native_composition_completion);
+  else
+    plan.remove(QStringLiteral("nativeCompositionCompletion"));
   const auto edit_strategy = agent_edit_strategy_route(
       plan.value(QStringLiteral("recipePatch")).toMap(),
       plan.value(QStringLiteral("editIntent")).toMap(),
@@ -21002,9 +25304,12 @@ QVariantMap AgentEditController::runDraftForScope(
       report_scope,
       static_cast<int>(scoped_assets.size()),
       batch_plan_metadata,
-      plan.value(QStringLiteral("riskAssessment")).toMap());
+      plan.value(QStringLiteral("riskAssessment")).toMap(),
+      !native_composition_completion.isEmpty());
   plan.insert(QStringLiteral("editStrategy"), edit_strategy);
   batch_plan_metadata.insert(QStringLiteral("editStrategy"), edit_strategy);
+  if (!native_composition_completion.isEmpty())
+    batch_plan_metadata.insert(QStringLiteral("nativeCompositionCompletion"), native_composition_completion);
   appendRunEvent(
       QStringLiteral("route"),
       QStringLiteral("Choose edit path"),
@@ -21090,15 +25395,7 @@ QVariantMap AgentEditController::runDraftForScope(
     const auto model_id = plan.value(QStringLiteral("modelId"), selected_model_id_).toString();
     const auto model = model_metadata_by_id(available_models_, model_id);
     const auto run_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    const auto mcp_tool_call = tool_call_record(
-        QStringLiteral("mcp.tools/list"),
-        mcp_discovery.value(QStringLiteral("ready")).toBool() ? QStringLiteral("ok") : QStringLiteral("unavailable"),
-        QVariantMap{
-            {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
-            {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
-            {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
-            {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
-        });
+    const auto mcp_tool_call = mcp_discovery_tool_call;
     const auto plan_tool_call = tool_call_record(
         QStringLiteral("plan_agent_recipe_patch"),
         QStringLiteral("needs_user_input"),
@@ -21182,7 +25479,13 @@ QVariantMap AgentEditController::runDraftForScope(
     }
     stopped.insert(QStringLiteral("plannedRecipePatchesByAssetId"),
                    planned_patches_by_asset_id);
-    stopped.insert(QStringLiteral("batchPlanMetadata"), batch_plan_metadata);
+    auto public_batch_plan_metadata = batch_plan_metadata;
+    auto public_model_repair_context = public_batch_plan_metadata
+        .value(QStringLiteral("modelRepairContext")).toMap();
+    public_model_repair_context.remove(QStringLiteral("compositionPhotoBaseline"));
+    if (!public_model_repair_context.isEmpty())
+      public_batch_plan_metadata.insert(QStringLiteral("modelRepairContext"), public_model_repair_context);
+    stopped.insert(QStringLiteral("batchPlanMetadata"), public_batch_plan_metadata);
     stopped.insert(QStringLiteral("styleConstraintCitations"), plan.value(QStringLiteral("styleConstraintCitations")));
     stopped.insert(QStringLiteral("mcpDiscovery"), mcp_discovery);
     stopped.insert(QStringLiteral("mcpObservation"), mcp_observation);
@@ -21231,15 +25534,7 @@ QVariantMap AgentEditController::runDraftForScope(
   const auto model = model_metadata_by_id(available_models_, plan.value(QStringLiteral("modelId")).toString());
   auto tool_calls = report_tool_calls(draft);
   const auto model_tool_plan_calls = plan.value(QStringLiteral("modelToolPlanCalls")).toList();
-  const auto mcp_tool_call = tool_call_record(
-      QStringLiteral("mcp.tools/list"),
-      mcp_discovery.value(QStringLiteral("ready")).toBool() ? QStringLiteral("ok") : QStringLiteral("unavailable"),
-      QVariantMap{
-          {QStringLiteral("endpointKind"), mcp_discovery.value(QStringLiteral("endpointKind"))},
-          {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
-          {QStringLiteral("durationMs"), mcp_discovery.value(QStringLiteral("durationMs"))},
-          {QStringLiteral("available"), mcp_discovery.value(QStringLiteral("available"))},
-      });
+  const auto mcp_tool_call = mcp_discovery_tool_call;
   const auto plan_tool_call = tool_call_record(
       QStringLiteral("plan_agent_recipe_patch"),
       plan.value(QStringLiteral("ok")).toBool() ? QStringLiteral("ok") : QStringLiteral("failed"),
@@ -21288,6 +25583,8 @@ QVariantMap AgentEditController::runDraftForScope(
   draft.insert(QStringLiteral("planSummary"), plan.value(QStringLiteral("planSummary")));
   draft.insert(QStringLiteral("editIntent"), plan.value(QStringLiteral("editIntent")));
   draft.insert(QStringLiteral("editStrategy"), plan.value(QStringLiteral("editStrategy")));
+  if (plan.contains(QStringLiteral("nativeCompositionCompletion")))
+    draft.insert(QStringLiteral("nativeCompositionCompletion"), plan.value(QStringLiteral("nativeCompositionCompletion")));
   draft.insert(QStringLiteral("editGoals"), plan.value(QStringLiteral("editGoals")));
   draft.insert(QStringLiteral("riskAssessment"), plan.value(QStringLiteral("riskAssessment")));
   draft.insert(QStringLiteral("recipeBaseMode"), plan.value(QStringLiteral("recipeBaseMode")));
@@ -21365,7 +25662,12 @@ QVariantMap AgentEditController::applyDraftRecipePatchForScope(
     report.insert(QStringLiteral("errorCode"), QStringLiteral("access_required"));
     return report;
   }
-  return applyDraftRecipePatchesForScope(scope, patch, {}, {});
+  auto task_metadata = QVariantMap{};
+  const auto approved_instructions = approved_task_snapshot_
+      .value(QStringLiteral("approvedInstructions")).toString().trimmed();
+  task_metadata.insert(QStringLiteral("capturedInstructions"),
+      approved_instructions.isEmpty() ? user_instructions_ : approved_instructions);
+  return applyDraftRecipePatchesForScope(scope, patch, {}, task_metadata);
 }
 
 void AgentEditController::clearDraftDirectionComparison() {
@@ -21393,9 +25695,8 @@ QVariantMap AgentEditController::restoreDraftDirectionA(
   if (errors.isEmpty()) {
     for (auto iterator = draft_direction_a_adjustment_patches_.cbegin();
          iterator != draft_direction_a_adjustment_patches_.cend(); ++iterator) {
-      restored_count +=
-          catalog_model_->applyAdjustmentPatchJsonToAssetIds(
-              {iterator.key()}, iterator.value());
+      restored_count += applyTaskOwnedAdjustmentPatchJson(
+          {iterator.key()}, iterator.value());
     }
     if (restored_count != draft_direction_a_adjustment_patches_.size()) {
       errors.append(QStringLiteral("Direction A could not be restored on every photo."));
@@ -22016,7 +26317,7 @@ QVariantMap AgentEditController::reviseDraft(const QString& feedback) {
     return report;
   }
   const auto trimmed_feedback = feedback.trimmed();
-  if (running_) {
+  if (running_ || draft_request_pending_ || !active_draft_request_id_.isEmpty()) {
     auto report = result_map(
         false,
         {QStringLiteral("Wait for the current agent run to finish before requesting a revision.")});
@@ -22051,7 +26352,7 @@ QVariantMap AgentEditController::reviseDraft(const QString& feedback) {
     auto report = result_map(
         false,
         {QStringLiteral(
-            "Unlock the protected draft changes before rebuilding the whole draft.")});
+            "Unlock the protected draft changes before revising the whole draft.")});
     report.insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
     report.insert(QStringLiteral("contract"),
                   QStringLiteral("agent-draft-intent-boundary-v1"));
@@ -22084,8 +26385,102 @@ QVariantMap AgentEditController::reviseDraft(const QString& feedback) {
   const auto source_scope =
       source_report.value(QStringLiteral("scope"), QStringLiteral("selected-assets"))
           .toString();
-  const auto source_asset_ids =
-      source_report.value(QStringLiteral("assetIds")).toStringList();
+  const auto source_asset_ids = source_report.value(QStringLiteral("assetIds")).toStringList().isEmpty()
+      ? draft_original_adjustment_patches_.keys() : source_report.value(QStringLiteral("assetIds")).toStringList();
+  auto revision_photo_baseline = task_composition_photo_baseline_;
+  auto sorted_revision_targets = source_asset_ids;
+  std::sort(sorted_revision_targets.begin(), sorted_revision_targets.end());
+  auto cached_task_targets = revision_photo_baseline.value(QStringLiteral("taskTargetIds")).toStringList();
+  std::sort(cached_task_targets.begin(), cached_task_targets.end());
+  auto journal_target_ids = QStringList{};
+  for (const auto& resource_value : task_transaction_state_.value(QStringLiteral("resources")).toList())
+    journal_target_ids.append(resource_value.toMap().value(QStringLiteral("id")).toString());
+  std::sort(journal_target_ids.begin(), journal_target_ids.end());
+  const auto revision_photo_baseline_valid =
+      !revision_photo_baseline.isEmpty() &&
+      !task_transaction_id_.isEmpty() &&
+      task_transaction_state_.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+      task_transaction_state_.value(QStringLiteral("status")).toString() == QStringLiteral("review") &&
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool() &&
+      source_report.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+      revision_photo_baseline.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+      revision_photo_baseline.value(QStringLiteral("latestAcceptedRunId"),
+          revision_photo_baseline.value(QStringLiteral("sourceRunId"))).toString() == source_run_id &&
+      revision_photo_baseline.value(QStringLiteral("sourceProjectKey")).toString() == source_project_key &&
+      revision_photo_baseline.value(QStringLiteral("sourceProjectKey")).toString() == currentContinuityProjectKey() &&
+      revision_photo_baseline.value(QStringLiteral("assetId")).toString() == sorted_revision_targets.value(0) &&
+      catalog_model_->assetById(sorted_revision_targets.value(0))
+          .value(QStringLiteral("filePath")).toString() ==
+          revision_photo_baseline.value(QStringLiteral("sourceFilePath")).toString() &&
+      cached_task_targets == sorted_revision_targets && journal_target_ids == sorted_revision_targets &&
+      sorted_revision_targets.size() == 1 &&
+      verified_composition_photo_baseline(
+          revision_photo_baseline,
+          revision_photo_baseline.value(QStringLiteral("requestId")).toString(),
+          revision_photo_baseline.value(QStringLiteral("runId")).toString(),
+          sorted_revision_targets.value(0), task_transaction_id_);
+  observability::logInfo(photoEditorAppLog(),
+      QStringLiteral("agent.edit.composition_baseline.revision_admission"),
+      {{QStringLiteral("task_id"), task_transaction_id_},
+       {QStringLiteral("source_run_id"), source_run_id},
+       {QStringLiteral("baseline_present"), !revision_photo_baseline.isEmpty()},
+       {QStringLiteral("baseline_valid"), revision_photo_baseline_valid},
+       {QStringLiteral("task_in_review"), task_transaction_state_.value(QStringLiteral("status")).toString() == QStringLiteral("review")},
+       {QStringLiteral("source_report_task_matches"), source_report.value(QStringLiteral("taskId")).toString() == task_transaction_id_},
+       {QStringLiteral("baseline_task_matches"), revision_photo_baseline.value(QStringLiteral("taskId")).toString() == task_transaction_id_},
+       {QStringLiteral("run_lineage_matches"), revision_photo_baseline.value(QStringLiteral("latestAcceptedRunId"), revision_photo_baseline.value(QStringLiteral("sourceRunId"))).toString() == source_run_id},
+       {QStringLiteral("project_matches"), revision_photo_baseline.value(QStringLiteral("sourceProjectKey")).toString() == source_project_key && source_project_key == currentContinuityProjectKey()},
+       {QStringLiteral("targets_match"), cached_task_targets == sorted_revision_targets && journal_target_ids == sorted_revision_targets},
+       {QStringLiteral("fingerprints_verified"), verified_composition_photo_baseline(revision_photo_baseline,
+            revision_photo_baseline.value(QStringLiteral("requestId")).toString(),
+            revision_photo_baseline.value(QStringLiteral("runId")).toString(),
+            sorted_revision_targets.value(0), task_transaction_id_)}});
+  if (!revision_photo_baseline_valid) revision_photo_baseline.clear();
+  QVariantMap revision_composition_baseline;
+  const auto source_tool_reports = source_report.value(QStringLiteral("modelToolPlan")).toMap()
+      .value(QStringLiteral("toolReports")).toList();
+  for (auto receipt = source_tool_reports.crbegin(); receipt != source_tool_reports.crend(); ++receipt) {
+    const auto report = receipt->toMap();
+    if (!report.value(QStringLiteral("ok")).toBool() ||
+        report.value(QStringLiteral("toolName")).toString() != QStringLiteral("photo.inspect_composition"))
+      continue;
+    const auto content = report.value(QStringLiteral("structuredContent")).toMap();
+    const auto arguments = report.value(QStringLiteral("arguments")).toMap();
+    const auto asset_id = content.value(QStringLiteral("assetId"),
+        arguments.value(QStringLiteral("assetId"))).toString();
+    if (asset_id.isEmpty() || !source_asset_ids.contains(asset_id)) continue;
+    QVariantList text_layers;
+    QStringList text_layer_ids;
+    const auto layers = content.value(QStringLiteral("layers")).toList();
+    for (qsizetype layer_index = 0; layer_index < layers.size(); ++layer_index) {
+      const auto layer = layers.at(layer_index).toMap();
+      if (layer.value(QStringLiteral("kind")).toString() != QStringLiteral("text")) continue;
+      const auto id = layer.value(QStringLiteral("id")).toString().trimmed();
+      if (id.isEmpty()) continue;
+      text_layer_ids.append(id);
+      text_layers.append(QVariantMap{
+          {QStringLiteral("id"), id},
+          {QStringLiteral("text"), layer.value(QStringLiteral("text"))},
+          {QStringLiteral("x"), layer.value(QStringLiteral("x"))},
+          {QStringLiteral("y"), layer.value(QStringLiteral("y"))},
+          {QStringLiteral("scale"), layer.value(QStringLiteral("scale"))},
+          {QStringLiteral("rotation"), layer.value(QStringLiteral("rotation"))},
+          {QStringLiteral("layerIndex"), static_cast<int>(layer_index)},
+          {QStringLiteral("textTypography"), layer.value(QStringLiteral("textTypography"))},
+      });
+    }
+    if (text_layer_ids.isEmpty()) continue;
+    const auto proof = source_report.value(QStringLiteral("planningProofReport")).toMap();
+    revision_composition_baseline = QVariantMap{
+        {QStringLiteral("source"), QStringLiteral("prior-accepted-native-inspect")},
+        {QStringLiteral("assetId"), asset_id},
+        {QStringLiteral("sourceProofSha256"), proof.value(QStringLiteral("proofSha256"))},
+        {QStringLiteral("sourceRecipeSha256"), proof.value(QStringLiteral("sourceRecipeSha256"))},
+        {QStringLiteral("layerIdsTopFirst"), text_layer_ids},
+        {QStringLiteral("textLayers"), text_layers},
+    };
+    break;
+  }
   const auto rejected_examples =
       compact_project_recipe_examples(source_report, source_asset_ids, 3);
   const auto base_instructions = user_instructions_.trimmed();
@@ -22094,48 +26489,89 @@ QVariantMap AgentEditController::reviseDraft(const QString& feedback) {
           ? QStringLiteral("Revision request:\n%1").arg(trimmed_feedback)
           : QStringLiteral("%1\n\nRevision request:\n%2")
                 .arg(base_instructions, trimmed_feedback);
-  const auto rollback_report = rollbackDraft(QStringLiteral("revision_requested"));
-  if (!rollback_report.value(QStringLiteral("ok")).toBool()) {
-    auto failed = result_map(
-        false,
-        rollback_report.value(QStringLiteral("errors")).toStringList());
-    failed.insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
-    failed.insert(QStringLiteral("rollbackReport"), rollback_report);
-    setLastRunReport(failed);
-    return failed;
+  if (manual_editing_active_ || catalog_model_ == nullptr || source_asset_ids.isEmpty()) {
+    return result_map(false, {QStringLiteral("Pause manual editing and keep the draft's original photos available before revising.")});
   }
-
-  auto revised = runDraftForScope(source_scope, revised_instructions);
+  for (const auto& id : source_asset_ids)
+    if (catalog_model_->assetById(id).isEmpty())
+      return result_map(false, {QStringLiteral("An original draft photo is no longer available. The draft was preserved.")});
+  if (task_transaction_handler_) {
+    if (task_transaction_id_.isEmpty())
+      return result_map(false, {QStringLiteral("This draft has no original task checkpoint. Discard it before starting a new task.")});
+    const auto continued = task_transaction_handler_(QStringLiteral("continue"), task_transaction_id_, source_asset_ids, {});
+    if (!continued.value(QStringLiteral("ok")).toBool()) {
+      auto rejected = result_map(false, {continued.value(QStringLiteral("error")).toString()});
+      rejected.insert(QStringLiteral("accepted"), false);
+      rejected.insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
+      rejected.insert(QStringLiteral("taskStateConflict"), true);
+      rejected.insert(QStringLiteral("draftActive"), true);
+      return rejected;
+    }
+    auto continued_target_ids = QStringList{};
+    for (const auto& resource_value : continued.value(QStringLiteral("resources")).toList())
+      continued_target_ids.append(resource_value.toMap().value(QStringLiteral("id")).toString());
+    std::sort(continued_target_ids.begin(), continued_target_ids.end());
+    if (continued.value(QStringLiteral("taskId")).toString() != task_transaction_id_ ||
+        continued.value(QStringLiteral("status")).toString() != QStringLiteral("running") ||
+        continued.value(QStringLiteral("pending")).toBool() ||
+        !continued.value(QStringLiteral("revertAvailable")).toBool() ||
+        continued_target_ids != sorted_revision_targets) {
+      auto rejected = result_map(false, {QStringLiteral(
+          "The original task checkpoint no longer matches this draft, so the revision was not started.")});
+      rejected.insert(QStringLiteral("accepted"), false);
+      rejected.insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
+      rejected.insert(QStringLiteral("errorCode"), QStringLiteral("task_state_conflict"));
+      rejected.insert(QStringLiteral("taskStateConflict"), true);
+      rejected.insert(QStringLiteral("draftActive"), true);
+      rejected.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+      return rejected;
+    }
+    task_transaction_state_ = continued;
+    emit taskTransactionChanged();
+  }
+  const auto request_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  auto revised = enqueueDraftRequest(source_scope, revised_instructions, request_id);
+  async_revision_context_ = {
+      {QStringLiteral("assetIds"), source_asset_ids},
+      {QStringLiteral("feedback"), trimmed_feedback.left(360)},
+      {QStringLiteral("revisedFromRunId"), source_run_id},
+      {QStringLiteral("taskId"), task_transaction_id_},
+      {QStringLiteral("projectKey"), source_project_key},
+      {QStringLiteral("rejectedRecipeExamples"), rejected_examples},
+  };
+  if (!revision_photo_baseline.isEmpty())
+    async_revision_context_.insert(QStringLiteral("compositionPhotoBaseline"), revision_photo_baseline);
+  if (!revision_composition_baseline.isEmpty())
+    async_revision_context_.insert(QStringLiteral("revisionCompositionBaseline"), revision_composition_baseline);
+  async_draft_asset_ids_ = source_asset_ids;
+  draft_run_id_.clear();
   revised.insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
   revised.insert(QStringLiteral("revisionFeedback"), trimmed_feedback.left(360));
   revised.insert(QStringLiteral("revisedFromRunId"), source_run_id);
-  revised.insert(QStringLiteral("rollbackBeforeRevision"), rollback_report);
-  if (revised.value(QStringLiteral("ok")).toBool() && draftActive()) {
-    revised.insert(
-        QStringLiteral("pendingProjectCorrection"),
-        QVariantMap{
-            {QStringLiteral("schemaVersion"), 1},
-            {QStringLiteral("source"), QStringLiteral("explicit-revision")},
-            {QStringLiteral("projectKey"), source_project_key},
-            {QStringLiteral("feedback"), trimmed_feedback.left(360)},
-            {QStringLiteral("revisedFromRunId"), source_run_id},
-            {QStringLiteral("rejectedRecipeExamples"), rejected_examples},
-            {QStringLiteral("promotionPolicy"),
-             QStringLiteral("promote-only-after-confirmed-revised-draft-commit")},
-        });
-    appendRunEvent(
-        QStringLiteral("correction"),
-        QStringLiteral("Correction"),
-        QStringLiteral("ready"),
-        QStringLiteral("Applied your correction. It becomes project memory only if you approve this revised draft."),
-        QVariantMap{
-            {QStringLiteral("revisedFromRunId"), source_run_id},
-            {QStringLiteral("projectKey"), source_project_key},
-        });
-    revised.insert(QStringLiteral("runEvents"), run_events_);
-  }
+  revised.insert(QStringLiteral("originalRollbackRetained"), true);
   setLastRunReport(revised);
   return revised;
+}
+
+void AgentEditController::attachRevisionOutcome(QVariantMap* report) {
+  if (!report || async_revision_context_.isEmpty()) return;
+  report->insert(QStringLiteral("mode"), QStringLiteral("draft-revision"));
+  report->insert(QStringLiteral("revisionFeedback"), async_revision_context_.value(QStringLiteral("feedback")));
+  report->insert(QStringLiteral("revisedFromRunId"), async_revision_context_.value(QStringLiteral("revisedFromRunId")));
+  report->insert(QStringLiteral("originalRollbackRetained"), true);
+  report->insert(QStringLiteral("draftActive"), draftActive());
+  if (report->value(QStringLiteral("ok")).toBool() && draftActive()) {
+    auto correction = async_revision_context_;
+    correction.remove(QStringLiteral("assetIds"));
+    correction.remove(QStringLiteral("compositionPhotoBaseline"));
+    correction.insert(QStringLiteral("schemaVersion"), 1);
+    correction.insert(QStringLiteral("source"), QStringLiteral("explicit-revision"));
+    correction.insert(QStringLiteral("promotionPolicy"), QStringLiteral("promote-only-after-confirmed-revised-draft-commit"));
+    report->insert(QStringLiteral("pendingProjectCorrection"), correction);
+    appendRunEvent(QStringLiteral("correction"), QStringLiteral("Correction"), QStringLiteral("ready"),
+        QStringLiteral("Applied your correction to the existing draft. It becomes project memory only if you approve it."), correction);
+    report->insert(QStringLiteral("runEvents"), run_events_);
+  }
 }
 
 QVariantMap AgentEditController::reviseDraftFinding(
@@ -23187,7 +27623,29 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     errors.append(QStringLiteral(
         "Interactive proof could not safely acquire the renderer within 5000 ms."));
   }
-  const auto validation = validateRecipePatch(patch);
+  const auto scoped_assets = scopedAssetMaps(scope);
+  const auto sample_only_asset_ids =
+      batch_plan_metadata.value(QStringLiteral("sampleOnlyAssetIds")).toStringList();
+  const auto explicit_target_asset_ids =
+      batch_plan_metadata.value(QStringLiteral("explicitTargetAssetIds")).toStringList();
+  const auto selected_assets = filter_asset_maps_by_ids(
+      scoped_assets,
+      !explicit_target_asset_ids.isEmpty() ? explicit_target_asset_ids : sample_only_asset_ids);
+  const auto native_completion = batch_plan_metadata
+      .value(QStringLiteral("nativeCompositionCompletion")).toMap();
+  const auto native_completion_only = patch.isEmpty() && patches_by_asset_id.isEmpty() &&
+      native_completion.value(QStringLiteral("controllerVerified")).toBool() &&
+      native_completion.value(QStringLiteral("verificationContract")).toString() ==
+          QStringLiteral("agent-native-composition-completion-controller-v1") &&
+      native_completion.value(QStringLiteral("requested")).toBool() &&
+      native_completion.value(QStringLiteral("acceptedMutationCount")).toInt() > 0 &&
+      native_completion.value(QStringLiteral("readbackConfirmed")).toBool() &&
+      selected_assets.size() == 1 &&
+      selected_assets.first().toMap().value(QStringLiteral("assetId")).toString() ==
+          native_completion.value(QStringLiteral("assetId")).toString();
+  const auto validation = native_completion_only
+      ? QVariantMap{{QStringLiteral("ok"), true}, {QStringLiteral("warnings"), QStringList{}}}
+      : validateRecipePatch(patch);
   if (!validation.value(QStringLiteral("ok")).toBool()) {
     errors.append(validation.value(QStringLiteral("errors")).toStringList());
   }
@@ -23207,17 +27665,13 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     }
     patch_validation_warnings.append(per_asset_validation.value(QStringLiteral("warnings")).toStringList());
   }
-  const auto scoped_assets = scopedAssetMaps(scope);
-  const auto sample_only_asset_ids =
-      batch_plan_metadata.value(QStringLiteral("sampleOnlyAssetIds")).toStringList();
-  const auto explicit_target_asset_ids =
-      batch_plan_metadata.value(QStringLiteral("explicitTargetAssetIds")).toStringList();
-  const auto selected_assets = filter_asset_maps_by_ids(
-      scoped_assets,
-      !explicit_target_asset_ids.isEmpty() ? explicit_target_asset_ids : sample_only_asset_ids);
   const auto report_scope = report_scope_for_assets(scope, scoped_assets);
   const auto scope_context =
       active_project_scope_context(catalog_model_, scope, selected_assets);
+  const auto repair_context_for_apply =
+      batch_plan_metadata.value(QStringLiteral("modelRepairContext")).toMap();
+  const auto planning_proof_checkpoint = repair_context_for_apply
+      .value(QStringLiteral("planningProofCheckpoint")).toMap();
   if (catalog_model_ != nullptr && selected_assets.isEmpty()) {
     errors.append(empty_scope_error(scope, QStringLiteral("agent draft editing")));
   }
@@ -23240,6 +27694,43 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   if (draft_run_id_.isEmpty()) {
     draft_run_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     draft_project_key_ = currentContinuityProjectKey();
+  }
+  if (async_revision_context_.isEmpty()) {
+    auto repair_context = batch_plan_metadata.value(QStringLiteral("modelRepairContext")).toMap();
+    auto photo_baseline = repair_context.value(QStringLiteral("compositionPhotoBaseline")).toMap();
+    QStringList task_target_ids;
+    const auto task_resources = task_transaction_state_.value(QStringLiteral("resources")).toList();
+    for (const auto& resource_value : task_resources)
+      task_target_ids.append(resource_value.toMap().value(QStringLiteral("id")).toString());
+    std::sort(task_target_ids.begin(), task_target_ids.end());
+    auto expected_asset_ids = asset_ids_from_maps(selected_assets);
+    std::sort(expected_asset_ids.begin(), expected_asset_ids.end());
+    if (!photo_baseline.isEmpty()) {
+      photo_baseline.insert(QStringLiteral("sourceRunId"), draft_run_id_);
+      photo_baseline.insert(QStringLiteral("latestAcceptedRunId"), draft_run_id_);
+      photo_baseline.insert(QStringLiteral("sourceProjectKey"), currentContinuityProjectKey());
+      photo_baseline.insert(QStringLiteral("taskTargetIds"), task_target_ids);
+    }
+    const auto task_bound_baseline_valid =
+        !photo_baseline.isEmpty() && !task_transaction_id_.isEmpty() &&
+        activeTaskId() == task_transaction_id_ &&
+        task_transaction_state_.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+        task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool() &&
+        !task_resources.isEmpty() && task_target_ids.size() == task_resources.size() &&
+        !selected_assets.isEmpty() && expected_asset_ids.size() == selected_assets.size() &&
+        task_target_ids == expected_asset_ids && task_target_ids.size() == 1 &&
+        photo_baseline.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+        verified_composition_photo_baseline(
+            photo_baseline,
+            photo_baseline.value(QStringLiteral("requestId")).toString(),
+            photo_baseline.value(QStringLiteral("runId")).toString(),
+            task_target_ids.value(0),
+            task_transaction_id_);
+    if (task_bound_baseline_valid) {
+      task_composition_photo_baseline_ = photo_baseline;
+    } else {
+      task_composition_photo_baseline_.clear();
+    }
   }
   log_agent_run_started(
       draft_run_id_,
@@ -23302,6 +27793,10 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   QHash<QString, QString> progressive_preview_originals =
       async_model_planning_enabled_
           ? async_progressive_preview_originals_
+          : QHash<QString, QString>{};
+  QHash<QString, QString> progressive_preview_authored =
+      async_model_planning_enabled_
+          ? async_progressive_preview_authored_
           : QHash<QString, QString>{};
   auto progressive_preview_publish_count =
       progressive_preview_report.value(QStringLiteral("publishCount")).toInt();
@@ -23413,23 +27908,30 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   const auto restore_progressive_preview =
       [&](const QString& state, const QString& reason) {
         auto restored_count = 0;
+        QStringList conflicts;
         for (auto iterator = progressive_preview_originals.cbegin();
              iterator != progressive_preview_originals.cend(); ++iterator) {
-          restored_count +=
-              catalog_model_->applyAdjustmentPatchJsonToAssetIds(
-                  {iterator.key()}, iterator.value());
+          const auto authored = progressive_preview_authored.value(iterator.key());
+          if (authored.isEmpty() || catalog_model_->assetById(iterator.key()).value(QStringLiteral("adjustmentPatchJson")).toString() != authored) {
+            conflicts.append(iterator.key());
+            continue;
+          }
+          restored_count += applyTaskOwnedAdjustmentPatchJson(
+              {iterator.key()}, iterator.value());
         }
         if (progressive_preview_allowed) {
           progressive_preview_report.insert(QStringLiteral("state"), state);
           progressive_preview_report.insert(QStringLiteral("validationPending"), false);
-          progressive_preview_report.insert(QStringLiteral("restored"), true);
+          progressive_preview_report.insert(QStringLiteral("restored"), conflicts.isEmpty());
+          progressive_preview_report.insert(QStringLiteral("conflictedAssetIds"), conflicts);
+          progressive_preview_report.insert(QStringLiteral("manualChangesPreserved"), !conflicts.isEmpty());
           progressive_preview_report.insert(QStringLiteral("restoredCount"), restored_count);
           progressive_preview_report.insert(QStringLiteral("restoreReason"), reason);
           setProgressivePreview(progressive_preview_report);
         }
         return restored_count;
       };
-  const auto base_mode = batch_plan_metadata
+  const auto base_mode = !async_revision_context_.isEmpty() || batch_plan_metadata
                                  .value(QStringLiteral("forceCurrentRecipeBase"))
                                  .toBool()
                              ? QStringLiteral("current")
@@ -23489,6 +27991,10 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     const auto asset = asset_value.toMap();
     const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
     const auto requested_patch = patches_by_asset_id.value(asset_id, patch);
+    QVariantMap authorized_native_checkpoint;
+    QString authorized_native_recipe_json;
+    QString authorized_native_recipe_sha;
+    QString authorized_native_task_state_hash;
     auto original_asset = asset;
     const auto preserved_pre_preview_patch =
         progressive_preview_originals.value(asset_id);
@@ -23496,10 +28002,67 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       original_asset.insert(QStringLiteral("adjustmentPatchJson"),
                             preserved_pre_preview_patch);
     }
+    if (planning_proof_checkpoint.value(QStringLiteral("snapshotSource")).toString() ==
+            QStringLiteral("native-photo") &&
+        planning_proof_checkpoint.value(QStringLiteral("assetId")).toString() == asset_id) {
+      const auto source_recipe_json =
+          planning_proof_checkpoint.value(QStringLiteral("sourceRecipeJson")).toString();
+      const auto source_recipe_sha =
+          planning_proof_checkpoint.value(QStringLiteral("sourceRecipeSha256")).toString();
+      const auto task_state_hash =
+          planning_proof_checkpoint.value(QStringLiteral("taskStateHash")).toString();
+      const auto live_snapshot = planningRecipeSnapshot(asset);
+      const auto live_recipe_json = live_snapshot.value(QStringLiteral("recipeJson")).toString();
+      const auto live_recipe_sha = QString::fromLatin1(QCryptographicHash::hash(
+          live_recipe_json.toUtf8(), QCryptographicHash::Sha256).toHex());
+      const auto source_snapshot_is_current =
+          live_snapshot.value(QStringLiteral("ok")).toBool() &&
+          live_snapshot.value(QStringLiteral("source")).toString() == QStringLiteral("native-photo") &&
+          live_snapshot.value(QStringLiteral("assetId")).toString() == asset_id &&
+          !live_snapshot.value(QStringLiteral("paintBusy")).toBool() &&
+          !source_recipe_json.isEmpty() && !source_recipe_sha.isEmpty() &&
+          !task_state_hash.isEmpty() && live_recipe_json == source_recipe_json &&
+          live_recipe_sha == source_recipe_sha &&
+          live_snapshot.value(QStringLiteral("taskStateHash")).toString() == task_state_hash;
+      if (!source_snapshot_is_current) {
+        errors.append(QStringLiteral(
+            "%1: the native planning source changed before apply; the approved draft was not rebased onto newer document state.")
+                          .arg(asset_id));
+        continue;
+      }
+      const auto source_state = compatibility_adjustments_for_asset(
+          {{QStringLiteral("adjustmentPatchJson"), source_recipe_json}});
+      if (!source_state.ok()) {
+        errors.append(QStringLiteral("%1: the native planning source recipe could not be read: %2")
+                          .arg(asset_id, source_state.error));
+        continue;
+      }
+      authorized_native_checkpoint = planning_proof_checkpoint;
+      authorized_native_recipe_json = source_recipe_json;
+      authorized_native_recipe_sha = source_recipe_sha;
+      authorized_native_task_state_hash = task_state_hash;
+      // The Catalog row can lag a native editor save. The planner's exact
+      // native checkpoint is authoritative for document structure; merge that
+      // structure after parsing the original recipe so its numeric comparison
+      // basis remains the one the draft was approved against.
+      auto original = compatibility_adjustments_for_asset(original_asset);
+      if (!original.ok()) {
+        errors.append(QStringLiteral("%1: %2").arg(asset_id, original.error));
+        continue;
+      }
+      auto merged_state = *original.state;
+      merged_state.layers = source_state.state->layers;
+      merged_state.mask_stack = source_state.state->mask_stack;
+      merged_state.active_mask_index = source_state.state->active_mask_index;
+      original_asset.insert(QStringLiteral("adjustmentPatchJson"),
+                            serialize_adjustment_patch_json(
+                                merged_state, all_adjustment_groups(),
+                                AdjustmentPatchScope::AssetBound));
+    }
     const auto original_adjustments =
         compatibility_adjustments_for_asset(
             original_asset);
-    const auto original_adjustment_patch_json =
+    auto original_adjustment_patch_json =
         asset_bound_adjustment_patch_for_asset(
             original_asset);
     if (!original_adjustments.ok() ||
@@ -23513,8 +28076,11 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       continue;
     }
 
-    const auto& original_state =
-        *original_adjustments.state;
+    auto original_state = *original_adjustments.state;
+    if (!authorized_native_recipe_json.isEmpty()) {
+      original_adjustment_patch_json = serialize_adjustment_patch_json(
+          original_state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+    }
     const auto resume_clean_report = resume_clean_reports_by_id.value(asset_id).toMap();
     if (!resume_clean_report.isEmpty() &&
         resume_clean_report
@@ -23677,20 +28243,367 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     QString edit_loop_stop_reason;
     QVariantList model_repair_reports;
     const auto repair_context = batch_plan_metadata.value(QStringLiteral("modelRepairContext")).toMap();
+    const auto approved_snapshot = repair_context.value(QStringLiteral("approvedTaskSnapshot")).toMap();
+    const auto repair_allowed_tools = repair_context.value(QStringLiteral("allowedTools")).toStringList();
+    const auto composition_request_text = QJsonDocument::fromVariant(QVariantMap{
+        {QStringLiteral("prompt"), approved_snapshot.value(QStringLiteral("prompt"))},
+        {QStringLiteral("instructions"), approved_snapshot.value(QStringLiteral("approvedInstructions"))},
+        {QStringLiteral("exactCopy"), approved_snapshot.value(QStringLiteral("exactCopy"))},
+        {QStringLiteral("deliverables"), approved_snapshot.value(QStringLiteral("deliverables"))},
+        {QStringLiteral("plan"), approved_snapshot.value(QStringLiteral("plan"))},
+    }).toJson(QJsonDocument::Compact).toLower();
+    const auto composition_repair_required =
+        !repair_context.value(QStringLiteral("compositionTextLayerIds")).toStringList().isEmpty() ||
+        composition_request_text.contains("text") || composition_request_text.contains("title") ||
+        composition_request_text.contains("typograph") || composition_request_text.contains("poster") ||
+        composition_request_text.contains("graphic") || composition_request_text.contains("layer") ||
+        composition_request_text.contains("mask") || composition_request_text.contains("cutout") ||
+        composition_request_text.contains("composition") || composition_request_text.contains("canvas");
+    const auto canonical_recipe_json = [](const QString& json) {
+      const auto parsed = parse_adjustment_patch_json(json);
+      if (!parsed.ok() || !parsed.state.has_value()) return QString{};
+      return serialize_adjustment_patch_json(
+          *parsed.state, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+    };
+    const auto hash_recipe_json = [](const QString& json) {
+      return QString::fromLatin1(
+          QCryptographicHash::hash(json.toUtf8(), QCryptographicHash::Sha256).toHex());
+    };
+    const auto snapshot_checkpoint = [&](const QVariantMap& snapshot) {
+      auto checkpoint = snapshot.value(QStringLiteral("taskStateHash")).toString();
+      if (checkpoint.isEmpty())
+        checkpoint = hash_recipe_json(snapshot.value(QStringLiteral("recipeJson")).toString());
+      return checkpoint;
+    };
+    auto task_owned_structure_recipe_json = authorized_native_recipe_json;
+    auto task_owned_structure_recipe_sha = authorized_native_recipe_sha;
+    auto task_owned_structure_state_hash = authorized_native_task_state_hash;
+    const auto native_source_matches = [&](const QVariantMap& snapshot,
+                                           const QString& expected_recipe_json,
+                                           const QString& expected_recipe_sha,
+                                           const QString& expected_task_state_hash) {
+      const auto live_recipe_json = snapshot.value(QStringLiteral("recipeJson")).toString();
+      return snapshot.value(QStringLiteral("ok")).toBool() &&
+          snapshot.value(QStringLiteral("source")).toString() == QStringLiteral("native-photo") &&
+          snapshot.value(QStringLiteral("assetId")).toString() == asset_id &&
+          !snapshot.value(QStringLiteral("paintBusy")).toBool() &&
+          !expected_recipe_json.isEmpty() && !expected_recipe_sha.isEmpty() &&
+          !expected_task_state_hash.isEmpty() && live_recipe_json == expected_recipe_json &&
+          hash_recipe_json(live_recipe_json) == expected_recipe_sha &&
+          snapshot.value(QStringLiteral("taskStateHash")).toString() == expected_task_state_hash;
+    };
+    const auto inspect_composition_for_repair = [&](const QString& proof_path,
+                                                     const QString& recipe_json,
+                                                     const QString& detail_stage_key,
+                                                     const QString& expected_task_state_hash) {
+      const auto semantic_recipe_json = canonical_recipe_json(recipe_json);
+      const auto semantic_recipe_sha = hash_recipe_json(semantic_recipe_json);
+      const auto render_recipe_sha = hash_recipe_json(recipe_json);
+      const auto snapshot_before_inspection = planningRecipeSnapshot(asset);
+      const auto raw_recipe_before_inspection =
+          snapshot_before_inspection.value(QStringLiteral("recipeJson")).toString();
+      const auto raw_recipe_sha_before_inspection = hash_recipe_json(raw_recipe_before_inspection);
+      const auto checkpoint_before_inspection = snapshot_checkpoint(snapshot_before_inspection);
+      const auto candidate_state = compatibility_adjustments_for_asset(
+          {{QStringLiteral("adjustmentPatchJson"), recipe_json}});
+      const auto live_state = compatibility_adjustments_for_asset(
+          {{QStringLiteral("adjustmentPatchJson"), raw_recipe_before_inspection}});
+      const auto candidate_layer_projection_sha = candidate_state.ok()
+          ? stable_variant_hash(QVariantMap{{QStringLiteral("layers"), candidate_state.state->layers}})
+          : QString();
+      const auto live_layer_projection_sha = live_state.ok()
+          ? stable_variant_hash(QVariantMap{{QStringLiteral("layers"), live_state.state->layers}})
+          : QString();
+      const auto layer_projection_matches = candidate_state.ok() && live_state.ok() &&
+          candidate_state.state->layers == live_state.state->layers;
+      const auto snapshot_is_valid = [&](const QVariantMap& snapshot) {
+        const auto live_recipe = snapshot.value(QStringLiteral("recipeJson")).toString();
+        return snapshot.value(QStringLiteral("ok")).toBool() &&
+            snapshot.value(QStringLiteral("assetId")).toString() == asset_id &&
+            !snapshot.value(QStringLiteral("paintBusy")).toBool() &&
+            !live_recipe.isEmpty() && !canonical_recipe_json(live_recipe).isEmpty();
+      };
+      const auto initial_snapshot_matches = snapshot_is_valid(snapshot_before_inspection) &&
+          !semantic_recipe_json.isEmpty() && !semantic_recipe_sha.isEmpty() &&
+          layer_projection_matches &&
+          (expected_task_state_hash.isEmpty() ||
+           checkpoint_before_inspection == expected_task_state_hash);
+      QVariantMap inspection;
+      if (initial_snapshot_matches) {
+        inspection = inspect_live_agent_composition(
+            repair_context.value(QStringLiteral("endpoint")).toString(),
+            repair_context.value(QStringLiteral("endpointKind")).toString(),
+            mcp_bearer_token_, repair_context.value(QStringLiteral("runId")).toString(),
+            asset_id, repair_allowed_tools,
+            [this]() { return cancellation_requested_.load(); });
+      } else {
+        inspection = QVariantMap{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral(
+                "The live task checkpoint could not be bound to the rendered proof source.")}};
+      }
+      auto review = review_live_agent_composition(
+          inspection, approved_snapshot,
+          repair_context.value(QStringLiteral("compositionTextLayerIds")).toStringList());
+      review.insert(QStringLiteral("inspectionAvailable"),
+                    inspection.value(QStringLiteral("ok")).toBool());
+      if (!inspection.value(QStringLiteral("ok")).toBool()) {
+        auto warnings = review.value(QStringLiteral("warnings")).toStringList();
+        warnings.append(QStringLiteral("Live composition inspection failed: %1")
+                            .arg(inspection.value(QStringLiteral("error")).toString()));
+        review.insert(QStringLiteral("warnings"), warnings);
+        review.insert(QStringLiteral("ok"), false);
+      }
+      review.insert(QStringLiteral("candidateLayerProjectionSha256"),
+                    candidate_layer_projection_sha);
+      review.insert(QStringLiteral("liveLayerProjectionSha256"), live_layer_projection_sha);
+      review.insert(QStringLiteral("candidateMatchesLiveLayerProjection"), layer_projection_matches);
+      if (!layer_projection_matches) {
+        auto warnings = review.value(QStringLiteral("warnings")).toStringList();
+        warnings.append(QStringLiteral(
+            "The rendered candidate layer stack does not match the current native composition."));
+        review.insert(QStringLiteral("warnings"), warnings);
+        review.insert(QStringLiteral("ok"), false);
+      }
+      auto snapshot_after_inspection = planningRecipeSnapshot(asset);
+      const auto inspection_snapshot_stable = initial_snapshot_matches &&
+          snapshot_is_valid(snapshot_after_inspection) &&
+          hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString()) ==
+              raw_recipe_sha_before_inspection &&
+          snapshot_checkpoint(snapshot_after_inspection) == checkpoint_before_inspection;
+      if (!inspection_snapshot_stable) {
+        auto warnings = review.value(QStringLiteral("warnings")).toStringList();
+        warnings.append(QStringLiteral(
+            "The live composition changed while its layer inspection was in progress."));
+        review.insert(QStringLiteral("warnings"), warnings);
+        review.insert(QStringLiteral("ok"), false);
+      }
+      const auto graphic_layers = review.value(QStringLiteral("observedGraphicLayers")).toList();
+      const auto graphic_layers_sha = QString::fromLatin1(QCryptographicHash::hash(
+          QJsonDocument::fromVariant(graphic_layers).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha256).toHex());
+      QString proof_overview_sha;
+      QFile proof_overview_file(proof_path);
+      if (proof_overview_file.open(QIODevice::ReadOnly)) {
+        const auto proof_overview_bytes = proof_overview_file.readAll();
+        if (!proof_overview_bytes.isEmpty()) {
+          proof_overview_sha = QString::fromLatin1(QCryptographicHash::hash(
+              proof_overview_bytes, QCryptographicHash::Sha256).toHex());
+        }
+      }
+      const auto detail_binding_bytes = QJsonDocument(QJsonObject{
+          {QStringLiteral("logicalStage"), detail_stage_key},
+          {QStringLiteral("assetId"), asset_id},
+          {QStringLiteral("taskStateHash"), checkpoint_before_inspection},
+          {QStringLiteral("sourceSnapshotRecipeSha256"), raw_recipe_sha_before_inspection},
+          {QStringLiteral("sourceSemanticRecipeSha256"), semantic_recipe_sha},
+          {QStringLiteral("sourceRenderRecipeSha256"), render_recipe_sha},
+          {QStringLiteral("sourceGraphicLayersSha256"), graphic_layers_sha},
+          {QStringLiteral("sourceOverviewSha256"), proof_overview_sha},
+      }).toJson(QJsonDocument::Compact);
+      const auto detail_worker_stage = QStringLiteral("composition-detail-proof:%1")
+          .arg(QString::fromLatin1(QCryptographicHash::hash(
+              detail_binding_bytes, QCryptographicHash::Sha256).toHex()));
+      QVariantMap details;
+      if (proof_overview_sha.isEmpty()) {
+        details = {{QStringLiteral("available"), false},
+            {QStringLiteral("error"), QStringLiteral(
+                "The rendered composition overview could not be bound to its detail proof.")}};
+      } else if (!inspection_snapshot_stable) {
+        details = {{QStringLiteral("available"), false},
+            {QStringLiteral("error"), QStringLiteral(
+                "The live composition changed while its layer inspection was in progress.")}};
+      } else if (async_model_planning_enabled_ && !graphic_layers.isEmpty()) {
+        QVariantMap stage_result;
+        const auto worker_file_path = asset.value(QStringLiteral("filePath")).toString();
+        const auto worker_run_id = repair_context.value(QStringLiteral("runId")).toString();
+        const auto worker_asset_id = asset_id;
+        const auto worker_recipe_json = recipe_json;
+        const auto worker_graphic_layers = graphic_layers;
+        const auto worker_proof_path = proof_path;
+        const auto worker_checkpoint = checkpoint_before_inspection;
+        const auto worker_raw_recipe_sha = raw_recipe_sha_before_inspection;
+        const auto worker_semantic_recipe_sha = semantic_recipe_sha;
+        const auto worker_render_recipe_sha = render_recipe_sha;
+        const auto worker_graphic_layers_sha = graphic_layers_sha;
+        const auto worker_proof_overview_sha = proof_overview_sha;
+        if (!takeOrStartRequestOwnedWorkerStage(
+                detail_worker_stage, scope,
+                [worker_proof_path, worker_file_path, worker_recipe_json,
+                 worker_graphic_layers, worker_run_id, worker_asset_id,
+                 worker_checkpoint, worker_raw_recipe_sha, worker_semantic_recipe_sha,
+                 worker_render_recipe_sha, worker_graphic_layers_sha,
+                 worker_proof_overview_sha](
+                    const std::shared_ptr<std::atomic_bool>& token) {
+                  auto rendered = render_agent_composition_detail_proofs(
+                      worker_proof_path, worker_file_path, worker_recipe_json,
+                      worker_graphic_layers, worker_run_id, worker_asset_id,
+                      token.get());
+                  rendered.insert(QStringLiteral("sourceTaskStateHash"), worker_checkpoint);
+                  rendered.insert(QStringLiteral("sourceSnapshotRecipeSha256"), worker_raw_recipe_sha);
+                  rendered.insert(QStringLiteral("sourceSemanticRecipeSha256"), worker_semantic_recipe_sha);
+                  rendered.insert(QStringLiteral("sourceRenderRecipeSha256"), worker_render_recipe_sha);
+                  rendered.insert(QStringLiteral("sourceGraphicLayersSha256"), worker_graphic_layers_sha);
+                  rendered.insert(QStringLiteral("sourceOverviewSha256"), worker_proof_overview_sha);
+                  return rendered;
+                },
+                &stage_result)) {
+          review.insert(QStringLiteral("detailProofStagePending"), true);
+          review.insert(QStringLiteral("detailProofStageName"), detail_worker_stage);
+          return review;
+        }
+        if (stage_result.value(QStringLiteral("cannotCompleteSafely")).toBool()) {
+          details = stage_result;
+          details.insert(QStringLiteral("available"), false);
+        } else {
+          details = stage_result;
+          snapshot_after_inspection = planningRecipeSnapshot(asset);
+          const auto after_recipe_sha = hash_recipe_json(
+              snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString());
+          const auto after_checkpoint = snapshot_checkpoint(snapshot_after_inspection);
+          const auto worker_checkpoint_matches =
+              details.value(QStringLiteral("sourceTaskStateHash")).toString() == checkpoint_before_inspection;
+          const auto worker_source_recipe_matches =
+              details.value(QStringLiteral("sourceSnapshotRecipeSha256")).toString() ==
+                  raw_recipe_sha_before_inspection;
+          const auto worker_semantic_recipe_matches =
+              details.value(QStringLiteral("sourceSemanticRecipeSha256")).toString() == semantic_recipe_sha;
+          const auto worker_render_recipe_matches =
+              details.value(QStringLiteral("sourceRenderRecipeSha256")).toString() == render_recipe_sha &&
+              details.value(QStringLiteral("sourceRecipeSha256")).toString() == render_recipe_sha;
+          const auto worker_layers_match =
+              details.value(QStringLiteral("sourceGraphicLayersSha256")).toString() == graphic_layers_sha &&
+              details.value(QStringLiteral("graphicLayersSha256")).toString() == graphic_layers_sha;
+          const auto worker_overview_matches =
+              details.value(QStringLiteral("sourceOverviewSha256")).toString() == proof_overview_sha &&
+              details.value(QStringLiteral("overviewSha256")).toString() == proof_overview_sha;
+          const auto after_snapshot_available = snapshot_is_valid(snapshot_after_inspection);
+          const auto after_recipe_matches = after_recipe_sha == raw_recipe_sha_before_inspection;
+          const auto after_checkpoint_matches = after_checkpoint == checkpoint_before_inspection;
+          const auto worker_binding_matches = worker_checkpoint_matches && worker_source_recipe_matches &&
+              worker_semantic_recipe_matches && worker_render_recipe_matches && worker_layers_match &&
+              worker_overview_matches;
+          details.insert(QStringLiteral("bindingAudit"), QVariantMap{
+              {QStringLiteral("sourceTaskStateHash"), checkpoint_before_inspection},
+              {QStringLiteral("afterTaskStateHash"), after_checkpoint},
+              {QStringLiteral("sourceSnapshotRecipeSha256"), raw_recipe_sha_before_inspection},
+              {QStringLiteral("afterSnapshotRecipeSha256"), after_recipe_sha},
+              {QStringLiteral("sourceSemanticRecipeSha256"), semantic_recipe_sha},
+              {QStringLiteral("sourceRenderRecipeSha256"), render_recipe_sha},
+              {QStringLiteral("workerCheckpointMatches"), worker_checkpoint_matches},
+              {QStringLiteral("workerSourceRecipeMatches"), worker_source_recipe_matches},
+              {QStringLiteral("workerSemanticRecipeMatches"), worker_semantic_recipe_matches},
+              {QStringLiteral("workerRenderRecipeMatches"), worker_render_recipe_matches},
+              {QStringLiteral("workerLayersMatch"), worker_layers_match},
+              {QStringLiteral("workerOverviewMatches"), worker_overview_matches},
+              {QStringLiteral("afterSnapshotAvailable"), after_snapshot_available},
+              {QStringLiteral("afterRecipeMatches"), after_recipe_matches},
+              {QStringLiteral("afterCheckpointMatches"), after_checkpoint_matches},
+          });
+          if (!worker_binding_matches || !after_snapshot_available ||
+              !after_recipe_matches || !after_checkpoint_matches) {
+            details.insert(QStringLiteral("available"), false);
+            details.insert(QStringLiteral("error"), QStringLiteral(
+                "The live composition changed while its full-resolution detail proof was rendering."));
+          }
+        }
+      } else {
+        details = render_agent_composition_detail_proofs(
+            proof_path, asset.value(QStringLiteral("filePath")).toString(), recipe_json,
+            graphic_layers, repair_context.value(QStringLiteral("runId")).toString(),
+            asset_id, &cancellation_requested_);
+        details.insert(QStringLiteral("sourceTaskStateHash"), checkpoint_before_inspection);
+        details.insert(QStringLiteral("sourceSnapshotRecipeSha256"), raw_recipe_sha_before_inspection);
+        details.insert(QStringLiteral("sourceSemanticRecipeSha256"), semantic_recipe_sha);
+        details.insert(QStringLiteral("sourceRenderRecipeSha256"), render_recipe_sha);
+        details.insert(QStringLiteral("sourceGraphicLayersSha256"), graphic_layers_sha);
+        details.insert(QStringLiteral("sourceOverviewSha256"), proof_overview_sha);
+        snapshot_after_inspection = planningRecipeSnapshot(asset);
+        if (!snapshot_is_valid(snapshot_after_inspection) ||
+            hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString()) !=
+                raw_recipe_sha_before_inspection ||
+            snapshot_checkpoint(snapshot_after_inspection) != checkpoint_before_inspection ||
+            details.value(QStringLiteral("sourceRecipeSha256")).toString() != render_recipe_sha ||
+            details.value(QStringLiteral("graphicLayersSha256")).toString() != graphic_layers_sha ||
+            details.value(QStringLiteral("overviewSha256")).toString() != proof_overview_sha) {
+          details.insert(QStringLiteral("available"), false);
+          details.insert(QStringLiteral("error"), QStringLiteral(
+              "The live composition changed while its full-resolution detail proof was rendering."));
+        }
+      }
+      review.insert(QStringLiteral("detailProofImagePaths"),
+                    details.value(QStringLiteral("detailProofImagePaths")));
+      review.insert(QStringLiteral("targetedDetailProofs"),
+                    details.value(QStringLiteral("targetedDetailProofs")));
+      review.insert(QStringLiteral("detailProofReport"), details);
+      auto detail_proof_available = details.value(QStringLiteral("available")).toBool();
+      if (!graphic_layers.isEmpty()) {
+        const auto crop_reports = details.value(QStringLiteral("targetedDetailProofs")).toList();
+        const auto all_crops_available = crop_reports.size() == graphic_layers.size() &&
+            std::all_of(crop_reports.cbegin(), crop_reports.cend(), [](const auto& value) {
+              const auto crop = value.toMap();
+              return crop.value(QStringLiteral("available")).toBool() &&
+                     !crop.value(QStringLiteral("omitted")).toBool() &&
+                     !crop.value(QStringLiteral("imagePath")).toString().isEmpty() &&
+                     !crop.value(QStringLiteral("imageSha256")).toString().isEmpty();
+            });
+        if (!all_crops_available) {
+          auto warnings = review.value(QStringLiteral("warnings")).toStringList();
+          warnings.append(QStringLiteral("One or more required composition detail proofs are unavailable."));
+          review.insert(QStringLiteral("warnings"), warnings);
+          review.insert(QStringLiteral("ok"), false);
+          detail_proof_available = false;
+        }
+      }
+      if (!detail_proof_available) {
+        auto warnings = review.value(QStringLiteral("warnings")).toStringList();
+        const auto detail_error = details.value(QStringLiteral("error")).toString().trimmed();
+        warnings.append(detail_error.isEmpty()
+            ? QStringLiteral("The full-resolution composition detail proof is unavailable.")
+            : QStringLiteral("Full-resolution composition detail proof failed: %1").arg(detail_error));
+        review.insert(QStringLiteral("warnings"), warnings);
+        review.insert(QStringLiteral("ok"), false);
+      }
+      review.insert(QStringLiteral("detailProofAvailable"), detail_proof_available);
+      review.insert(QStringLiteral("detailProofRenderSource"),
+                    details.value(QStringLiteral("renderSource")));
+      review.insert(QStringLiteral("detailProofRenderedCompositionSha256"),
+                    details.value(QStringLiteral("renderedCompositionSha256")));
+      return review;
+    };
     const auto repair_model =
         model_metadata_by_id(available_models_, repair_context.value(QStringLiteral("modelId")).toString());
     const auto model_proof_critique_available =
         repair_model.value(QStringLiteral("backend")).toString() == QStringLiteral("ollama") &&
         repair_model.value(QStringLiteral("vision")).toBool();
+    const auto composition_proof_passed = [&](const QVariantMap& validation) {
+      if (!composition_repair_required) return true;
+      if (!validation.value(QStringLiteral("compositionReview")).toMap()
+               .value(QStringLiteral("ok")).toBool()) return false;
+      if (!model_proof_critique_available || repair_context.isEmpty()) return true;
+      const auto critique = validation.value(QStringLiteral("modelProofCritique")).toMap();
+      // Exact-copy metadata and valid bounds do not establish the requested
+      // visual design. A rejected or unavailable rendered review cannot be
+      // published as a completed composition.
+      return critique.value(QStringLiteral("ok")).toBool() &&
+          critique.value(QStringLiteral("pass")).toBool();
+    };
     const auto preserve_reviewed_sensitive_plan =
         batch_plan_metadata
             .value(QStringLiteral("preserveReviewedSensitivePlan"))
             .toBool();
     // Quality warnings can describe the original photograph. A global repair
     // must not override a request to edit a region and protect everything else.
-    const auto preserve_requested_local_scope = agent_instructions_require_grounded_edit(
-        repair_context.value(QStringLiteral("userInstructions"), user_instructions_).toString());
-    for (auto iteration = 0; iteration <= kMaxValidationRevisionIterations; ++iteration) {
+    const auto captured_repair_instructions =
+        repair_context.value(
+            QStringLiteral("userInstructions"),
+            batch_plan_metadata.value(
+                QStringLiteral("capturedInstructions"),
+                repair_context.value(QStringLiteral("capturedInstructions"))))
+            .toString();
+    const auto preserve_requested_local_scope =
+        agent_instructions_require_grounded_edit(captured_repair_instructions);
+    for (auto iteration = 0;; ++iteration) {
       if (stop_requested()) {
         edit_loop_stop_reason = QStringLiteral("cancelled");
         break;
@@ -23702,17 +28615,59 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         break;
       }
       attempted_patch_hashes.insert(patch_hash);
+      auto iteration_base_state = original_state;
+      QVariantMap iteration_native_snapshot;
+      if (!task_owned_structure_recipe_json.isEmpty()) {
+        iteration_native_snapshot = planningRecipeSnapshot(asset);
+        if (!native_source_matches(iteration_native_snapshot,
+                                   task_owned_structure_recipe_json,
+                                   task_owned_structure_recipe_sha,
+                                   task_owned_structure_state_hash)) {
+          edit_loop_stop_reason = QStringLiteral("native_source_checkpoint_changed");
+          errors.append(QStringLiteral(
+              "%1: the task-owned native source changed after its planning proof; current edits were preserved.")
+                            .arg(asset_id));
+          break;
+        }
+        if (composition_repair_required) {
+          const auto native_state = compatibility_adjustments_for_asset(
+              {{QStringLiteral("adjustmentPatchJson"), task_owned_structure_recipe_json}});
+          if (!native_state.ok()) {
+            edit_loop_stop_reason = QStringLiteral("native_source_recipe_unreadable");
+            errors.append(QStringLiteral("%1: the proved native composition state could not be read: %2")
+                              .arg(asset_id, native_state.error));
+            break;
+          }
+          // Rebase only native structure. Numeric intent and its comparison
+          // baseline continue to come from original_state/final_patch.
+          iteration_base_state.layers = native_state.state->layers;
+          iteration_base_state.mask_stack = native_state.state->mask_stack;
+          iteration_base_state.active_mask_index = native_state.state->active_mask_index;
+        }
+      }
+      // Async continuations rerun this loop from the same request snapshot.
+      // Pin provenance to the request and iteration so the exact rendered
+      // recipe hash remains stable until that candidate is actually revised.
+      const auto snapshot_created_at =
+          async_model_planning_enabled_ && async_draft_started_at_utc_.isValid()
+              ? async_draft_started_at_utc_.addMSecs(iteration)
+              : QDateTime::currentDateTimeUtc();
       auto state = append_named_recipe_snapshot(
-          original_state,
-          QStringLiteral("Agent draft %1").arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate)),
+          iteration_base_state,
+          QStringLiteral("Agent draft %1").arg(snapshot_created_at.toString(Qt::ISODate)),
           QStringLiteral("agent-%1").arg(draft_run_id_.left(8)));
       state = agent_base_state_for_mode(original_state, state, base_mode);
+      if (composition_repair_required && !task_owned_structure_recipe_json.isEmpty()) {
+        state.layers = iteration_base_state.layers;
+        state.mask_stack = iteration_base_state.mask_stack;
+        state.active_mask_index = iteration_base_state.active_mask_index;
+      }
       tag_latest_agent_snapshot(
           &state,
           draft_run_id_,
           selected_model_id_,
           selected_style_id_,
-          QDateTime::currentDateTimeUtc());
+          snapshot_created_at);
       if (agent_grounded_selection_request_count(final_patch) > 0 &&
           cached_visual_referent_mask.isEmpty() &&
           semantic_source.image.isNull() && semantic_source.error.isEmpty()) {
@@ -23725,7 +28680,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           materialize_agent_semantic_masks(
               final_patch,
               semantic_source,
-              original_state,
+              iteration_base_state,
               cached_visual_referent_mask,
               current_source_version);
       final_semantic_selection_report = semantic_materialization.report;
@@ -23878,18 +28833,19 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       if (progressive_preview_allowed) {
         const auto& provisional_adjustment_patch_json =
             candidate_adjustment_patch_json;
+        const auto current_asset_patch_json =
+            catalog_model_->assetById(asset_id)
+                .value(QStringLiteral("adjustmentPatchJson"))
+                .toString();
+        // Native text/mask edits can change the rendered composition without
+        // changing the adjustment recipe. Catalog returns zero for that
+        // already-current recipe, so treat only exact candidate bytes as a
+        // successful no-op; a different recipe still has to be published.
         const auto provisional_preview_already_current =
-            async_model_planning_enabled_ &&
-            progressive_preview_originals.contains(asset_id) &&
-            progressive_preview_report.value(QStringLiteral("published")).toBool() &&
-            progressive_preview_report.value(QStringLiteral("state")).toString() ==
-                QStringLiteral("validating") &&
-            progressive_preview_report.value(QStringLiteral("assetId")).toString() ==
-                asset_id &&
-            progressive_preview_report
-                    .value(QStringLiteral("validationIteration"))
-                    .toInt() == iteration;
-        if (!progressive_preview_originals.contains(asset_id)) {
+            !current_asset_patch_json.isEmpty() &&
+            current_asset_patch_json == provisional_adjustment_patch_json;
+        if (!provisional_preview_already_current &&
+            !progressive_preview_originals.contains(asset_id)) {
           progressive_preview_originals.insert(
               asset_id, original_adjustment_patch_json);
           if (async_model_planning_enabled_) {
@@ -23915,12 +28871,18 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           break;
         }
         if (!provisional_preview_already_current) {
+          progressive_preview_authored.insert(asset_id, provisional_adjustment_patch_json);
+          if (async_model_planning_enabled_)
+            async_progressive_preview_authored_.insert(asset_id, provisional_adjustment_patch_json);
           ++progressive_preview_publish_count;
           if (progressive_preview_first_publish_ms < 0) {
             progressive_preview_first_publish_ms = active_run_elapsed_ms();
           }
         }
         progressive_preview_report.insert(QStringLiteral("published"), true);
+        progressive_preview_report.insert(
+            QStringLiteral("candidateRecipeAlreadyCurrent"),
+            provisional_preview_already_current);
         progressive_preview_report.insert(
             QStringLiteral("state"), QStringLiteral("validating"));
         progressive_preview_report.insert(QStringLiteral("assetId"), asset_id);
@@ -23954,6 +28916,16 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
             });
       }
 
+      QStringList rendered_adjustment_keys;
+      for (auto group = applied_patch.constBegin(); group != applied_patch.constEnd(); ++group) {
+        const auto parameters = group.value().toMap();
+        for (auto parameter = parameters.constBegin(); parameter != parameters.constEnd(); ++parameter) {
+          if (parameter.value().canConvert<double>() &&
+              !rendered_adjustment_keys.contains(parameter.key())) {
+            rendered_adjustment_keys.append(parameter.key());
+          }
+        }
+      }
       appendRunEvent(
           QStringLiteral("render"),
           QStringLiteral("Render proof"),
@@ -23962,11 +28934,9 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           QVariantMap{
               {QStringLiteral("assetId"), asset_id},
               {QStringLiteral("attempt"), iteration + 1},
+              {QStringLiteral("adjustmentKeys"), rendered_adjustment_keys},
           });
-      const auto intent_instructions =
-          repair_context.value(QStringLiteral("userInstructions")).toString().trimmed().isEmpty()
-              ? user_instructions_
-              : repair_context.value(QStringLiteral("userInstructions")).toString();
+      const auto intent_instructions = captured_repair_instructions;
       WorkerProofResult proof_worker;
       if (async_model_planning_enabled_) {
         const auto proof_stage_name =
@@ -23988,8 +28958,16 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         const auto worker_cached_before_proof_path =
             cached_before_proof_path;
         const auto worker_intent_instructions = intent_instructions;
-        const auto worker_edit_intent =
+        auto worker_edit_intent =
             batch_plan_metadata.value(QStringLiteral("editIntent")).toMap();
+        const auto composition_photo_baseline = repair_context
+            .value(QStringLiteral("compositionPhotoBaseline")).toMap();
+        if (native_completion_only && composition_repair_required &&
+            composition_photo_baseline.value(QStringLiteral("preMutationInspectionVerified")).toBool() &&
+            composition_photo_baseline.value(QStringLiteral("assetId")).toString() == asset_id) {
+          worker_edit_intent.insert(
+              QStringLiteral("compositionPhotoBaselineSourceHashRequested"), true);
+        }
         QVariantMap stage_result;
         if (!takeOrStartRequestOwnedWorkerStage(
                 proof_stage_name,
@@ -24161,7 +29139,115 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       }
       auto iteration_warnings =
           image_validation.value(QStringLiteral("warnings")).toStringList();
-      const auto quality_score = edit_loop_quality_score(image_validation);
+      if (composition_repair_required) {
+        const auto composition_review = inspect_composition_for_repair(
+            image_validation.value(QStringLiteral("artifacts")).toMap()
+                .value(QStringLiteral("afterProofPath")).toString(),
+            candidate_adjustment_patch_json,
+            QStringLiteral("initial:%1:%2").arg(asset_id).arg(iteration),
+            task_owned_structure_state_hash);
+        if (composition_review.value(QStringLiteral("detailProofStagePending")).toBool()) {
+          auto pending = requestOwnedWorkerPendingReport(
+              composition_review.value(QStringLiteral("detailProofStageName")).toString(),
+              report_scope);
+          pending.insert(QStringLiteral("runId"), draft_run_id_);
+          pending.insert(QStringLiteral("assetId"), asset_id);
+          pending.insert(QStringLiteral("iteration"), iteration);
+          pending.insert(QStringLiteral("progressivePreview"), progressive_preview_report);
+          pending.insert(QStringLiteral("runEvents"), run_events_);
+          return pending;
+        }
+        image_validation.insert(QStringLiteral("compositionReview"), composition_review);
+        auto live_evidence = QVariantMap{
+            {QStringLiteral("source"), QStringLiteral("live-composition-inspection-and-rendered-detail")},
+            {QStringLiteral("assetId"), asset_id},
+            {QStringLiteral("compositionReview"), composition_review},
+            {QStringLiteral("targetedDetailProofs"), composition_review.value(QStringLiteral("targetedDetailProofs"))},
+            {QStringLiteral("requiredChecks"), composition_review.value(QStringLiteral("requiredChecks"))},
+        };
+        QFile overview_file(image_validation.value(QStringLiteral("artifacts")).toMap()
+                               .value(QStringLiteral("afterProofPath")).toString());
+        if (overview_file.open(QIODevice::ReadOnly)) {
+          live_evidence.insert(QStringLiteral("proofSha256"), QString::fromLatin1(
+              QCryptographicHash::hash(overview_file.readAll(), QCryptographicHash::Sha256).toHex()));
+        }
+        image_validation.insert(QStringLiteral("liveRepairEvidence"), live_evidence);
+        iteration_warnings.append(composition_review.value(QStringLiteral("warnings")).toStringList());
+      }
+      auto review_validation_report = image_validation;
+      auto photographic_review_projection_applied = false;
+      if (native_completion_only && composition_repair_required) {
+        const auto live_evidence = image_validation.value(QStringLiteral("liveRepairEvidence")).toMap();
+        const QVariantMap current_composition_proof{
+            {QStringLiteral("assetId"), asset_id},
+            {QStringLiteral("requestId"), active_draft_request_id_.isEmpty()
+                ? repair_context.value(QStringLiteral("compositionPhotoBaseline")).toMap()
+                    .value(QStringLiteral("requestId"))
+                : active_draft_request_id_},
+            {QStringLiteral("taskId"), task_transaction_id_},
+            {QStringLiteral("mcpRunId"), repair_context.value(QStringLiteral("compositionPhotoBaseline"))
+                .toMap().value(QStringLiteral("revisionBinding")).toMap().value(QStringLiteral("runId"))},
+            {QStringLiteral("snapshotSource"), authorized_native_checkpoint.value(QStringLiteral("snapshotSource"))},
+            {QStringLiteral("sourceRecipeJson"), candidate_adjustment_patch_json},
+            {QStringLiteral("sourceRecipeSha256"), sha256_text(candidate_adjustment_patch_json)},
+            {QStringLiteral("taskStateHash"), task_owned_structure_state_hash},
+            {QStringLiteral("proofSha256"), live_evidence.value(QStringLiteral("proofSha256"))},
+            {QStringLiteral("sourceFilePath"), asset.value(QStringLiteral("filePath"))},
+            {QStringLiteral("sourceFileSha256"), image_validation.value(QStringLiteral("compositionPhotoSourceFileSha256"))},
+            {QStringLiteral("styleFingerprint"), sha256_text(QString::fromUtf8(
+                 QJsonDocument::fromVariant(style).toJson(QJsonDocument::Compact)))},
+        };
+        const auto projected = composition_photo_quality_validation_projection(
+            image_validation,
+            repair_context.value(QStringLiteral("compositionPhotoBaseline")).toMap(),
+            current_composition_proof);
+        photographic_review_projection_applied =
+            projected.contains(QStringLiteral("photographicQualityEvidence"));
+        if (photographic_review_projection_applied) {
+          review_validation_report = projected;
+          // Keep native composite observations intact while the public task
+          // decision follows the verified unchanged-photo projection.
+          image_validation.insert(QStringLiteral("compositeNeedsUserReview"),
+              image_validation.value(QStringLiteral("needsUserReview")));
+          image_validation.insert(QStringLiteral("compositeQualityScore"),
+              image_validation.value(QStringLiteral("qualityScore")));
+          image_validation.insert(QStringLiteral("compositeQualityScorePercent"),
+              image_validation.value(QStringLiteral("qualityScorePercent")));
+          image_validation.insert(QStringLiteral("compositeQualityScoreReport"),
+              image_validation.value(QStringLiteral("qualityScoreReport")));
+          image_validation.insert(QStringLiteral("compositeWarnings"),
+              image_validation.value(QStringLiteral("warnings")));
+          image_validation.insert(QStringLiteral("compositeImageStats"),
+              image_validation.value(QStringLiteral("imageStats")));
+          image_validation.insert(QStringLiteral("photographicReviewProjectionApplied"), true);
+          image_validation.insert(QStringLiteral("photographicReviewNeedsUserReview"),
+              projected.value(QStringLiteral("needsUserReview")));
+          image_validation.insert(QStringLiteral("photographicReviewQualityScore"),
+              projected.value(QStringLiteral("qualityScore")));
+          image_validation.insert(QStringLiteral("photographicQualityEvidence"),
+              projected.value(QStringLiteral("photographicQualityEvidence")));
+          image_validation.insert(QStringLiteral("needsUserReview"),
+              projected.value(QStringLiteral("needsUserReview")));
+          image_validation.insert(QStringLiteral("qualityScore"),
+              projected.value(QStringLiteral("qualityScore")));
+          image_validation.insert(QStringLiteral("qualityScorePercent"),
+              projected.value(QStringLiteral("qualityScorePercent")));
+          image_validation.insert(QStringLiteral("qualityScoreReport"),
+              projected.value(QStringLiteral("qualityScoreReport")));
+          image_validation.insert(QStringLiteral("warnings"),
+              projected.value(QStringLiteral("warnings")));
+          image_validation.insert(QStringLiteral("imageStats"),
+              projected.value(QStringLiteral("imageStats")));
+          auto scoped_warnings = projected.value(QStringLiteral("warnings")).toStringList();
+          for (const auto& warning : image_validation.value(QStringLiteral("compositionReview"))
+                   .toMap().value(QStringLiteral("warnings")).toStringList()) {
+            if (!scoped_warnings.contains(warning)) scoped_warnings.append(warning);
+          }
+          iteration_warnings = scoped_warnings;
+          image_validation.insert(QStringLiteral("warnings"), scoped_warnings);
+        }
+      }
+      const auto quality_score = edit_loop_quality_score(review_validation_report);
       appendRunEvent(
           QStringLiteral("validate"),
           QStringLiteral("Verify result"),
@@ -24198,32 +29284,54 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           critique_asset.insert(QStringLiteral("proofImagePath"), after_proof_path);
           critique_asset.insert(QStringLiteral("afterProofPath"), after_proof_path);
         }
+        const auto composition_review = image_validation
+            .value(QStringLiteral("compositionReview")).toMap();
+        if (!composition_review.isEmpty()) {
+          const auto detail_paths = composition_review
+              .value(QStringLiteral("detailProofImagePaths")).toStringList();
+          const auto targeted_details = composition_review
+              .value(QStringLiteral("targetedDetailProofs")).toList();
+          const auto live_evidence = image_validation
+              .value(QStringLiteral("liveRepairEvidence")).toMap();
+          auto visual_evidence = critique_asset
+              .value(QStringLiteral("visualEvidence")).toMap();
+          visual_evidence.insert(QStringLiteral("source"),
+              live_evidence.value(QStringLiteral("source")));
+          visual_evidence.insert(QStringLiteral("assetId"), asset_id);
+          visual_evidence.insert(QStringLiteral("proofSha256"),
+              live_evidence.value(QStringLiteral("proofSha256")));
+          visual_evidence.insert(QStringLiteral("targetedDetailProofs"),
+              targeted_details);
+          visual_evidence.insert(QStringLiteral("requiredChecks"),
+              composition_review.value(QStringLiteral("requiredChecks")));
+          critique_asset.insert(QStringLiteral("visualEvidence"), visual_evidence);
+          critique_asset.insert(QStringLiteral("additionalProofImagePaths"), detail_paths);
+          critique_asset.insert(QStringLiteral("planningProofRequired"), true);
+          critique_asset.insert(QStringLiteral("planningProofSha256"),
+              live_evidence.value(QStringLiteral("proofSha256")));
+        }
         AgentLocalModelProofCritiqueRequest critique_request;
         critique_request.model_id = repair_context.value(QStringLiteral("modelId")).toString();
         critique_request.style = style;
         critique_request.asset = critique_asset;
         critique_request.user_instructions =
             repair_context.value(QStringLiteral("userInstructions")).toString();
-        for (const auto& layer_value : state.layers) {
-          const auto layer = layer_value.toMap();
-          if (!layer.value(QStringLiteral("agentGraphic")).toBool()) {
-            continue;
+        critique_request.graphic_layers = agent_graphic_proof_layers(state.layers,
+            repair_context.value(QStringLiteral("compositionTextLayerIds")).toStringList());
+        critique_request.validation_report = proof_critique_validation_projection(review_validation_report);
+        for (const auto& attempt_value : edit_loop_attempts) {
+          auto attempt = attempt_value.toMap();
+          const auto prior_validation = attempt.value(QStringLiteral("validationReport")).toMap();
+          if (!prior_validation.isEmpty()) {
+            attempt.insert(QStringLiteral("validationReportSha256"),
+                QString::fromLatin1(QCryptographicHash::hash(
+                    QJsonDocument::fromVariant(prior_validation).toJson(QJsonDocument::Compact),
+                    QCryptographicHash::Sha256).toHex()));
+            attempt.insert(QStringLiteral("validationReport"),
+                proof_critique_validation_projection(prior_validation));
           }
-          critique_request.graphic_layers.append(QVariantMap{
-              {QStringLiteral("id"), layer.value(QStringLiteral("id"))},
-              {QStringLiteral("name"), layer.value(QStringLiteral("name"))},
-              {QStringLiteral("text"), layer.value(QStringLiteral("text"))},
-              {QStringLiteral("x"), layer.value(QStringLiteral("x"))},
-              {QStringLiteral("y"), layer.value(QStringLiteral("y"))},
-              {QStringLiteral("pixelWidth"), layer.value(QStringLiteral("pixelWidth"))},
-              {QStringLiteral("pixelHeight"), layer.value(QStringLiteral("pixelHeight"))},
-              {QStringLiteral("canvasWidth"), layer.value(QStringLiteral("canvasWidth"))},
-              {QStringLiteral("canvasHeight"), layer.value(QStringLiteral("canvasHeight"))},
-              {QStringLiteral("textTypography"), layer.value(QStringLiteral("textTypography"))},
-          });
+          critique_request.previous_attempts.append(attempt);
         }
-        critique_request.validation_report = image_validation;
-        critique_request.previous_attempts = edit_loop_attempts;
         critique_request.photographer_calibration =
             repair_context.value(QStringLiteral("memoryPacket"))
                 .toMap()
@@ -24353,9 +29461,18 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
                 {QStringLiteral("needsUserReview"), critique.needs_user_review},
             });
       }
+      if (composition_repair_required && !composition_proof_passed(image_validation) &&
+          iteration_warnings.isEmpty()) {
+        iteration_warnings.append(QStringLiteral(
+            "Approved composition requirements remain unresolved; continue with a grounded composition repair."));
+        image_validation.insert(QStringLiteral("warnings"), iteration_warnings);
+      }
       const auto attempt_needs_user_review =
-          image_validation.value(QStringLiteral("needsUserReview")).toBool() ||
-          image_validation.value(QStringLiteral("qualityScoreReport"))
+          !image_validation.value(QStringLiteral("ok")).toBool() ||
+          !image_validation.value(QStringLiteral("errors")).toStringList().isEmpty() ||
+          (composition_repair_required && !composition_proof_passed(image_validation)) ||
+          review_validation_report.value(QStringLiteral("needsUserReview")).toBool() ||
+          review_validation_report.value(QStringLiteral("qualityScoreReport"))
               .toMap()
               .value(QStringLiteral("needsUserReview"))
               .toBool() ||
@@ -24373,8 +29490,6 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         attempt_stop_reason = QStringLiteral("validation_failed");
       } else if (iteration_warnings.isEmpty()) {
         attempt_stop_reason = QStringLiteral("validated_clean");
-      } else if (iteration == kMaxValidationRevisionIterations) {
-        attempt_stop_reason = QStringLiteral("attempt_limit");
       } else if (iteration > 0 &&
                  previous_best_quality_score >= 0.0 &&
                  quality_score < previous_best_quality_score + kMinEditLoopScoreImprovement) {
@@ -24455,14 +29570,13 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       }
       next_adjustment_patch_json =
           candidate_adjustment_patch_json;
+      const auto composition_issue_pending = !composition_proof_passed(image_validation);
       if (!image_validation.value(QStringLiteral("ok")).toBool() ||
           iteration_warnings.isEmpty() ||
           preserve_reviewed_sensitive_plan ||
           preserve_requested_local_scope ||
-          iteration == kMaxValidationRevisionIterations ||
-          attempt_stop_reason == QStringLiteral("no_score_improvement")) {
-        stopped_at_iteration_limit = !iteration_warnings.isEmpty() &&
-                                    iteration == kMaxValidationRevisionIterations;
+          (attempt_stop_reason == QStringLiteral("no_score_improvement") &&
+           !composition_issue_pending)) {
         no_score_improvement_stop =
             attempt_stop_reason == QStringLiteral("no_score_improvement");
         edit_loop_stop_reason =
@@ -24477,10 +29591,91 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       }
       auto revised_patch = QVariantMap{};
       auto model_repair_used_this_iteration = false;
-      if (model_repair_count < kMaxModelRepairTurnsPerAsset &&
-          !repair_context.isEmpty() &&
+      auto repair_tool_aborted = false;
+      if (!repair_context.isEmpty() &&
           repair_context.value(QStringLiteral("modelId")).toString() !=
               QStringLiteral("rulebook-deterministic")) {
+        const auto repair_cursor_key = stable_variant_hash(QVariantMap{
+            {QStringLiteral("requestId"), active_draft_request_id_},
+            {QStringLiteral("taskId"), task_transaction_id_},
+            {QStringLiteral("assetId"), asset_id},
+            {QStringLiteral("scope"), scope},
+            {QStringLiteral("iteration"), iteration},
+            {QStringLiteral("approvedSnapshotSha256"), stable_variant_hash(approved_task_snapshot_)},
+        });
+        QVariantMap repair_report;
+        auto repair_round = async_model_planning_enabled_
+            ? async_composition_repair_round_cursors_.value(repair_cursor_key, 0)
+            : 0;
+        const auto accepted_repair = async_model_planning_enabled_
+            ? async_composition_repair_accepted_recipe_results_.value(repair_cursor_key)
+            : QVariantMap{};
+        if (!accepted_repair.isEmpty()) {
+          const auto accepted_patch = accepted_repair.value(QStringLiteral("recipePatch")).toMap();
+          const auto accepted_task_state_hash =
+              accepted_repair.value(QStringLiteral("taskStateHash")).toString();
+          const auto accepted_source_recipe_sha =
+              accepted_repair.value(QStringLiteral("sourceRecipeSha256")).toString();
+          const auto accepted_source_recipe_json =
+              accepted_repair.value(QStringLiteral("sourceRecipeJson")).toString();
+          const auto accepted_snapshot_source =
+              accepted_repair.value(QStringLiteral("snapshotSource")).toString();
+          const auto live_checkpoint = planningRecipeSnapshot(asset);
+          const auto live_recipe_json = live_checkpoint.value(QStringLiteral("recipeJson")).toString();
+          const auto accepted_checkpoint_is_current =
+              live_checkpoint.value(QStringLiteral("ok")).toBool() &&
+              live_checkpoint.value(QStringLiteral("assetId")).toString() == asset_id &&
+              !live_checkpoint.value(QStringLiteral("paintBusy")).toBool() &&
+              !accepted_task_state_hash.isEmpty() &&
+              !accepted_source_recipe_sha.isEmpty() &&
+              snapshot_checkpoint(live_checkpoint) == accepted_task_state_hash &&
+              hash_recipe_json(live_recipe_json) == accepted_source_recipe_sha &&
+              (accepted_snapshot_source != QStringLiteral("native-photo") ||
+               (!accepted_source_recipe_json.isEmpty() &&
+                live_checkpoint.value(QStringLiteral("source")).toString() == accepted_snapshot_source &&
+                live_recipe_json == accepted_source_recipe_json));
+          const auto accepted_context_matches =
+              accepted_repair.value(QStringLiteral("requestId")).toString() == active_draft_request_id_ &&
+              accepted_repair.value(QStringLiteral("taskId")).toString() == task_transaction_id_ &&
+              accepted_repair.value(QStringLiteral("assetId")).toString() == asset_id &&
+              accepted_repair.value(QStringLiteral("iteration")).toInt() == iteration &&
+              accepted_repair.value(QStringLiteral("approvedSnapshotSha256")).toString() ==
+                  stable_variant_hash(approved_task_snapshot_);
+          repair_report = accepted_repair.value(QStringLiteral("repairReport")).toMap();
+          if (!accepted_context_matches || !accepted_checkpoint_is_current ||
+              accepted_patch.isEmpty() ||
+              !repair_report.value(QStringLiteral("ok")).toBool() ||
+              repair_report.value(QStringLiteral("decision")).toString() != QStringLiteral("recipe_patch")) {
+            repair_report = QVariantMap{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("repairBoundaryFailed"), true},
+                {QStringLiteral("errorCode"), QStringLiteral("accepted_repair_checkpoint_changed")},
+                {QStringLiteral("errors"), QStringList{QStringLiteral(
+                    "The live task checkpoint changed after the accepted repair decision; the saved edits were preserved.")}},
+            };
+            model_repair_reports.append(repair_report);
+            repair_tool_aborted = true;
+          } else {
+            repair_round = accepted_repair.value(QStringLiteral("repairRound")).toInt();
+            if (accepted_snapshot_source == QStringLiteral("native-photo")) {
+              task_owned_structure_recipe_json = accepted_source_recipe_json;
+              task_owned_structure_recipe_sha = accepted_source_recipe_sha;
+              task_owned_structure_state_hash = accepted_task_state_hash;
+            }
+            repair_report.insert(QStringLiteral("resumedAcceptedDecision"), true);
+            model_repair_reports.append(repair_report);
+            revised_patch = accepted_patch;
+            ++model_repair_count;
+            model_repair_used_this_iteration = true;
+            appendRunEvent(
+                QStringLiteral("repair"), QStringLiteral("Repair"), QStringLiteral("complete"),
+                QStringLiteral("Resumed the accepted request-owned repair decision without redispatching or replaying it."),
+                QVariantMap{{QStringLiteral("assetId"), asset_id},
+                    {QStringLiteral("iteration"), iteration},
+                    {QStringLiteral("repairRound"), repair_round},
+                    {QStringLiteral("acceptedDecisionRehydrated"), true}});
+          }
+        } else {
         appendRunEvent(
             QStringLiteral("repair"),
             QStringLiteral("Repair"),
@@ -24491,92 +29686,454 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
                 {QStringLiteral("attempt"), iteration + 1},
                 {QStringLiteral("warningCount"), iteration_warnings.size()},
             });
-        const auto repair_stage_name =
-            QStringLiteral("validation-repair:%1:%2")
-                .arg(asset_id)
-                .arg(iteration);
-        auto repair_report = model_repair_recipe_patch_from_validation(
-            repair_context,
-            asset,
-            serialize_adjustment_patch_json(
-                original_state,
-                all_adjustment_groups(),
-                AdjustmentPatchScope::AssetBound),
-            final_patch,
-            image_validation,
-            style,
-            edit_loop_attempts,
-            [&](const AgentLocalModelPlanRequest& repair_request) {
-              if (!async_model_planning_enabled_) {
-                return plan_agent_recipe_patch_on_worker(repair_request);
-              }
-              WorkerPlanResult result;
-              if (!takeOrStartRequestOwnedPlanStage(
-                      repair_stage_name,
-                      repair_request,
-                      scope,
-                      repair_context
-                          .value(QStringLiteral("userInstructions"))
-                          .toString(),
-                      &result.plan)) {
-                result.continuation_pending = true;
+        QVariantList repair_prior_results;
+        QVariantList successful_mutation_receipts;
+        AgentToolProgress repair_tool_progress;
+        bool repair_progress_restore_failed = false;
+        QSet<QString> repeated_repair_plan_signatures;
+        if (async_model_planning_enabled_) {
+          for (const auto& signature :
+               async_composition_repair_plan_signatures_.value(repair_cursor_key))
+            repeated_repair_plan_signatures.insert(signature);
+          if (async_composition_repair_progress_snapshots_.contains(repair_cursor_key) &&
+              !repair_tool_progress.restore(
+                  async_composition_repair_progress_snapshots_.value(repair_cursor_key)))
+            repair_progress_restore_failed = true;
+        }
+        QSet<QString> repair_receipt_signatures;
+        const auto append_repair_receipt = [&](const QVariantMap& receipt) {
+          const auto signature = stable_variant_hash(QVariantMap{
+              {QStringLiteral("toolName"), receipt.value(QStringLiteral("toolName"))},
+              {QStringLiteral("arguments"), receipt.value(QStringLiteral("arguments"))},
+              {QStringLiteral("ok"), receipt.value(QStringLiteral("ok"))},
+              {QStringLiteral("structuredContent"), receipt.value(QStringLiteral("structuredContent"))},
+              {QStringLiteral("error"), receipt.value(QStringLiteral("error"))},
+          });
+          if (repair_receipt_signatures.contains(signature)) return;
+          repair_receipt_signatures.insert(signature);
+          repair_prior_results.append(receipt);
+          if (receipt.value(QStringLiteral("ok")).toBool() &&
+              !read_only_mcp_observation_tools().contains(receipt.value(QStringLiteral("toolName")).toString()))
+            successful_mutation_receipts.append(receipt);
+        };
+        for (const auto& prior_value : repair_context.value(QStringLiteral("priorToolResults")).toList()) {
+          const auto prior = prior_value.toMap();
+          if (prior.contains(QStringLiteral("toolName"))) append_repair_receipt(prior);
+          else repair_prior_results.append(prior);
+        }
+        // A continuation resumes the next proof round, but the next model turn
+        // still needs the successful mutation receipts that established its
+        // current composition. Rehydrate only completed rounds from this exact
+        // request-owned cache; never invoke their operations again.
+        if (async_model_planning_enabled_) {
+          for (auto completed_round = 0; completed_round < repair_round; ++completed_round) {
+            const auto execution_key = QStringLiteral("validation-repair-tools:%1:%2:%3")
+                                           .arg(asset_id).arg(iteration).arg(completed_round);
+            const auto execution = async_model_tool_plan_results_.value(execution_key);
+            if (!execution.value(QStringLiteral("executionComplete")).toBool() ||
+                execution.value(QStringLiteral("compositionPending")).toBool())
+              continue;
+            for (const auto& receipt_value : execution.value(QStringLiteral("toolReports")).toList())
+              append_repair_receipt(receipt_value.toMap());
+          }
+        }
+        if (repair_progress_restore_failed) {
+          repair_report = QVariantMap{
+              {QStringLiteral("ok"), false},
+              {QStringLiteral("repairBoundaryFailed"), true},
+              {QStringLiteral("errorCode"), QStringLiteral("repair_progress_checkpoint_invalid")},
+              {QStringLiteral("errors"), QStringList{QStringLiteral(
+                  "Repair stopped because its request-owned repeated-result checkpoint could not be verified.")}},
+          };
+          model_repair_reports.append(repair_report);
+          repair_tool_aborted = true;
+        }
+        for (;;) {
+          if (repair_tool_aborted) break;
+          if (stop_requested()) {
+            repair_tool_aborted = true;
+            edit_loop_stop_reason = QStringLiteral("cancelled");
+            break;
+          }
+          const auto round_name = QStringLiteral("validation-repair:%1:%2:%3")
+                                      .arg(asset_id).arg(iteration).arg(repair_round);
+          QVariantMap round_proof;
+          if (!takeOrStartPlanningProof(
+                  QStringLiteral("%1-proof").arg(round_name), asset, style,
+                  draft_run_id_, scope, true, &round_proof, applied_patch)) {
+            repair_report = requestOwnedWorkerPendingReport(
+                QStringLiteral("planning-proof:%1-proof").arg(round_name), report_scope);
+            repair_report.insert(QStringLiteral("runId"), draft_run_id_);
+            repair_report.insert(QStringLiteral("assetId"), asset_id);
+            repair_report.insert(QStringLiteral("iteration"), iteration);
+            repair_report.insert(QStringLiteral("repairRound"), repair_round);
+            return repair_report;
+          }
+          if (!round_proof.value(QStringLiteral("ok")).toBool()) {
+            repair_report = round_proof;
+            repair_tool_aborted = true;
+            break;
+          }
+          auto turn_validation = image_validation;
+          auto turn_artifacts = turn_validation.value(QStringLiteral("artifacts")).toMap();
+          turn_artifacts.insert(QStringLiteral("afterProofPath"),
+                                round_proof.value(QStringLiteral("currentProofPath")));
+          turn_validation.insert(QStringLiteral("artifacts"), turn_artifacts);
+          auto turn_review = inspect_composition_for_repair(
+              round_proof.value(QStringLiteral("currentProofPath")).toString(),
+              round_proof.value(QStringLiteral("planningRecipeJson")).toString(),
+              round_name,
+              round_proof.value(QStringLiteral("taskStateHash")).toString());
+          if (turn_review.value(QStringLiteral("detailProofStagePending")).toBool()) {
+            auto pending = requestOwnedWorkerPendingReport(
+                turn_review.value(QStringLiteral("detailProofStageName")).toString(),
+                report_scope);
+            pending.insert(QStringLiteral("runId"), draft_run_id_);
+            pending.insert(QStringLiteral("assetId"), asset_id);
+            pending.insert(QStringLiteral("iteration"), iteration);
+            pending.insert(QStringLiteral("repairRound"), repair_round);
+            pending.insert(QStringLiteral("progressivePreview"), progressive_preview_report);
+            pending.insert(QStringLiteral("runEvents"), run_events_);
+            return pending;
+          }
+          if (composition_repair_required &&
+              (!turn_review.value(QStringLiteral("inspectionAvailable")).toBool() ||
+               !turn_review.value(QStringLiteral("detailProofAvailable")).toBool())) {
+            repair_report = QVariantMap{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("proofBoundaryFailed"), true},
+                {QStringLiteral("errorCode"), QStringLiteral("composition_proof_unavailable")},
+                {QStringLiteral("errors"), QStringList{QStringLiteral(
+                    "Repair stopped because fresh live composition inspection or required full-resolution detail proof is unavailable.")}},
+                {QStringLiteral("compositionReview"), turn_review},
+            };
+            model_repair_reports.append(repair_report);
+            repair_tool_aborted = true;
+            break;
+          }
+          if (composition_repair_required) {
+            turn_validation.insert(QStringLiteral("compositionReview"), turn_review);
+            auto live_evidence = turn_validation.value(QStringLiteral("liveRepairEvidence")).toMap();
+            live_evidence.insert(QStringLiteral("source"),
+                                 QStringLiteral("fresh-rendered-proof-and-live-composition"));
+            live_evidence.insert(QStringLiteral("assetId"), asset_id);
+            live_evidence.insert(QStringLiteral("proofPath"),
+                                 round_proof.value(QStringLiteral("currentProofPath")));
+            live_evidence.insert(QStringLiteral("proofSha256"),
+                                 round_proof.value(QStringLiteral("proofSha256")));
+            live_evidence.insert(QStringLiteral("compositionReview"), turn_review);
+            live_evidence.insert(QStringLiteral("targetedDetailProofs"),
+                                 turn_review.value(QStringLiteral("targetedDetailProofs")));
+            live_evidence.insert(QStringLiteral("requiredChecks"),
+                                 turn_review.value(QStringLiteral("requiredChecks")));
+            turn_validation.insert(QStringLiteral("liveRepairEvidence"), live_evidence);
+          }
+          auto turn_context = repair_context;
+          // Require document work after a rejected visual composition review.
+          // Following productive native work, permit a final numeric intent so
+          // the outer loop can render and critique the changed document afresh.
+          turn_context.insert(QStringLiteral("requireCompositionToolPlan"),
+                              composition_issue_pending && repair_round == 0);
+          turn_context.insert(QStringLiteral("priorToolResults"), repair_prior_results);
+          const auto repair_stage_name = repair_round == 0
+              ? QStringLiteral("validation-repair:%1:%2").arg(asset_id).arg(iteration)
+              : QStringLiteral("validation-repair:%1:%2:tool-follow-up:%3")
+                    .arg(asset_id).arg(iteration).arg(repair_round);
+          auto repair_report = model_repair_recipe_patch_from_validation(
+              turn_context,
+              asset,
+              round_proof.value(QStringLiteral("planningRecipeJson")).toString(),
+              final_patch,
+              turn_validation,
+              style,
+              edit_loop_attempts,
+              [&](const AgentLocalModelPlanRequest& repair_request) {
+                if (!async_model_planning_enabled_)
+                  return plan_agent_recipe_patch_on_worker(repair_request);
+                WorkerPlanResult result;
+                if (!takeOrStartRequestOwnedPlanStage(
+                        repair_stage_name, repair_request, scope,
+                        repair_context.value(QStringLiteral("capturedInstructions")).toString(),
+                        &result.plan)) {
+                  result.continuation_pending = true;
+                  result.request_owned_continuation = true;
+                  return result;
+                }
                 result.request_owned_continuation = true;
                 return result;
+              });
+          if (repair_report.value(QStringLiteral("errorCode")).toString() ==
+              QStringLiteral("async_stage_pending")) {
+            auto pending = requestOwnedPlanPendingReport(repair_stage_name, report_scope);
+            pending.insert(QStringLiteral("runId"), draft_run_id_);
+            pending.insert(QStringLiteral("assetId"), asset_id);
+            pending.insert(QStringLiteral("iteration"), iteration);
+            pending.insert(QStringLiteral("repairRound"), repair_round);
+            pending.insert(QStringLiteral("proofWorker"), proof_worker_summary());
+            pending.insert(QStringLiteral("progressivePreview"), progressive_preview_report);
+            pending.insert(QStringLiteral("runEvents"), run_events_);
+            return pending;
+          }
+          repair_report.insert(QStringLiteral("assetId"), asset_id);
+          repair_report.insert(QStringLiteral("iteration"), iteration);
+          repair_report.insert(QStringLiteral("repairRound"), repair_round);
+          if (repair_report.value(QStringLiteral("toolCallPlanOnly")).toBool() &&
+              repair_report.value(QStringLiteral("ok")).toBool()) {
+            const auto execution_key = QStringLiteral("validation-repair-tools:%1:%2:%3")
+                                           .arg(asset_id).arg(iteration).arg(repair_round);
+            auto execution = async_model_tool_plan_results_.value(execution_key);
+            const auto previous_execution = execution;
+            if (execution.isEmpty() || execution.value(QStringLiteral("compositionPending")).toBool() ||
+                (!execution.value(QStringLiteral("executionComplete")).toBool() &&
+                 execution.value(QStringLiteral("errors")).toStringList().isEmpty() &&
+                 !execution.value(QStringLiteral("canceled")).toBool())) {
+              execution = execute_model_mcp_tool_plan(
+                  turn_context.value(QStringLiteral("endpoint")).toString(),
+                  turn_context.value(QStringLiteral("endpointKind")).toString(),
+                  mcp_bearer_token_, turn_context.value(QStringLiteral("runId")).toString(),
+                  repair_allowed_tools, turn_context.value(QStringLiteral("availableToolSchemas")).toList(),
+                  repair_report.value(QStringLiteral("toolCallPlan")).toList(),
+                  [this]() { return cancellation_requested_.load(); },
+                  [this](const QString& tool_name, const QVariantMap& arguments, const QString& status) {
+                    const auto operation = arguments.value(QStringLiteral("operation")).toString();
+                    const auto action = operation.isEmpty() ? tool_name : operation;
+                    appendRunEvent(QStringLiteral("tool"), action, status,
+                        status == QStringLiteral("running") ? QStringLiteral("Using %1.").arg(action)
+                          : status == QStringLiteral("pending") ? QStringLiteral("Waiting for %1 pixels to finish.").arg(action)
+                          : status == QStringLiteral("complete") ? QStringLiteral("Completed %1.").arg(action)
+                          : QStringLiteral("Could not complete %1.").arg(action),
+                        QVariantMap{{QStringLiteral("toolName"), tool_name}, {QStringLiteral("operation"), operation}});
+                  },
+                  async_model_planning_enabled_, previous_execution, true,
+                  successful_mutation_receipts);
+              if (async_model_planning_enabled_)
+                async_model_tool_plan_results_.insert(execution_key, execution);
+            }
+            if (execution.value(QStringLiteral("compositionPending")).toBool()) {
+              draft_request_pending_ = true;
+              emit draftRequestChanged();
+              setStatus(QStringLiteral("Finishing composition repair"));
+              scheduleCompositionContinuation(active_draft_request_id_, scope,
+                  async_draft_instructions_, execution_key);
+              auto pending = requestOwnedPlanPendingReport(QStringLiteral("composition-ready"), report_scope);
+              pending.insert(QStringLiteral("runId"), draft_run_id_);
+              pending.insert(QStringLiteral("assetId"), asset_id);
+              pending.insert(QStringLiteral("iteration"), iteration);
+              pending.insert(QStringLiteral("repairRound"), repair_round);
+              pending.insert(QStringLiteral("compositionCompletion"), execution);
+              return pending;
+            }
+            repair_report.insert(QStringLiteral("toolExecution"), execution);
+            repair_report.insert(QStringLiteral("toolReports"), execution.value(QStringLiteral("toolReports")));
+            model_repair_reports.append(repair_report);
+            for (const auto& receipt_value : execution.value(QStringLiteral("toolReports")).toList()) {
+              const auto receipt = receipt_value.toMap();
+              append_repair_receipt(receipt);
+            }
+            append_tool_call(&tool_calls, QStringLiteral("model_repair_composition_tool_plan"),
+                execution.value(QStringLiteral("ok")).toBool() ? QStringLiteral("ok") : QStringLiteral("failed"),
+                QVariantMap{{QStringLiteral("assetId"), asset_id},
+                    {QStringLiteral("iteration"), iteration}, {QStringLiteral("repairRound"), repair_round},
+                    {QStringLiteral("requestedToolCallCount"), repair_report.value(QStringLiteral("toolCallPlan")).toList().size()},
+                    {QStringLiteral("successCount"), execution.value(QStringLiteral("successCount"))},
+                    {QStringLiteral("errors"), execution.value(QStringLiteral("errors"))}});
+            if (!execution.value(QStringLiteral("ok")).toBool()) {
+              if (execution.value(QStringLiteral("canceled")).toBool() || stop_requested()) {
+                repair_tool_aborted = true;
+                edit_loop_stop_reason = QStringLiteral("cancelled");
+                break;
               }
-              result.request_owned_continuation = true;
-              return result;
-            });
-        if (repair_report.value(QStringLiteral("errorCode")).toString() ==
-            QStringLiteral("async_stage_pending")) {
-          auto pending = requestOwnedPlanPendingReport(
-              repair_stage_name, report_scope);
-          pending.insert(QStringLiteral("runId"), draft_run_id_);
-          pending.insert(QStringLiteral("assetId"), asset_id);
-          pending.insert(QStringLiteral("iteration"), iteration);
-          pending.insert(QStringLiteral("proofWorker"),
-                         proof_worker_summary());
-          pending.insert(QStringLiteral("progressivePreview"),
-                         progressive_preview_report);
-          pending.insert(QStringLiteral("runEvents"), run_events_);
-          return pending;
-        }
-        repair_report.insert(QStringLiteral("assetId"), asset_id);
-        repair_report.insert(QStringLiteral("iteration"), iteration);
-        model_repair_reports.append(repair_report);
-        append_tool_call(
-            &tool_calls,
-            QStringLiteral("model_repair_recipe_patch_from_validation"),
-            repair_report.value(QStringLiteral("ok")).toBool() ? QStringLiteral("ok") : QStringLiteral("failed"),
-            QVariantMap{
-                {QStringLiteral("assetId"), asset_id},
-                {QStringLiteral("iteration"), iteration},
-                {QStringLiteral("warningCount"), iteration_warnings.size()},
-                {QStringLiteral("modelId"), repair_context.value(QStringLiteral("modelId"))},
+              if (!execution.value(QStringLiteral("recoverableError")).toBool()) {
+                repair_tool_aborted = true;
+                repair_report.insert(QStringLiteral("proofBoundaryFailed"), true);
+                break;
+              }
+              repair_prior_results.append(QVariantMap{
+                  {QStringLiteral("kind"), QStringLiteral("tool-correction-required")},
+                  {QStringLiteral("errors"), execution.value(QStringLiteral("errors"))},
+                  {QStringLiteral("unattemptedToolCalls"), execution.value(QStringLiteral("unattemptedToolCalls"))},
+                  {QStringLiteral("completedOperationsRemainApplied"), true},
+                  {QStringLiteral("instruction"), QStringLiteral(
+                      "Correct only the certified unapplied operation. Earlier successful mutations remain applied; never replay them. Read current composition state and use returned stable IDs.")}});
+            }
+            const auto completed_tool_reports = execution.value(QStringLiteral("toolReports")).toList();
+            const auto repair_progress_productive = repair_tool_progress.record(completed_tool_reports);
+            if (async_model_planning_enabled_)
+              async_composition_repair_progress_snapshots_.insert(
+                  repair_cursor_key, repair_tool_progress.snapshot());
+            if (!repair_progress_productive) {
+              repair_tool_aborted = true;
+              repair_report.insert(QStringLiteral("repeatedToolResults"), repair_tool_progress.repeatedRounds());
+              break;
+            }
+            appendRunEvent(QStringLiteral("repair"), QStringLiteral("Repair"),
+                execution.value(QStringLiteral("ok")).toBool() ? QStringLiteral("complete") : QStringLiteral("warning"),
+                execution.value(QStringLiteral("ok")).toBool()
+                    ? QStringLiteral("Native composition tools completed; the next repair turn will inspect and render the updated document.")
+                    : execution.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")),
+                QVariantMap{{QStringLiteral("assetId"), asset_id}, {QStringLiteral("repairRound"), repair_round}});
+            if (repair_tool_aborted) break;
+            ++repair_round;
+            if (async_model_planning_enabled_)
+              async_composition_repair_round_cursors_.insert(repair_cursor_key, repair_round);
+            continue;
+          }
+          model_repair_reports.append(repair_report);
+          if (repair_report.value(QStringLiteral("errorCode")).toString() ==
+              QStringLiteral("composition_repair_incomplete")) {
+            repair_tool_aborted = true;
+            break;
+          }
+          append_tool_call(&tool_calls, QStringLiteral("model_repair_recipe_patch_from_validation"),
+              repair_report.value(QStringLiteral("ok")).toBool() ? QStringLiteral("ok") : QStringLiteral("failed"),
+              QVariantMap{{QStringLiteral("assetId"), asset_id}, {QStringLiteral("iteration"), iteration},
+                  {QStringLiteral("repairRound"), repair_round},
+                  {QStringLiteral("warningCount"), iteration_warnings.size()},
+                  {QStringLiteral("modelId"), repair_context.value(QStringLiteral("modelId"))},
+                  {QStringLiteral("decision"), repair_report.value(QStringLiteral("decision"))},
+                  {QStringLiteral("error"), repair_report.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; "))}});
+          if (repair_report.value(QStringLiteral("ok")).toBool()) {
+            const auto composition_signature = stable_variant_hash(QVariantMap{
                 {QStringLiteral("decision"), repair_report.value(QStringLiteral("decision"))},
-                {QStringLiteral("error"), repair_report.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; "))},
+                {QStringLiteral("recipePatch"), repair_report.value(QStringLiteral("recipePatch"))},
+                {QStringLiteral("compositionWarnings"), turn_review.value(QStringLiteral("warnings"))},
+                {QStringLiteral("observedGraphicLayers"), turn_review.value(QStringLiteral("observedGraphicLayers"))},
             });
-        if (repair_report.value(QStringLiteral("ok")).toBool()) {
-          revised_patch = repair_report.value(QStringLiteral("recipePatch")).toMap();
-          ++model_repair_count;
-          model_repair_used_this_iteration = true;
+            if (repeated_repair_plan_signatures.contains(composition_signature)) {
+              repair_report.insert(QStringLiteral("errorCode"), QStringLiteral("repeated_repair_result"));
+              repair_report.insert(QStringLiteral("proofBoundaryFailed"), !turn_review.value(QStringLiteral("ok")).toBool());
+              model_repair_reports.append(repair_report);
+              repair_tool_aborted = !turn_review.value(QStringLiteral("ok")).toBool();
+              break;
+            }
+            repeated_repair_plan_signatures.insert(composition_signature);
+            if (async_model_planning_enabled_) {
+              auto signatures = async_composition_repair_plan_signatures_.value(repair_cursor_key);
+              signatures.append(composition_signature);
+              async_composition_repair_plan_signatures_.insert(repair_cursor_key, signatures);
+            }
+            if (composition_repair_required && !turn_review.value(QStringLiteral("ok")).toBool()) {
+              repair_prior_results.append(QVariantMap{
+                  {QStringLiteral("kind"), QStringLiteral("composition-proof-not-passed")},
+                  {QStringLiteral("compositionReview"), turn_review},
+                  {QStringLiteral("instruction"), QStringLiteral(
+                      "The current rendered composition still fails its approved copy, geometry, stack, mask, or detail proof. Continue with native tools; a recipe patch alone cannot satisfy this proof.")}});
+              ++repair_round;
+              if (async_model_planning_enabled_)
+                async_composition_repair_round_cursors_.insert(repair_cursor_key, repair_round);
+              continue;
+            }
+            if (composition_repair_required) {
+              image_validation.insert(QStringLiteral("compositionReview"), turn_review);
+              auto live_evidence = turn_validation.value(QStringLiteral("liveRepairEvidence")).toMap();
+              live_evidence.insert(QStringLiteral("compositionReview"), turn_review);
+              live_evidence.insert(QStringLiteral("targetedDetailProofs"),
+                                   turn_review.value(QStringLiteral("targetedDetailProofs")));
+              image_validation.insert(QStringLiteral("liveRepairEvidence"), live_evidence);
+            }
+            revised_patch = repair_report.value(QStringLiteral("recipePatch")).toMap();
+            if (!revised_patch.isEmpty()) {
+              // Older/catalog planning snapshot providers do not expose a
+              // separate task checkpoint. In that case the request-owned
+              // proof's exact source recipe digest is the checkpoint used by
+              // snapshot_checkpoint(); persisting it here keeps accepted
+              // repair rehydration equally strict without rejecting those
+              // providers or rebasing against a later live recipe.
+              const auto accepted_task_state_hash =
+                  round_proof.value(QStringLiteral("taskStateHash")).toString().trimmed();
+              const auto accepted_source_recipe_sha =
+                  round_proof.value(QStringLiteral("sourceRecipeSha256")).toString().trimmed();
+              const auto accepted_source_recipe_json =
+                  round_proof.value(QStringLiteral("sourceRecipeJson")).toString();
+              const auto accepted_snapshot_source =
+                  round_proof.value(QStringLiteral("snapshotSource")).toString();
+              const auto accepted_task_checkpoint = accepted_task_state_hash.isEmpty()
+                  ? accepted_source_recipe_sha
+                  : accepted_task_state_hash;
+              if (accepted_snapshot_source == QStringLiteral("native-photo")) {
+                task_owned_structure_recipe_json = accepted_source_recipe_json;
+                task_owned_structure_recipe_sha = accepted_source_recipe_sha;
+                task_owned_structure_state_hash = accepted_task_checkpoint;
+              }
+              if (async_model_planning_enabled_) {
+                async_composition_repair_accepted_recipe_results_.insert(repair_cursor_key, QVariantMap{
+                    {QStringLiteral("requestId"), active_draft_request_id_},
+                    {QStringLiteral("taskId"), task_transaction_id_},
+                    {QStringLiteral("assetId"), asset_id},
+                    {QStringLiteral("scope"), scope},
+                    {QStringLiteral("iteration"), iteration},
+                    {QStringLiteral("approvedSnapshotSha256"), stable_variant_hash(approved_task_snapshot_)},
+                    {QStringLiteral("repairRound"), repair_round},
+                    {QStringLiteral("recipePatch"), revised_patch},
+                    {QStringLiteral("repairReport"), repair_report},
+                    {QStringLiteral("taskStateHash"), accepted_task_checkpoint},
+                    {QStringLiteral("sourceRecipeSha256"), accepted_source_recipe_sha},
+                    {QStringLiteral("sourceRecipeJson"), accepted_source_recipe_json},
+                    {QStringLiteral("snapshotSource"), accepted_snapshot_source},
+                    {QStringLiteral("proofSha256"), round_proof.value(QStringLiteral("proofSha256"))},
+                    {QStringLiteral("compositionSignature"), composition_signature},
+                });
+              }
+            }
+            ++model_repair_count;
+            model_repair_used_this_iteration = true;
+          }
+          appendRunEvent(QStringLiteral("repair"), QStringLiteral("Repair"),
+              repair_report.value(QStringLiteral("ok")).toBool() ? QStringLiteral("complete") : QStringLiteral("warning"),
+              repair_report.value(QStringLiteral("ok")).toBool()
+                  ? QStringLiteral("The model produced a revised constrained patch for the next proof.")
+                  : repair_report.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")),
+              QVariantMap{{QStringLiteral("assetId"), asset_id}, {QStringLiteral("attempt"), iteration + 1},
+                          {QStringLiteral("repairRound"), repair_round},
+                          {QStringLiteral("modelId"), repair_context.value(QStringLiteral("modelId"))}});
+          break;
         }
-        appendRunEvent(
-            QStringLiteral("repair"),
-            QStringLiteral("Repair"),
-            repair_report.value(QStringLiteral("ok")).toBool()
-                ? QStringLiteral("complete")
-                : QStringLiteral("warning"),
-            repair_report.value(QStringLiteral("ok")).toBool()
-                ? QStringLiteral("The model produced a revised constrained patch for the next proof.")
-                : repair_report.value(QStringLiteral("errors"))
-                      .toStringList()
-                      .join(QStringLiteral("; ")),
-            QVariantMap{
+        }
+        if (repair_tool_aborted) {
+          if (!stop_requested()) {
+            QStringList repair_failure_details =
+                repair_report.value(QStringLiteral("errors")).toStringList();
+            if (repair_failure_details.isEmpty()) {
+              const auto failure_reason = repair_report.value(QStringLiteral("failureReason")).toString().trimmed();
+              if (!failure_reason.isEmpty()) repair_failure_details.append(failure_reason);
+            }
+            if (repair_failure_details.isEmpty()) {
+              repair_failure_details = repair_report
+                  .value(QStringLiteral("toolExecution")).toMap()
+                  .value(QStringLiteral("errors")).toStringList();
+            }
+            if (repair_failure_details.isEmpty()) {
+              repair_failure_details = repair_report
+                  .value(QStringLiteral("compositionReview")).toMap()
+                  .value(QStringLiteral("warnings")).toStringList();
+            }
+            if (repair_failure_details.isEmpty()) {
+              repair_failure_details.append(QStringLiteral(
+                  "The repair stage stopped without a certified proof or tool receipt."));
+            }
+            repair_failure_details.removeAll(QString());
+            repair_failure_details.removeDuplicates();
+            repair_report.insert(QStringLiteral("assetId"), asset_id);
+            repair_report.insert(QStringLiteral("iteration"), iteration);
+            repair_report.insert(QStringLiteral("repairRound"), repair_round);
+            repair_report.insert(QStringLiteral("repairBoundaryFailed"), true);
+            if (!model_repair_reports.contains(repair_report))
+              model_repair_reports.append(repair_report);
+            asset_reports.append(QVariantMap{
                 {QStringLiteral("assetId"), asset_id},
-                {QStringLiteral("attempt"), iteration + 1},
-                {QStringLiteral("modelId"), repair_context.value(QStringLiteral("modelId"))},
+                {QStringLiteral("status"), QStringLiteral("failed")},
+                {QStringLiteral("failureReason"), repair_failure_details.join(QStringLiteral("; "))},
+                {QStringLiteral("repairBoundaryReport"), repair_report},
+                {QStringLiteral("modelRepairReports"), model_repair_reports},
+                {QStringLiteral("validationReport"), image_validation},
             });
+            errors.append(QStringLiteral("%1: native composition repair could not complete its proof boundary: %2")
+                              .arg(asset_id, repair_failure_details.join(QStringLiteral("; "))));
+          }
+          break;
+        }
       }
+      if (stop_requested()) break;
       if (revised_patch.isEmpty()) {
         revised_patch = revise_recipe_patch_from_validation(final_patch, image_validation);
       }
@@ -24612,9 +30169,21 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     if (!errors.isEmpty()) {
       continue;
     }
-    if (!image_validation.value(QStringLiteral("ok")).toBool()) {
-      errors.append(
-          QStringLiteral("%1: validation failed before draft apply").arg(asset_id));
+    const auto composition_proof_failed = !composition_proof_passed(image_validation);
+    if (!image_validation.value(QStringLiteral("ok")).toBool() || composition_proof_failed) {
+      auto validation_reasons = image_validation.value(QStringLiteral("pixelIntentAlignment"))
+          .toMap().value(QStringLiteral("issues")).toStringList();
+      if (validation_reasons.isEmpty())
+        validation_reasons = image_validation.value(QStringLiteral("compositionReview")).toMap()
+            .value(QStringLiteral("warnings")).toStringList();
+      if (validation_reasons.isEmpty())
+        validation_reasons = image_validation.value(QStringLiteral("errors")).toStringList();
+      if (validation_reasons.isEmpty())
+        validation_reasons = image_validation.value(QStringLiteral("warnings")).toStringList();
+      const auto failure_reason = validation_reasons.isEmpty()
+          ? QStringLiteral("Rendered proof did not pass validation.")
+          : validation_reasons.join(QStringLiteral("; "));
+      errors.append(QStringLiteral("%1: %2").arg(asset_id, failure_reason));
       asset_reports.append(QVariantMap{
           {QStringLiteral("assetId"), asset_id},
           {QStringLiteral("status"), QStringLiteral("failed")},
@@ -24631,7 +30200,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           {QStringLiteral("warnings"),
            image_validation.value(QStringLiteral("warnings")).toStringList()},
           {QStringLiteral("failureReason"),
-           QStringLiteral("Rendered proof did not pass validation.")},
+           failure_reason},
       });
       asset_ids.append(asset_id);
       continue;
@@ -24710,7 +30279,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         QStringLiteral("qualityScorePercent"),
         static_cast<int>(std::round(final_quality_score * 100.0)));
     asset_report.insert(QStringLiteral("needsUserReview"), edit_loop_needs_user_review);
-    asset_report.insert(QStringLiteral("validationIterationLimit"), kMaxValidationRevisionIterations);
+    asset_report.insert(QStringLiteral("validationIterationLimit"), -1);
     asset_report.insert(QStringLiteral("validationIterationLimitReached"), stopped_at_iteration_limit);
     asset_report.insert(
         QStringLiteral("repairBudget"),
@@ -24727,8 +30296,8 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     const QVariantMap edit_loop_report{
         {QStringLiteral("version"), QStringLiteral("agent-edit-loop-v1")},
         {QStringLiteral("assetId"), asset_id},
-        {QStringLiteral("maxAttempts"), kMaxValidationRevisionIterations + 1},
-        {QStringLiteral("maxModelRepairTurns"), kMaxModelRepairTurnsPerAsset},
+        {QStringLiteral("maxAttempts"), -1},
+        {QStringLiteral("maxModelRepairTurns"), -1},
         {QStringLiteral("minScoreImprovement"), kMinEditLoopScoreImprovement},
         {QStringLiteral("attempts"), edit_loop_attempts},
         {QStringLiteral("attemptCount"), edit_loop_attempts.size()},
@@ -24949,15 +30518,28 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   }
 
   QStringList applied_ids;
+  if (task_transaction_handler_ && !active_draft_request_id_.isEmpty() &&
+      activeTaskId() == task_transaction_id_) {
+    const auto checked = task_transaction_handler_(QStringLiteral("check_revert"), task_transaction_id_, {}, {});
+    if (!checked.value(QStringLiteral("ok")).toBool()) {
+      auto conflicted = result_map(false, {checked.value(QStringLiteral("error")).toString()});
+      conflicted.insert(QStringLiteral("runId"), draft_run_id_);
+      conflicted.insert(QStringLiteral("taskStateConflict"), true);
+      setRunning(false);
+      setStatus(QStringLiteral("Task needs recovery"));
+      setErrorMessage(conflicted.value(QStringLiteral("failureReason")).toString());
+      return conflicted;
+    }
+  }
   for (const auto& asset_id : asset_ids) {
     if (stop_requested()) {
       break;
     }
-    const auto updated =
-        catalog_model_->applyAdjustmentPatchJsonToAssetIds(
-            {asset_id},
-            next_adjustment_patches.value(
-                asset_id));
+    const auto updated = applyTaskOwnedAdjustmentPatchJson(
+        {asset_id}, next_adjustment_patches.value(asset_id));
+    if (updated == 1 && !active_draft_request_id_.isEmpty() &&
+        activeTaskId() == task_transaction_id_)
+      task_expected_adjustment_patches_.insert(asset_id, next_adjustment_patches.value(asset_id));
     if (updated != 1) {
       errors.append(QStringLiteral("Unable to apply draft recipe to selected photo: %1").arg(asset_id));
       break;
@@ -24983,11 +30565,8 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
                       restore_id,
                       original_adjustment_patches
                           .value(restore_id)));
-      restored_count +=
-          catalog_model_
-              ->applyAdjustmentPatchJsonToAssetIds(
-                  {restore_id},
-                  restore_adjustment_patch);
+      restored_count += applyTaskOwnedAdjustmentPatchJson(
+          {restore_id}, restore_adjustment_patch);
     }
     if (progressive_preview_allowed) {
       progressive_preview_report.insert(
@@ -25103,7 +30682,8 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
        original_adjustment_patches.cend();
        ++iterator) {
     if (!draft_original_adjustment_patches_.contains(iterator.key())) {
-      draft_original_adjustment_patches_.insert(iterator.key(), iterator.value());
+      draft_original_adjustment_patches_.insert(iterator.key(),
+          task_original_adjustment_patches_.value(iterator.key(), iterator.value()));
     }
   }
 
@@ -25196,8 +30776,8 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       QStringLiteral("editLoopSummary"),
       QVariantMap{
           {QStringLiteral("assetCount"), edit_loop_reports.size()},
-          {QStringLiteral("maxAttempts"), kMaxValidationRevisionIterations + 1},
-          {QStringLiteral("maxModelRepairTurns"), kMaxModelRepairTurnsPerAsset},
+          {QStringLiteral("maxAttempts"), -1},
+          {QStringLiteral("maxModelRepairTurns"), -1},
           {QStringLiteral("minScoreImprovement"), kMinEditLoopScoreImprovement},
       });
   report.insert(QStringLiteral("editLoops"), edit_loop_reports);
@@ -25230,7 +30810,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   report.insert(QStringLiteral("plannedPatchesByAssetId"), batch_plan_metadata.value(QStringLiteral("plannedPatchesByAssetId")));
   report.insert(QStringLiteral("recipePatch"), first_final_patch.isEmpty() ? patch : first_final_patch);
   report.insert(QStringLiteral("recipeStorageMode"), QStringLiteral("recipe-diff-first"));
-  report.insert(QStringLiteral("validationIterationLimit"), kMaxValidationRevisionIterations);
+  report.insert(QStringLiteral("validationIterationLimit"), -1);
   report.insert(
       QStringLiteral("previewProofPolicy"),
       QVariantMap{
@@ -25417,6 +30997,19 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
        {QStringLiteral("asset_count"), asset_ids.size()},
        {QStringLiteral("has_before_after"), !report.value(QStringLiteral("afterProofPath")).toString().isEmpty()},
        {QStringLiteral("has_recipe_diff"), !report.value(QStringLiteral("recipeDiff")).toMap().isEmpty()}});
+  QStringList applied_adjustment_keys;
+  for (const auto& asset_report_value : asset_reports) {
+    const auto final_patch = asset_report_value.toMap()
+        .value(QStringLiteral("finalRecipePatch")).toMap();
+    for (auto group = final_patch.cbegin(); group != final_patch.cend(); ++group) {
+      const auto parameters = group.value().toMap();
+      for (auto parameter = parameters.cbegin(); parameter != parameters.cend(); ++parameter) {
+        if (parameter.value().canConvert<double>() &&
+            !applied_adjustment_keys.contains(parameter.key()))
+          applied_adjustment_keys.append(parameter.key());
+      }
+    }
+  }
   appendRunEvent(
       QStringLiteral("act"),
       QStringLiteral("Apply draft"),
@@ -25424,7 +31017,8 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       QStringLiteral("Applied a reversible draft to %1 photo%2.")
           .arg(asset_ids.size())
           .arg(asset_ids.size() == 1 ? QString() : QStringLiteral("s")),
-      QVariantMap{{QStringLiteral("assetCount"), asset_ids.size()}});
+      QVariantMap{{QStringLiteral("assetCount"), asset_ids.size()},
+                  {QStringLiteral("adjustmentKeys"), applied_adjustment_keys}});
   appendRunEvent(
       QStringLiteral("review"),
       QStringLiteral("Review"),
@@ -25521,9 +31115,19 @@ QVariantMap AgentEditController::keepValidatedFastDraft() {
                               ? async_draft_run_timer_.elapsed()
                               : 0;
 
+  if (task_transaction_handler_ && !activeTaskId().isEmpty()) {
+    const auto checked = task_transaction_handler_(QStringLiteral("check_revert"), activeTaskId(), {}, {});
+    if (!checked.value(QStringLiteral("ok")).toBool())
+      return fail(checked.value(QStringLiteral("error")).toString(), QStringLiteral("task_state_conflict"));
+    task_transaction_state_ = task_transaction_handler_(QStringLiteral("cancel"), activeTaskId(), {}, {});
+    emit taskTransactionChanged();
+    if (!task_transaction_state_.value(QStringLiteral("ok")).toBool())
+      return fail(task_transaction_state_.value(QStringLiteral("error")).toString(), QStringLiteral("task_cancel_failed"));
+  }
+  if (async_model_cancellation_token_) async_model_cancellation_token_->store(true, std::memory_order_relaxed);
+  if (async_fast_preview_validation_token_) async_fast_preview_validation_token_->store(true, std::memory_order_relaxed);
   if (catalog_model_ == nullptr ||
-      catalog_model_->applyAdjustmentPatchJsonToAssetIds(
-          {asset_id}, fast_adjustment_patch) != 1) {
+      applyTaskOwnedAdjustmentPatchJson({asset_id}, fast_adjustment_patch) != 1) {
     return fail(
         QStringLiteral("The proved fast draft could not be made reversible."),
         QStringLiteral("fast_draft_apply_failed"));
@@ -25655,13 +31259,17 @@ QVariantMap AgentEditController::keepValidatedFastDraft() {
       },
       QStringLiteral("rulebook-deterministic"));
 
+  if (!activeTaskId().isEmpty()) task_expected_adjustment_patches_.insert(asset_id, fast_adjustment_patch);
+  setProgressivePreview(preview);
+  if (finalizeTaskTransaction(request_id, &report, true)) return report;
+
   cancellation_requested_ = false;
   rollback_on_cancel_ = false;
   cancellation_reason_.clear();
-  setProgressivePreview(preview);
   setRunning(false);
-  setStatus(QStringLiteral("Validated fast draft ready"));
-  setErrorMessage(QString());
+  setStatus(report.value(QStringLiteral("ok")).toBool() ? QStringLiteral("Validated fast draft ready")
+      : QStringLiteral("Task needs recovery"));
+  setErrorMessage(report.value(QStringLiteral("ok")).toBool() ? QString{} : report.value(QStringLiteral("failureReason")).toString());
   active_draft_request_id_.clear();
   draft_request_pending_ = false;
   clearAsyncModelPlanningState();
@@ -25764,8 +31372,7 @@ QVariantMap AgentEditController::chooseTwoSpeedDraftVersion(
   const auto switched = previous_key != key;
   if (switched &&
       (catalog_model_ == nullptr ||
-       catalog_model_->applyAdjustmentPatchJsonToAssetIds(
-           {asset_id}, adjustment_patch) != 1)) {
+       applyTaskOwnedAdjustmentPatchJson({asset_id}, adjustment_patch) != 1)) {
     return fail(
         QStringLiteral("The selected proved version could not be applied."),
         QStringLiteral("draft_choice_apply_failed"));
@@ -25886,6 +31493,35 @@ QVariantMap AgentEditController::cancelRun(const QString& reason) {
   cancellation_reason_ =
       reason.trimmed().isEmpty() ? QStringLiteral("user_cancelled") : reason.trimmed();
   rollback_on_cancel_ = true;
+  if (!pending_task_finalization_.isEmpty()) {
+    if (!cancellation_requested_) {
+      cancellation_requested_ = true;
+      emit cancellationChanged();
+    }
+    if (task_transaction_handler_ && !task_transaction_id_.isEmpty()) {
+      const auto canceled = task_transaction_handler_(
+          QStringLiteral("cancel"), task_transaction_id_, {}, {});
+      if (!canceled.value(QStringLiteral("ok")).toBool())
+        return canceled;
+    }
+    auto pending_report = pending_task_finalization_.value(QStringLiteral("report")).toMap();
+    pending_report.insert(QStringLiteral("ok"), false);
+    pending_report.insert(QStringLiteral("pending"), true);
+    pending_report.insert(QStringLiteral("taskSettlementPending"), true);
+    pending_report.insert(QStringLiteral("taskId"), pending_task_finalization_.value(QStringLiteral("taskId")));
+    pending_report.insert(QStringLiteral("receiptId"), pending_task_finalization_.value(QStringLiteral("receiptId")));
+    pending_report.insert(QStringLiteral("cancellationReason"), cancellation_reason_);
+    pending_report.insert(QStringLiteral("status"), QStringLiteral("canceling"));
+    pending_task_finalization_.insert(QStringLiteral("action"), QStringLiteral("revert"));
+    pending_task_finalization_.insert(QStringLiteral("report"), pending_report);
+    setLastRunReport(pending_report);
+    setStatus(QStringLiteral("Canceling task finalization"));
+    setErrorMessage(QString());
+    return {{QStringLiteral("ok"), true}, {QStringLiteral("pending"), true},
+        {QStringLiteral("taskId"), pending_task_finalization_.value(QStringLiteral("taskId"))},
+        {QStringLiteral("receiptId"), pending_task_finalization_.value(QStringLiteral("receiptId"))},
+        {QStringLiteral("action"), QStringLiteral("revert")}};
+  }
   if (!cancellation_requested_) {
     cancellation_requested_ = true;
     emit cancellationChanged();
@@ -25895,6 +31531,10 @@ QVariantMap AgentEditController::cancelRun(const QString& reason) {
         true, std::memory_order_relaxed);
   }
   setStatus(QStringLiteral("Canceling"));
+  if (task_transaction_handler_ && !task_transaction_id_.isEmpty()) {
+    task_transaction_state_ = task_transaction_handler_(QStringLiteral("cancel"), task_transaction_id_, {}, {});
+    emit taskTransactionChanged();
+  }
   const auto restored_preview = restoreAsyncPlanningPreview(
       QStringLiteral("restored-after-cancel"), cancellation_reason_);
   QVariantMap report = result_map(true);
@@ -25907,6 +31547,23 @@ QVariantMap AgentEditController::cancelRun(const QString& reason) {
   }
   setLastRunReport(report);
   return report;
+}
+
+QVariantMap AgentEditController::revertTask() {
+  if (running_) return cancelRun(QStringLiteral("user_requested_task_revert"));
+  if (!task_transaction_handler_ || task_transaction_id_.isEmpty())
+    return result_map(false, {QStringLiteral("No reversible agent task is available.")});
+  if (draftActive()) return rollbackDraft(QStringLiteral("user_discarded"));
+  auto result = task_transaction_handler_(QStringLiteral("revert"), task_transaction_id_, {}, {});
+  task_transaction_state_ = result;
+  if (result.value(QStringLiteral("ok")).toBool()) {
+    approved_task_snapshot_.clear();
+    approved_task_snapshot_history_.clear();
+  }
+  emit taskTransactionChanged();
+  if (result.value(QStringLiteral("ok")).toBool()) setStatus(QStringLiteral("Reverted"));
+  else setErrorMessage(result.value(QStringLiteral("error")).toString());
+  return result;
 }
 
 QVariantMap AgentEditController::resumeLastFailedBatchDraft() {
@@ -26351,13 +32008,8 @@ QVariantMap AgentEditController::rollbackReviewIssue(const QString& asset_id) {
     return report;
   }
 
-  const auto restored_count =
-      catalog_model_
-          ->applyAdjustmentPatchJsonToAssetIds(
-              {trimmed_asset_id},
-              draft_original_adjustment_patches_
-                  .value(
-                      trimmed_asset_id));
+  const auto restored_count = applyTaskOwnedAdjustmentPatchJson(
+      {trimmed_asset_id}, draft_original_adjustment_patches_.value(trimmed_asset_id));
   if (restored_count != 1) {
     auto report = result_map(false, {QStringLiteral("Unable to restore the original recipe for %1.").arg(trimmed_asset_id)});
     report.insert(QStringLiteral("mode"), QStringLiteral("review-issue-rollback"));
@@ -26369,6 +32021,7 @@ QVariantMap AgentEditController::rollbackReviewIssue(const QString& asset_id) {
   if (draft_original_adjustment_patches_.isEmpty()) {
     draft_run_id_.clear();
     draft_project_key_.clear();
+    task_composition_photo_baseline_.clear();
   }
 
   auto updated_report = last_run_report_;
@@ -26433,20 +32086,56 @@ QVariantMap AgentEditController::rollbackReviewIssue(const QString& asset_id) {
 }
 
 QVariantMap AgentEditController::rollbackDraft(const QString& reason) {
+  if (!pending_task_finalization_.isEmpty()) {
+    auto pending = last_run_report_;
+    pending.insert(QStringLiteral("ok"), false);
+    pending.insert(QStringLiteral("pending"), true);
+    pending.insert(QStringLiteral("taskSettlementPending"), true);
+    return pending;
+  }
+  const auto owns_whole_task = task_transaction_handler_ && !task_transaction_id_.isEmpty() &&
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool();
+  if (owns_whole_task) {
+    const auto checked = task_transaction_handler_(QStringLiteral("check_revert"), task_transaction_id_, {}, {});
+    if (!checked.value(QStringLiteral("ok")).toBool()) return checked;
+  }
   QStringList errors;
-  if (catalog_model_ == nullptr) {
+  if (!owns_whole_task && catalog_model_ == nullptr) {
     errors.append(QStringLiteral("Catalog model is not connected."));
   }
   auto asset_ids = draft_original_adjustment_patches_.keys();
   std::sort(asset_ids.begin(), asset_ids.end());
   auto restored_count = 0;
-  if (errors.isEmpty()) {
+  auto whole_task_reverted = false;
+  if (owns_whole_task) {
+    task_transaction_state_ = task_transaction_handler_(QStringLiteral("revert"), task_transaction_id_, {}, {});
+    if (!task_transaction_state_.value(QStringLiteral("ok")).toBool()) {
+      auto failed = result_map(false, {task_transaction_state_.value(QStringLiteral("error")).toString()});
+      failed.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+      setLastRunReport(failed);
+      return failed;
+    }
+    if (task_transaction_state_.value(QStringLiteral("pending")).toBool()) {
+      auto pending = result_map(false);
+      pending.insert(QStringLiteral("mode"), QStringLiteral("rollback"));
+      pending.insert(QStringLiteral("taskId"), task_transaction_id_);
+      pending.insert(QStringLiteral("rollbackReason"), reason.trimmed().isEmpty()
+          ? QStringLiteral("unspecified") : reason.trimmed());
+      pending.insert(QStringLiteral("assetIds"), asset_ids);
+      pending.insert(QStringLiteral("draftActive"), draftActive());
+      pending.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+      if (retainPendingTaskFinalization(task_transaction_id_, task_transaction_state_,
+              active_draft_request_id_, QStringLiteral("revert"), pending, false, true))
+        return last_run_report_;
+      return result_map(false, {QStringLiteral("The task owner returned a malformed pending Revert receipt.")});
+    }
+    whole_task_reverted = true;
+    restored_count = static_cast<int>(asset_ids.size());
+  }
+  if (errors.isEmpty() && !whole_task_reverted) {
     for (auto iterator = draft_original_adjustment_patches_.cbegin(); iterator != draft_original_adjustment_patches_.cend(); ++iterator) {
-      restored_count +=
-          catalog_model_
-              ->applyAdjustmentPatchJsonToAssetIds(
-                  {iterator.key()},
-                  iterator.value());
+      restored_count += applyTaskOwnedAdjustmentPatchJson(
+          {iterator.key()}, iterator.value());
     }
   }
   if (!errors.isEmpty()) {
@@ -26503,9 +32192,25 @@ QVariantMap AgentEditController::rollbackDraft(const QString& reason) {
       report.insert(QStringLiteral("warnings"), warnings);
     }
   }
+  if (task_transaction_handler_ && !task_transaction_id_.isEmpty() &&
+      task_transaction_state_.value(QStringLiteral("revertAvailable")).toBool()) {
+    if (!whole_task_reverted)
+      task_transaction_state_ = task_transaction_handler_(QStringLiteral("revert"), task_transaction_id_, {}, {});
+    emit taskTransactionChanged();
+    report.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+    if (!task_transaction_state_.value(QStringLiteral("ok")).toBool()) {
+      report.insert(QStringLiteral("ok"), false);
+      report.insert(QStringLiteral("errors"), QStringList{task_transaction_state_.value(QStringLiteral("error")).toString()});
+      setLastRunReport(report);
+      return report;
+    }
+  }
   draft_original_adjustment_patches_.clear();
   draft_run_id_.clear();
   draft_project_key_.clear();
+  task_composition_photo_baseline_.clear();
+  approved_task_snapshot_.clear();
+  approved_task_snapshot_history_.clear();
   if (!reason.trimmed().startsWith(QStringLiteral("direction_comparison_"))) {
     clearDraftDirectionComparison();
   }
@@ -26520,6 +32225,17 @@ QVariantMap AgentEditController::rollbackDraft(const QString& reason) {
 }
 
 QVariantMap AgentEditController::commitDraft(bool confirmed) {
+  if (running_ || draft_request_pending_ || !active_draft_request_id_.isEmpty()) {
+    auto blocked = result_map(false, {QStringLiteral("Wait for the active task to finish before committing its draft.")});
+    blocked.insert(QStringLiteral("errorCode"), QStringLiteral("run_in_progress"));
+    return blocked;
+  }
+  if (task_transaction_handler_ && !task_transaction_id_.isEmpty() &&
+      !task_transaction_state_.value(QStringLiteral("ok")).toBool()) {
+    auto blocked = result_map(false, {QStringLiteral("Resolve the task checkpoint failure before committing this draft.")});
+    blocked.insert(QStringLiteral("errorCode"), QStringLiteral("task_recovery_required"));
+    return blocked;
+  }
   if (draft_direction_comparison_
           .value(QStringLiteral("choiceRequired")).toBool()) {
     auto blocked = result_map(
@@ -26739,9 +32455,22 @@ QVariantMap AgentEditController::commitDraft(bool confirmed) {
       QStringLiteral("Approved and committed %1 photo%2.")
           .arg(asset_ids.size())
           .arg(asset_ids.size() == 1 ? QString() : QStringLiteral("s")));
+  if (task_transaction_handler_ && !task_transaction_id_.isEmpty()) {
+    task_transaction_state_ = task_transaction_handler_(QStringLiteral("committed"), task_transaction_id_, {}, {});
+    report.insert(QStringLiteral("taskTransaction"), task_transaction_state_);
+    emit taskTransactionChanged();
+    if (task_transaction_state_.value(QStringLiteral("ok")).toBool()) {
+      approved_task_snapshot_.clear();
+      approved_task_snapshot_history_.clear();
+    }
+  } else {
+    approved_task_snapshot_.clear();
+    approved_task_snapshot_history_.clear();
+  }
   draft_original_adjustment_patches_.clear();
   draft_run_id_.clear();
   draft_project_key_.clear();
+  task_composition_photo_baseline_.clear();
   clearDraftDirectionComparison();
   setStatus(QStringLiteral("Committed"));
   setLastRunReport(report);
@@ -26826,6 +32555,17 @@ void AgentEditController::appendRunEvent(
     ui_anchor = QStringLiteral("image");
     character_mode = QStringLiteral("thinking");
     character_tool = QStringLiteral("sampler");
+  } else if (normalized_stage == QStringLiteral("tool")) {
+    const auto operation = evidence.value(QStringLiteral("operation")).toString();
+    const auto observation = operation == QStringLiteral("inspect") ||
+        read_only_mcp_observation_tools().contains(evidence.value(QStringLiteral("toolName")).toString());
+    headline = detail;
+    ui_anchor = observation ? QStringLiteral("image")
+        : operation.startsWith(QStringLiteral("select")) || operation == QStringLiteral("add_text") ||
+          operation == QStringLiteral("typography") ? QStringLiteral("toolbar") : QStringLiteral("inspector");
+    character_mode = status == QStringLiteral("failed") ? QStringLiteral("warning")
+        : observation ? QStringLiteral("observe") : QStringLiteral("adjust");
+    character_tool = observation ? QStringLiteral("loupe") : QStringLiteral("tone-key");
   } else if (normalized_stage.startsWith(QStringLiteral("plan-worker")) &&
              status.trimmed().toLower() == QStringLiteral("running")) {
     headline = QStringLiteral("I'm reviewing this photo locally.");
@@ -26866,7 +32606,9 @@ void AgentEditController::appendRunEvent(
     ui_anchor = QStringLiteral("image");
     character_mode = QStringLiteral("warning");
   } else if (status.trimmed().toLower() == QStringLiteral("failed")) {
-    headline = QStringLiteral("Nope. I put everything back exactly as it was.");
+    headline = detail.isEmpty()
+        ? QStringLiteral("That step stopped. Your draft is available to review.")
+        : detail;
     ui_anchor = QStringLiteral("image");
     character_mode = QStringLiteral("warning");
   } else if (status.trimmed().toLower() == QStringLiteral("complete")) {
@@ -27006,6 +32748,23 @@ void AgentEditController::setLastRunReport(const QVariantMap& report) {
     }
     enriched_report.insert(QStringLiteral("batchReviewForecast"), forecast);
   }
+  const auto failure_reason = enriched_report.value(QStringLiteral("failureReason")).toString();
+  const auto failure_errors = enriched_report.value(QStringLiteral("errors")).toStringList();
+  if (enriched_report.contains(QStringLiteral("ok")) &&
+      !enriched_report.value(QStringLiteral("ok")).toBool() &&
+      (!failure_reason.isEmpty() || !failure_errors.isEmpty()) &&
+      (last_run_report_.value(QStringLiteral("runId")).toString() != run_id ||
+       last_run_report_.value(QStringLiteral("failureReason")).toString() != failure_reason ||
+       last_run_report_.value(QStringLiteral("errors")).toStringList() != failure_errors)) {
+    observability::logWarning(
+        photoEditorAppLog(),
+        QStringLiteral("agent.edit.run_failed"),
+        {{QStringLiteral("run_id"), run_id},
+         {QStringLiteral("stage"), mode},
+         {QStringLiteral("model_id"), selected_model_id_},
+         {QStringLiteral("reason"), failure_reason.isEmpty() ? failure_errors.join(QStringLiteral("; ")) : failure_reason},
+         {QStringLiteral("errors"), failure_errors}});
+  }
   last_run_report_ = enriched_report;
   const auto history_entry = run_history_entry(enriched_report);
   if (!history_entry.isEmpty()) {
@@ -27033,6 +32792,7 @@ QVariantMap AgentEditController::publishFastPlanningPreview(
     const QString& instructions,
     const QVariantMap& style,
     const QVariantMap& asset) {
+  if (!async_revision_context_.isEmpty()) return {};
   constexpr qint64 kFirstPreviewBudgetMs = 2000;
   QVariantMap preview{
       {QStringLiteral("contract"),
@@ -27168,6 +32928,7 @@ QVariantMap AgentEditController::publishFastPlanningPreview(
 
   async_progressive_preview_originals_.insert(asset_id,
                                                original_patch_json);
+  async_progressive_preview_authored_.insert(asset_id, fast_patch_json);
   const auto first_publish_ms = async_draft_run_timer_.isValid()
                                     ? async_draft_run_timer_.elapsed()
                                     : fast_timer.elapsed();
@@ -27456,12 +33217,16 @@ QVariantMap AgentEditController::rejectFastPlanningPreview(
     return {};
   }
   auto restored_count = 0;
+  QStringList conflicts;
   for (auto iterator = async_progressive_preview_originals_.cbegin();
        iterator != async_progressive_preview_originals_.cend(); ++iterator) {
-    restored_count += catalog_model_ == nullptr
-                          ? 0
-                          : catalog_model_->applyTransientAdjustmentPatchJsonToAssetIds(
-                                {iterator.key()}, iterator.value());
+    const auto authored = async_progressive_preview_authored_.value(iterator.key());
+    if (!catalog_model_ || authored.isEmpty() ||
+        catalog_model_->assetById(iterator.key()).value(QStringLiteral("adjustmentPatchJson")).toString() != authored) {
+      conflicts.append(iterator.key());
+      continue;
+    }
+    restored_count += catalog_model_->applyTransientAdjustmentPatchJsonToAssetIds({iterator.key()}, iterator.value());
   }
   auto preview = progressive_preview_;
   preview.insert(QStringLiteral("state"),
@@ -27475,10 +33240,13 @@ QVariantMap AgentEditController::rejectFastPlanningPreview(
   preview.insert(QStringLiteral("keepFastDraftAvailable"), false);
   preview.insert(QStringLiteral("fastValidationFailureReason"), reason);
   preview.insert(QStringLiteral("fastValidationReport"), validation_report);
-  preview.insert(QStringLiteral("restored"), true);
+  preview.insert(QStringLiteral("restored"), conflicts.isEmpty());
+  preview.insert(QStringLiteral("conflictedAssetIds"), conflicts);
+  preview.insert(QStringLiteral("manualChangesPreserved"), !conflicts.isEmpty());
   preview.insert(QStringLiteral("restoredCount"), restored_count);
   preview.insert(QStringLiteral("durableAgentEditWritten"), false);
   async_progressive_preview_originals_.clear();
+  async_progressive_preview_authored_.clear();
   async_fast_preview_recipe_patch_.clear();
   async_fast_preview_adjustment_patch_json_.clear();
   setProgressivePreview(preview);
@@ -27495,12 +33263,16 @@ QVariantMap AgentEditController::restoreAsyncPlanningPreview(
     return {};
   }
   auto restored_count = 0;
+  QStringList conflicts;
   for (auto iterator = async_progressive_preview_originals_.cbegin();
        iterator != async_progressive_preview_originals_.cend(); ++iterator) {
-    restored_count += catalog_model_ == nullptr
-                          ? 0
-                          : catalog_model_->applyTransientAdjustmentPatchJsonToAssetIds(
-                                {iterator.key()}, iterator.value());
+    const auto authored = async_progressive_preview_authored_.value(iterator.key());
+    if (!catalog_model_ || authored.isEmpty() ||
+        catalog_model_->assetById(iterator.key()).value(QStringLiteral("adjustmentPatchJson")).toString() != authored) {
+      conflicts.append(iterator.key());
+      continue;
+    }
+    restored_count += catalog_model_->applyTransientAdjustmentPatchJsonToAssetIds({iterator.key()}, iterator.value());
   }
   auto preview = progressive_preview_;
   preview.insert(QStringLiteral("state"), state);
@@ -27508,7 +33280,9 @@ QVariantMap AgentEditController::restoreAsyncPlanningPreview(
   preview.insert(QStringLiteral("deepRefinementPending"), false);
   preview.insert(QStringLiteral("fastValidationPending"), false);
   preview.insert(QStringLiteral("keepFastDraftAvailable"), false);
-  preview.insert(QStringLiteral("restored"), true);
+  preview.insert(QStringLiteral("restored"), conflicts.isEmpty());
+  preview.insert(QStringLiteral("conflictedAssetIds"), conflicts);
+  preview.insert(QStringLiteral("manualChangesPreserved"), !conflicts.isEmpty());
   preview.insert(QStringLiteral("restoredCount"), restored_count);
   preview.insert(QStringLiteral("restoreReason"), reason);
   preview.insert(QStringLiteral("fastPreviewReplaced"), false);
@@ -27516,6 +33290,7 @@ QVariantMap AgentEditController::restoreAsyncPlanningPreview(
   preview.insert(QStringLiteral("restorePublication"),
                  QStringLiteral("transient-original-republish"));
   async_progressive_preview_originals_.clear();
+  async_progressive_preview_authored_.clear();
   if (async_fast_preview_validation_token_ != nullptr) {
     async_fast_preview_validation_token_->store(true, std::memory_order_relaxed);
   }
@@ -27623,7 +33398,9 @@ QVariantMap AgentEditController::selectedStyle() const {
 }
 
 QVariantMap AgentEditController::activeRunStyle() const {
-  return style_for_editing_freedom(selectedStyle(), editing_freedom_);
+  return style_for_approved_task_capabilities(
+      style_for_editing_freedom(selectedStyle(), editing_freedom_),
+      approved_task_snapshot_, editing_freedom_);
 }
 
 QString AgentEditController::styleDirectory() const {

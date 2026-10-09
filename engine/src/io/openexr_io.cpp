@@ -141,6 +141,12 @@ OpenExrChromaticities openexr_chromaticities_for_color_space(
     case ColorPrimaries::Rec2020:
       return {0.7080F, 0.2920F, 0.1700F, 0.7970F,
               0.1310F, 0.0460F, 0.3127F, 0.3290F};
+    case ColorPrimaries::SonySGamut3:
+      return {0.7300F, 0.2800F, 0.1400F, 0.8550F,
+              0.1000F, -0.0500F, 0.3127F, 0.3290F};
+    case ColorPrimaries::SonySGamut3Cine:
+      return {0.7660F, 0.2750F, 0.2250F, 0.8000F,
+              0.0890F, -0.0870F, 0.3127F, 0.3290F};
     case ColorPrimaries::AcesAp0:
       return {0.7347F, 0.2653F, 0.0000F, 1.0000F,
               0.0001F, -0.0770F, 0.32168F, 0.33767F};

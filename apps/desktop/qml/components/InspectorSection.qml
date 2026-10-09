@@ -8,12 +8,13 @@ Rectangle {
 
     required property string title
     property string subtitle: ""
+    property string helpText: ""
     property color accent: theme.accentWarm400
     property bool showAccentMarker: false
     property bool uppercaseTitle: false
     property string titleFontFamily: theme.fontUi
     property int titlePixelSize: theme.typeLabel
-    property int titleWeight: Font.DemiBold
+    property int titleWeight: theme.weightSection
     property real titleLetterSpacing: 0
     property string disabledReason: ""
     property bool changed: false
@@ -29,22 +30,25 @@ Rectangle {
     property string menuTooltip: "More options for " + title
     property bool expandable: false
     property bool expanded: true
-    readonly property int headerMinimumHeight: 30
+    readonly property int headerMinimumHeight: theme.controlHeightDense
     readonly property int headerActionSize: theme.controlHeightDense
     readonly property int headerChevronColumnWidth: 14
     readonly property int headerAccentColumnWidth: 10
     readonly property bool sectionInteractive: root.enabled && root.expandable
     readonly property string resolvedTitle: root.uppercaseTitle ? root.title.toUpperCase() : root.title
-    readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0
-                                                 ? root.title + " - " + root.disabledReason
-                                                 : root.title
+    readonly property string resolvedTooltipText: root.title +
+        ((!root.enabled && root.disabledReason.length > 0)
+         ? " — " + root.disabledReason
+         : root.helpText.length > 0
+           ? " — " + root.helpText
+           : root.subtitle.length > 0 ? " — " + root.subtitle : "")
     default property alias contentData: body.data
     readonly property string sectionContract: "inspector-section:v2|header:title-changed-before-after-reset-menu-chevron|fixed-header:true|fixed-actions:true|icon-first-actions:true|collapse:true|keyboard:true|disabled-reason:true|changed-state:true|no-nested-card:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-fit:true|subtitle-wrap:true|tooltip-full:true|accessibility-full:true"
     readonly property string headerActionContract: "inspector-header-actions:v1|before-after:icon-only-tooltip|reset:icon-only-tooltip|menu:menu-button|fixed-size:" +
                                                    String(root.headerActionSize) +
                                                    "|no-text-labels:true|accessibility-full:true"
-    readonly property string sectionGeometryContract: "inspector-section-geometry:v1|left-edge:shared|header-min:30|action-size:" +
+    readonly property string sectionGeometryContract: "inspector-section-geometry:v2|left-edge:shared|header-min:" + String(root.headerMinimumHeight) + "|action-size:" +
                                                       String(root.headerActionSize) +
                                                       "|accent-column:" +
                                                       String(root.headerAccentColumnWidth) +
@@ -68,7 +72,9 @@ Rectangle {
     opacity: root.enabled ? 1.0 : 0.58
     activeFocusOnTab: root.expandable
     Accessible.name: root.title
-    Accessible.description: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.subtitle
+    Accessible.description: !root.enabled && root.disabledReason.length > 0
+                             ? root.disabledReason
+                             : root.helpText.length > 0 ? root.helpText : root.subtitle
     Accessible.role: root.expandable ? Accessible.Button : Accessible.StaticText
 
     function toggleExpanded() {
@@ -78,9 +84,18 @@ Rectangle {
         root.toggled()
     }
 
-    Keys.onReturnPressed: root.toggleExpanded()
-    Keys.onEnterPressed: root.toggleExpanded()
-    Keys.onSpacePressed: root.toggleExpanded()
+    Keys.onReturnPressed: event => {
+        if (root.activeFocus) root.toggleExpanded()
+        else event.accepted = false
+    }
+    Keys.onEnterPressed: event => {
+        if (root.activeFocus) root.toggleExpanded()
+        else event.accepted = false
+    }
+    Keys.onSpacePressed: event => {
+        if (root.activeFocus) root.toggleExpanded()
+        else event.accepted = false
+    }
 
     Rectangle {
         anchors.left: parent.left
@@ -95,7 +110,7 @@ Rectangle {
         anchors.fill: parent
         anchors.leftMargin: theme.space8
         anchors.rightMargin: theme.space8
-        anchors.topMargin: theme.space10
+        anchors.topMargin: theme.space8
         anchors.bottomMargin: theme.space4
         spacing: theme.space8
 
@@ -142,13 +157,15 @@ Rectangle {
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideNone
                         fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: 8
+                        minimumPixelSize: theme.typeCaption
                         maximumLineCount: 1
                         Layout.fillWidth: true
 
                         ToolTip.visible: headerHover.hovered &&
                                          (titleLabel.contentWidth > titleLabel.width + 1 ||
-                                          (!root.enabled && root.disabledReason.length > 0))
+                                          (!root.enabled && root.disabledReason.length > 0) ||
+                                          root.helpText.length > 0)
+                        ToolTip.delay: 300
                         ToolTip.text: root.resolvedTooltipText
                     }
 
@@ -261,7 +278,8 @@ Rectangle {
                     text: root.subtitle
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeCaption
+                    font.weight: theme.weightControl
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }

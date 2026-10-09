@@ -62,6 +62,7 @@ publish_retained_adjusted_surface(
   return request != nullptr && working.hasRetainedSurface() &&
          request->use_in_memory_preview && request->allow_native_srgb_surface &&
          !request->require_cpu_preview_image && !request->full_resolution &&
+         !request->require_cpu_display_image &&
          request->tile_size <= 0 && !request->compare_mode &&
          !request->generate_proof_gamut_warning_mask && !request->scopes_visible &&
          !request->canonical_render_plan.has_value();

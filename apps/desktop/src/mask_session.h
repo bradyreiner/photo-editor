@@ -65,6 +65,7 @@ class MaskSession final {
     rememberActiveComponent();
     flushSelectionPreferences();
     asset_scope_ = asset_id;
+    brush_source_signatures_.clear();
     if (!selection_storage_directory_.isEmpty() && !asset_scope_.isEmpty() &&
         !last_component_by_asset_.contains(asset_scope_)) {
       QFile file(selectionPreferencesPath(asset_scope_));
@@ -86,6 +87,13 @@ class MaskSession final {
   void replaceStack(QVariantList stack, int active_index) {
     rememberActiveComponent();
     stack_ = std::move(stack);
+    QSet<QString> retained_ids;
+    for (const auto& value : stack_)
+      retained_ids.insert(value.toMap().value(QStringLiteral("id")).toString());
+    for (auto it = brush_source_signatures_.begin(); it != brush_source_signatures_.end();) {
+      if (!retained_ids.contains(it.key())) it = brush_source_signatures_.erase(it);
+      else ++it;
+    }
     active_index_ = normalizedActiveIndex(active_index);
     invalidateActiveDefinition();
     rememberActiveComponent();
@@ -131,6 +139,22 @@ class MaskSession final {
       active_definition_dirty_ = false;
     }
     return cached_active_definition_;
+  }
+
+  bool brushSourceSignatureLookup(const QVariantMap& payload, QString* signature) const {
+    const auto found = brush_source_signatures_.constFind(payload.value(QStringLiteral("id")).toString());
+    if (found == brush_source_signatures_.cend() || found->payload != payload) return false;
+    *signature = found->signature;
+    return true;
+  }
+
+  void storeBrushSourceSignature(const QVariantMap& payload, const QString& signature) {
+    const auto id = payload.value(QStringLiteral("id")).toString();
+    // Payload arrays share the normalized stack's immutable Qt values. Deleted
+    // masks are pruned on publication; asset changes release all retained values.
+    if (!brush_source_signatures_.contains(id) && brush_source_signatures_.size() >= 64)
+      brush_source_signatures_.clear();
+    brush_source_signatures_.insert(id, BrushSourceSignature{payload, signature});
   }
 
   void invalidateActiveDefinition() {
@@ -423,6 +447,11 @@ class MaskSession final {
   }
 
  private:
+  struct BrushSourceSignature final {
+    QVariantMap payload;
+    QString signature;
+  };
+  QHash<QString, BrushSourceSignature> brush_source_signatures_;
   QString selectionPreferencesPath(const QString& asset) const {
     const auto key = QCryptographicHash::hash(asset.toUtf8(), QCryptographicHash::Sha256).toHex();
     return QDir(selection_storage_directory_).filePath(QString::fromLatin1(key) + QStringLiteral(".json"));

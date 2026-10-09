@@ -9,13 +9,14 @@ Rectangle {
     property string mediaType: String(asset.mediaType || "")
     property string tooltipText: String(asset.cameraLabel || asset.assetId || "Library asset")
     property bool online: Boolean(asset.online)
+    property bool selected: false
     readonly property string mediaLabel: mediaType === "video" ? "Video" : "Photo"
     readonly property string carouselMediaThumbContract: "carousel-media-thumb:v2|preview:true|online-state:true|click-double-click:true|drag-payload:true|copy-action:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|media-label-wrap:true|tooltip-full:true|accessibility-full:true"
     readonly property string mediaSurfaceContract: "media-surface:v1|quick-library-thumbnail:stable|preview-dominant:true|label-zone:bottom|badge-corner:reserved|chrome:quiet"
 
     signal activated(var asset, var modifiers)
-    signal doubleActivated(var asset)
+    signal doubleActivated(var asset, var modifiers)
 
     Theme { id: theme }
 
@@ -26,7 +27,7 @@ Rectangle {
            ? theme.alpha(theme.ink850, 0.95)
            : theme.alpha(theme.ink900, 0.78)
     border.width: theme.chromeBorderWidth
-    border.color: thumbHover.containsMouse
+    border.color: selected ? theme.accentCool400 : thumbHover.containsMouse
                   ? theme.alpha(theme.accentCool400, 0.46)
                   : theme.alpha(theme.lineSoft, 0.36)
     opacity: online ? 1 : 0.48
@@ -84,7 +85,7 @@ Rectangle {
         onClicked: function(mouse) {
             root.activated(root.asset, mouse.modifiers)
         }
-        onDoubleClicked: root.doubleActivated(root.asset)
+        onDoubleClicked: function(mouse) { root.doubleActivated(root.asset, mouse.modifiers) }
     }
 
     Item {
@@ -103,7 +104,7 @@ Rectangle {
     }
 
     ToolTip.visible: thumbHover.containsMouse
-    ToolTip.text: root.tooltipText
+    ToolTip.text: root.tooltipText + "\nClick to select. Double-click to place."
     ToolTip.delay: 500
     ToolTip.timeout: 3600
 }

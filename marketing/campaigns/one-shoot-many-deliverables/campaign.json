@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "campaign_id": "one-shoot-many-deliverables",
+  "title": "One idea. More ways to tell it.",
+  "brand": {
+    "name": "Looksy",
+    "tagline": "The creative future is yours.",
+    "logo_asset": "media/looksy-wordmark.png",
+    "colors": {
+      "background": "#07090D",
+      "foreground": "#F4F4F5",
+      "accent": "#FF6254",
+      "optical": "#67DDEB"
+    },
+    "logo_rights_status": "internal-review",
+    "logo_review_status": "pending",
+    "logo_rights_refs": [
+      "media/brand-provenance.json"
+    ],
+    "logo_sha256": "17199f363f1168d68bd9ac1f1c9a7a8d3401ab04982175021be3c8dedda811b9"
+  },
+  "cta": {
+    "label": "Follow the build."
+  },
+  "aspect_ratios": [
+    "9:16",
+    "4:5",
+    "16:9"
+  ],
+  "assets": [
+    {
+      "id": "alpine",
+      "path": "media/generated/alpine-blue-hour.png",
+      "kind": "image",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Built-in imagegen; synthetic source asset; see media/generated/PROMPT.md",
+      "sha256": "632fa50012c12e73b7ef680facec8826858150a63fc3a2427d7a0924b5b82600",
+      "rights_refs": [
+        "media/generated/PROMPT.md"
+      ]
+    },
+    {
+      "id": "night",
+      "path": "media/stock/night-hong-kong-typhoon.jpg",
+      "kind": "image",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Stock source; see media/sources.json",
+      "sha256": "bbf03b141b82e43f8a798db8bf899154791a3bd0195d2a0ca5f6935f0411a241",
+      "source_id": "night-hong-kong-typhoon",
+      "rights_refs": [
+        "media/licenses/commons-hong-kong-typhoon.md",
+        "media/licenses/cc0-1.0-deed.md"
+      ]
+    },
+    {
+      "id": "agent-ui",
+      "path": "media/captures/agent-plan-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical native UI fixture; no real model/executor proof",
+      "sha256": "f6f29fb99bf490674e89ddea6e6974a4753275a9c7f7b3ea26002a3ca4077b89",
+      "rights_refs": [
+        "media/captures/provenance.json"
+      ]
+    },
+    {
+      "id": "boards-ui",
+      "path": "media/captures/edit-boards-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical native Edit boards fixture",
+      "sha256": "39b295e84726431070731e8af78605f3fa51926d4157fdb8921763788c001ecb",
+      "rights_refs": [
+        "media/captures/provenance.json"
+      ]
+    },
+    {
+      "id": "timeline-ui",
+      "path": "media/captures/timeline-layout-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical QML Timeline layout fixture",
+      "sha256": "ee45ceed7f561dae985cd6099cbbc1f8aa8e28f8be9d91b9e1ece919e4e3ba16",
+      "rights_refs": [
+        "media/captures/provenance.json"
+      ]
+    },
+    {
+      "id": "soundbed",
+      "path": "media/audio/optical-pulse.wav",
+      "kind": "audio",
+      "rights_status": "cleared",
+      "proof_status": "pending",
+      "proof_refs": [
+        "media/audio/provenance.json"
+      ],
+      "source": "Original deterministic synthesis; see tools/make_soundbed.py",
+      "sha256": "1a8e8528cfb6a90993f83b2e63f9d35ee497e238724ef49f926d32ee7c6739ec",
+      "rights_refs": [
+        "media/audio/provenance.json"
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "id": "multi-format",
+      "text": "Photo, design boards, and a video timeline in Looksy.",
+      "status": "pending",
+      "evidence_refs": []
+    }
+  ],
+  "audio_track": "soundbed",
+  "scenes": [
+    {
+      "id": "open",
+      "type": "image",
+      "duration_s": 3,
+      "headline": "One idea.\nMore ways to tell it.",
+      "body": "Build a whole visual story.",
+      "media_refs": [
+        "alpine"
+      ],
+      "claim_refs": [],
+      "motion": "slow_zoom"
+    },
+    {
+      "id": "photo",
+      "type": "image",
+      "duration_s": 4,
+      "headline": "Start with\na photograph.",
+      "body": "Source imagery \u00b7 creative direction study",
+      "media_refs": [
+        "alpine"
+      ],
+      "claim_refs": [],
+      "motion": "slow_zoom"
+    },
+    {
+      "id": "boards",
+      "type": "app",
+      "duration_s": 5,
+      "headline": "Give it\na new format.",
+      "body": "Development interface preview \u00b7 finished carousel pending",
+      "media_refs": [
+        "boards-ui"
+      ],
+      "claim_refs": [
+        "multi-format"
+      ],
+      "motion": "none"
+    },
+    {
+      "id": "timeline",
+      "type": "app",
+      "duration_s": 5,
+      "headline": "Bring it\ninto motion.",
+      "body": "Development interface preview \u00b7 actual edit capture pending",
+      "media_refs": [
+        "timeline-ui"
+      ],
+      "claim_refs": [
+        "multi-format"
+      ],
+      "motion": "none"
+    },
+    {
+      "id": "world",
+      "type": "title",
+      "duration_s": 3,
+      "headline": "A creative studio\non your computer.",
+      "body": "Photos. Design. Video.",
+      "media_refs": [],
+      "claim_refs": [],
+      "motion": "slow_zoom"
+    },
+    {
+      "id": "close",
+      "type": "image",
+      "duration_s": 4,
+      "headline": "Looksy.",
+      "body": "What would you make?",
+      "media_refs": [
+        "alpine"
+      ],
+      "claim_refs": [],
+      "motion": "slow_zoom"
+    }
+  ]
+}

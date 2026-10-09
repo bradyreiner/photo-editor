@@ -4009,6 +4009,125 @@ int main() {
     return fail("layer groups should organize the stack without directly altering pixels");
   }
 
+  const auto grouped_stack = [](const std::string& group_blend_mode, double group_opacity) {
+    ColorAdjustmentState state;
+    state.photo_layers = {
+        PhotoLayer{
+            .id = "outer-group",
+            .name = "Outer Group",
+            .kind = "group",
+            .blend_mode = group_blend_mode,
+            .opacity = group_opacity,
+        },
+        PhotoLayer{
+            .id = "nested-group",
+            .parent_id = "outer-group",
+            .name = "Nested Group",
+            .kind = "group",
+        },
+        PhotoLayer{
+            .id = "grouped-pixel",
+            .parent_id = "nested-group",
+            .name = "Red Pixel",
+            .kind = "pixel",
+            .pixels = {ColorPixel{1.0F, 0.0F, 0.0F, 1.0F}},
+            .pixel_width = 1,
+            .pixel_height = 1,
+        },
+    };
+    return state;
+  };
+  const auto render_grouped_stack = [&grouped_stack](
+                                        const std::string& blend_mode,
+                                        double opacity) {
+    std::vector<ColorPixel> pixels{ColorPixel{0.0F, 0.0F, 1.0F, 1.0F}};
+    photo_editor::pipeline::apply_color_adjustments(
+        &pixels, 1, 1, grouped_stack(blend_mode, opacity));
+    return pixels.front();
+  };
+  const auto nested_group_normal = render_grouped_stack("normal", 1.0);
+  const auto nested_group_multiply = render_grouped_stack("multiply", 1.0);
+  const auto nested_group_half_opacity = render_grouped_stack("normal", 0.5);
+  if (!(nested_group_normal.red > nested_group_normal.blue &&
+        luminance(nested_group_normal) > luminance(nested_group_multiply) + 0.05 &&
+        nested_group_half_opacity.red > 0.05F &&
+        nested_group_half_opacity.blue > 0.05F)) {
+    return fail("nested photo layers should composite through group opacity and blend modes");
+  }
+
+  const auto render_nested_group_transform = [](
+                                                  int group_x,
+                                                  int group_y,
+                                                  double group_scale,
+                                                  double group_rotation,
+                                                  int child_x,
+                                                  int child_y) {
+    ColorAdjustmentState state;
+    PhotoLayer group;
+    group.id = "transform-group";
+    group.kind = "group";
+    group.x = group_x;
+    group.y = group_y;
+    group.transform_scale = group_scale;
+    group.transform_rotation = group_rotation;
+    PhotoLayer nested_group;
+    nested_group.id = "nested-transform-group";
+    nested_group.parent_id = group.id;
+    nested_group.kind = "group";
+    PhotoLayer pixel;
+    pixel.id = "transformed-group-pixel";
+    pixel.parent_id = nested_group.id;
+    pixel.kind = "pixel";
+    pixel.pixels = {ColorPixel{1.0F, 0.0F, 0.0F, 1.0F}};
+    pixel.pixel_width = 1;
+    pixel.pixel_height = 1;
+    pixel.x = child_x;
+    pixel.y = child_y;
+    state.photo_layers = {group, nested_group, pixel};
+    std::vector<ColorPixel> pixels(
+        25, ColorPixel{0.0F, 0.0F, 0.0F, 1.0F});
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 5, 5, state);
+    return pixels;
+  };
+  const auto translated_nested_group =
+      render_nested_group_transform(1, -1, 1.0, 0.0, 2, 2);
+  if (translated_nested_group[1 * 5 + 3].red < 0.99F ||
+      translated_nested_group[2 * 5 + 2].red > 0.01F) {
+    return fail("nested group translation should move its flattened child composite");
+  }
+  const auto scaled_nested_group =
+      render_nested_group_transform(0, 0, 2.0, 0.0, 1, 1);
+  if (scaled_nested_group[2 * 5 + 2].red < 0.30F ||
+      scaled_nested_group[1 * 5 + 1].red > 0.10F) {
+    return fail("nested group scale should transform its children as one flattened surface");
+  }
+  const auto rotated_nested_group =
+      render_nested_group_transform(0, 0, 1.0, 90.0, 1, 2);
+  if (rotated_nested_group[1 * 5 + 2].red < 0.99F ||
+      rotated_nested_group[2 * 5 + 1].red > 0.01F) {
+    return fail("nested group rotation should transform its children around the group center");
+  }
+
+  ColorAdjustmentState graded_group_state;
+  PhotoLayer graded_group;
+  graded_group.id = "graded-group";
+  graded_group.kind = "group";
+  graded_group.exposure = 1.0;
+  PhotoLayer graded_group_pixel;
+  graded_group_pixel.id = "graded-group-pixel";
+  graded_group_pixel.parent_id = graded_group.id;
+  graded_group_pixel.kind = "pixel";
+  graded_group_pixel.pixels = {ColorPixel{0.2F, 0.2F, 0.2F, 1.0F}};
+  graded_group_pixel.pixel_width = 1;
+  graded_group_pixel.pixel_height = 1;
+  graded_group_state.photo_layers = {graded_group, graded_group_pixel};
+  std::vector<ColorPixel> graded_group_pixels{ColorPixel{0.0F, 0.0F, 0.0F, 0.0F}};
+  photo_editor::pipeline::apply_color_adjustments(
+      &graded_group_pixels, 1, 1, graded_group_state);
+  if (graded_group_pixels.front().red < 0.35F) {
+    return fail("group color adjustments should process the flattened child composite");
+  }
+
   std::vector<ColorPixel> transformed_layer_base(
       4,
       linear_pixel_from_srgb(QColor::fromRgbF(0.08F, 0.08F, 0.08F, 1.0F)));

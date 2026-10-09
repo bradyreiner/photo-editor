@@ -11,6 +11,10 @@
 
 namespace photo_editor::desktop {
 
+// Qt maps 12 on its PNG compression scale to zlib level 1. Pixels and
+// metadata stay lossless; avoid expensive default compression during export.
+inline constexpr int kPngExportCompression = 12;
+
 struct StandardExportEncodingResult final {
   bool valid = false;
   QByteArray bytes;
@@ -24,6 +28,15 @@ prepare_image_for_export_encoding(
   if (image.isNull()) {
     return {};
   }
+  const auto preserve_metadata = [&image](QImage& output) {
+    output.setDotsPerMeterX(image.dotsPerMeterX());
+    output.setDotsPerMeterY(image.dotsPerMeterY());
+    output.setOffset(image.offset());
+    output.setDevicePixelRatio(image.devicePixelRatio());
+    for (const auto& key : image.textKeys()) {
+      output.setText(key, image.text(key));
+    }
+  };
   if (options.hdr_delivery) {
     return image.convertToFormat(
         QImage::Format_RGBA32FPx4);
@@ -43,8 +56,9 @@ prepare_image_for_export_encoding(
     QPainter painter(&flattened);
     painter.setCompositionMode(
         QPainter::CompositionMode_SourceOver);
-    painter.drawImage(0, 0, float_image);
+    painter.drawImage(flattened.rect(), float_image, float_image.rect());
     painter.end();
+    preserve_metadata(flattened);
     return flattened;
   }
   if (!options.flatten_alpha) {
@@ -59,8 +73,9 @@ prepare_image_for_export_encoding(
   QPainter painter(&flattened);
   painter.setCompositionMode(
       QPainter::CompositionMode_SourceOver);
-  painter.drawImage(0, 0, image);
+  painter.drawImage(flattened.rect(), image, image.rect());
   painter.end();
+  preserve_metadata(flattened);
   return flattened;
 }
 
@@ -95,6 +110,8 @@ encode_prepared_standard_export_image(
       &buffer, options.writer_format);
   if (options.writer_format == "jpg") {
     writer.setQuality(options.jpeg_quality);
+  } else if (options.writer_format == "png") {
+    writer.setCompression(kPngExportCompression);
   }
   writer.setText(
       QStringLiteral("Description"),

@@ -28,6 +28,7 @@ struct BrushPreviewStyle final {
   double feather = 0.5;
   double hardness = 0.25;
   double opacity = 0.38;
+  bool circular = false;
 };
 
 class BrushPreviewCompositor {

@@ -1,4 +1,6 @@
 #include "photo_automation_bridge.h"
+#include "agent_app_command_registry.h"
+#include "agent_mcp_client.h"
 #include "search_edit_workflow.h"
 
 #include <QCoreApplication>
@@ -21,6 +23,7 @@
 #include <QVector>
 
 #include <tuple>
+#include <cmath>
 
 #include "agent_edit_controller.h"
 #include "agent_edit_recipe_patch.h"
@@ -29,6 +32,10 @@
 #include "catalog_asset_model.h"
 #include "edit_adjustment_patch.h"
 #include "photo_mcp_server.h"
+#include "photo_composition_tool_contract.h"
+#include "agent_design_schemas.h"
+#include "timeline_document_controller.h"
+#include "timeline_playback_controller.h"
 
 namespace photo_editor::desktop {
 namespace {
@@ -59,6 +66,14 @@ QJsonObject capability_error_response(const QString& required_capability) {
       QStringLiteral("Automation capability '%1' is required.").arg(required_capability));
   response.insert(QStringLiteral("errorCode"), QStringLiteral("insufficient_capability"));
   response.insert(QStringLiteral("requiredCapability"), required_capability);
+  return response;
+}
+
+QJsonObject argument_error_response(const QString& message) {
+  auto response = error_response(message);
+  response.insert(QStringLiteral("data"), QJsonObject{{QStringLiteral("ok"), false},
+      {QStringLiteral("errorCode"), QStringLiteral("invalid_arguments")},
+      {QStringLiteral("recoverableError"), true}, {QStringLiteral("mutationNotApplied"), true}});
   return response;
 }
 
@@ -390,10 +405,28 @@ PhotoAutomationBridge::PhotoAutomationBridge(
     AgentEditController* agent_edit,
     CatalogAssetModel* catalog_model,
     QObject* parent)
-    : QObject(parent), agent_edit_(agent_edit), catalog_model_(catalog_model) {}
+    : QObject(parent), agent_edit_(agent_edit), catalog_model_(catalog_model) {
+  agent_mcp_endpoint_ = AgentMcpClient::registerInProcessEndpoint(this,
+      [this](const QVariantMap& request) {
+        PhotoMcpServer server(this, nullptr, true);
+        return server.handleJsonRpc(QJsonObject::fromVariantMap(request),
+            {QStringLiteral("read"), QStringLiteral("draft")}).toVariantMap();
+      });
+}
 
 PhotoAutomationBridge::~PhotoAutomationBridge() {
+  AgentMcpClient::unregisterInProcessEndpoint(agent_mcp_endpoint_);
   stop();
+}
+
+void PhotoAutomationBridge::setTimelineDocumentController(
+    TimelineDocumentController* controller) {
+  timeline_document_ = controller;
+}
+
+void PhotoAutomationBridge::setTimelinePlaybackController(
+    TimelinePlaybackController* controller) {
+  timeline_playback_ = controller;
 }
 
 bool PhotoAutomationBridge::running() const {
@@ -938,6 +971,16 @@ void PhotoAutomationBridge::replyMcpHttpSse(QTcpSocket* socket) const {
 }
 
 QJsonObject PhotoAutomationBridge::handleJsonRequest(const QJsonObject& request) const {
+  return handleJsonRequestWithCapabilities(request, mcp_capabilities_);
+}
+
+QJsonObject PhotoAutomationBridge::handleAgentJsonRequest(const QJsonObject& request) const {
+  return handleJsonRequestWithCapabilities(request,
+      {QStringLiteral("read"), QStringLiteral("draft")});
+}
+
+QJsonObject PhotoAutomationBridge::handleJsonRequestWithCapabilities(
+    const QJsonObject& request, const QStringList& capabilities) const {
   if (!has_only_keys(
           request,
           {QStringLiteral("id"), QStringLiteral("token"), QStringLiteral("command"), QStringLiteral("args")})) {
@@ -961,7 +1004,7 @@ QJsonObject PhotoAutomationBridge::handleJsonRequest(const QJsonObject& request)
       edit_access_policy_ && !edit_access_policy_()) {
     return error_response(QStringLiteral("Editing requires an active trial or purchase."));
   }
-  if (!mcp_capabilities_.contains(required_capability)) {
+  if (!capabilities.contains(required_capability)) {
     return capability_error_response(required_capability);
   }
   const auto args_value = request.value(QStringLiteral("args"));
@@ -1000,6 +1043,652 @@ bool PhotoAutomationBridge::admitMcpRequest() {
 }
 
 QJsonObject PhotoAutomationBridge::handleCommand(const QString& command, const QJsonObject& args) const {
+  if (command == QStringLiteral("app_list_commands") || command == QStringLiteral("app_command_schema") ||
+      command == QStringLiteral("app_invoke_command") || command == QStringLiteral("app_inspect_command")) {
+    if (!app_commands_) return error_response(QStringLiteral("Native app command discovery is unavailable."));
+    QVariantMap result;
+    if (command == QStringLiteral("app_list_commands")) {
+      if (!has_only_keys(args, {QStringLiteral("domain"), QStringLiteral("query"), QStringLiteral("offset"), QStringLiteral("limit")}) ||
+          (args.contains("domain") && !args.value("domain").isString()) ||
+          (args.contains("query") && !args.value("query").isString()) ||
+          (args.contains("offset") && (!args.value("offset").isDouble() || args.value("offset").toDouble() < 0 ||
+              args.value("offset").toDouble() > 1000000 || std::floor(args.value("offset").toDouble()) != args.value("offset").toDouble())) ||
+          (args.contains("limit") && (!args.value("limit").isDouble() || args.value("limit").toDouble() < 1 ||
+              args.value("limit").toDouble() > 64 || std::floor(args.value("limit").toDouble()) != args.value("limit").toDouble())))
+        return argument_error_response(QStringLiteral("Discovery accepts domain/query strings, nonnegative integer offset and limit 1–64."));
+      result = app_commands_->commands(args.value("domain").toString(), args.value("query").toString(),
+          args.value("offset").toInt(), args.value("limit").toInt(24));
+    } else {
+      if (!args.value("commandId").isString() || !has_only_keys(args,
+          command == QStringLiteral("app_command_schema") ? QStringList{"commandId"} : QStringList{"commandId", "values"}) ||
+          (command != QStringLiteral("app_command_schema") && !args.value("values").isObject()))
+        return argument_error_response(QStringLiteral("Supply a commandId and an object of typed values for invocation."));
+      if (command == QStringLiteral("app_inspect_command") &&
+          !app_commands_->schema(args.value("commandId").toString()).value("readOnly").toBool())
+        return error_response(QStringLiteral("Read capability cannot invoke a mutable native control."));
+      result = command == QStringLiteral("app_command_schema") ? app_commands_->schema(args.value("commandId").toString())
+          : app_commands_->invoke(args.value("commandId").toString(), args.value("values").toObject().toVariantMap());
+    }
+    // Keep failure receipts as structured evidence, including any applied state
+    // that the native journal captured before rejecting a postcondition.
+    if (!result.value("ok").toBool()) {
+      auto error = error_response(result.value("error").toString());
+      error.insert("data", QJsonObject::fromVariantMap(result));
+      return error;
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("photo_inspect_composition") || command == QStringLiteral("photo_edit_composition")) {
+    if (!composition_handler_) return error_response(QStringLiteral("Open the photo editor to edit a composition."));
+    if (!has_only_keys(args, {QStringLiteral("assetId"), QStringLiteral("operation"), QStringLiteral("layerId"), QStringLiteral("values")}) ||
+        !args.value("assetId").isString() ||
+        (args.contains("layerId") && !args.value("layerId").isString()) ||
+        (args.contains("values") && !args.value("values").isObject()))
+      return argument_error_response(QStringLiteral("Composition requires assetId and typed operation values."));
+    auto request = args.toVariantMap();
+    if (command == QStringLiteral("photo_inspect_composition")) {
+      if (args.contains("operation") || args.contains("layerId"))
+        return argument_error_response(QStringLiteral("Inspect accepts assetId and optional font family/face values."));
+      if (args.contains("values")) {
+        const auto values = args.value("values").toObject();
+        if (values.size() > 2 || !values.contains("family") ||
+            !values.value("family").isString() || values.value("family").toString().trimmed().isEmpty() ||
+            (values.contains("face") && !values.value("face").isString()) ||
+            (values.contains("face") && values.value("face").toString().trimmed().isEmpty()))
+          return argument_error_response(QStringLiteral("Font inspection values require a non-empty family and optional face string."));
+      }
+      request.insert("operation", "inspect");
+    } else if (!args.value("operation").isString() || args.value("operation").toString() == "inspect") {
+      return argument_error_response(QStringLiteral("Use inspect_composition to read or supply an edit operation."));
+    }
+    if (command == QStringLiteral("photo_edit_composition") &&
+        composition_layer_target_operations().contains(args.value("operation").toString()) &&
+        args.value("layerId").toString().trimmed().isEmpty())
+      return argument_error_response(QStringLiteral(
+          "This operation requires arguments.layerId identifying an existing layer. Use an inspected layer ID or the createdLayerId from a completed creation call; coordinates in values do not identify a layer."));
+    if (command == QStringLiteral("photo_edit_composition") && args.value("operation") == "typography" &&
+        !AgentAppCommandRegistry::valueMatchesSchema(request.value("values"), agent_typography_schema()))
+      return argument_error_response(QStringLiteral(
+          "Typography values must match its partial-update schema: font, size, weight, color, spacing, path or material controls. Do not pass x or y; position a layer with the transform operation. Use numeric weight and preserve the existing layerId."));
+    const auto result = composition_handler_(request);
+    if (!result.value("ok").toBool()) {
+      auto error = error_response(result.value("error").toString());
+      error.insert("data", QJsonObject::fromVariantMap(result));
+      return error;
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_scope_capture_request")) {
+    if (!args.isEmpty()) {
+      return error_response(QStringLiteral(
+          "timeline_scope_capture_request does not accept arguments."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->requestProgramScopeCaptureForAutomation();
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    auto payload = result;
+    payload.remove(QStringLiteral("ok"));
+    return ok_response(QJsonObject::fromVariantMap(payload));
+  }
+  if (command == QStringLiteral("timeline_scope_summary_inspect")) {
+    if (!args.isEmpty()) {
+      return error_response(QStringLiteral(
+          "timeline_scope_summary_inspect does not accept arguments."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    auto result = timeline_document_->programColorScopeSummaryForAutomation();
+    result.remove(QStringLiteral("ok"));
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_playback_performance_inspect")) {
+    if (!args.isEmpty()) {
+      return error_response(QStringLiteral(
+          "timeline_playback_performance_inspect does not accept arguments."));
+    }
+    if (timeline_playback_.isNull()) {
+      return error_response(QStringLiteral("Timeline playback is unavailable."));
+    }
+    auto frame_metrics = timeline_playback_->frameProcessingMetrics();
+    const auto sample_count = frame_metrics.value(QStringLiteral("sampleCount")).toLongLong();
+    const auto measured_source_key =
+        frame_metrics.take(QStringLiteral("sourceKey")).toString();
+    const auto result = QJsonObject{
+        {QStringLiteral("hasVideoSource"), timeline_playback_->hasVideoSource()},
+        {QStringLiteral("mediaReady"), timeline_playback_->mediaReady()},
+        {QStringLiteral("playbackHealth"), timeline_playback_->playbackHealth()},
+        {QStringLiteral("previewQualityMode"), timeline_playback_->previewQualityMode()},
+        {QStringLiteral("effectivePreviewQuality"),
+         timeline_playback_->effectivePreviewQuality()},
+        {QStringLiteral("effectivePreviewScale"),
+         timeline_playback_->effectivePreviewScale()},
+        {QStringLiteral("usingProxy"), timeline_playback_->usingProxy()},
+        {QStringLiteral("usingRenderCache"), timeline_playback_->usingRenderCache()},
+        {QStringLiteral("adaptiveQualityActive"),
+         timeline_playback_->adaptiveQualityActive()},
+        {QStringLiteral("adaptiveDetailLevel"),
+         timeline_playback_->adaptiveDetailLevel()},
+        {QStringLiteral("adaptiveQualityReason"),
+         timeline_playback_->adaptiveQualityReason()},
+        {QStringLiteral("droppedFrameCount"), timeline_playback_->droppedFrameCount()},
+        {QStringLiteral("hasFrameTimingSample"), sample_count > 0},
+        {QStringLiteral("frameTimingSampleCount"), static_cast<qint64>(sample_count)},
+        {QStringLiteral("measuredSourceKey"), measured_source_key},
+        {QStringLiteral("frameTimingSmoothing"),
+         QStringLiteral("EWMA with alpha 0.15 over completed processed frames")},
+        {QStringLiteral("frameProcessingMetrics"),
+         QJsonObject::fromVariantMap(frame_metrics)},
+        {QStringLiteral("colorCacheDiagnostics"),
+         QJsonObject::fromVariantMap(
+             timeline_playback_->colorCacheDiagnostics())},
+        {QStringLiteral("cacheCounterScope"),
+         QStringLiteral("Cumulative since process start; independent of playback diagnostic resets.")},
+        {QStringLiteral("timingScope"),
+         QStringLiteral("Worker-side video frame conversion and color/effect processing; excludes decoder wait and display presentation.")},
+    };
+    return ok_response(result);
+  }
+  if (command == QStringLiteral("timeline_color_inspect")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral("timeline_color_inspect requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->inspectClipColorForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_compare_open")) {
+    const auto has_sequence_seconds = args.contains(QStringLiteral("sequenceSeconds"));
+    const auto has_mode = args.contains(QStringLiteral("mode"));
+    if (!has_only_keys(
+            args,
+            {QStringLiteral("clipId"), QStringLiteral("sequenceSeconds"),
+             QStringLiteral("mode")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        (has_sequence_seconds && !args.value(QStringLiteral("sequenceSeconds")).isDouble()) ||
+        (has_mode && !args.value(QStringLiteral("mode")).isString())) {
+      return error_response(QStringLiteral(
+          "timeline_color_compare_open requires clipId and optional numeric sequenceSeconds and string mode."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->openProgramComparisonForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        has_sequence_seconds ? args.value(QStringLiteral("sequenceSeconds")).toDouble() : -1.0,
+        has_mode ? args.value(QStringLiteral("mode")).toString() : QStringLiteral("wipe"));
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    auto payload = result;
+    payload.remove(QStringLiteral("ok"));
+    return ok_response(QJsonObject::fromVariantMap(payload));
+  }
+  if (command == QStringLiteral("timeline_source_color_metadata_inspect")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_source_color_metadata_inspect requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->inspectClipSourceColorMetadataForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_effects_inspect")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral("timeline_effects_inspect requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->inspectClipEffectsForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_inspect")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_inspect requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->inspectClipColorGradeForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_set")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("recipe")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("recipe")).isObject()) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_set requires a clipId string and recipe object."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipColorGradeRecipeForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("recipe")).toObject());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_layer_edit")) {
+    const auto allowed_keys = QStringList{
+        QStringLiteral("clipId"), QStringLiteral("operation"),
+        QStringLiteral("layerId"), QStringLiteral("layer"),
+        QStringLiteral("position"), QStringLiteral("enabled"),
+        QStringLiteral("opacity"), QStringLiteral("parameter"),
+        QStringLiteral("value"), QStringLiteral("blendMode")};
+    if (!has_only_keys(args, allowed_keys) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("operation")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_layer_edit requires clipId and operation strings."));
+    }
+    const auto operation =
+        args.value(QStringLiteral("operation")).toString().trimmed().toLower();
+    const auto supported_operation =
+        operation == QStringLiteral("add") ||
+        operation == QStringLiteral("remove") ||
+        operation == QStringLiteral("move") ||
+        operation == QStringLiteral("replace") ||
+        operation == QStringLiteral("set_enabled") ||
+        operation == QStringLiteral("set_opacity") ||
+        operation == QStringLiteral("set_blend_mode") ||
+        operation == QStringLiteral("set_parameter");
+    const auto needs_layer_id = operation != QStringLiteral("add");
+    const auto needs_layer = operation == QStringLiteral("add") ||
+                             operation == QStringLiteral("replace");
+    const auto needs_position = operation == QStringLiteral("move");
+    const auto needs_enabled = operation == QStringLiteral("set_enabled");
+    const auto needs_opacity = operation == QStringLiteral("set_opacity");
+    const auto needs_blend_mode = operation == QStringLiteral("set_blend_mode");
+    const auto needs_parameter = operation == QStringLiteral("set_parameter");
+    if (!supported_operation ||
+        args.contains(QStringLiteral("layerId")) != needs_layer_id ||
+        args.contains(QStringLiteral("layer")) != needs_layer ||
+        args.contains(QStringLiteral("enabled")) != needs_enabled ||
+        args.contains(QStringLiteral("opacity")) != needs_opacity ||
+        args.contains(QStringLiteral("blendMode")) != needs_blend_mode ||
+        args.contains(QStringLiteral("parameter")) != needs_parameter ||
+        args.contains(QStringLiteral("value")) != needs_parameter ||
+        (needs_position && !args.contains(QStringLiteral("position"))) ||
+        (!needs_position && operation != QStringLiteral("add") &&
+         args.contains(QStringLiteral("position")))) {
+      return error_response(QStringLiteral(
+          "Provide layerId for remove, move, replace, and per-layer edits; layer for add or replace; position for move and optionally add; enabled only for set_enabled; opacity only for set_opacity; blendMode only for set_blend_mode; parameter and value only for set_parameter."));
+    }
+    if ((needs_layer_id && !args.value(QStringLiteral("layerId")).isString()) ||
+        (needs_layer && !args.value(QStringLiteral("layer")).isObject()) ||
+        (needs_enabled && !args.value(QStringLiteral("enabled")).isBool()) ||
+        (needs_opacity && !args.value(QStringLiteral("opacity")).isDouble()) ||
+        (needs_blend_mode && !args.value(QStringLiteral("blendMode")).isString()) ||
+        (needs_parameter &&
+         (!args.value(QStringLiteral("parameter")).isString() ||
+          !args.value(QStringLiteral("value")).isDouble()))) {
+      return error_response(QStringLiteral(
+          "layerId, layer, enabled, opacity, blendMode, or parameter has the wrong JSON type."));
+    }
+    auto position = -1;
+    if (args.contains(QStringLiteral("position"))) {
+      const auto position_value = args.value(QStringLiteral("position"));
+      if (!position_value.isDouble() ||
+          position_value.toDouble() != static_cast<double>(position_value.toInt())) {
+        return error_response(QStringLiteral("position must be an integer."));
+      }
+      position = position_value.toInt();
+      if (position < 0) {
+        return error_response(QStringLiteral("position cannot be negative."));
+      }
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->editClipColorGradeLayerForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        operation,
+        args.value(QStringLiteral("layerId")).toString(),
+        args.value(QStringLiteral("layer")).toObject().toVariantMap(),
+        position,
+        args.value(QStringLiteral("enabled")).toBool(),
+        args.value(QStringLiteral("opacity")).toDouble(),
+        args.value(QStringLiteral("parameter")).toString(),
+        args.value(QStringLiteral("value")).toDouble(),
+        args.value(QStringLiteral("blendMode")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_parameter_set")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("parameter"),
+                              QStringLiteral("value")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("parameter")).isString() ||
+        !args.value(QStringLiteral("value")).isDouble()) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_parameter_set requires clipId, parameter, and numeric value."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipColorGradeParameterForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("parameter")).toString(),
+        args.value(QStringLiteral("value")).toDouble());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_curve_set")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("layerId"),
+                              QStringLiteral("channel"), QStringLiteral("points")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("channel")).isString() ||
+        !args.value(QStringLiteral("points")).isArray() ||
+        (args.contains(QStringLiteral("layerId")) &&
+         !args.value(QStringLiteral("layerId")).isString())) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_curve_set requires clipId, channel, and points, with an optional layerId."));
+    }
+    const auto points = args.value(QStringLiteral("points")).toArray();
+    if (points.size() > 64) {
+      return error_response(QStringLiteral("points cannot contain more than 64 entries."));
+    }
+    auto curve_points = QVariantList{};
+    curve_points.reserve(points.size());
+    for (const auto& point_value : points) {
+      if (!point_value.isObject()) {
+        return error_response(QStringLiteral("Every curve point must be an object."));
+      }
+      const auto point = point_value.toObject();
+      if (!has_only_keys(point, {QStringLiteral("x"), QStringLiteral("y")}) ||
+          !point.value(QStringLiteral("x")).isDouble() ||
+          !point.value(QStringLiteral("y")).isDouble()) {
+        return error_response(QStringLiteral(
+            "Every curve point must contain only numeric x and y values."));
+      }
+      curve_points.push_back(point.toVariantMap());
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipColorGradeCurveForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("layerId")).toString(),
+        args.value(QStringLiteral("channel")).toString(), curve_points);
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_grade_clear")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_grade_clear requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->clearClipColorGradeRecipeForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_adjustment_clip_add")) {
+    if (!has_only_keys(args, {QStringLiteral("startSeconds"),
+                              QStringLiteral("durationSeconds")}) ||
+        !args.value(QStringLiteral("startSeconds")).isDouble() ||
+        !args.value(QStringLiteral("durationSeconds")).isDouble() ||
+        args.value(QStringLiteral("startSeconds")).toDouble() < 0.0 ||
+        args.value(QStringLiteral("durationSeconds")).toDouble() <= 0.0) {
+      return error_response(QStringLiteral(
+          "timeline_adjustment_clip_add requires a nonnegative startSeconds and positive durationSeconds."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->addAdjustmentClipForAutomation(
+        args.value(QStringLiteral("startSeconds")).toDouble(),
+        args.value(QStringLiteral("durationSeconds")).toDouble());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_clip_opacity_set")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("opacity")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("opacity")).isDouble()) {
+      return error_response(QStringLiteral(
+          "timeline_clip_opacity_set requires a clipId string and numeric opacity."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipOpacityForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("opacity")).toDouble());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_clip_keyframe_edit")) {
+    const auto allowed_keys = QStringList{
+        QStringLiteral("clipId"), QStringLiteral("operation"),
+        QStringLiteral("parameter"), QStringLiteral("localSeconds"),
+        QStringLiteral("value"), QStringLiteral("interpolation")};
+    if (!has_only_keys(args, allowed_keys) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("operation")).isString() ||
+        !args.value(QStringLiteral("parameter")).isString() ||
+        !args.value(QStringLiteral("localSeconds")).isDouble()) {
+      return error_response(QStringLiteral(
+          "timeline_clip_keyframe_edit requires clipId, operation, parameter, and numeric localSeconds."));
+    }
+    const auto operation =
+        args.value(QStringLiteral("operation")).toString().trimmed().toLower();
+    const auto is_set = operation == QStringLiteral("set");
+    const auto is_remove = operation == QStringLiteral("remove");
+    if ((!is_set && !is_remove) ||
+        args.contains(QStringLiteral("value")) != is_set ||
+        (args.contains(QStringLiteral("interpolation")) &&
+         (!is_set || !args.value(QStringLiteral("interpolation")).isString())) ||
+        (is_set && !args.value(QStringLiteral("value")).isDouble()) ||
+        args.value(QStringLiteral("localSeconds")).toDouble() < 0.0) {
+      return error_response(QStringLiteral(
+          "Use set with a numeric value and optional interpolation, or remove without either field; localSeconds must be nonnegative."));
+    }
+    if (args.contains(QStringLiteral("interpolation"))) {
+      const auto interpolation = args.value(QStringLiteral("interpolation"))
+                                     .toString()
+                                     .trimmed()
+                                     .toLower();
+      if (!QStringList{QStringLiteral("hold"), QStringLiteral("linear"),
+                       QStringLiteral("ease-in"), QStringLiteral("ease-out"),
+                       QStringLiteral("ease-in-out"), QStringLiteral("bezier")}
+               .contains(interpolation)) {
+        return error_response(QStringLiteral("Unsupported keyframe interpolation."));
+      }
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->editClipKeyframeForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        operation,
+        args.value(QStringLiteral("parameter")).toString(),
+        args.value(QStringLiteral("localSeconds")).toDouble(),
+        args.value(QStringLiteral("value")).toDouble(),
+        args.value(QStringLiteral("interpolation")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_effects_edit")) {
+    const auto allowed_keys = QStringList{
+        QStringLiteral("clipId"), QStringLiteral("operation"),
+        QStringLiteral("effectName"), QStringLiteral("amount"),
+        QStringLiteral("enabled")};
+    if (!has_only_keys(args, allowed_keys) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("operation")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_effects_edit requires clipId and operation strings and accepts only effectName, amount, and enabled as optional fields."));
+    }
+    const auto operation = args.value(QStringLiteral("operation")).toString().trimmed().toLower();
+    const auto effect_operation =
+        operation == QStringLiteral("add") || operation == QStringLiteral("remove") ||
+        operation == QStringLiteral("move_up") || operation == QStringLiteral("move_down") ||
+        operation == QStringLiteral("set_amount") || operation == QStringLiteral("set_enabled");
+    if (args.contains(QStringLiteral("effectName")) &&
+        !args.value(QStringLiteral("effectName")).isString()) {
+      return error_response(QStringLiteral("effectName must be a string."));
+    }
+    if (args.contains(QStringLiteral("amount")) &&
+        !args.value(QStringLiteral("amount")).isDouble()) {
+      return error_response(QStringLiteral("amount must be a number."));
+    }
+    if (args.contains(QStringLiteral("enabled")) &&
+        !args.value(QStringLiteral("enabled")).isBool()) {
+      return error_response(QStringLiteral("enabled must be a boolean."));
+    }
+    const auto has_effect_name = args.contains(QStringLiteral("effectName"));
+    const auto has_amount = args.contains(QStringLiteral("amount"));
+    const auto has_enabled = args.contains(QStringLiteral("enabled"));
+    const auto amount_expected = operation == QStringLiteral("set_amount");
+    const auto enabled_expected = operation == QStringLiteral("set_enabled") ||
+                                  operation == QStringLiteral("set_stack_enabled");
+    if (effect_operation != has_effect_name || amount_expected != has_amount ||
+        enabled_expected != has_enabled) {
+      return error_response(QStringLiteral(
+          "Provide effectName for add, remove, move, and per-effect operations; provide amount only for set_amount and enabled only for set_enabled or set_stack_enabled."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->editClipEffectStackForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        operation,
+        args.value(QStringLiteral("effectName")).toString(),
+        args.value(QStringLiteral("amount")).toDouble(),
+        args.value(QStringLiteral("enabled")).toBool());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_set_video_input_transform")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("profile")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("profile")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_set_video_input_transform requires clipId and profile strings."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipVideoInputTransformForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("profile")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_set_lut")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId"), QStringLiteral("filePath")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("filePath")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_set_lut requires clipId and filePath strings."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipColorLutForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("filePath")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_clear_lut")) {
+    if (!has_only_keys(args, {QStringLiteral("clipId")}) ||
+        !args.value(QStringLiteral("clipId")).isString()) {
+      return error_response(QStringLiteral(
+          "timeline_color_clear_lut requires only a clipId string."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->clearClipColorLutForAutomation(
+        args.value(QStringLiteral("clipId")).toString());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
+  if (command == QStringLiteral("timeline_color_set_shot_match_gains")) {
+    if (!has_only_keys(
+            args,
+            {QStringLiteral("clipId"), QStringLiteral("redGain"),
+             QStringLiteral("greenGain"), QStringLiteral("blueGain")}) ||
+        !args.value(QStringLiteral("clipId")).isString() ||
+        !args.value(QStringLiteral("redGain")).isDouble() ||
+        !args.value(QStringLiteral("greenGain")).isDouble() ||
+        !args.value(QStringLiteral("blueGain")).isDouble()) {
+      return error_response(QStringLiteral(
+          "timeline_color_set_shot_match_gains requires clipId and three numeric gains."));
+    }
+    if (timeline_document_.isNull()) {
+      return error_response(QStringLiteral("Timeline editing is unavailable."));
+    }
+    const auto result = timeline_document_->setClipShotMatchGainsForAutomation(
+        args.value(QStringLiteral("clipId")).toString(),
+        args.value(QStringLiteral("redGain")).toDouble(),
+        args.value(QStringLiteral("greenGain")).toDouble(),
+        args.value(QStringLiteral("blueGain")).toDouble());
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+      return error_response(result.value(QStringLiteral("error")).toString());
+    }
+    return ok_response(QJsonObject::fromVariantMap(result));
+  }
   if (command == QStringLiteral("photo_search_edit_start")) {
     if (!has_only_keys(args, {QStringLiteral("instruction")}) || !args.value("instruction").isString())
       return error_response(QStringLiteral("Search requires only an instruction string."));

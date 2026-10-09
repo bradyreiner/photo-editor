@@ -9,6 +9,9 @@ struct LibRawDecodeCacheStats {
   int entries = 0;
   quint64 hits = 0;
   quint64 misses = 0;
+  quint64 metadata_hits = 0;
+  quint64 metadata_misses = 0;
+  int metadata_entries = 0;
 };
 [[nodiscard]] LibRawDecodeCacheStats libraw_decode_cache_stats();
 void clear_libraw_decode_cache();

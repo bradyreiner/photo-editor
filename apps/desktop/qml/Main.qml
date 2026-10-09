@@ -17,10 +17,22 @@ ApplicationWindow {
     color: theme.ink950
     font.family: theme.fontUi
     font.pixelSize: theme.typeControl
+    palette.window: theme.ink900
+    palette.windowText: theme.textMain
+    palette.base: theme.fieldFill
+    palette.text: theme.textMain
+    palette.button: theme.ink900
+    palette.buttonText: theme.textMain
+    palette.highlight: theme.editorControlHover
+    palette.highlightedText: theme.textStrong
+    palette.mid: theme.controlEdge
+    palette.disabled.text: theme.textFaint
+    palette.disabled.buttonText: theme.textFaint
+    palette.disabled.windowText: theme.textFaint
     property var closeCoordinator: null
     property bool allowUnconfirmedExportClose: false
     onClosing: function(event) {
-        if (exportJobs.pendingAdmissionCount > 0 || (!allowUnconfirmedExportClose && exportJobs.admissionError.length > 0)) {
+        if (exportJobs.batchSubmissionBusy || exportJobs.pendingAdmissionCount > 0 || (!allowUnconfirmedExportClose && exportJobs.admissionError.length > 0)) {
             event.accepted = false
             exportAdmissionCloseDialog.open()
             return
@@ -59,15 +71,16 @@ ApplicationWindow {
                 ActionButton {
                     Layout.fillWidth: true
                     text: "Retry saving"
+                    iconName: "retry"
                     visible: exportJobs.admissionError.length > 0
-                    enabled: exportJobs.pendingAdmissionCount === 0 && exportJobs.historyMutationsEnabled
+                    enabled: !exportJobs.batchSubmissionBusy && exportJobs.pendingAdmissionCount === 0 && exportJobs.historyMutationsEnabled
                     onClicked: exportJobs.retryUnconfirmedExports()
                 }
                 ActionButton {
                     Layout.fillWidth: true
                     text: "Close without confirmation"
                     visible: exportJobs.admissionError.length > 0
-                    enabled: exportJobs.pendingAdmissionCount === 0
+                    enabled: !exportJobs.batchSubmissionBusy && exportJobs.pendingAdmissionCount === 0
                     onClicked: { window.allowUnconfirmedExportClose = true; exportAdmissionCloseDialog.close(); window.close() }
                 }
             }
@@ -90,7 +103,10 @@ ApplicationWindow {
 
     property bool workspaceInitialized: false
     property int currentWorkspace: 0
+    property Item workspaceFocusFallbackItem: null
     property string pendingEditInspectorTab: ""
+    property string pendingTimelineRecoveryRouteId: ""
+    property var pendingTimelineRecoveryWorkspace: null
     property bool libraryWorkspaceLoaded: false
     property bool carouselWorkspaceLoaded: false
     property bool editWorkspaceLoaded: false
@@ -101,6 +117,7 @@ ApplicationWindow {
         && sceneWorkspaceLoader.item !== null && sceneWorkspaceLoader.item.immersive
     property bool secondaryWorkspacesPrewarmStarted: false
     property int secondaryWorkspacePrewarmStep: 0
+    property bool recentUserInput: false
     property bool workspaceTransitionActive: false
     property int pendingWorkspaceIndex: -1
     property string pendingEditToolActivation: ""
@@ -112,8 +129,8 @@ ApplicationWindow {
     property int qmlFrameSampleCount: 0
     property int qmlFrameJankCount: 0
     property int qmlFrameDroppedCount: 0
-    property int qmlFrameIdleGapCount: 0
     property real qmlFrameMaxIntervalMs: 0
+    property bool qmlFrameCaptureEnabled: false
     property string shellTransitionTitle: ""
     property string shellTransitionDetail: ""
     property color shellTransitionAccent: theme.accentWarm400
@@ -133,7 +150,17 @@ ApplicationWindow {
     readonly property bool macStyle: Qt.platform.os === "osx"
     readonly property int libraryWorkspaceIndex: 0
     readonly property int editWorkspaceIndex: 1
+    // Index 2 remains a compatibility route for saved workspace preferences.
     readonly property int carouselWorkspaceIndex: 2
+    property bool editBoardsActive: false
+    property bool switchingEditBoard: false
+    property string editBoardSyncError: ""
+    property var editBoardImageReplacement: ({})
+    property var editBoardImageReplacementHistory: []
+    property var editBoardLayerSelections: ({})
+    readonly property bool photoWorkspaceActive: currentWorkspace === editWorkspaceIndex
+    readonly property bool boardsWorkspaceActive: currentWorkspace === editWorkspaceIndex && editBoardsActive
+    property string carouselPhotoEditOriginalPatch: ""
     readonly property int timelineWorkspaceIndex: 3
     readonly property int exportWorkspaceIndex: 4
     readonly property int sceneWorkspaceIndex: 5
@@ -147,7 +174,7 @@ ApplicationWindow {
     property bool pendingFirstRunGuideOpen: false
     property bool sessionRestoreApplied: false
     property bool recoveryDetailsExpanded: false
-    readonly property var workspaceTitles: ["Library", "Edit", "Carousel", "Timeline", "Export", "Scene"]
+    readonly property var workspaceTitles: ["Library", "Edit", "Boards", "Timeline", "Export", "Scene"]
     readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export", "scene"]
     readonly property string pageVisibilityAuditContract: "page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export|buckets:always,contextual,one-expansion,hover-focus,diagnostic,preserve|runtime-active:true|functionality:preserved|major-shape:preserved"
     readonly property string activityProgressPlacementContract: "activity-progress-placement:v2|header-overlay:true|layout-shift:false|text:false|cancel-action:true"
@@ -228,7 +255,7 @@ ApplicationWindow {
                 || status.indexOf("error") >= 0
                 || status.indexOf("unavailable") >= 0
                 || status.indexOf("unable") >= 0
-        return currentWorkspace === editWorkspaceIndex && failed
+        return photoWorkspaceActive && failed
     }
     readonly property string primaryFailureKind: {
         if (!jobQueue)
@@ -387,7 +414,16 @@ ApplicationWindow {
     }
     readonly property bool primaryActivityCancelable: canCancelActivityKind(primaryActivityKind)
     function primaryShortcut(key) {
-        return (macStyle ? "Meta+" : "Ctrl+") + key
+        // Qt maps its portable Ctrl modifier to Command on macOS. Using Meta
+        // here binds the physical Control key while the UI advertises Command.
+        return "Ctrl+" + key
+    }
+    function configuredShortcut(shortcutId, fallback) {
+        let sequence = String(appShell.shortcutSequence(shortcutId, fallback) || fallback)
+        // Older versions exposed "Cmd+" in the shortcut editor and persisted
+        // that spelling. Preserve its intended primary modifier while mapping
+        // it to Qt's portable shortcut token.
+        return sequence.replace(/(^|\+)Cmd(?=\+)/g, "$1Ctrl")
     }
 
     function openPreferencesDialog(pageIndex) {
@@ -406,6 +442,12 @@ ApplicationWindow {
             keyboardShortcutsDialogLoader.item.open()
             pendingKeyboardShortcutsDialogOpen = false
         }
+    }
+
+    function openUiPrimitivesPage() {
+        uiPrimitivesLoader.active = true
+        if (uiPrimitivesLoader.item)
+            uiPrimitivesLoader.item.open()
     }
 
     function openCommandPaletteDialog() {
@@ -427,11 +469,11 @@ ApplicationWindow {
     }
 
     function primaryShiftShortcut(key) {
-        return (macStyle ? "Meta+Shift+" : "Ctrl+Shift+") + key
+        return "Ctrl+Shift+" + key
     }
 
     function primaryAltShortcut(key) {
-        return (macStyle ? "Meta+Alt+" : "Ctrl+Alt+") + key
+        return "Ctrl+Alt+" + key
     }
 
     function coreWorkflowShortcutSignature() {
@@ -606,10 +648,10 @@ ApplicationWindow {
     function activeWorkspaceItem() {
         if (currentWorkspace === sceneWorkspaceIndex)
             return sceneWorkspaceLoader.item
-        if (currentWorkspace === editWorkspaceIndex)
+        if (photoWorkspaceActive)
             return editWorkspaceLoader.item ? editWorkspaceLoader.item : null
-        if (currentWorkspace === carouselWorkspaceIndex)
-            return carouselWorkspaceLoader.item ? carouselWorkspaceLoader.item : null
+        if (boardsWorkspaceActive)
+            return editWorkspaceLoader.item
         if (currentWorkspace === timelineWorkspaceIndex)
             return timelineWorkspaceLoader.item ? timelineWorkspaceLoader.item : null
         if (currentWorkspace === exportWorkspaceIndex)
@@ -625,7 +667,7 @@ ApplicationWindow {
         if (index === editWorkspaceIndex)
             return editWorkspaceLoaded
         if (index === carouselWorkspaceIndex)
-            return carouselWorkspaceLoaded
+            return editWorkspaceLoaded
         if (index === timelineWorkspaceIndex)
             return timelineWorkspaceLoaded
         if (index === exportWorkspaceIndex)
@@ -641,7 +683,7 @@ ApplicationWindow {
         if (index === editWorkspaceIndex)
             return editWorkspaceLoader.item
         if (index === carouselWorkspaceIndex)
-            return carouselWorkspaceLoader.item
+            return editWorkspaceLoader.item
         if (index === timelineWorkspaceIndex)
             return timelineWorkspaceLoader.item
         if (index === exportWorkspaceIndex)
@@ -671,7 +713,7 @@ ApplicationWindow {
         const tool = String(editToolName || "").trim().toLowerCase()
         if (workspaceIndex === libraryWorkspaceIndex && libraryWorkspaceMode === "import")
             return "import"
-        if (workspaceIndex === editWorkspaceIndex && tool === "masks")
+                if (workspaceIndex === editWorkspaceIndex && tool === "masks")
             return "masks"
         if (workspaceIndex >= 0 && workspaceIndex < workspaceKinds.length)
             return workspaceKinds[workspaceIndex]
@@ -679,7 +721,7 @@ ApplicationWindow {
     }
 
     function activePerformanceSurface() {
-        return workspacePerformanceSurface(currentWorkspace, currentWorkspace === editWorkspaceIndex ? resolvedEditTool() : "")
+        return workspacePerformanceSurface(currentWorkspace, photoWorkspaceActive ? resolvedEditTool() : "")
     }
 
     function routeWorkflowId(surface) {
@@ -731,7 +773,13 @@ ApplicationWindow {
         const elapsed = Math.max(0, nowMs - qmlFrameLastSampleAtMs)
         qmlFrameLastSampleAtMs = nowMs
         if (elapsed > 1000) {
-            qmlFrameIdleGapCount += 1
+            // Preserve long visible-window gaps as the stalls they are. Treating
+            // them as idle made multi-second synchronous workspace construction
+            // disappear from the jank report.
+            qmlFrameSampleCount += 1
+            qmlFrameMaxIntervalMs = Math.max(qmlFrameMaxIntervalMs, elapsed)
+            qmlFrameJankCount += 1
+            qmlFrameDroppedCount += 1
             flushQmlFrameSummary()
             return
         }
@@ -752,7 +800,7 @@ ApplicationWindow {
             return
         const surface = activePerformanceSurface()
         const hasFrameIssue = qmlFrameJankCount > 0 || qmlFrameDroppedCount > 0
-        if (hasQmlPerformance() && hasFrameIssue) {
+        if (hasQmlPerformance() && (hasFrameIssue || qmlFrameCaptureEnabled)) {
             qmlPerformance.frameSummary(surface,
                                         currentWorkspace,
                                         qmlFrameSampleCount,
@@ -763,8 +811,12 @@ ApplicationWindow {
         qmlFrameSampleCount = 0
         qmlFrameJankCount = 0
         qmlFrameDroppedCount = 0
-        qmlFrameIdleGapCount = 0
         qmlFrameMaxIntervalMs = 0
+    }
+
+    function beginQmlFrameCaptureWindow() {
+        flushQmlFrameSummary()
+        qmlFrameLastSampleAtMs = qmlNowMs()
     }
 
     function editToolTitle(toolName) {
@@ -785,7 +837,8 @@ ApplicationWindow {
     }
 
     function beginShellTransition(targetWorkspaceIndex, title, detail, accent, editToolName) {
-        const workspaceIndex = Number(targetWorkspaceIndex)
+        const requestedIndex = Number(targetWorkspaceIndex)
+        const workspaceIndex = requestedIndex === carouselWorkspaceIndex ? editWorkspaceIndex : requestedIndex
         if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
             return false
 
@@ -803,6 +856,8 @@ ApplicationWindow {
         shellTransitionDetail = String(detail || workspaceSubtitles[workspaceIndex])
         shellTransitionAccent = accent || workspaceAccent(workspaceIndex)
         workspaceTransitionActive = true
+        if (workspaceIndex !== timelineWorkspaceIndex)
+            timelinePlayback.workspaceActive = false
         workspaceTransitionCommitTimer.restart()
         return true
     }
@@ -817,6 +872,7 @@ ApplicationWindow {
         workspaceTransitionCommitTimer.stop()
         workspaceTransitionFinishTimer.stop()
         workspaceTransitionActive = false
+        timelinePlayback.workspaceActive = currentWorkspace === timelineWorkspaceIndex
         pendingWorkspaceIndex = -1
         pendingEditToolActivation = ""
         qmlRouteStartedAtMs = 0
@@ -858,6 +914,8 @@ ApplicationWindow {
         if (!workspaceTransitionActive || pendingWorkspaceIndex !== index)
             return
         if (loadedWorkspaceItem(index) === null)
+            return
+        if (index === editWorkspaceIndex && loadedWorkspaceItem(index).pageContentReady === false)
             return
         logQmlRouteReady(index, workspaceLoaded(index))
         finishShellTransitionSoon()
@@ -903,6 +961,13 @@ ApplicationWindow {
         return true
     }
 
+    function prewarmTimelineWorkspace() {
+        if (timelineWorkspaceLoaded || currentWorkspace === timelineWorkspaceIndex)
+            return false
+        timelineWorkspaceLoaded = true
+        return true
+    }
+
     function preloadNextSecondaryWorkspace() {
         if (secondaryWorkspacePrewarmStep === 0) {
             if (!carouselWorkspaceLoaded)
@@ -932,9 +997,9 @@ ApplicationWindow {
     function activePageKind() {
         if (currentWorkspace === libraryWorkspaceIndex)
             return libraryWorkspaceMode === "import" ? "import" : "library"
-        if (currentWorkspace === editWorkspaceIndex)
+        if (photoWorkspaceActive)
             return editWorkspaceMode === "masks" || editWorkspaceMode === "brush" ? "masks" : "edit"
-        if (currentWorkspace === carouselWorkspaceIndex)
+        if (boardsWorkspaceActive)
             return "carousel"
         if (currentWorkspace === timelineWorkspaceIndex)
             return "timeline"
@@ -971,11 +1036,14 @@ ApplicationWindow {
     }
 
     function activeTimelineView() {
-        return currentWorkspace === timelineWorkspaceIndex ? activeWorkspaceItem() : null
+        if (currentWorkspace !== timelineWorkspaceIndex)
+            return null
+        const workspace = activeWorkspaceItem()
+        return workspace && workspace.timelineSetupOnly !== true ? workspace : null
     }
 
     function activeCarouselView() {
-        return currentWorkspace === carouselWorkspaceIndex ? activeWorkspaceItem() : null
+        return null
     }
 
     function activatePrimaryEditTool(toolName) {
@@ -996,7 +1064,7 @@ ApplicationWindow {
             contentItem.forceActiveFocus(Qt.ShortcutFocusReason)
 
         const selectionTool = cleanTool === "masks" || cleanTool === "brush" || cleanTool === "retouch"
-        const editWorkspace = currentWorkspace === editWorkspaceIndex ? activeWorkspaceItem() : null
+        const editWorkspace = photoWorkspaceActive ? activeWorkspaceItem() : null
         if (selectionTool && editWorkspace &&
                 editWorkspace.objectName === "editStudioWorkspace" &&
                 typeof editWorkspace.activateEditTool === "function") {
@@ -1154,8 +1222,10 @@ ApplicationWindow {
         return dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
     }
 
-    readonly property bool photoRecipeWorkspace: currentWorkspace === libraryWorkspaceIndex
-                                                || currentWorkspace === editWorkspaceIndex
+    readonly property bool libraryBoardsActive: currentWorkspace === libraryWorkspaceIndex && workspaceLoader.item !== null && workspaceLoader.item.libraryBoardsOpen
+    readonly property bool libraryDocumentsActive: currentWorkspace === libraryWorkspaceIndex && workspaceLoader.item !== null && workspaceLoader.item.libraryDocumentsOpen
+    readonly property bool photoRecipeWorkspace: (currentWorkspace === libraryWorkspaceIndex && !libraryDocumentsActive)
+                                                || photoWorkspaceActive
     property bool applyingPhotoRecipe: false
     property string photoRecipeNoticeText: ""
     property bool photoRecipeNoticeUndo: false
@@ -1163,15 +1233,15 @@ ApplicationWindow {
     function canCopyPhotoRecipe() {
         return photoRecipeWorkspace && !copyPhotoEditsDialog.visible
                 && !focusItemSupports("copy")
-                && !(currentWorkspace === editWorkspaceIndex && editorUsesLocalAsset)
-                && catalogAssets.selectedAssetId.length > 0
-                && catalogAssets.selectedMediaType === "photo"
+                && !(photoWorkspaceActive && editorUsesLocalAsset)
+                && (photoWorkspaceActive ? editorPreview.hasAsset
+                    : catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo")
     }
 
     function canPastePhotoRecipe() {
         return photoRecipeWorkspace && !copyPhotoEditsDialog.visible
                 && !focusItemSupports("paste")
-                && !(currentWorkspace === editWorkspaceIndex && editorUsesLocalAsset)
+                && !(photoWorkspaceActive && editorUsesLocalAsset)
                 && (catalogAssets.selectedAssetCount > 0
                     || (catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo"))
                 && editorPreview.hasCopiedPhotoRecipe
@@ -1186,9 +1256,9 @@ ApplicationWindow {
 
     function openCopyPhotoEdits() {
         if (!canCopyPhotoRecipe()) return
+        copyPhotoEditsDialog.focusReturnItem = activeFocusItem
         // Freeze the source before showing the chooser, including unsaved edits.
-        copyPhotoEditsDialog.sourcePatch = currentWorkspace === editWorkspaceIndex
-                && editorPreview.assetId === catalogAssets.selectedAssetId
+        copyPhotoEditsDialog.sourcePatch = photoWorkspaceActive && editorPreview.hasAsset
                 ? editorPreview.currentAssetBoundAdjustmentPatchJson()
                 : catalogAssets.selectedAdjustmentPatchJson
         copyPhotoEditsDialog.sourceLabel = currentSelectionLabel()
@@ -1205,7 +1275,7 @@ ApplicationWindow {
         let count = 0
         try {
             // Merge onto the latest live edit, not an older catalog snapshot.
-            if (currentWorkspace === editWorkspaceIndex) syncEditorRecipeToCatalog()
+            if (photoWorkspaceActive) syncEditorRecipeToCatalog()
             count = catalogAssets.pasteAdjustmentPatchJsonToAssetIds(targets, patch)
         } finally {
             applyingPhotoRecipe = false
@@ -1224,8 +1294,15 @@ ApplicationWindow {
     }
 
     function currentSelectionLabel() {
-        if (editorUsesLocalAsset && currentWorkspace === editWorkspaceIndex && localEditorFilePath.length > 0)
+        if (currentWorkspace === sceneWorkspaceIndex) {
+            const workspace = sceneWorkspaceLoader.item
+            return workspace && workspace.scene.projectPath
+                    ? baseNameFromPath(String(workspace.scene.projectPath)) : ""
+        }
+        if (editorUsesLocalAsset && photoWorkspaceActive && localEditorFilePath.length > 0)
             return localEditorDisplayName.length > 0 ? localEditorDisplayName : baseNameFromPath(localEditorFilePath)
+        if (photoWorkspaceActive && editorPreview.hasAsset && openedCatalogFilePath.length > 0)
+            return baseNameFromPath(openedCatalogFilePath)
 
         if (currentWorkspace === timelineWorkspaceIndex && timelineDocument.savedRenderPath.length > 0)
             return timelineDocument.timelineName.length > 0 ? timelineDocument.timelineName : "Untitled Timeline"
@@ -1239,8 +1316,9 @@ ApplicationWindow {
     }
 
     function canOpenSelectedPhotoInEdit() {
-        return (catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo")
-                || catalogAssets.assetCount > 0
+        if (catalogAssets.selectedAssetCount > 0)
+            return catalogAssets.selectedMediaType === "photo"
+        return catalogAssets.firstVisiblePhotoIndex >= 0
     }
 
     function canOpenSelectedTimeline() {
@@ -1285,7 +1363,7 @@ ApplicationWindow {
             }
         }
 
-        if (editorUsesLocalAsset && currentWorkspace === editWorkspaceIndex && localEditorFilePath.length > 0) {
+        if (editorUsesLocalAsset && photoWorkspaceActive && localEditorFilePath.length > 0) {
             return {
                 "assetId": localEditorFilePath,
                 "mediaType": "photo",
@@ -1296,15 +1374,12 @@ ApplicationWindow {
             }
         }
 
-        if (currentWorkspace === editWorkspaceIndex
-                && catalogAssets.selectedAssetId.length > 0
-                && catalogAssets.selectedMediaType === "photo"
-                && catalogAssets.selectedFilePath.length > 0) {
+        if (photoWorkspaceActive && editorPreview.hasAsset && openedCatalogFilePath.length > 0) {
             return {
-                "assetId": catalogAssets.selectedAssetId,
-                "mediaType": catalogAssets.selectedMediaType,
+                "assetId": editorPreview.assetId,
+                "mediaType": "photo",
                 "displayLabel": currentSelectionLabel(),
-                "sourcePath": catalogAssets.selectedFilePath,
+                "sourcePath": openedCatalogFilePath,
                 "editedPreviewSource": editorPreview.previewSource,
                 "adjustmentPatchJson": editorPreview.currentAssetBoundAdjustmentPatchJson()
             }
@@ -1316,7 +1391,7 @@ ApplicationWindow {
                 "mediaType": catalogAssets.selectedMediaType,
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": catalogAssets.selectedFilePath,
-                "editedPreviewSource": editorPreview.previewSource,
+                "editedPreviewSource": editorPreview.assetId === catalogAssets.selectedAssetId ? editorPreview.previewSource : "",
                 "adjustmentPatchJson": catalogAssets.selectedAdjustmentPatchJson
             }
         }
@@ -1325,7 +1400,18 @@ ApplicationWindow {
     }
 
     function canQueueExportFromMenu() {
-        return currentExportPayload() !== null
+        // Availability must stay cheap during selection. Materialize the
+        // full edit recipe only in queueExportFromMenu, on explicit activation.
+        if (currentWorkspace === timelineWorkspaceIndex
+                && timelineDocument.savedRenderPath.length > 0 && !timelineDocument.dirty)
+            return true
+        if (photoWorkspaceActive) {
+            if (editorUsesLocalAsset && localEditorFilePath.length > 0)
+                return true
+            if (editorPreview.hasAsset && openedCatalogFilePath.length > 0)
+                return true
+        }
+        return catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedFilePath.length > 0
     }
 
     function queueExportFromMenu() {
@@ -1350,12 +1436,15 @@ ApplicationWindow {
             switchToWorkspaceIndex(exportWorkspaceIndex)
     }
 
+    property string openedCatalogFilePath: ""
     function loadSelectedAssetIntoEditor() {
+        editorPreview.catalogRecipePersistenceEnabled = true
         if (catalogAssets.selectedAssetId.length === 0 && catalogAssets.assetCount > 0)
             catalogAssets.selectIndex(0)
 
         syncEditorRecipeToCatalog(catalogAssets.selectedAssetId)
         if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo") {
+            openedCatalogFilePath = ""
             editorPreview.loadAsset(
                 "",
                 "",
@@ -1368,6 +1457,7 @@ ApplicationWindow {
             return
         }
 
+        openedCatalogFilePath = catalogAssets.selectedFilePath
         editorPreview.loadAsset(
             catalogAssets.selectedAssetId,
             catalogAssets.selectedFilePath,
@@ -1379,7 +1469,8 @@ ApplicationWindow {
         )
     }
 
-    function loadLocalAssetIntoEditor() {
+    function loadLocalAssetIntoEditor(documentOwned) {
+        editorPreview.catalogRecipePersistenceEnabled = !(carouselPhotoEditActive || documentOwned === true)
         if (localEditorFilePath.length === 0)
             return
 
@@ -1394,55 +1485,311 @@ ApplicationWindow {
         )
     }
 
-    function beginCarouselPhotoEdit(payload) {
-        const targetKey = String(payload.targetKey || "")
-        const filePath = String(payload.filePath || "")
-        if (targetKey.length === 0 || filePath.length === 0)
-            return
+    function commitActiveEditBoard() {
+        if (!carouselPhotoEditActive) return true
+        if (editorPreview.photoPaintBusy || editorPreview.brushStrokeActive || switchingEditBoard) return false
+        const workspace = editWorkspaceLoader.item
+        if (workspace && workspace.photoTextOverlayHandle && workspace.photoTextOverlayHandle.editing)
+            workspace.photoTextOverlayHandle.finish(true)
+        if (workspace) workspace.finishCreativeInspectorEditing()
+        if (workspace)
+            editBoardLayerSelections[localEditorAssetId] = workspace.selectedEditTargetScope() === "base-image"
+                    ? -1 : workspace.activePhotoLayerIndex
+        return syncBoardPhotoEdit() && carouselDocument.saveDocument()
+    }
 
+    function activateEditBoard(index) {
+        if (switchingEditBoard || editorPreview.photoPaintBusy || editorPreview.brushStrokeActive) return false
+        if (carouselPhotoEditActive && !commitActiveEditBoard()) return false
+        switchingEditBoard = true
+        const workspace = editWorkspaceLoader.item
+        if (carouselPhotoEditActive && workspace)
+            editBoardLayerSelections[localEditorAssetId] = workspace.selectedEditTargetScope() === "base-image"
+                    ? -1 : workspace.activePhotoLayerIndex
+        const payload = carouselDocument.editBoardPayload(index)
+        if (!payload || !String(payload.boardId || "").length) {
+            switchingEditBoard = false
+            showPhotoRecipeNotice(carouselDocument.status, false)
+            return false
+        }
+        editBoardsActive = true
         carouselPhotoEditActive = true
-        carouselPhotoEditTargetKey = targetKey
-        carouselPhotoEditDisplayName = String(payload.displayLabel || baseNameFromPath(filePath))
-        carouselPhotoEditGeneration += 1
+        carouselPhotoEditTargetKey = String(payload.targetKey)
+        carouselPhotoEditDisplayName = String(payload.displayLabel || "Board")
         editorUsesLocalAsset = true
-        localEditorAssetId = targetKey + "|edit:" + carouselPhotoEditGeneration
-        localEditorFilePath = filePath
+        localEditorAssetId = "board:" + carouselDocument.savedDocumentId + ":" + String(payload.imageId || payload.boardId)
+        localEditorFilePath = String(payload.filePath)
         localEditorPreviewSource = String(payload.previewSource || "")
         localEditorDisplayName = carouselPhotoEditDisplayName
-        localEditorAdjustmentPatchJson =
-                String(payload.adjustmentPatchJson || "")
-        beginShellTransition(editWorkspaceIndex,
-                             "Editing Carousel Photo",
-                             "Adjust the source photo, then apply it back to the same Carousel instance.",
-                             workspaceAccent(editWorkspaceIndex),
-                             "adjust")
+        localEditorAdjustmentPatchJson = String(payload.adjustmentPatchJson || "")
+        editorPreview.catalogRecipePersistenceEnabled = false
+        if (editorPreview.assetId !== localEditorAssetId) loadLocalAssetIntoEditor(true)
+        switchingEditBoard = false
+        if (workspace) {
+            workspace.editInspectorTab = "layers"
+            const layerIndex = editBoardLayerSelections[localEditorAssetId]
+            if (layerIndex !== undefined && layerIndex >= 0 && layerIndex < editorPreview.photoLayerCount)
+                workspace.setActivePhotoLayerSelection(layerIndex, false)
+            else {
+                workspace.selectedPhotoLayerIndices = []
+                workspace.setSelectedEditTarget("base-image", -1, ({}), -1)
+            }
+        }
+        return carouselDocument.saveDocument()
+    }
+
+    function openSavedBoards(documentId) {
+        if (carouselPhotoEditActive && !finishCarouselPhotoEdit(true)) return false
+        if (carouselDocument.hasActiveCarousel && carouselDocument.documentDirty && !carouselDocument.saveDocument()) return false
+        if (!carouselDocument.loadDocument(documentId) || !activateEditBoard(carouselDocument.currentIndex)) {
+            showPhotoRecipeNotice(carouselDocument.status, false)
+            return false
+        }
+        return beginShellTransition(editWorkspaceIndex, "Opening canvas", "Continue your document in Edit.",
+                                    workspaceAccent(editWorkspaceIndex), "")
+    }
+
+    function addBoardsFromCurrentEdit() {
+        if (!photoWorkspaceActive || !editorPreview.hasAsset || carouselPhotoEditActive) return false
+        const path = editorUsesLocalAsset ? localEditorFilePath : openedCatalogFilePath
+        const name = editorUsesLocalAsset ? localEditorDisplayName : baseNameFromPath(path)
+        syncEditorRecipeToCatalog()
+        if (!carouselDocument.createBoardsFromEdit(path, name,
+                editorPreview.currentAssetBoundAdjustmentPatchJson(),
+                editorPreview.sourceImageWidth, editorPreview.sourceImageHeight, 1)) {
+            showPhotoRecipeNotice(carouselDocument.status, false)
+            return false
+        }
+        return activateEditBoard(0)
+    }
+
+    function addEditBoard(extendCurrent) {
+        if (!editBoardsActive && !addBoardsFromCurrentEdit()) return false
+        if (!commitActiveEditBoard()) return false
+        const outgoingSelection = editBoardLayerSelections[localEditorAssetId]
+        switchingEditBoard = true
+        const added = carouselDocument.addEditBoard(extendCurrent)
+        switchingEditBoard = false
+        if (!added) {
+            showPhotoRecipeNotice(carouselDocument.status, false)
+            return false
+        }
+        if (extendCurrent) {
+            const imageId = carouselDocument.slides[carouselDocument.currentIndex].imageId
+            editBoardLayerSelections["board:" + carouselDocument.savedDocumentId + ":" + imageId] = outgoingSelection
+        }
+        // The outgoing edit is already committed; do not retarget the new board
+        // back to the old board while selecting the newly added canvas.
+        carouselPhotoEditActive = false
+        return activateEditBoard(carouselDocument.currentIndex)
+    }
+
+    function modifyEditBoards(operation) {
+        if (!editBoardsActive || carouselDocument.exportBusy) return false
+        if (operation === "earlier" || operation === "later") {
+            const current = carouselDocument.slides[carouselDocument.currentIndex]
+            const start = Number(current.moveSpanStart)
+            const end = start + Number(current.moveSpanCount)
+            if (operation === "earlier") {
+                if (start <= 0) return false
+                return moveEditBoard(carouselDocument.currentIndex, Number(carouselDocument.slides[start - 1].moveSpanStart))
+            }
+            if (end >= carouselDocument.slideCount) return false
+            const next = carouselDocument.slides[end]
+            return moveEditBoard(carouselDocument.currentIndex, Number(next.moveSpanStart) + Number(next.moveSpanCount))
+        }
+        if (!commitActiveEditBoard()) return false
+        switchingEditBoard = true
+        if (operation === "remove") carouselDocument.removeEditBoard()
+        else if (operation === "duplicate") carouselDocument.duplicateCurrentSlide()
+        else if (operation === "variant" && !carouselDocument.createBoardVariant()) {
+            switchingEditBoard = false
+            return false
+        }
+        switchingEditBoard = false
+        carouselPhotoEditActive = false
+        return activateEditBoard(carouselDocument.currentIndex)
+    }
+
+    function moveEditBoard(index, insertionIndex) {
+        if (!editBoardsActive || switchingEditBoard || carouselDocument.editBoardImageBusy || carouselDocument.exportBusy ||
+            editorPreview.photoPaintBusy || editorPreview.brushStrokeActive || !commitActiveEditBoard()) return false
+        const before = carouselDocument.slides.map(function(board) { return String(board.boardId) }).join("|")
+        switchingEditBoard = true
+        const saved = carouselDocument.moveEditBoard(index, insertionIndex)
+        switchingEditBoard = false
+        const changed = before !== carouselDocument.slides.map(function(board) { return String(board.boardId) }).join("|")
+        if (changed) {
+            carouselPhotoEditActive = false
+            activateEditBoard(carouselDocument.currentIndex)
+        }
+        if (editWorkspaceLoader.item && (changed || !saved))
+            editWorkspaceLoader.item.showEditActionFeedback(carouselDocument.status, !saved && changed)
+        return changed
+    }
+
+    function canUndoBoardMove(redo) {
+        const label = redo ? carouselDocument.redoText : carouselDocument.undoText
+        return editBoardsActive && carouselPhotoEditActive && !switchingEditBoard && !carouselDocument.editBoardImageBusy &&
+            !carouselDocument.exportBusy && !editorPreview.photoPaintBusy && !editorPreview.brushStrokeActive &&
+            (redo ? label === "Move boards" : (label === "Move boards" || label === "Edit photo") && carouselDocument.canUndoEditBoardMove())
+    }
+
+    function undoBoardMove(redo) {
+        if (!canUndoBoardMove(redo) || !commitActiveEditBoard()) return false
+        switchingEditBoard = true
+        if (redo) carouselDocument.redo()
+        else if (!carouselDocument.undoEditBoardMove()) {
+            switchingEditBoard = false
+            return false
+        }
+        switchingEditBoard = false
+        carouselPhotoEditActive = false
+        return activateEditBoard(carouselDocument.currentIndex)
+    }
+
+    function canUndoCreativeBoardAction(redo) {
+        const label = redo ? carouselDocument.redoText : carouselDocument.undoText
+        return editBoardsActive && carouselPhotoEditActive && !switchingEditBoard && editBoardSyncError.length === 0 &&
+            !carouselDocument.editBoardImageBusy && !carouselDocument.exportBusy &&
+            !editorPreview.photoPaintBusy && !editorPreview.brushStrokeActive &&
+            ["Create board variant", "Link photo text across boards", "Detach local photo text override"].indexOf(label) >= 0
+    }
+
+    function undoCreativeBoardAction(redo) {
+        if (!canUndoCreativeBoardAction(redo) || !commitActiveEditBoard()) return false
+        const previousBoardId = String(carouselDocument.slides[carouselDocument.currentIndex].boardId)
+        switchingEditBoard = true
+        if (redo) carouselDocument.redo()
+        else carouselDocument.undo()
+        switchingEditBoard = false
+        if (String(carouselDocument.slides[carouselDocument.currentIndex].boardId) === previousBoardId)
+            return true
+        carouselPhotoEditActive = false
+        return activateEditBoard(carouselDocument.currentIndex)
+    }
+
+    function performPhotoUndo(redo) {
+        if (window.canUndoCreativeBoardAction(redo)) window.undoCreativeBoardAction(redo)
+        else if (window.canUndoBoardMove(redo)) window.undoBoardMove(redo)
+        else if (window.canUndoBoardImageReplacement(redo)) window.undoBoardImageReplacement(redo)
+        else if (redo) editorPreview.redo()
+        else editorPreview.undo()
+    }
+
+    function requestEditBoardAction(index, operation) {
+        if (operation === "add-photo") {
+            if (!editBoardsActive && !addBoardsFromCurrentEdit()) return false
+            if (!commitActiveEditBoard()) return false
+            switchingEditBoard = true
+            const added = carouselDocument.addEditPhotoBoard()
+            switchingEditBoard = false
+            if (!added) return false
+            carouselPhotoEditActive = false
+            return activateEditBoard(carouselDocument.currentIndex)
+        }
+        if (!editBoardsActive || switchingEditBoard || editorPreview.photoPaintBusy ||
+                editorPreview.brushStrokeActive || carouselDocument.exportBusy) return false
+        if (index !== carouselDocument.currentIndex && !activateEditBoard(index)) return false
+        if (operation !== "rename" && operation !== "remove") return modifyEditBoards(operation)
+        if (operation === "remove" && carouselDocument.slideCount <= 1) return false
+        if (!commitActiveEditBoard()) return false
+        const board = carouselDocument.slides[carouselDocument.currentIndex]
+        editBoardDialog.operation = operation
+        editBoardDialog.boardId = String(board.boardId)
+        editBoardDialog.boardName = String(board.boardName || "Board " + (index + 1))
+        editBoardDialog.errorText = ""
+        editBoardNameField.text = editBoardDialog.boardName
+        editBoardDialog.open()
+        return true
+    }
+
+    function requestEditBoardImageDrop(index, fileUrl, operation) {
+        const workspace = editWorkspaceLoader.item
+        if (!workspace || !editBoardsActive || switchingEditBoard || carouselDocument.editBoardImageBusy ||
+                carouselDocument.exportBusy || editorPreview.photoPaintBusy || editorPreview.brushStrokeActive) return false
+        if (operation !== "layer" && operation !== "replace") return false
+        if (index !== carouselDocument.currentIndex && !activateEditBoard(index)) return false
+        if (operation === "layer") {
+            if (!workspace.addDroppedImageLayer(fileUrl)) return false
+            return commitActiveEditBoard()
+        }
+        if (!commitActiveEditBoard()) return false
+        if (!carouselDocument.replaceEditBoardImage(fileUrl)) {
+            workspace.showEditActionFeedback(carouselDocument.status, true)
+            return false
+        }
+        workspace.showEditActionFeedback("Replacing base image…", false)
+        return true
+    }
+
+    function boardImageReplacement(redo) {
+        const entries = window.editBoardImageReplacementHistory
+        for (let i = entries.length - 1; i >= 0; --i) {
+            const entry = entries[i]
+            if (entry.documentId === carouselDocument.savedDocumentId && entry.assetId === localEditorAssetId &&
+                localEditorFilePath === (redo ? entry.originalPath : entry.replacedPath)) return entry
+        }
+        return ({})
+    }
+
+    function canUndoBoardImageReplacement(redo) {
+        const replacement = window.boardImageReplacement(redo)
+        if (!editBoardsActive || !carouselPhotoEditActive || carouselDocument.editBoardImageBusy ||
+            editorPreview.photoPaintBusy || editorPreview.brushStrokeActive ||
+            replacement.documentId !== carouselDocument.savedDocumentId || replacement.assetId !== localEditorAssetId) return false
+        if (redo) return carouselDocument.redoText === "Replace base image" && localEditorFilePath === replacement.originalPath
+        return localEditorFilePath === replacement.replacedPath &&
+            (carouselDocument.undoText === "Replace base image" ||
+             (editorPreview.currentAssetBoundAdjustmentPatchJson() === replacement.baseline &&
+              carouselDocument.canUndoEditBoardImageReplacement()))
+    }
+
+    function undoBoardImageReplacement(redo) {
+        if (!canUndoBoardImageReplacement(redo)) return false
+        switchingEditBoard = true
+        if (redo) carouselDocument.redo()
+        else if (!carouselDocument.undoEditBoardImageReplacement(window.boardImageReplacement(false).baseline)) {
+            switchingEditBoard = false
+            return false
+        }
+        switchingEditBoard = false
+        carouselPhotoEditActive = false
+        if (!activateEditBoard(carouselDocument.currentIndex)) return false
+        loadLocalAssetIntoEditor(true)
+        return true
+    }
+
+    function beginCarouselPhotoEdit(payload) { activateEditBoard(carouselDocument.currentIndex) }
+
+    function syncBoardPhotoEdit() {
+        if (switchingEditBoard || !carouselPhotoEditActive || editorPreview.assetId !== localEditorAssetId) return true
+        localEditorAdjustmentPatchJson = editorPreview.currentAssetBoundAdjustmentPatchJson()
+        const accepted = carouselDocument.applyAdjustmentPatchToPhotoEditTarget(carouselPhotoEditTargetKey,
+                    localEditorAdjustmentPatchJson)
+        editBoardSyncError = accepted ? "" : String(carouselDocument.status || qsTr("The board edits could not be saved."))
+        if (!accepted && editWorkspaceLoader.item)
+            editWorkspaceLoader.item.showEditActionFeedback(editBoardSyncError + qsTr(" Undo the last edit to return to the saved version."), true)
+        return accepted
     }
 
     function finishCarouselPhotoEdit(applyChanges) {
-        if (!carouselPhotoEditActive)
-            return
-        if (applyChanges
-                && !carouselDocument.applyAdjustmentPatchToPhotoEditTarget(
-                       carouselPhotoEditTargetKey,
-                       editorPreview.currentAssetBoundAdjustmentPatchJson()))
-            return
-
+        if (!carouselPhotoEditActive) return true
+        if (!commitActiveEditBoard()) return false
+        switchingEditBoard = true
         carouselPhotoEditActive = false
+        editBoardsActive = false
         carouselPhotoEditTargetKey = ""
         carouselPhotoEditDisplayName = ""
         editorUsesLocalAsset = false
+        editorPreview.catalogRecipePersistenceEnabled = true
         localEditorAssetId = ""
         localEditorFilePath = ""
         localEditorPreviewSource = ""
         localEditorDisplayName = ""
         localEditorAdjustmentPatchJson = ""
-        beginShellTransition(carouselWorkspaceIndex,
-                             applyChanges ? "Applied Photo Edit" : "Returning to Carousel",
-                             applyChanges
-                                 ? "The Carousel instance now uses the updated non-destructive recipe."
-                                 : "The Carousel photo was left unchanged.",
-                             workspaceAccent(carouselWorkspaceIndex),
-                             "")
+        switchingEditBoard = false
+        return true
     }
 
     function syncEditorRecipeToCatalog(nextAssetId) {
@@ -1510,7 +1857,7 @@ ApplicationWindow {
             editWorkspaceMode = recoveredMode
 
         sessionRestoreApplied = true
-        if (currentWorkspace === editWorkspaceIndex)
+        if (photoWorkspaceActive)
             loadSelectedAssetIntoEditor()
         return true
     }
@@ -1573,12 +1920,19 @@ ApplicationWindow {
         if (!canOpenSelectedPhotoInEdit())
             return
 
-        if (catalogAssets.selectedAssetId.length === 0 && catalogAssets.assetCount > 0)
-            catalogAssets.selectIndex(0)
+        if (catalogAssets.selectedAssetCount === 0) {
+            const photoIndex = catalogAssets.firstVisiblePhotoIndex
+            if (photoIndex < 0)
+                return
+            catalogAssets.selectIndex(photoIndex)
+        }
 
+        if (carouselPhotoEditActive && !finishCarouselPhotoEdit(true)) return
+        editBoardsActive = false
         carouselPhotoEditActive = false
         carouselPhotoEditTargetKey = ""
         editorUsesLocalAsset = false
+        loadSelectedAssetIntoEditor()
         beginShellTransition(editWorkspaceIndex,
                              "Opening Edit",
                              workspaceSubtitles[editWorkspaceIndex],
@@ -1600,12 +1954,7 @@ ApplicationWindow {
     }
 
     function createCarouselFromMenu() {
-        carouselDocument.createCarouselWithSettings({
-            "carouselName": "Untitled Carousel",
-            "format": "4x5",
-            "slideCount": 1
-        })
-        switchToWorkspaceIndex(carouselWorkspaceIndex)
+        newCanvasDialog.open()
     }
 
     function saveCurrentTimeline() {
@@ -1615,6 +1964,7 @@ ApplicationWindow {
     }
 
     function openProjectWorkspace(destination, projectName) {
+        if (carouselPhotoEditActive && !finishCarouselPhotoEdit(true)) return
         if (projectName.length === 0)
             return
 
@@ -1647,19 +1997,154 @@ ApplicationWindow {
     Action {
         id: newTimelineAction
         text: "New Timeline"
-        shortcut: StandardKey.New
+        shortcut: window.currentWorkspace === window.editWorkspaceIndex ? "" : StandardKey.New
         onTriggered: window.createTimelineFromMenu()
     }
 
     Action {
-        id: newCarouselAction
-        text: "New Carousel"
-        onTriggered: window.createCarouselFromMenu()
+        id: newCanvasAction
+        text: "New Canvas…"
+        shortcut: window.currentWorkspace === window.editWorkspaceIndex ? StandardKey.New : ""
+        enabled: !catalogAssets.busy && !catalogAssets.blankCanvasBusy && !editorPreview.photoPaintBusy &&
+                 !editorPreview.brushStrokeActive && !window.switchingEditBoard &&
+                 (typeof customerAccess === "undefined" || customerAccess.editingAllowed)
+        onTriggered: newCanvasDialog.open()
+    }
+
+    NewCanvasDialog {
+        id: newCanvasDialog
+        parent: Overlay.overlay
+        busy: catalogAssets.blankCanvasBusy
+        onCreateRequested: function(settings) {
+            if (window.carouselPhotoEditActive && !window.commitActiveEditBoard()) {
+                errorText = "Finish the current edit and save this document before creating another."
+                return
+            }
+            if (!carouselDocument.createEditCanvas(settings)) {
+                errorText = carouselDocument.status
+                return
+            }
+            window.carouselPhotoEditActive = false
+            if (!window.activateEditBoard(0)) {
+                errorText = carouselDocument.status
+                return
+            }
+            newCanvasDialog.close()
+            window.switchToWorkspaceIndex(window.editWorkspaceIndex)
+            window.pendingEditInspectorTab = "layers"
+            window.activatePrimaryEditTool("shapes")
+        }
+    }
+
+    Popup {
+        id: editBoardDialog
+        objectName: "editBoardDialog"
+        parent: Overlay.overlay
+        property string operation: "rename"
+        property string boardId: ""
+        property string boardName: ""
+        property string errorText: ""
+        property Item focusReturnItem: null
+        readonly property bool removing: operation === "remove"
+        modal: true
+        focus: true
+        width: Math.min(420, parent ? parent.width - 32 : 420)
+        height: contentItem.implicitHeight + padding * 2
+        x: parent ? (parent.width - width) / 2 : 0
+        y: parent ? (parent.height - height) / 2 : 0
+        padding: 24
+        closePolicy: Popup.CloseOnEscape
+        onAboutToShow: focusReturnItem = window.activeFocusItem
+        onOpened: {
+            if (removing) editBoardDialogCancel.forceActiveFocus()
+            else { editBoardNameField.forceActiveFocus(); editBoardNameField.selectAll() }
+        }
+        onClosed: Qt.callLater(function() {
+            if (editBoardDialog.focusReturnItem && editBoardDialog.focusReturnItem.visible && editBoardDialog.focusReturnItem.enabled)
+                editBoardDialog.focusReturnItem.forceActiveFocus(Qt.TabFocusReason)
+            editBoardDialog.focusReturnItem = null
+        })
+        function apply() {
+            const board = carouselDocument.slides[carouselDocument.currentIndex] || ({})
+            if (!window.editBoardsActive || String(board.boardId || "") !== boardId) {
+                errorText = "The active board changed. Close this dialog and try again."
+                return
+            }
+            if (removing) {
+                if (!window.modifyEditBoards("remove")) { errorText = carouselDocument.status; return }
+            } else {
+                if (!editBoardNameField.text.trim().length) return
+                carouselDocument.setCurrentSlideName(editBoardNameField.text.trim())
+                if (!carouselDocument.saveDocument()) { errorText = carouselDocument.saveError; return }
+                window.carouselPhotoEditDisplayName = String(carouselDocument.slides[carouselDocument.currentIndex].boardName)
+                window.localEditorDisplayName = window.carouselPhotoEditDisplayName
+            }
+            close()
+        }
+        background: Rectangle {
+            color: theme.ink900
+            radius: theme.radiusPanel
+            border.color: theme.lineSoft
+            Accessible.role: Accessible.Dialog
+            Accessible.name: editBoardDialog.removing ? "Remove board" : "Rename board"
+        }
+        contentItem: ColumnLayout {
+            spacing: 16
+            Label {
+                text: editBoardDialog.removing ? "Remove board?" : "Rename board"
+                color: theme.textStrong
+                font.pixelSize: theme.typeDialogTitle
+                font.weight: Font.DemiBold
+            }
+            Label {
+                Layout.fillWidth: true
+                text: editBoardDialog.removing ? (Number((carouselDocument.slides[carouselDocument.currentIndex] || ({})).imageSpanCount || 1) > 1
+                        ? "“" + editBoardDialog.boardName + "” will be removed. Its shared image and layers remain on the other boards."
+                        : "“" + editBoardDialog.boardName + "” and its layers will be removed from this document.")
+                                              : "Give this board a name you can recognize on the canvas."
+                color: theme.textMuted
+                wrapMode: Text.WordWrap
+            }
+            ToneTextField {
+                id: editBoardNameField
+                objectName: "editBoardNameField"
+                Layout.fillWidth: true
+                visible: !editBoardDialog.removing
+                maximumLength: 120
+                accessibleLabel: "Board name"
+                onAccepted: editBoardDialog.apply()
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: editBoardDialog.errorText.length > 0
+                text: editBoardDialog.errorText
+                color: theme.error
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 8
+                ActionButton {
+                    id: editBoardDialogCancel
+                    objectName: "editBoardDialogCancel"
+                    text: "Cancel"
+                    onClicked: editBoardDialog.close()
+                }
+                ActionButton {
+                    objectName: "editBoardDialogApply"
+                    text: editBoardDialog.removing ? "Remove board" : "Save name"
+                    tone: editBoardDialog.removing ? "danger" : "primary"
+                    enabled: editBoardDialog.removing || editBoardNameField.text.trim().length > 0
+                    onClicked: editBoardDialog.apply()
+                }
+            }
+        }
     }
 
     Action {
         id: openSelectedInEditAction
-        text: "Open Selected In Edit"
+        objectName: "openSelectedInEditAction"
+        text: "Open Selected Photo in Edit"
         shortcut: window.primaryShortcut("E")
         enabled: window.canOpenSelectedPhotoInEdit()
         onTriggered: window.openSelectedPhotoInEdit()
@@ -1678,6 +2163,21 @@ ApplicationWindow {
         shortcut: StandardKey.Save
         enabled: window.canSaveTimeline()
         onTriggered: window.saveCurrentTimeline()
+    }
+
+    Action {
+        id: saveBoardsAction
+        text: "Save Boards"
+        shortcut: StandardKey.Save
+        enabled: (window.boardsWorkspaceActive || (window.photoWorkspaceActive && window.carouselPhotoEditActive)) &&
+                 !carouselDocument.exportBusy && !editorPreview.photoPaintBusy && !editorPreview.brushStrokeActive
+        onTriggered: {
+            const workspace = editWorkspaceLoader.item
+            if (window.carouselPhotoEditActive && workspace && workspace.photoTextOverlayHandle && workspace.photoTextOverlayHandle.editing)
+                workspace.photoTextOverlayHandle.finish(true)
+            if (!window.syncBoardPhotoEdit() || !carouselDocument.saveDocument())
+                window.showPhotoRecipeNotice(carouselDocument.saveError || carouselDocument.status, false)
+        }
     }
 
     Action {
@@ -1705,7 +2205,7 @@ ApplicationWindow {
     Action {
         id: queueExportAction
         text: "Start Export"
-        shortcut: appShell.shortcutSequence("queue-export", window.primaryShiftShortcut("E"))
+        shortcut: window.configuredShortcut("queue-export", window.primaryShiftShortcut("E"))
         enabled: window.canQueueExportFromMenu()
         onTriggered: window.queueExportFromMenu()
     }
@@ -1721,8 +2221,8 @@ ApplicationWindow {
         id: undoEditAction
         text: "Undo"
         shortcut: window.primaryShortcut("Z")
-        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && catalogAssets.canUndoCulling)
-                 || (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo)
+        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && !window.libraryDocumentsActive && catalogAssets.canUndoCulling)
+                 || (window.photoWorkspaceActive && !carouselDocument.editBoardImageBusy && (editorPreview.canUndo || window.canUndoBoardImageReplacement(false) || window.canUndoBoardMove(false)))
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canUndo)
         onTriggered: {
             if (window.currentWorkspace === window.libraryWorkspaceIndex)
@@ -1730,7 +2230,7 @@ ApplicationWindow {
             else if (window.currentWorkspace === window.timelineWorkspaceIndex)
                 timelineDocument.undo()
             else
-                editorPreview.undo()
+                window.performPhotoUndo(false)
         }
     }
 
@@ -1738,8 +2238,8 @@ ApplicationWindow {
         id: redoEditAction
         text: "Redo"
         shortcut: window.primaryShiftShortcut("Z")
-        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && catalogAssets.canRedoCulling)
-                 || (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo)
+        enabled: (window.currentWorkspace === window.libraryWorkspaceIndex && !window.libraryDocumentsActive && catalogAssets.canRedoCulling)
+                 || (window.photoWorkspaceActive && !carouselDocument.editBoardImageBusy && (editorPreview.canRedo || window.canUndoBoardImageReplacement(true) || window.canUndoBoardMove(true)))
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canRedo)
         onTriggered: {
             if (window.currentWorkspace === window.libraryWorkspaceIndex)
@@ -1747,33 +2247,68 @@ ApplicationWindow {
             else if (window.currentWorkspace === window.timelineWorkspaceIndex)
                 timelineDocument.redo()
             else
-                editorPreview.redo()
+                window.performPhotoUndo(true)
         }
     }
 
     Action {
         id: copyPhotoEditsAction
         text: "Copy Edits…"
-        shortcut: window.primaryShortcut("C")
+        shortcut: window.photoWorkspaceActive ? window.primaryAltShortcut("C") : window.boardsWorkspaceActive ? "" : window.primaryShortcut("C")
         enabled: window.canCopyPhotoRecipe()
         onTriggered: window.openCopyPhotoEdits()
     }
     Action {
         id: pastePhotoEditsAction
         text: "Paste Edits"
-        shortcut: window.primaryShortcut("V")
+        shortcut: window.photoWorkspaceActive ? window.primaryAltShortcut("V") : window.boardsWorkspaceActive ? "" : window.primaryShortcut("V")
         enabled: window.canPastePhotoRecipe()
         onTriggered: window.pastePhotoEdits()
     }
     Shortcut {
         sequence: "Ctrl+C"
-        enabled: window.macStyle && copyPhotoEditsAction.enabled
-        onActivated: window.openCopyPhotoEdits()
+        enabled: window.macStyle && (copyLayersAction.enabled || copyPhotoEditsAction.enabled)
+        onActivated: window.photoWorkspaceActive ? copyLayersAction.trigger() : window.openCopyPhotoEdits()
     }
     Shortcut {
         sequence: "Ctrl+V"
-        enabled: window.macStyle && pastePhotoEditsAction.enabled
-        onActivated: window.pastePhotoEdits()
+        enabled: window.macStyle && (pasteLayersAction.enabled || pastePhotoEditsAction.enabled)
+        onActivated: window.photoWorkspaceActive ? pasteLayersAction.trigger() : window.pastePhotoEdits()
+    }
+    Action {
+        id: copyLayersAction
+        text: "Copy Layers"
+        shortcut: window.primaryShortcut("C")
+        enabled: window.photoWorkspaceActive && window.activeWorkspaceItem() && typeof window.activeWorkspaceItem().canCopyLayers === "function" &&
+                 window.activeWorkspaceItem().canCopyLayers()
+        onTriggered: window.activeWorkspaceItem().copySelectedLayers()
+    }
+    Action {
+        id: pasteLayersAction
+        text: "Paste Layers"
+        shortcut: window.primaryShortcut("V")
+        enabled: window.photoWorkspaceActive && editorPreview.hasAsset &&
+                 editorPreview.hasCopiedPhotoLayers && !editorPreview.photoLayerClipboardBusy &&
+                 !carouselDocument.editBoardImageBusy &&
+                 !editorPreview.photoPaintBusy && !window.focusItemSupports("paste") &&
+                 (typeof customerAccess === "undefined" || customerAccess.editingAllowed)
+        onTriggered: window.activeWorkspaceItem().pasteLayers(false)
+    }
+    Action {
+        id: pasteLayersInPlaceAction
+        text: "Paste Layers in Place"
+        shortcut: window.photoWorkspaceActive && window.activeWorkspaceItem() &&
+                  typeof window.activeWorkspaceItem().maskShortcutContextActive === "function" &&
+                  !window.activeWorkspaceItem().maskShortcutContextActive(true) ? window.primaryShiftShortcut("V") : ""
+        enabled: pasteLayersAction.enabled
+        onTriggered: window.activeWorkspaceItem().pasteLayers(true)
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+V"
+        enabled: window.macStyle && pasteLayersInPlaceAction.enabled && window.activeWorkspaceItem() &&
+                 typeof window.activeWorkspaceItem().maskShortcutContextActive === "function" &&
+                  !window.activeWorkspaceItem().maskShortcutContextActive(true)
+        onActivated: pasteLayersInPlaceAction.trigger()
     }
     Action {
         id: undoPastedPhotoEditsAction
@@ -1838,7 +2373,7 @@ ApplicationWindow {
     Action {
         id: adjustToolAction
         text: "Adjust Tool"
-        shortcut: appShell.shortcutSequence("tool-adjust", window.primaryAltShortcut("A"))
+        shortcut: window.configuredShortcut("tool-adjust", window.primaryAltShortcut("A"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("adjust")
     }
@@ -1846,7 +2381,7 @@ ApplicationWindow {
     Action {
         id: cropToolAction
         text: "Crop Tool"
-        shortcut: appShell.shortcutSequence("tool-crop", window.primaryAltShortcut("C"))
+        shortcut: window.configuredShortcut("tool-crop", window.primaryAltShortcut("C"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("crop")
     }
@@ -1854,7 +2389,7 @@ ApplicationWindow {
     Action {
         id: masksToolAction
         text: "Masks Tool"
-        shortcut: appShell.shortcutSequence("tool-masks", window.primaryAltShortcut("M"))
+        shortcut: window.configuredShortcut("tool-masks", window.primaryAltShortcut("M"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("masks")
     }
@@ -1862,7 +2397,7 @@ ApplicationWindow {
     Action {
         id: brushToolAction
         text: "Brush Tool"
-        shortcut: appShell.shortcutSequence("tool-brush", window.primaryAltShortcut("B"))
+        shortcut: window.configuredShortcut("tool-brush", window.primaryAltShortcut("B"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("brush")
     }
@@ -1870,7 +2405,7 @@ ApplicationWindow {
     Action {
         id: compareToolAction
         text: "Compare Tool"
-        shortcut: appShell.shortcutSequence("tool-compare", window.primaryAltShortcut("P"))
+        shortcut: window.configuredShortcut("tool-compare", window.primaryAltShortcut("P"))
         enabled: editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("compare")
     }
@@ -1878,7 +2413,7 @@ ApplicationWindow {
     Action {
         id: exportToolAction
         text: "Export Tool"
-        shortcut: appShell.shortcutSequence("tool-export", window.primaryAltShortcut("E"))
+        shortcut: window.configuredShortcut("tool-export", window.primaryAltShortcut("E"))
         enabled: catalogAssets.selectedAssetId.length > 0 || editorPreview.hasAsset
         onTriggered: window.activatePrimaryEditTool("export")
     }
@@ -2079,34 +2614,34 @@ ApplicationWindow {
 
     Action {
         id: carouselAddSlideAction
-        text: "Add Slide"
+        text: "Add Blank Board"
         shortcut: window.primaryShiftShortcut("A")
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex && carouselDocument.canAddSlide
-        onTriggered: carouselDocument.addSlide()
+        enabled: window.boardsWorkspaceActive && carouselDocument.canAddSlide
+        onTriggered: window.addEditBoard(false)
     }
 
     Action {
         id: carouselRemoveSlideAction
-        text: "Remove Current Slide"
-        shortcut: StandardKey.Delete
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex && carouselDocument.slideCount > 0
-        onTriggered: carouselDocument.removeCurrentSlide()
+        text: "Remove Current Board"
+        shortcut: ""
+        enabled: window.boardsWorkspaceActive && carouselDocument.slideCount > 1
+        onTriggered: window.requestEditBoardAction(carouselDocument.currentIndex, "remove")
     }
 
     Action {
         id: carouselMoveBackwardAction
-        text: "Move Slide Earlier"
-        shortcut: window.primaryShortcut("[")
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex && carouselDocument.slideCount > 1
-        onTriggered: carouselDocument.moveCurrentBackward()
+        text: "Move Board Earlier"
+        shortcut: ""
+        enabled: window.boardsWorkspaceActive && carouselDocument.currentIndex > 0
+        onTriggered: window.modifyEditBoards("earlier")
     }
 
     Action {
         id: carouselMoveForwardAction
-        text: "Move Slide Later"
-        shortcut: window.primaryShortcut("]")
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex && carouselDocument.slideCount > 1
-        onTriggered: carouselDocument.moveCurrentForward()
+        text: "Move Board Later"
+        shortcut: ""
+        enabled: window.boardsWorkspaceActive && carouselDocument.currentIndex < carouselDocument.slideCount - 1
+        onTriggered: window.modifyEditBoards("later")
     }
 
     Action {
@@ -2118,9 +2653,9 @@ ApplicationWindow {
 
     Action {
         id: carouselExportAction
-        text: "Export Carousel"
+        text: "Export Boards"
         shortcut: window.primaryShiftShortcut("C")
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex && !carouselDocument.exportBusy
+        enabled: window.boardsWorkspaceActive && !carouselDocument.exportBusy
         onTriggered: carouselDocument.exportCarousel()
     }
 
@@ -2129,7 +2664,7 @@ ApplicationWindow {
         text: "4x5 Portrait"
         checkable: true
         checked: carouselDocument.documentFormat === "4x5"
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex
+        enabled: window.boardsWorkspaceActive
         onTriggered: carouselDocument.documentFormat = "4x5"
     }
 
@@ -2138,14 +2673,14 @@ ApplicationWindow {
         text: "5x4 Landscape"
         checkable: true
         checked: carouselDocument.documentFormat === "5x4"
-        enabled: window.currentWorkspace === window.carouselWorkspaceIndex
+        enabled: window.boardsWorkspaceActive
         onTriggered: carouselDocument.documentFormat = "5x4"
     }
 
     Action {
         id: switchToLibraryAction
         text: "Library"
-        shortcut: appShell.shortcutSequence("workspace-library", window.primaryShortcut("1"))
+        shortcut: window.configuredShortcut("workspace-library", window.primaryShortcut("1"))
         checkable: true
         checked: window.currentWorkspace === window.libraryWorkspaceIndex
         onTriggered: window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
@@ -2154,7 +2689,7 @@ ApplicationWindow {
     Action {
         id: switchToEditAction
         text: "Edit"
-        shortcut: appShell.shortcutSequence("workspace-edit", window.primaryShortcut("2"))
+        shortcut: window.configuredShortcut("workspace-edit", window.primaryShortcut("2"))
         checkable: true
         checked: window.currentWorkspace === window.editWorkspaceIndex
         onTriggered: window.switchToWorkspaceIndex(window.editWorkspaceIndex)
@@ -2162,10 +2697,10 @@ ApplicationWindow {
 
     Action {
         id: switchToCarouselAction
-        text: "Carousel"
+        text: "Boards"
         shortcut: window.primaryShortcut("3")
         checkable: true
-        checked: window.currentWorkspace === window.carouselWorkspaceIndex
+        checked: window.boardsWorkspaceActive
         onTriggered: window.switchToWorkspaceIndex(window.carouselWorkspaceIndex)
     }
 
@@ -2281,6 +2816,13 @@ ApplicationWindow {
     }
 
     Action {
+        id: uiPrimitivesAction
+        objectName: "uiPrimitivesAction"
+        text: "UI Primitives"
+        onTriggered: window.openUiPrimitivesPage()
+    }
+
+    Action {
         id: quickStartAction
         text: "Quick Start"
         onTriggered: {
@@ -2299,7 +2841,7 @@ ApplicationWindow {
     Action {
         id: commandPaletteAction
         text: "Command Palette"
-        shortcut: appShell.shortcutSequence("command-palette", window.primaryShortcut("K"))
+        shortcut: window.configuredShortcut("command-palette", window.primaryShortcut("K"))
         onTriggered: {
             const carouselView = window.activeCarouselView()
             if (carouselView && typeof carouselView.openCarouselCommandPalette === "function")
@@ -2346,16 +2888,19 @@ ApplicationWindow {
     }
 
     menuBar: MenuBar {
+        objectName: "applicationMenuBar"
         Menu {
+            objectName: "applicationFileMenu"
             title: "&File"
             MenuItem { action: newImportAction }
+            MenuItem { action: newCanvasAction }
             MenuItem { action: newTimelineAction }
-            MenuItem { action: newCarouselAction }
             MenuSeparator {}
             MenuItem { action: openSelectedInEditAction }
             MenuItem { action: openSelectedTimelineAction }
             MenuSeparator {}
             MenuItem { action: saveTimelineAction }
+            MenuItem { action: saveBoardsAction; visible: saveBoardsAction.enabled }
             MenuItem { action: importFolderAction }
             MenuItem { action: refreshLibraryAction }
             MenuSeparator {}
@@ -2370,6 +2915,10 @@ ApplicationWindow {
             MenuItem { action: undoEditAction }
             MenuItem { action: redoEditAction }
             MenuItem { action: undoPastedPhotoEditsAction }
+            MenuSeparator {}
+            MenuItem { action: copyLayersAction }
+            MenuItem { action: pasteLayersAction }
+            MenuItem { action: pasteLayersInPlaceAction }
             MenuSeparator {}
             MenuItem { action: copyPhotoEditsAction }
             MenuItem { action: pastePhotoEditsAction }
@@ -2402,11 +2951,7 @@ ApplicationWindow {
             MenuItem { action: switchToTimelineAction }
             MenuItem { action: switchToExportAction }
             MenuSeparator {}
-            MenuItem { action: toggleSourcePanelAction }
-            MenuItem { action: toggleEffectsPanelAction }
-            MenuItem { action: toggleSnappingAction }
-            MenuItem { action: toggleRippleAction }
-            MenuItem { action: restoreTimelineLayoutAction }
+            MenuItem { action: commandPaletteAction }
         }
 
         Menu {
@@ -2427,6 +2972,12 @@ ApplicationWindow {
             MenuItem { action: stepTimelineBackwardAction }
             MenuItem { action: stepTimelineForwardAction }
             MenuSeparator {}
+            MenuItem { action: toggleSourcePanelAction }
+            MenuItem { action: toggleEffectsPanelAction }
+            MenuItem { action: toggleSnappingAction }
+            MenuItem { action: toggleRippleAction }
+            MenuItem { action: restoreTimelineLayoutAction }
+            MenuSeparator {}
             MenuItem { action: addSequenceMarkerAction }
             MenuItem { action: splitAtPlayheadAction }
             MenuItem { action: addTimelineVideoTrackAction }
@@ -2434,32 +2985,24 @@ ApplicationWindow {
         }
 
         Menu {
-            title: "Ca&rousel"
-            enabled: window.currentWorkspace === window.carouselWorkspaceIndex
-            MenuItem { action: newCarouselAction }
+            title: "&Boards"
+            enabled: window.boardsWorkspaceActive
+            MenuItem { action: newCanvasAction }
             MenuSeparator {}
             MenuItem { action: carouselAddSlideAction }
             MenuItem { action: carouselRemoveSlideAction }
             MenuItem { action: carouselMoveBackwardAction }
             MenuItem { action: carouselMoveForwardAction }
             MenuSeparator {}
-            MenuItem { action: carouselAssignSelectedMediaAction }
-            MenuSeparator {}
-            MenuItem { action: carouselFormat4x5Action }
-            MenuItem { action: carouselFormat5x4Action }
-            MenuSeparator {}
+            MenuItem { action: saveBoardsAction }
             MenuItem { action: carouselExportAction }
-        }
-
-        Menu {
-            title: "&View"
-            MenuItem { action: commandPaletteAction }
         }
 
         Menu {
             title: "&Help"
             MenuItem { action: quickStartAction }
             MenuItem { action: keyboardShortcutsAction }
+            MenuItem { action: uiPrimitivesAction }
             MenuItem { action: checkForUpdatesAction }
             MenuSeparator {}
             MenuItem { action: aboutAction }
@@ -2472,6 +3015,11 @@ ApplicationWindow {
         }
     }
 
+    StartupLoadingPopup {
+        parent: Overlay.overlay
+        catalogLoading: window.catalogAssetModel.loading
+    }
+
     Component.onCompleted: {
         currentWorkspace = appShell.sessionRecoveryAvailable
                 ? appShell.recoveredWorkspace()
@@ -2481,13 +3029,14 @@ ApplicationWindow {
         if (hasQmlPerformance())
             qmlPerformance.routeStarted(startupSurface, currentWorkspace, routeWorkflowId(startupSurface))
         workspaceInitialized = true
+        timelinePlayback.workspaceActive = currentWorkspace === timelineWorkspaceIndex
         appShell.currentWorkspace = currentWorkspace
         if (currentWorkspace === libraryWorkspaceIndex) {
             libraryWorkspaceLoaded = true
-        } else if (currentWorkspace === editWorkspaceIndex) {
+        } else if (currentWorkspace === editWorkspaceIndex && !editBoardsActive) {
             editWorkspaceLoaded = true
-        } else if (currentWorkspace === carouselWorkspaceIndex) {
-            carouselWorkspaceLoaded = true
+        } else if (currentWorkspace === editWorkspaceIndex && editBoardsActive) {
+            editWorkspaceLoaded = true
         } else if (currentWorkspace === timelineWorkspaceIndex) {
             timelineWorkspaceLoaded = true
         } else if (currentWorkspace === exportWorkspaceIndex) {
@@ -2520,7 +3069,68 @@ ApplicationWindow {
         }
     }
 
+    function publishPhotoWorkIntent() {
+        timelineDocument.setPhotoWorkIntent(currentWorkspace === editWorkspaceIndex,
+                                           editorPreview.processing, editorPreview.assetId)
+    }
+
+    Connections {
+        target: editorPreview
+        function onProcessingChanged() { window.publishPhotoWorkIntent() }
+        function onAssetChanged() { window.publishPhotoWorkIntent() }
+        function onDocumentEditCommitted() { window.syncBoardPhotoEdit() }
+    }
+
+    Connections {
+        target: timelineDocument
+        function onRecoveryOpenCompleted(candidateId, succeeded) {
+            if (String(candidateId || "") !== window.pendingTimelineRecoveryRouteId)
+                return
+            const workspace = window.pendingTimelineRecoveryWorkspace
+            window.pendingTimelineRecoveryRouteId = ""
+            window.pendingTimelineRecoveryWorkspace = null
+            if (succeeded)
+                window.switchToWorkspaceIndex(window.timelineWorkspaceIndex)
+            else if (workspace && typeof workspace.showEditActionFeedback === "function")
+                workspace.showEditActionFeedback(String(timelineDocument.status ||
+                                                        "Recovery could not be opened. Your current project remains open."), true)
+        }
+    }
+
+    Connections {
+        target: carouselDocument
+        function onEditBoardImageReplaced(success, error) {
+            if (!window.editBoardsActive || !window.carouselPhotoEditActive) return
+            const workspace = editWorkspaceLoader.item
+            if (success) {
+                const previousPath = window.localEditorFilePath
+                window.carouselPhotoEditActive = false
+                window.activateEditBoard(carouselDocument.currentIndex)
+                window.loadLocalAssetIntoEditor(true)
+                window.editBoardImageReplacement = {
+                    documentId: carouselDocument.savedDocumentId, assetId: window.localEditorAssetId,
+                    originalPath: previousPath, replacedPath: window.localEditorFilePath,
+                    baseline: window.localEditorAdjustmentPatchJson
+                }
+                window.editBoardImageReplacementHistory = window.editBoardImageReplacementHistory.concat([window.editBoardImageReplacement])
+            }
+            if (workspace) workspace.showEditActionFeedback(error.length ? error : "Base image replaced · Layers preserved", error.length > 0)
+        }
+    }
+
+    onEditBoardsActiveChanged: {
+        publishPhotoWorkIntent()
+        if (editBoardsActive) editWorkspaceLoaded = true
+    }
+
     onCurrentWorkspaceChanged: {
+        if (currentWorkspace === carouselWorkspaceIndex) {
+            if (carouselDocument.hasActiveCarousel) activateEditBoard(carouselDocument.currentIndex)
+            currentWorkspace = editWorkspaceIndex
+            return
+        }
+        publishPhotoWorkIntent()
+        timelinePlayback.workspaceActive = currentWorkspace === timelineWorkspaceIndex
         if (workspaceInitialized)
             appShell.currentWorkspace = currentWorkspace
 
@@ -2532,7 +3142,7 @@ ApplicationWindow {
             Qt.callLater(function() {
                 window.restorePrimaryStudioPanels(workspaceLoader.item)
             })
-        } else if (currentWorkspace === editWorkspaceIndex) {
+        } else if (currentWorkspace === editWorkspaceIndex && !editBoardsActive) {
             editWorkspaceLoaded = true
             if (editorUsesLocalAsset)
                 loadLocalAssetIntoEditor()
@@ -2543,8 +3153,8 @@ ApplicationWindow {
                 if (editWorkspaceLoader.item && editWorkspaceLoader.item.contentWorkspace)
                     window.restorePrimaryStudioPanels(editWorkspaceLoader.item.contentWorkspace)
             })
-        } else if (currentWorkspace === carouselWorkspaceIndex) {
-            carouselWorkspaceLoaded = true
+        } else if (currentWorkspace === editWorkspaceIndex && editBoardsActive) {
+            editWorkspaceLoaded = true
         } else if (currentWorkspace === timelineWorkspaceIndex) {
             timelineWorkspaceLoaded = true
         } else if (currentWorkspace === exportWorkspaceIndex) {
@@ -2576,7 +3186,8 @@ ApplicationWindow {
         interval: 700
         repeat: false
         onTriggered: {
-            if (!window.workspaceTransitionActive && !window.anyAppActivity && window.currentWorkspace !== window.sceneWorkspaceIndex)
+            if (!window.workspaceTransitionActive && !window.anyAppActivity && !window.recentUserInput
+                    && window.currentWorkspace !== window.sceneWorkspaceIndex)
                 window.preloadEditWorkspace()
             else
                 restart()
@@ -2601,9 +3212,28 @@ ApplicationWindow {
         interval: 1200
         repeat: false
         onTriggered: {
-            if (!window.workspaceTransitionActive && !window.anyAppActivity && window.currentWorkspace !== window.sceneWorkspaceIndex)
+            if (!window.workspaceTransitionActive && !window.anyAppActivity && !window.recentUserInput
+                    && window.currentWorkspace !== window.sceneWorkspaceIndex)
                 window.preloadNextSecondaryWorkspace()
             else
+                restart()
+        }
+    }
+
+    Timer {
+        id: timelineWorkspaceHoverPrewarmTimer
+        interval: 450
+        repeat: false
+        onTriggered: {
+            if (window.currentWorkspace === window.timelineWorkspaceIndex ||
+                    window.timelineWorkspaceLoaded)
+                return
+            if (!window.workspaceTransitionActive && !window.anyAppActivity &&
+                    window.currentWorkspace !== window.sceneWorkspaceIndex) {
+                window.prewarmTimelineWorkspace()
+                return
+            }
+            if (window.currentWorkspace !== window.sceneWorkspaceIndex)
                 restart()
         }
     }
@@ -2633,6 +3263,7 @@ ApplicationWindow {
     CopyPhotoEditsDialog {
         id: copyPhotoEditsDialog
         parent: Overlay.overlay
+        focusFallbackItem: window.workspaceFocusFallbackItem
         onCopyRequested: (patch, groups) => {
             if (editorPreview.copyPhotoRecipe(patch, groups)) {
                 close()
@@ -2668,16 +3299,29 @@ ApplicationWindow {
     Connections {
         target: catalogAssets
 
+        function onBlankCanvasCreated(assetId) {
+            newCanvasDialog.close()
+            if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+            window.editBoardsActive = false
+            window.editorUsesLocalAsset = false
+            window.loadSelectedAssetIntoEditor()
+            window.pendingEditInspectorTab = "layers"
+            window.activatePrimaryEditTool("shapes")
+            const workspace = window.photoWorkspaceActive ? window.activeWorkspaceItem() : null
+            if (workspace && workspace.objectName === "editStudioWorkspace") {
+                workspace.editInspectorTab = "layers"
+                window.pendingEditInspectorTab = ""
+            }
+        }
+
+        function onBlankCanvasFailed(error) { newCanvasDialog.errorText = error }
+
         function onPhotoRecipeChanged(assetId, filePath, previousPatch, nextPatch, restoringHistory) {
             editorPreview.applyCatalogRecipeChange(assetId, filePath, previousPatch, nextPatch, restoringHistory)
         }
 
-        function onSelectedAssetChanged() {
-            if (window.applyingPhotoRecipe) return
-            window.editorUsesLocalAsset = false
-            if (window.currentWorkspace === window.editWorkspaceIndex)
-                window.loadSelectedAssetIntoEditor()
-        }
+        // Catalog selection leaves the open editor document intact. Activation
+        // loads it explicitly, including clicks from the editor's filmstrip.
 
         function onLoadingChanged() {
             if (appShell.sessionRecoveryAvailable && !window.sessionRestoreApplied)
@@ -2731,10 +3375,10 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: 24
                 anchors.rightMargin: 24
-                spacing: 18
+                spacing: window.width < 1100 ? 10 : 18
 
                 BrandWordmark {
-                    Layout.preferredWidth: 240
+                    Layout.preferredWidth: window.width < 1100 ? 150 : 240
                     Layout.preferredHeight: implicitHeight
                     Layout.alignment: Qt.AlignVCenter
                     compact: true
@@ -2745,7 +3389,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.alignment: Qt.AlignVCenter
                     Layout.fillWidth: true
-                    spacing: 18
+                    spacing: window.width < 1100 ? 8 : 18
 
                     Item { Layout.fillWidth: true }
 
@@ -2758,9 +3402,25 @@ ApplicationWindow {
                             required property int index
                             required property string modelData
 
-                            objectName: "workspaceTab" + workspaceTab.modelData
+                            Component.onCompleted: {
+                                if (workspaceTab.index === window.currentWorkspace)
+                                    window.workspaceFocusFallbackItem = workspaceTab
+                            }
+                            Component.onDestruction: {
+                                if (window.workspaceFocusFallbackItem === workspaceTab)
+                                    window.workspaceFocusFallbackItem = null
+                            }
+                            Connections {
+                                target: window
+                                function onCurrentWorkspaceChanged() {
+                                    if (workspaceTab.index === window.currentWorkspace)
+                                        window.workspaceFocusFallbackItem = workspaceTab
+                                }
+                            }
+                            visible: workspaceTab.index !== window.carouselWorkspaceIndex
+                            objectName: workspaceTab.index === window.carouselWorkspaceIndex ? "workspaceTabCarousel" : "workspaceTab" + workspaceTab.modelData
                             text: workspaceTab.modelData
-                            Layout.preferredWidth: Math.max(theme.navItemMinWidth, tabLabel.implicitWidth + 18)
+                            Layout.preferredWidth: visible ? Math.max(theme.navItemMinWidth, tabLabel.implicitWidth + 18) : 0
                             Layout.preferredHeight: theme.navHeight
                             flat: true
                             hoverEnabled: true
@@ -2770,7 +3430,27 @@ ApplicationWindow {
                             ToolTip.delay: 350
                             ToolTip.timeout: 2800
                             ToolTip.text: workspaceSubtitles[index]
-                            onClicked: window.switchToWorkspaceIndex(index)
+                            onHoveredChanged: {
+                                if (workspaceTab.index !== window.timelineWorkspaceIndex)
+                                    return
+                                if (hovered)
+                                    timelineWorkspaceHoverPrewarmTimer.restart()
+                                else if (!window.timelineWorkspaceLoaded)
+                                    timelineWorkspaceHoverPrewarmTimer.stop()
+                            }
+                            onActiveFocusChanged: {
+                                if (workspaceTab.index !== window.timelineWorkspaceIndex)
+                                    return
+                                if (activeFocus)
+                                    timelineWorkspaceHoverPrewarmTimer.restart()
+                                else if (!window.timelineWorkspaceLoaded)
+                                    timelineWorkspaceHoverPrewarmTimer.stop()
+                            }
+                            onClicked: {
+                                if (workspaceTab.index === window.timelineWorkspaceIndex)
+                                    timelineWorkspaceHoverPrewarmTimer.stop()
+                                window.switchToWorkspaceIndex(index)
+                            }
 
                             background: Rectangle {
                                 anchors.fill: parent
@@ -2820,16 +3500,16 @@ ApplicationWindow {
 
                 ColumnLayout {
                     Layout.alignment: Qt.AlignVCenter
-                    Layout.preferredWidth: 250
+                    Layout.preferredWidth: window.width < 1100 ? 160 : 250
                     spacing: 3
+                    visible: window.currentSelectionLabel().length > 0 || window.appActivityStatusVisible
 
                     Text {
                         objectName: "topSelectionStatusLabel"
                         Layout.fillWidth: true
-                        text: window.currentSelectionLabel().length > 0
-                              ? window.currentSelectionLabel()
-                              : "No active asset"
-                        color: window.currentSelectionLabel().length > 0 ? theme.textMain : theme.textFaint
+                        visible: window.currentSelectionLabel().length > 0
+                        text: window.currentSelectionLabel()
+                        color: theme.textMain
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         font.letterSpacing: 0
@@ -2842,7 +3522,8 @@ ApplicationWindow {
                     Text {
                         objectName: "topWorkspaceStatusLabel"
                         Layout.fillWidth: true
-                        text: window.workspaceTitles[window.currentWorkspace] + " / v" + appShell.appVersion
+                        visible: window.appActivityStatusVisible
+                        text: window.appActivityStatusTitle
                         color: theme.textFaint
                         font.family: theme.fontUi
                         font.pixelSize: 9
@@ -2950,8 +3631,8 @@ ApplicationWindow {
                 id: editWorkspaceLoader
                 anchors.fill: parent
                 anchors.margins: 6
-                active: window.editWorkspaceLoaded || window.currentWorkspace === window.editWorkspaceIndex
-                visible: window.currentWorkspace === window.editWorkspaceIndex
+                active: window.editWorkspaceLoaded || window.photoWorkspaceActive
+                visible: window.photoWorkspaceActive
                 sourceComponent: active ? editView : null
                 onLoaded: {
                     window.noteWorkspaceComponentCreated(window.editWorkspaceIndex)
@@ -2976,6 +3657,13 @@ ApplicationWindow {
                 enabled: editWorkspaceLoader.item !== null
                 ignoreUnknownSignals: true
 
+                function onPageContentReadyChanged() {
+                    if (editWorkspaceLoader.item && editWorkspaceLoader.item.pageContentReady) {
+                        window.applyPendingEditToolActivation()
+                        window.maybeFinishWorkspaceTransition(window.editWorkspaceIndex)
+                    }
+                }
+
                 function onAssetActivated(destination) {
                     if (destination === "library") {
                         window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
@@ -2999,46 +3687,49 @@ ApplicationWindow {
             Binding {
                 target: editWorkspaceLoader.item
                 property: "workspaceActive"
-                value: window.currentWorkspace === window.editWorkspaceIndex
+                value: window.photoWorkspaceActive
                 when: editWorkspaceLoader.item !== null
                 restoreMode: Binding.RestoreBindingOrValue
             }
 
             Loader {
-                id: carouselWorkspaceLoader
-                anchors.fill: parent
-                anchors.margins: 6
-                active: window.carouselWorkspaceLoaded || window.currentWorkspace === window.carouselWorkspaceIndex
-                visible: window.currentWorkspace === window.carouselWorkspaceIndex
-                source: Qt.resolvedUrl("workspaces/CarouselView.qml")
-                onLoaded: {
-                    window.noteWorkspaceComponentCreated(window.carouselWorkspaceIndex)
-                    window.markWorkspaceLoaded(window.carouselWorkspaceIndex)
-                    window.maybeFinishWorkspaceTransition(window.carouselWorkspaceIndex)
-                }
-            }
-
-            Connections {
-                target: carouselWorkspaceLoader.item
-                enabled: carouselWorkspaceLoader.item !== null
-                ignoreUnknownSignals: true
-
-                function onEditPhotoRequested(payload) {
-                    window.beginCarouselPhotoEdit(payload)
-                }
-            }
-
-            Loader {
                 id: timelineWorkspaceLoader
+                objectName: "timelineWorkspaceLoader"
                 anchors.fill: parent
                 anchors.margins: window.timelineProgramFullScreenActive ? 0 : 6
+                asynchronous: true
                 active: window.timelineWorkspaceLoaded || window.currentWorkspace === window.timelineWorkspaceIndex
                 visible: window.currentWorkspace === window.timelineWorkspaceIndex
-                source: Qt.resolvedUrl("workspaces/TimelineView.qml")
+                source: Qt.resolvedUrl(timelineDocument.hasActiveTimeline
+                                       ? "workspaces/TimelineView.qml"
+                                       : "workspaces/TimelineSetupPage.qml")
                 onLoaded: {
                     window.noteWorkspaceComponentCreated(window.timelineWorkspaceIndex)
                     window.markWorkspaceLoaded(window.timelineWorkspaceIndex)
                     window.maybeFinishWorkspaceTransition(window.timelineWorkspaceIndex)
+                }
+            }
+
+            Rectangle {
+                id: timelineWorkspaceLoadingSurface
+                objectName: "timelineWorkspaceLoadingSurface"
+                anchors.fill: parent
+                anchors.margins: 6
+                z: 1000
+                visible: window.currentWorkspace === window.timelineWorkspaceIndex
+                         && timelineWorkspaceLoader.status === Loader.Loading
+                color: theme.alpha(theme.ink950, 0.94)
+                Accessible.role: Accessible.ProgressBar
+                Accessible.name: "Preparing Timeline workspace"
+                Accessible.description: "Loading track controls, the Program Monitor, and editing tools."
+
+                LooksyLoadingScene {
+                    anchors.centerIn: parent
+                    width: Math.max(100, Math.min(560, parent.width - 40, (parent.height - 100) * 1.5))
+                    scene: "timeline"
+                    title: "Preparing Timeline"
+                    detail: "Opening tracks, preview, and editing tools…"
+                    active: timelineWorkspaceLoadingSurface.visible
                 }
             }
 
@@ -3090,6 +3781,8 @@ ApplicationWindow {
                     catalogAssets.clearFilters()
                     if (!catalogAssets.selectAssetById(assetId, true))
                         return
+                    if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                    window.editBoardsActive = false
                     window.editorUsesLocalAsset = false
                     window.carouselPhotoEditActive = false
                     window.switchToWorkspaceIndex(window.editWorkspaceIndex)
@@ -3117,82 +3810,6 @@ ApplicationWindow {
                     if (destination === "edit") {
                         window.switchToWorkspaceIndex(window.editWorkspaceIndex)
                         return
-                    }
-                }
-            }
-
-            Rectangle {
-                id: carouselPhotoEditBar
-                objectName: "carouselPhotoEditReturnBar"
-                visible: window.carouselPhotoEditActive
-                         && window.currentWorkspace === window.editWorkspaceIndex
-                         && !window.shellNavigationActivityVisible
-                z: 7
-                anchors.top: parent.top
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.topMargin: 14
-                width: Math.min(720, parent.width - 48)
-                height: carouselPhotoEditBarContent.implicitHeight + 18
-                radius: 9
-                color: theme.alpha(theme.ink900, 0.96)
-                border.width: 1
-                border.color: theme.alpha(theme.accentCool400, 0.62)
-
-                RowLayout {
-                    id: carouselPhotoEditBarContent
-                    anchors.fill: parent
-                    anchors.margins: 9
-                    spacing: 10
-
-                    Rectangle {
-                        Layout.preferredWidth: 7
-                        Layout.preferredHeight: 7
-                        radius: width / 2
-                        color: theme.accentCool400
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 1
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Editing for Carousel"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideNone
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: 8
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: window.carouselPhotoEditDisplayName
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
-                            elide: Text.ElideNone
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: 7
-                        }
-                    }
-
-                    ActionButton {
-                        compact: true
-                        text: "Return Without Applying"
-                        tooltipText: "Discard this round-trip and leave the Carousel instance unchanged."
-                        onClicked: window.finishCarouselPhotoEdit(false)
-                    }
-
-                    ActionButton {
-                        objectName: "applyCarouselPhotoEditButton"
-                        compact: true
-                        text: "Apply & Return"
-                        tone: "primary"
-                        tooltipText: "Apply this non-destructive recipe to the same Carousel photo and return."
-                        onClicked: window.finishCarouselPhotoEdit(true)
                     }
                 }
             }
@@ -3293,6 +3910,14 @@ ApplicationWindow {
     }
 
     Loader {
+        id: uiPrimitivesLoader
+        active: false
+        sourceComponent: Component {
+            UiPrimitivesPage { transientParent: window; previewFontFamily: window.font.family }
+        }
+    }
+
+    Loader {
         id: commandPaletteDialogLoader
         active: false
         sourceComponent: commandPaletteDialogComponent
@@ -3386,7 +4011,7 @@ ApplicationWindow {
                 "New Import",
                 "New Timeline",
                 "New Carousel",
-                "Open Selected In Edit",
+                "Open Selected Photo in Edit",
                 "Start Export",
                 "Reset Adjustments",
                 "Compare View",
@@ -3408,7 +4033,7 @@ ApplicationWindow {
                 { action: switchToExportAction, category: "Navigate", shortcutHint: macStyle ? "⌘5" : "Ctrl+5" },
                 { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
                 { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
-                { action: newCarouselAction, category: "File", shortcutHint: "" },
+                { action: newCanvasAction, category: "File", shortcutHint: "" },
                 { action: openSelectedInEditAction, category: "File", shortcutHint: macStyle ? "⌘E" : "Ctrl+E" },
                 { action: openSelectedTimelineAction, category: "File", shortcutHint: "" },
                 { action: saveTimelineAction, category: "File", shortcutHint: macStyle ? "⌘S" : "Ctrl+S" },
@@ -3463,6 +4088,7 @@ ApplicationWindow {
                 { action: commandPaletteAction, category: "View", shortcutHint: macStyle ? "⌘K" : "Ctrl+K" },
                 { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
                 { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
+                { action: uiPrimitivesAction, category: "Help", shortcutHint: "" },
                 { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
                 { action: aboutAction, category: "Help", shortcutHint: "" },
                 { action: runtimePathsAction, category: "Help", shortcutHint: "" },
@@ -3602,8 +4228,8 @@ ApplicationWindow {
                         text: window.recoverySurfaceSummary
                         color: theme.textMuted
                         font.pixelSize: theme.typeCaption
-                        maximumLineCount: 1
-                        elide: Text.ElideRight
+                        maximumLineCount: 2
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     }
                 }
 
@@ -3676,6 +4302,7 @@ ApplicationWindow {
                     objectName: "catalogRetryButton"
                     visible: window.catalogRecoveryNeeded
                     text: "Retry"
+                    iconName: "retry"
                     compact: true
                     Accessible.name: "Retry opening the catalog"
                     onClicked: catalogAssets.refresh()
@@ -3729,12 +4356,34 @@ ApplicationWindow {
 
         StudioWorkspace {
             objectName: "libraryStudioWorkspace"
+            onReviewImportedRequested: window.libraryWorkspaceMode = "library"
+            workspaceActive: window.currentWorkspace === window.libraryWorkspaceIndex
+            onBoardDocumentActivated: function(documentId) { window.openSavedBoards(documentId) }
+            onNewBoardsRequested: window.createCarouselFromMenu()
+            onNewTimelineRequested: window.createTimelineFromMenu()
+            onTimelineDocumentActivated: function(documentPath, recoveryCandidateId) {
+                if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                if (recoveryCandidateId.length > 0) {
+                    window.pendingTimelineRecoveryRouteId = String(recoveryCandidateId)
+                    window.pendingTimelineRecoveryWorkspace = window.activeWorkspaceItem()
+                    if (!timelineDocument.openRecoveryCandidate(recoveryCandidateId))
+                        window.pendingTimelineRecoveryRouteId = ""
+                    if (window.pendingTimelineRecoveryRouteId.length === 0)
+                        window.pendingTimelineRecoveryWorkspace = null
+                    return
+                }
+                if (timelineDocument.loadTimeline(documentPath))
+                    window.switchToWorkspaceIndex(window.timelineWorkspaceIndex)
+            }
             page: "library"
             catalogAssets: window.catalogAssetModel
             importModeOpen: window.libraryWorkspaceMode === "import"
-            interfaceMode: appShell.interfaceDensity === "clean" ? "compact" : appShell.interfaceDensity
 
             Component.onCompleted: {
+                window.catalogAssetModel.mediaCollectionFilter = "images"
+                Qt.callLater(restoreLibraryDestination)
+                if (window.catalogAssetModel.mediaTypeFilter === "timelines")
+                    window.catalogAssetModel.mediaTypeFilter = "all"
                 window.restorePrimaryStudioPanels(this)
                 if (importModeOpen)
                     window.catalogAssetModel.refreshImportSources()
@@ -3751,17 +4400,33 @@ ApplicationWindow {
             }
 
             onAssetActivated: function(destination) {
+                if (["edit", "masks", "compare"].indexOf(destination) >= 0) {
+                    if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                    window.editBoardsActive = false
+                    window.editorUsesLocalAsset = false
+                }
+                if (destination === "new-carousel") {
+                    window.createCarouselFromMenu()
+                    return
+                }
+
                 if (destination === "edit") {
+                    if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                    window.editBoardsActive = false
+                    window.editorUsesLocalAsset = false
+                    window.loadSelectedAssetIntoEditor()
                     window.activatePrimaryEditTool("adjust")
                     return
                 }
 
                 if (destination === "masks") {
+                    window.loadSelectedAssetIntoEditor()
                     window.activatePrimaryEditTool("masks")
                     return
                 }
 
                 if (destination === "compare") {
+                    window.loadSelectedAssetIntoEditor()
                     window.activatePrimaryEditTool("compare")
                     return
                 }
@@ -3781,6 +4446,8 @@ ApplicationWindow {
                 window.openProjectWorkspace(destination, projectName)
             }
             onLocalAssetActivated: function(filePath, previewSource, displayName) {
+                if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                window.editBoardsActive = false
                 window.carouselPhotoEditActive = false
                 window.editorUsesLocalAsset = true
                 window.localEditorAssetId = filePath
@@ -3799,15 +4466,60 @@ ApplicationWindow {
 
         StudioWorkspace {
             objectName: "editStudioWorkspace"
+            onNewCanvasRequested: newCanvasAction.trigger()
+            allowAddBoards: false
+            editBoardMode: window.editBoardsActive
+            editBoardController: carouselDocument
+            onEditBoardPhotoTextLinkRequested: function(layerId, boardIds) {
+                if (window.commitActiveEditBoard() &&
+                        !carouselDocument.linkEditBoardPhotoText(layerId, qsTr("Shared text"), boardIds))
+                    showEditActionFeedback(carouselDocument.status, true)
+            }
+            onEditBoardPhotoTextDetachRequested: function(layerId) {
+                if (window.commitActiveEditBoard() && !carouselDocument.detachEditBoardPhotoText(layerId))
+                    showEditActionFeedback(carouselDocument.status, true)
+            }
+            editBoardModel: window.editBoardsActive ? carouselDocument.slides : []
+            editBoardIndex: carouselDocument.currentIndex
+            editBoardDocumentId: carouselDocument.savedDocumentId
+            editBoardDocumentName: carouselDocument.documentName
+            editBoardSaveState: carouselDocument.saveState
+            editBoardSaveError: window.editBoardSyncError || carouselDocument.saveError
+            editBoardCanAdd: carouselDocument.canAddSlide
+            editBoardExportBusy: carouselDocument.exportBusy
+            editBoardSwitchBusy: window.switchingEditBoard || editorPreview.photoPaintBusy || editorPreview.brushStrokeActive
+                || carouselDocument.editBoardImageBusy
+            enabled: !carouselDocument.editBoardImageBusy
+            canUndoEdit: !carouselDocument.editBoardImageBusy && (editorPreview.canUndo || window.canUndoCreativeBoardAction(false) || window.canUndoBoardImageReplacement(false) || window.canUndoBoardMove(false))
+            canRedoEdit: !carouselDocument.editBoardImageBusy && (editorPreview.canRedo || window.canUndoCreativeBoardAction(true) || window.canUndoBoardImageReplacement(true) || window.canUndoBoardMove(true))
+            undoEditLabel: window.canUndoCreativeBoardAction(false) ? carouselDocument.undoText : window.canUndoBoardMove(false) ? "Move boards" : window.canUndoBoardImageReplacement(false) ? "Replace base image" : editorPreview.undoLabel
+            redoEditLabel: window.canUndoCreativeBoardAction(true) ? carouselDocument.redoText : window.canUndoBoardMove(true) ? "Move boards" : window.canUndoBoardImageReplacement(true) ? "Replace base image" : editorPreview.redoLabel
+            undoEditHandler: function() { window.performPhotoUndo(false) }
+            redoEditHandler: function() { window.performPhotoUndo(true) }
+            onEditBoardSelected: function(index) { window.activateEditBoard(index) }
+            onEditBoardAddRequested: function(extendCurrent) { window.addEditBoard(extendCurrent) }
+            onEditBoardActionRequested: function(index, operation) { window.requestEditBoardAction(index, operation) }
+            onEditBoardImageDropRequested: function(index, fileUrl, operation) { window.requestEditBoardImageDrop(index, fileUrl, operation) }
+            onEditBoardMoveRequested: function(index, insertionIndex) { window.moveEditBoard(index, insertionIndex) }
+            onEditBoardSaveRequested: window.commitActiveEditBoard()
+            onAddBoardsRequested: window.addBoardsFromCurrentEdit()
             page: "edit"
+            openPhotoFilePath: window.editorUsesLocalAsset ? window.localEditorFilePath : window.openedCatalogFilePath
             catalogAssets: window.catalogAssetModel
             editTool: window.resolvedEditTool()
-            workspaceActive: window.currentWorkspace === window.editWorkspaceIndex
-            interfaceMode: appShell.interfaceDensity === "clean" ? "compact" : appShell.interfaceDensity
+            workspaceActive: window.photoWorkspaceActive
 
             Component.onCompleted: window.restorePrimaryStudioPanels(this)
 
             onAssetActivated: function(destination) {
+                if (destination === "edit") {
+                    if (window.carouselPhotoEditActive && !window.finishCarouselPhotoEdit(true)) return
+                    window.editBoardsActive = false
+                    window.editorUsesLocalAsset = false
+                    window.loadSelectedAssetIntoEditor()
+                    window.activatePrimaryEditTool("adjust")
+                    return
+                }
                 if (destination === "library") {
                     window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
                     return

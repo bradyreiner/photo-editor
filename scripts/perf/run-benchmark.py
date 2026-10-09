@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import resource
+except ImportError:  # Windows does not expose getrusage.
+    resource = None
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_APP = REPO_ROOT / "build/dev-macos-debug/apps/desktop/Looksy.app/Contents/MacOS/Looksy"
@@ -171,6 +176,20 @@ def process_rss_kb(pid: int) -> int | None:
         return None
 
 
+def child_peak_rss_kb() -> int | None:
+    if resource is None:
+        return None
+    try:
+        peak = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    except (AttributeError, OSError, ValueError):
+        return None
+    if peak <= 0:
+        return None
+    # Darwin reports ru_maxrss in bytes; Linux and the other supported POSIX
+    # runners report KiB. Normalize before archiving the process peak.
+    return peak // 1024 if sys.platform == "darwin" else peak
+
+
 def process_rss_kb_with_retry(
     process: subprocess.Popen[Any],
     timeout: float = 1.0,
@@ -298,6 +317,7 @@ def append_resource_summary(
     workflow: str,
     start_rss_kb: int | None,
     peak_rss_kb: int | None,
+    process_max_rss_kb: int | None,
     end_rss_kb: int | None,
     memory_growth_threshold_kb: int,
 ) -> bool:
@@ -315,6 +335,13 @@ def append_resource_summary(
             "stage": "summary",
             "rss_start_kb": start_rss_kb,
             "rss_peak_kb": peak_rss_kb,
+            "process_max_rss_kb": process_max_rss_kb,
+            "process_max_rss_bytes": kb_to_bytes(process_max_rss_kb),
+            "process_max_rss_source": (
+                "getrusage.RUSAGE_CHILDREN.ru_maxrss"
+                if process_max_rss_kb is not None
+                else None
+            ),
             "rss_end_kb": end_rss_kb,
             "rss_delta_kb": delta_kb,
             "rss_bytes": kb_to_bytes(end_rss_kb),
@@ -368,6 +395,7 @@ def append_benchmark_artifact_summary(
     process_returncode: int | None,
     start_rss_kb: int | None,
     peak_rss_kb: int | None,
+    process_max_rss_kb: int | None,
     end_rss_kb: int | None,
 ) -> None:
     append_jsonl_event(
@@ -385,6 +413,8 @@ def append_benchmark_artifact_summary(
             "process_returncode": process_returncode,
             "rss_start_kb": start_rss_kb,
             "rss_peak_kb": peak_rss_kb,
+            "process_max_rss_kb": process_max_rss_kb,
+            "process_max_rss_bytes": kb_to_bytes(process_max_rss_kb),
             "rss_end_kb": end_rss_kb,
             "rss_delta_kb": rss_delta_kb(start_rss_kb, end_rss_kb),
             "rss_bytes": kb_to_bytes(end_rss_kb),
@@ -554,6 +584,7 @@ def main() -> int:
     ended_at = datetime.now(timezone.utc).isoformat()
     elapsed_ms = int(round((time.monotonic() - started_monotonic) * 1000.0))
     process_returncode = process.poll()
+    process_max_rss_kb = child_peak_rss_kb()
     skipped = (
         not target_met
         and args.allow_gui_unavailable
@@ -566,6 +597,7 @@ def main() -> int:
         workflow=args.scenario,
         start_rss_kb=start_rss_kb,
         peak_rss_kb=peak_rss_kb,
+        process_max_rss_kb=process_max_rss_kb,
         end_rss_kb=end_rss_kb,
         memory_growth_threshold_kb=args.memory_growth_threshold_kb,
     )
@@ -588,6 +620,7 @@ def main() -> int:
         process_returncode=process_returncode,
         start_rss_kb=start_rss_kb,
         peak_rss_kb=peak_rss_kb,
+        process_max_rss_kb=process_max_rss_kb,
         end_rss_kb=end_rss_kb,
     )
     run_summary(run_dir, artifact_dir)
@@ -615,6 +648,13 @@ def main() -> int:
         "process_returncode": process_returncode,
         "start_rss_kb": start_rss_kb,
         "peak_rss_kb": peak_rss_kb,
+        "process_max_rss_kb": process_max_rss_kb,
+        "process_max_rss_bytes": kb_to_bytes(process_max_rss_kb),
+        "process_max_rss_source": (
+            "getrusage.RUSAGE_CHILDREN.ru_maxrss"
+            if process_max_rss_kb is not None
+            else None
+        ),
         "end_rss_kb": end_rss_kb,
         "rss_delta_kb": rss_delta_kb(start_rss_kb, end_rss_kb),
         "rss_start_kb": start_rss_kb,

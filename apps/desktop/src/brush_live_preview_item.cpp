@@ -1,6 +1,7 @@
 #include "brush_live_preview_item.h"
 
 #include "editor_preview_controller.h"
+#include "brush_input_schema.h"
 
 #include <QQuickWindow>
 #include <QSGSimpleTextureNode>
@@ -11,6 +12,8 @@ namespace photo_editor::desktop {
 BrushLivePreviewItem::BrushLivePreviewItem(QQuickItem* parent)
     : QQuickItem(parent) {
   setFlag(ItemHasContents, true);
+  connect(this, &QQuickItem::widthChanged, this, [this]() { syncFromController(); });
+  connect(this, &QQuickItem::heightChanged, this, [this]() { syncFromController(); });
 }
 
 QObject* BrushLivePreviewItem::controller() const {
@@ -46,9 +49,50 @@ void BrushLivePreviewItem::setController(QObject* controller) {
   emit controllerChanged();
 }
 
+void BrushLivePreviewItem::setImmediate(bool value) {
+  if (immediate_ == value) return;
+  immediate_ = value;
+  syncFromController();
+  emit immediateChanged();
+}
+
+void BrushLivePreviewItem::setTint(const QColor& value) {
+  if (tint_ == value) return;
+  tint_ = value;
+  syncFromController();
+  emit tintChanged();
+}
+
 QSGNode* BrushLivePreviewItem::updatePaintNode(
     QSGNode* old_node,
     UpdatePaintNodeData*) {
+  if (immediate_) {
+    if (immediate_raster_.image.isNull() || !window()) {
+      delete old_node;
+      texture_immediate_revision_ = -1;
+      return nullptr;
+    }
+    auto* node = static_cast<QSGSimpleTextureNode*>(old_node);
+    if (!node) {
+      node = new QSGSimpleTextureNode;
+      node->setOwnsTexture(true);
+      node->setFiltering(QSGTexture::Linear);
+      texture_immediate_revision_ = -1;
+    }
+    if (texture_immediate_revision_ != immediate_revision_) {
+      auto* texture = window()->createTextureFromImage(immediate_raster_.image);
+      if (!texture) { delete node; texture_immediate_revision_ = -1; return nullptr; }
+      // The node owns its texture and releases the previous one on replacement.
+      node->setTexture(texture);
+      texture_immediate_revision_ = immediate_revision_;
+      painted_point_count_.store(static_cast<int>(immediate_point_count_));
+      ++completed_paint_revision_;
+      emit framePainted();
+    }
+    node->setRect(boundingRect());
+    node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+    return node;
+  }
 #if defined(QT_FEATURE_metal) && QT_CONFIG(metal)
   if (!native_texture_available_ || native_texture_handle_ == 0 ||
       !native_texture_size_.isValid() || window() == nullptr ||
@@ -89,6 +133,35 @@ QSGNode* BrushLivePreviewItem::updatePaintNode(
 }
 
 void BrushLivePreviewItem::syncFromController() {
+  if (immediate_) {
+    const auto painting = controller_ && controller_->brushStrokeActive();
+    const auto values = controller_ ? controller_->activeMaskLiveBrushPoints() : QVariantList{};
+    // A small, incremental raster gives immediate input feedback. The worker
+    // replaces it with display-resolution coverage using this same rasterizer.
+    const auto edge = std::max(width(), height());
+    const auto scale = edge > 0.0 ? std::min(1.0, 512.0 / edge) : 1.0;
+    const QSize size(std::max(2, qRound(width() * scale)), std::max(2, qRound(height() * scale)));
+    if (values.isEmpty() || !controller_ || controller_->activeMaskBrushAutoMask()) {
+      immediate_raster_ = {};
+      immediate_point_count_ = 0;
+    } else {
+      if ((painting && !immediate_stroke_active_) || values.size() < immediate_point_count_ ||
+          immediate_raster_.image.size() != size) {
+        immediate_raster_ = {};
+        immediate_point_count_ = 0;
+      }
+      QVector<BrushPreviewPoint> points;
+      points.reserve(values.size() - immediate_point_count_);
+      for (auto i = immediate_point_count_; i < values.size(); ++i)
+        points.append(brush_preview_point_from_variant(values.at(i), 0.5, 0.5, 0.08, 1.0));
+      immediate_raster_.append(size, points, controller_->activeBrushPreviewStyle());
+      immediate_point_count_ = values.size();
+    }
+    immediate_stroke_active_ = painting;
+    ++immediate_revision_;
+    update();
+    return;
+  }
   const auto next_available =
       controller_ != nullptr && controller_->activeMaskLiveBrushPreviewNativeAvailable();
   const auto next_handle =

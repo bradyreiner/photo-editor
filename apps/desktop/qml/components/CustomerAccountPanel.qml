@@ -6,6 +6,7 @@ import QtQuick.Layouts
 ColumnLayout {
     id: root
     property var controller: null
+    property string pendingDeviceId: ""
     readonly property bool serviceAvailable: controller !== null && controller.configured
     spacing: theme.space16
     Theme { id: theme }
@@ -38,6 +39,11 @@ ColumnLayout {
             enabled: root.serviceAvailable && !root.controller.busy
             onClicked: root.controller.refresh()
         }
+        ActionButton {
+            text: "Manage devices"
+            enabled: root.serviceAvailable && !root.controller.busy
+            onClicked: root.controller.loadDevices()
+        }
         Item { Layout.fillWidth: true }
     }
     Label {
@@ -46,9 +52,10 @@ ColumnLayout {
         text: "Your license key"
         color: theme.textMain
     }
-    TextField {
+    ToneTextField {
         id: licenseKey
         objectName: "customerLicenseKey"
+        accessibleLabel: "License key"
         visible: root.serviceAvailable
         Layout.fillWidth: true
         echoMode: TextInput.Password
@@ -63,7 +70,6 @@ ColumnLayout {
             border.width: 1
             border.color: licenseKey.activeFocus ? theme.focusRing : theme.lineSoft
         }
-        Accessible.name: "License key"
         onAccepted: activateButton.clicked()
     }
     RowLayout {
@@ -81,10 +87,84 @@ ColumnLayout {
             }
         }
         ActionButton {
+            text: "Recover access"
+            objectName: "recoverCustomerAccess"
+            visible: root.serviceAvailable
+            enabled: root.serviceAvailable && !root.controller.busy && licenseKey.text.trim().length > 0
+            onClicked: {
+                if (!enabled) return
+                root.controller.recoverAccess(licenseKey.text)
+                licenseKey.clear()
+            }
+        }
+        ActionButton {
             text: "Recover purchase"
-            onClicked: Qt.openUrlExternally("https://app.lemonsqueezy.com/my-orders/")
+            onClicked: root.controller ? root.controller.recoverPurchase() : Qt.openUrlExternally("https://app.lemonsqueezy.com/my-orders/")
         }
         Item { Layout.fillWidth: true }
+    }
+    RowLayout {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && (root.controller.purchaseUrl.length > 0 ||
+            root.controller.subscriptionPurchaseUrl.length > 0 || root.controller.billingPortalUrl.length > 0)
+        spacing: theme.space10
+        ActionButton {
+            text: "Buy a license"
+            objectName: "customerPurchaseLink"
+            visible: root.serviceAvailable && root.controller.purchaseUrl.length > 0
+            onClicked: Qt.openUrlExternally(root.controller.purchaseUrl)
+        }
+        ActionButton {
+            text: "Subscribe"
+            objectName: "customerSubscriptionLink"
+            visible: root.serviceAvailable && root.controller.subscriptionPurchaseUrl.length > 0
+            onClicked: Qt.openUrlExternally(root.controller.subscriptionPurchaseUrl)
+        }
+        ActionButton {
+            text: "Manage subscription"
+            objectName: "customerBillingPortalLink"
+            visible: root.serviceAvailable && root.controller.billingPortalUrl.length > 0
+            onClicked: Qt.openUrlExternally(root.controller.billingPortalUrl)
+        }
+        Item { Layout.fillWidth: true }
+    }
+    Label {
+        Layout.fillWidth: true
+        visible: root.serviceAvailable && root.controller.devices.length > 0
+        text: "Devices"
+        color: theme.textStrong
+        font.pixelSize: 16
+    }
+    Repeater {
+        model: root.serviceAvailable ? root.controller.devices : []
+        delegate: RowLayout {
+            required property var modelData
+            Layout.fillWidth: true
+            Label {
+                Layout.fillWidth: true
+                text: (modelData.id === root.controller.currentInstallationId ? "This device" : modelData.platform || "Device") +
+                    (modelData.revoked ? " · revoked" : " · active") +
+                    (modelData.app_version ? " · " + modelData.app_version : "")
+                color: theme.textMain
+                elide: Text.ElideMiddle
+            }
+            ActionButton {
+                text: "Revoke"
+                visible: !modelData.revoked && modelData.id !== root.controller.currentInstallationId
+                enabled: !root.controller.busy
+                onClicked: {
+                    root.pendingDeviceId = modelData.id
+                    revokeDialog.open()
+                }
+            }
+        }
+    }
+    ActionButton {
+        text: "Deactivate this device"
+        objectName: "deactivateCurrentDeviceAction"
+        visible: root.serviceAvailable && root.controller.currentInstallationId.length > 0
+        enabled: !root.controller.busy
+        onClicked: deactivateDialog.open()
     }
     Label {
         Layout.fillWidth: true
@@ -100,5 +180,67 @@ ColumnLayout {
         color: theme.textMuted
         font.pixelSize: 12
         wrapMode: Text.WordWrap
+    }
+    Dialog {
+        id: revokeDialog
+        objectName: "revokeCustomerDeviceDialog"
+        modal: true
+        title: "Revoke device access?"
+        onAccepted: root.controller.revokeDevice(root.pendingDeviceId)
+        header: Label {
+            text: revokeDialog.title
+            color: theme.textStrong
+            font.pixelSize: 18
+            padding: theme.space16
+            background: Rectangle { color: theme.surfaceTop }
+        }
+        background: Rectangle {
+            color: theme.surfaceBottom
+            border.width: 1
+            border.color: theme.lineSoft
+        }
+        Label {
+            width: 340
+            text: "That device will no longer be able to refresh its license."
+            color: theme.textMain
+            wrapMode: Text.WordWrap
+        }
+        footer: RowLayout {
+            spacing: theme.space8
+            Item { Layout.fillWidth: true }
+            ActionButton { text: "Cancel"; onClicked: revokeDialog.reject() }
+            ActionButton { text: "Revoke device"; tone: "danger"; onClicked: revokeDialog.accept() }
+        }
+    }
+    Dialog {
+        id: deactivateDialog
+        objectName: "deactivateCurrentDeviceDialog"
+        modal: true
+        title: "Deactivate this device?"
+        onAccepted: root.controller.deactivateCurrentDevice()
+        header: Label {
+            text: deactivateDialog.title
+            color: theme.textStrong
+            font.pixelSize: 18
+            padding: theme.space16
+            background: Rectangle { color: theme.surfaceTop }
+        }
+        background: Rectangle {
+            color: theme.surfaceBottom
+            border.width: 1
+            border.color: theme.lineSoft
+        }
+        Label {
+            width: 340
+            text: "This installation will be signed out and its saved access removed. You can recover it later with your verified purchase key."
+            color: theme.textMain
+            wrapMode: Text.WordWrap
+        }
+        footer: RowLayout {
+            spacing: theme.space8
+            Item { Layout.fillWidth: true }
+            ActionButton { text: "Cancel"; onClicked: deactivateDialog.reject() }
+            ActionButton { text: "Deactivate device"; tone: "danger"; onClicked: deactivateDialog.accept() }
+        }
     }
 }

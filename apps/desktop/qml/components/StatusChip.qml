@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Rectangle {
@@ -24,6 +23,11 @@ Rectangle {
                                                     ? text + " - " + detailText
                                                     : text)
     readonly property bool attentionTone: tone === "error" || tone === "warning"
+    readonly property string resolvedIconName: iconName.length > 0 ? iconName
+                                               : tone === "error" ? "error"
+                                               : tone === "warning" ? "warning"
+                                               : tone === "success" ? "check"
+                                               : tone === "info" ? "info" : ""
     readonly property string statusChipContract: "status-chip:v1|one-line:true|tone:" +
                                                 root.tone +
                                                 "|busy:" +
@@ -47,33 +51,27 @@ Rectangle {
                                        : tone === "info" ? theme.accentCool400
                                        : tone === "accent" ? theme.accentWarm400
                                        : theme.textMuted
-    readonly property color toneFill: tone === "error" ? theme.alpha(theme.error, 0.1)
-                                      : tone === "warning" ? theme.alpha(theme.warning, 0.1)
-                                      : tone === "success" ? theme.alpha(theme.success, 0.09)
-                                      : tone === "info" ? theme.alpha(theme.accentCool400, 0.1)
-                                      : tone === "accent" ? theme.alpha(theme.accentWarm400, 0.1)
+    readonly property color toneFill: tone === "error" ? theme.alpha(theme.error, 0.075)
+                                      : tone === "warning" ? theme.alpha(theme.warning, 0.075)
+                                      : tone === "success" ? theme.alpha(theme.success, 0.06)
+                                      : tone === "info" ? theme.alpha(theme.accentCool400, 0.07)
+                                      : tone === "accent" ? theme.alpha(theme.accentWarm400, 0.07)
                                       : theme.alpha(theme.ink950, 0.72)
 
     implicitWidth: Math.min(root.maximumReadableWidth,
                             Math.max(root.minimumReadableWidth,
                                      chipRow.implicitWidth + (compact ? 18 : 22)))
     implicitHeight: compact ? theme.controlHeight : theme.controlHeightTall
-    radius: theme.radiusChip
-    color: toneFill
-    border.width: theme.chromeBorderWidth
-    border.color: theme.alpha(toneColor, tone === "neutral" ? 0.24 : 0.46)
+    radius: theme.radiusControl
+    color: tone === "warning" ? theme.warningFill : tone === "error" ? theme.errorFill : toneFill
+    border.width: theme.hairlineWidth
+    border.color: theme.alpha(tone === "neutral" ? theme.lineSoft : toneColor,
+                              tone === "neutral" ? 0.62 : 0.3)
     clip: true
 
     Accessible.name: root.text
     Accessible.description: root.detailText.length > 0 ? root.detailText : root.resolvedTooltipText
     Accessible.role: Accessible.StaticText
-
-    ToolTip.visible: chipMouse.containsMouse &&
-                     (root.resolvedTooltipText.length > 0 ||
-                      chipLabel.contentWidth > chipLabel.width + 1)
-    ToolTip.delay: 350
-    ToolTip.timeout: 3000
-    ToolTip.text: root.resolvedTooltipText
 
     MouseArea {
         id: chipMouse
@@ -85,32 +83,35 @@ Rectangle {
     RowLayout {
         id: chipRow
         anchors.fill: parent
-        anchors.leftMargin: compact ? 9 : 11
-        anchors.rightMargin: compact ? 9 : 11
-        spacing: compact ? 7 : 8
+        anchors.leftMargin: root.compact ? 9 : 11
+        anchors.rightMargin: root.compact ? 9 : 11
+        spacing: root.compact ? 7 : 8
 
         Rectangle {
             id: statusDot
-            visible: root.dotVisible
+            visible: root.dotVisible && !root.busy && root.resolvedIconName.length === 0
             Layout.preferredWidth: theme.scaled(6)
             Layout.preferredHeight: theme.scaled(6)
             radius: width / 2
             color: root.toneColor
             opacity: root.enabled ? (root.attentionTone || root.busy ? 0.94 : 0.62) : 0.46
 
-            SequentialAnimation on opacity {
-                running: root.visible && root.pulse
-                loops: Animation.Infinite
-                NumberAnimation { from: 0.94; to: 0.34; duration: 520; easing.type: Easing.InOutSine }
-                NumberAnimation { from: 0.34; to: 0.94; duration: 520; easing.type: Easing.InOutSine }
-            }
+        }
+
+        OpticalActivityIndicator {
+            objectName: root.objectName.length > 0 ? root.objectName + "Activity" : "statusActivity"
+            visible: root.busy && root.dotVisible && !root.attentionTone
+            Layout.preferredWidth: theme.scaled(14)
+            Layout.preferredHeight: theme.scaled(14)
+            active: root.pulse
+            color: theme.opticalLight
         }
 
         AppIcon {
-            visible: root.iconName.length > 0
-            Layout.preferredWidth: compact ? theme.scaled(12) : theme.scaled(14)
-            Layout.preferredHeight: compact ? theme.scaled(12) : theme.scaled(14)
-            name: root.iconName
+            visible: root.resolvedIconName.length > 0 && !root.busy
+            Layout.preferredWidth: root.compact ? theme.scaled(12) : theme.scaled(14)
+            Layout.preferredHeight: root.compact ? theme.scaled(12) : theme.scaled(14)
+            name: root.resolvedIconName
             color: root.toneColor
             opacity: root.attentionTone || root.busy || root.tone !== "neutral" ? 1.0 : 0.72
         }
@@ -121,7 +122,7 @@ Rectangle {
             text: root.text
             color: root.tone === "neutral" ? theme.textMain : theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: compact ? theme.typeLabel : theme.typeBody
+            font.pixelSize: root.compact ? theme.typeLabel : theme.typeBody
             font.weight: root.tone === "neutral" ? Font.Medium : Font.DemiBold
             font.letterSpacing: 0
             maximumLineCount: 1
@@ -135,6 +136,7 @@ Rectangle {
         ActionButton {
             visible: root.actionText.length > 0
             text: root.actionText
+            iconName: /^retry\b/i.test(root.actionText) ? "retry" : ""
             enabled: root.actionEnabled
             compact: true
             embedded: true
@@ -142,5 +144,13 @@ Rectangle {
             tooltipText: root.actionText
             onClicked: root.actionTriggered()
         }
+    }
+
+    AppToolTip {
+        targetItem: root
+        visible: chipMouse.containsMouse &&
+                 (root.resolvedTooltipText.length > 0 ||
+                  chipLabel.contentWidth > chipLabel.width + 1)
+        text: root.resolvedTooltipText
     }
 }

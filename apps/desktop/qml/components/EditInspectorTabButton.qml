@@ -13,10 +13,11 @@ Item {
     Theme { id: theme }
 
     readonly property string editInspectorTabButtonContract: "edit-inspector-tab-button:v1|selected-state:true|hover:true|keyboard:true|width-to-label:true|readable-text:true|no-elide:true"
-    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-width:true|label-fit:true|tooltip-full:true|accessibility-full:true"
+    readonly property string editInspectorTabVisualContract: "edit-inspector-tab-visual:v3|pressed:true|focus-ring:2px|target:density-aware-control|selection:neutral-fill-and-weight|text-minimum:10px|motion:reduced-motion-aware|corners:2px"
+    readonly property string readableTextContract: "readable-text:v2|ellipsis:none|label-width:true|label-fit:true|minimum-px:10|tooltip-full:true|accessibility-full:true"
 
     implicitWidth: Math.max(54, tabLabel.implicitWidth + theme.space20)
-    implicitHeight: 26
+    implicitHeight: theme.controlHeight
     activeFocusOnTab: true
     Accessible.role: Accessible.PageTab
     Accessible.name: root.label
@@ -28,12 +29,15 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius6
-        color: tabMouse.containsMouse || root.selected || root.activeFocus
-               ? theme.alpha(root.accent, root.selected ? 0.07 : 0.04)
-               : "transparent"
-        border.width: root.activeFocus || root.selected ? 1 : 0
-        border.color: root.activeFocus || root.selected ? theme.controlEdge : "transparent"
+        radius: theme.scaled(2)
+        color: theme.commandFill("secondary", root.selected, tabMouse.containsMouse,
+                                 tabMouse.pressed, root.enabled, true)
+        border.width: theme.commandBorderWidth(root.activeFocus)
+        border.color: root.activeFocus ? theme.focusRing : theme.controlEdge
+
+        Behavior on color {
+            ColorAnimation { duration: theme.reducedMotion ? 0 : theme.durationFast; easing.type: Easing.OutCubic }
+        }
     }
 
     Text {
@@ -44,22 +48,23 @@ Item {
         anchors.leftMargin: theme.space8
         anchors.rightMargin: theme.space8
         text: root.label
-        color: root.selected ? theme.textStrong : (tabMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
+        color: root.selected ? theme.textStrong : (tabMouse.pressed || tabMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
         font.family: theme.fontMono
-        font.pixelSize: 10
+        font.pixelSize: theme.typeLabel
         font.weight: root.selected ? Font.DemiBold : Font.Normal
-        font.letterSpacing: 1.0
+        font.letterSpacing: 0.35
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         maximumLineCount: 1
         elide: Text.ElideNone
         fontSizeMode: Text.HorizontalFit
-        minimumPixelSize: 7
+        minimumPixelSize: 10
     }
 
     MouseArea {
         id: tabMouse
         anchors.fill: parent
+        enabled: root.enabled
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onClicked: root.selectedRequested(root.tabKey)

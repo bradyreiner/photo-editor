@@ -62,6 +62,26 @@ int main() {
       max_closed_outline_error_pixels(with_collinear, simplified) > 0.1) {
     return fail("outline simplification must remove redundant points within measured tolerance");
   }
+  const QVector<QPointF> subpixel_points{
+      QPointF(0.10, 0.10), QPointF(0.20, 0.10), QPointF(0.30, 0.10),
+      QPointF(2.0, 0.10), QPointF(2.0, 2.0), QPointF(0.10, 2.0)};
+  const auto subpixel_simplified = tolerance_simplified_closed_outline_points(subpixel_points, 0.01);
+  if (subpixel_simplified.size() >= subpixel_points.size() ||
+      max_closed_outline_error_pixels(subpixel_points, subpixel_simplified) > 0.01)
+    return fail("distinct subpixel vertices must not be mistaken for duplicate integer pixels");
+
+  QVector<QPointF> sampled_circle;
+  for (int index = 0; index < 720; ++index) {
+    const double angle = static_cast<double>(index) * 2.0 * std::acos(-1.0) / 720.0;
+    sampled_circle.append(QPointF(128 + 80 * std::cos(angle), 96 + 60 * std::sin(angle)));
+  }
+  const auto sampled_tolerance = outline_tolerance_for_sampled_raster(
+      0.5, QSize(8192, 6144), QSize(256, 192));
+  const auto enlarged_circle = tolerance_simplified_closed_outline_points(sampled_circle, sampled_tolerance);
+  if (max_closed_outline_error_pixels(sampled_circle, enlarged_circle) * 32.0 > 0.5 + 1e-9 ||
+      !close(outline_tolerance_for_sampled_raster(0.5, QSize(128, 96), QSize(256, 192)), 0.5))
+    return fail("small alpha mattes displayed over large photos must retain a subpixel reference-image tolerance");
+
   const QVector<QPointF> repeated{
       QPointF(0.0, 0.0), QPointF(5.0, 0.0), QPointF(5.0, 0.0),
       QPointF(10.0, 10.0), QPointF(0.0, 10.0)};

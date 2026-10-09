@@ -2,9 +2,11 @@
 #include "photo_text_rasterizer.h"
 #include "photo_render_utils.h"
 #include "openexr_source_color.h"
+#include "brush_matte_rebuild.h"
 
 #include "photo_layer_compiler.h"
 #include "photo_layer_effect_codec.h"
+#include "photo_extended_effect_bridge.h"
 #include "layer_selection_mask_cache.h"
 #include "photo_layer_source.h"
 #include "linked_image_source.h"
@@ -21,6 +23,7 @@
 #include "output_profile_names.h"
 #include "preview_output_color_space.h"
 #include "render_executor_service.h"
+#include "render_plan_store.h"
 #include "photo_editor/io/openexr_io.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
@@ -43,6 +46,7 @@
 #include <QJsonDocument>
 #include <QPainter>
 #include <QPolygonF>
+#include <QSet>
 #include <QStringList>
 #include <QTransform>
 
@@ -1161,15 +1165,25 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(
       }
       if (offset!=local_mask.brush_points.size()) local_mask.clone_strokes.clear();
     }
-    const auto seg_data = mask.value(QStringLiteral("segmentationData")).toByteArray();
-    const auto seg_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
-    const auto seg_height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+    auto raster_mask = mask;
+    bool version2 = false;
+    for (const auto& stroke : mask.value(QStringLiteral("brushStrokes")).toList()) {
+      if (stroke.toMap().value(QStringLiteral("settings")).toMap()
+              .value(QStringLiteral("rasterVersion")).toInt() >= 2) { version2 = true; break; }
+    }
+    if (version2 && raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution && output_size.isValid()) {
+      const auto rebuilt = mask_with_rebuilt_brush_matte(mask, output_size, QStringLiteral("full-resolution-render"));
+      if (!rebuilt.isEmpty()) raster_mask = rebuilt;
+    }
+    const auto seg_data = raster_mask.value(QStringLiteral("segmentationData")).toByteArray();
+    const auto seg_width = raster_mask.value(QStringLiteral("segmentationWidth")).toInt();
+    const auto seg_height = raster_mask.value(QStringLiteral("segmentationHeight")).toInt();
     const auto stored_raster_covers_output =
         valid_segmentation_payload(seg_data, seg_width, seg_height) &&
         output_size.isValid() &&
         seg_width >= output_size.width() &&
         seg_height >= output_size.height();
-    if (raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution &&
+    if (!version2 && raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution &&
         !local_mask.brush_points.empty() && output_size.isValid() &&
         !stored_raster_covers_output) {
       rebuild_brush_segmentation_at_output_resolution(&local_mask, output_size.width(), output_size.height());
@@ -1282,6 +1296,18 @@ std::array<double, 3> layer_lut_domain_array(
   return domain;
 }
 
+std::array<double, 2> layer_lut_input_range_array(
+    const QVariant& value,
+    const std::array<double, 2>& fallback) {
+  auto range = fallback;
+  const auto list = value.toList();
+  if (list.size() >= 2) {
+    range[0] = list.at(0).toDouble();
+    range[1] = list.at(1).toDouble();
+  }
+  return range;
+}
+
 std::vector<photo_editor::pipeline::ColorPixel> layer_lut_table(const QVariant& value) {
   std::vector<photo_editor::pipeline::ColorPixel> table;
   const auto list = value.toList();
@@ -1292,19 +1318,19 @@ std::vector<photo_editor::pipeline::ColorPixel> layer_lut_table(const QVariant& 
       const auto row = entry.toList();
       if (row.size() >= 3) {
         table.push_back(photo_editor::pipeline::ColorPixel{
-            .red = static_cast<float>(qBound(0.0, row.at(0).toDouble(), 1.0)),
-            .green = static_cast<float>(qBound(0.0, row.at(1).toDouble(), 1.0)),
-            .blue = static_cast<float>(qBound(0.0, row.at(2).toDouble(), 1.0)),
-            .alpha = static_cast<float>(qBound(0.0, row.value(3, 1.0).toDouble(), 1.0)),
+            .red = static_cast<float>(row.at(0).toDouble()),
+            .green = static_cast<float>(row.at(1).toDouble()),
+            .blue = static_cast<float>(row.at(2).toDouble()),
+            .alpha = static_cast<float>(row.value(3, 1.0).toDouble()),
         });
       }
       continue;
     }
     table.push_back(photo_editor::pipeline::ColorPixel{
-        .red = static_cast<float>(qBound(0.0, object.value(QStringLiteral("red")).toDouble(), 1.0)),
-        .green = static_cast<float>(qBound(0.0, object.value(QStringLiteral("green")).toDouble(), 1.0)),
-        .blue = static_cast<float>(qBound(0.0, object.value(QStringLiteral("blue")).toDouble(), 1.0)),
-        .alpha = static_cast<float>(qBound(0.0, object.value(QStringLiteral("alpha"), 1.0).toDouble(), 1.0)),
+        .red = static_cast<float>(object.value(QStringLiteral("red")).toDouble()),
+        .green = static_cast<float>(object.value(QStringLiteral("green")).toDouble()),
+        .blue = static_cast<float>(object.value(QStringLiteral("blue")).toDouble()),
+        .alpha = static_cast<float>(object.value(QStringLiteral("alpha"), 1.0).toDouble()),
     });
   }
   return table;
@@ -1329,6 +1355,11 @@ photo_editor::pipeline::LutAdjustment layer_lut_adjustment_from_object(const QVa
       .output_color_space = object.value(QStringLiteral("outputColorSpace"), QStringLiteral("sRGB"))
                                 .toString()
                                 .toStdString(),
+      .shaper_table = layer_lut_table(object.value(QStringLiteral("shaperTable"))),
+      .shaper_size = qBound(0, object.value(QStringLiteral("shaperSize")).toInt(), 65536),
+      .shaper_input_range = layer_lut_input_range_array(
+          object.value(QStringLiteral("shaperInputRange")),
+          std::array<double, 2>{0.0, 1.0}),
   };
 }
 
@@ -1685,6 +1716,101 @@ void populate_photo_layer_selection_mask(
   }
 }
 
+double photo_layer_mask_coverage_at(
+    const photo_editor::pipeline::PhotoLayer& mask,
+    int x,
+    int y,
+    int width,
+    int height) {
+  const auto expected = static_cast<std::size_t>(mask.mask_width) *
+      static_cast<std::size_t>(mask.mask_height);
+  if (mask.mask_width <= 0 || mask.mask_height <= 0 ||
+      mask.mask_data.size() != expected || width <= 0 || height <= 0) return 1.0;
+  const auto normalized_x = width > 1 ? static_cast<double>(std::clamp(x, 0, width - 1)) /
+      static_cast<double>(width - 1) : 0.0;
+  const auto normalized_y = height > 1 ? static_cast<double>(std::clamp(y, 0, height - 1)) /
+      static_cast<double>(height - 1) : 0.0;
+  const auto mask_x = std::clamp(static_cast<int>(std::lround(
+      normalized_x * static_cast<double>(mask.mask_width - 1))), 0, mask.mask_width - 1);
+  const auto mask_y = std::clamp(static_cast<int>(std::lround(
+      normalized_y * static_cast<double>(mask.mask_height - 1))), 0, mask.mask_height - 1);
+  const auto index = static_cast<std::size_t>(mask_y) * static_cast<std::size_t>(mask.mask_width) +
+      static_cast<std::size_t>(mask_x);
+  auto coverage = static_cast<double>(mask.mask_data[index]) / 255.0;
+  if (mask.mask_inverted) coverage = 1.0 - coverage;
+  coverage = std::min(coverage, std::clamp(mask.mask_density, 0.0, 1.0));
+  return std::clamp(coverage * std::clamp(mask.mask_opacity, 0.0, 1.0), 0.0, 1.0);
+}
+
+void intersect_photo_layer_masks(
+    photo_editor::pipeline::PhotoLayer* target,
+    const photo_editor::pipeline::PhotoLayer& selection_mask) {
+  if (target == nullptr || selection_mask.mask_data.empty() ||
+      selection_mask.mask_width <= 0 || selection_mask.mask_height <= 0) return;
+  if (target->mask_data.empty() || target->mask_width <= 0 || target->mask_height <= 0) {
+    *target = selection_mask;
+    return;
+  }
+  const auto width = selection_mask.mask_width;
+  const auto height = selection_mask.mask_height;
+  std::vector<std::uint8_t> intersection(static_cast<std::size_t>(width) *
+      static_cast<std::size_t>(height));
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto selection_coverage = photo_layer_mask_coverage_at(
+          selection_mask, x, y, width, height);
+      const auto target_coverage = photo_layer_mask_coverage_at(*target, x, y, width, height);
+      const auto index = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+      intersection[index] = static_cast<std::uint8_t>(std::lround(
+          std::clamp(selection_coverage * target_coverage, 0.0, 1.0) * 255.0));
+    }
+  }
+  target->mask_data = std::move(intersection);
+  target->mask_width = width;
+  target->mask_height = height;
+  target->mask_inverted = false;
+  target->mask_opacity = 1.0;
+  target->mask_density = 1.0;
+}
+
+photo_editor::pipeline::PhotoLayer compile_photo_layer_selection_mask(
+    const QVariantMap& layer,
+    const QVariantList& masks,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size,
+    std::span<const photo_editor::pipeline::ColorPixel> source_pixels,
+    const photo_editor::pipeline::ColorPipelineConfig& color_pipeline,
+    DesktopRenderPurpose purpose,
+    bool preserve_layer_mask_inversion = false) {
+  auto selection_layer = layer;
+  selection_layer.insert(QStringLiteral("maskInverted"), preserve_layer_mask_inversion &&
+      layer.value(QStringLiteral("maskInverted")).toBool());
+  selection_layer.insert(QStringLiteral("maskOpacity"), 1.0);
+  selection_layer.insert(QStringLiteral("maskDensity"), 1.0);
+  photo_editor::pipeline::PhotoLayer selection_mask;
+  populate_photo_layer_selection_mask(&selection_mask, selection_layer, masks,
+      raster_policy, output_size, source_pixels, color_pipeline, purpose);
+  const auto intersection_ids = layer.value(QStringLiteral("selectionIntersectionMaskSetIds")).toStringList();
+  const auto intersection_names = layer.value(QStringLiteral("selectionIntersectionMaskSetNames")).toStringList();
+  for (auto index = 0; index < std::max(intersection_ids.size(), intersection_names.size()); ++index) {
+    const auto id = index < intersection_ids.size() ? intersection_ids.at(index) : QString();
+    const auto name = index < intersection_names.size() ? intersection_names.at(index) : QString();
+    if (id.isEmpty() && name.isEmpty()) continue;
+    auto intersection_layer = selection_layer;
+    intersection_layer.insert(QStringLiteral("maskInverted"), false);
+    intersection_layer.insert(QStringLiteral("selectionMaskSetId"), id);
+    intersection_layer.insert(QStringLiteral("selectionMaskSetName"), name);
+    intersection_layer.insert(QStringLiteral("selectionMaskSetIds"), QVariantList{id});
+    intersection_layer.insert(QStringLiteral("selectionMaskSetNames"), QVariantList{name});
+    photo_editor::pipeline::PhotoLayer additional_mask;
+    populate_photo_layer_selection_mask(&additional_mask, intersection_layer, masks,
+        raster_policy, output_size, source_pixels, color_pipeline, purpose);
+    intersect_photo_layer_masks(&selection_mask, additional_mask);
+  }
+  return selection_mask;
+}
+
 void populate_photo_layer_pixels(photo_editor::pipeline::PhotoLayer* target,
     const QVariantMap& layer, const QString& working_profile, const QSize& text_raster_size = {}) {
   if (target == nullptr) {
@@ -1818,11 +1944,13 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
   for (const auto& value : layers) {
     const auto layer = value.toMap();
     const auto kind = layer.value(QStringLiteral("kind")).toString().trimmed().toLower();
-    if (solo_active && kind != QStringLiteral("group") && !layer.value(QStringLiteral("solo")).toBool()) {
+    if (solo_active && !layer.value(QStringLiteral("baseImageEdit")).toBool() && kind != QStringLiteral("group") && !layer.value(QStringLiteral("solo")).toBool()) {
       continue;
     }
     auto photo_layer = photo_editor::pipeline::PhotoLayer{
+        .erase_base_image = layer.value(QStringLiteral("baseImageEdit")).toBool(),
         .id = layer.value(QStringLiteral("id")).toString().toStdString(),
+        .parent_id = layer.value(QStringLiteral("parentId")).toString().trimmed().toStdString(),
         .name = layer.value(QStringLiteral("name")).toString().toStdString(),
         .kind = (kind.isEmpty() ? QStringLiteral("adjustment") : kind).toStdString(),
         .blend_mode =
@@ -2002,17 +2130,42 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         .lut_stack = layer_lut_stack(layer),
         .fill_color = layer_fill_color(layer, QString::fromStdString(color_pipeline.working_profile.profile_name)),
     };
+    if (kind == QStringLiteral("text")) {
+      const auto typography = layer.value(QStringLiteral("textTypography")).toMap();
+      photo_layer.text_material = typography.value(QStringLiteral("material")).toString().toStdString();
+      if (!photo_layer.text_material.empty() && photo_layer.text_material != "none") {
+        photo_layer.text_material_tint = layer_fill_color(
+            {{QStringLiteral("fillColor"), typography.value(QStringLiteral("materialTint"), QStringLiteral("#ff9eb8c8"))}},
+            QString::fromStdString(color_pipeline.working_profile.profile_name));
+        photo_layer.text_material_blur = qBound(0.0, typography.value(QStringLiteral("materialBlur"), 6.0).toDouble(), 64.0);
+        photo_layer.text_material_transmission = qBound(0.0,
+            typography.value(QStringLiteral("materialTransmission"), 0.68).toDouble(), 1.0);
+        photo_layer.text_material_edge_softness = qBound(0.0,
+            typography.value(QStringLiteral("materialEdgeSoftness"), 1.0).toDouble(), 16.0);
+        photo_layer.text_material_depth = qBound(0.0,
+            typography.value(QStringLiteral("materialDepth"), 4.0).toDouble(), 32.0);
+        photo_layer.text_material_light_angle = qBound(-180.0,
+            typography.value(QStringLiteral("materialLightAngle"), -45.0).toDouble(), 180.0);
+      }
+    }
+    photo_layer.copy_base_image = layer.value(QStringLiteral("copyBaseImage")).toBool();
     populate_photo_layer_mask(&photo_layer, layer);
-    if (photo_layer.mask_data.empty()) {
-      populate_photo_layer_selection_mask(
-          &photo_layer,
-          layer,
-          masks,
-          internal_raster_policy,
-          output_size,
-          source_pixels,
-          color_pipeline,
-          purpose);
+    if (layer.value(QStringLiteral("selectionScoped")).toBool()) {
+      const auto selection_mask = compile_photo_layer_selection_mask(layer, masks,
+          internal_raster_policy, output_size, source_pixels, color_pipeline, purpose,
+          photo_layer.mask_data.empty());
+      if (!selection_mask.mask_data.empty()) {
+        if (photo_layer.mask_data.empty()) {
+          photo_layer.mask_data = selection_mask.mask_data;
+          photo_layer.mask_width = selection_mask.mask_width;
+          photo_layer.mask_height = selection_mask.mask_height;
+          photo_layer.mask_inverted = selection_mask.mask_inverted;
+          photo_layer.mask_opacity = selection_mask.mask_opacity;
+          photo_layer.mask_density = selection_mask.mask_density;
+        } else {
+          intersect_photo_layer_masks(&photo_layer, selection_mask);
+        }
+      }
     }
     auto raster_layer = layer;
     QSize text_raster_size;
@@ -2021,6 +2174,12 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
     if (kind == QStringLiteral("text") && output_size.isValid() && canvas_width > 0 && canvas_height > 0) {
       const auto sx = static_cast<double>(output_size.width()) / canvas_width;
       const auto sy = static_cast<double>(output_size.height()) / canvas_height;
+      if (!photo_layer.text_material.empty() && photo_layer.text_material != "none") {
+        const auto material_scale = std::sqrt(sx * sy);
+        photo_layer.text_material_blur *= material_scale;
+        photo_layer.text_material_edge_softness *= material_scale;
+        photo_layer.text_material_depth *= material_scale;
+      }
       const auto scaled_width = qBound(16, layer.value("pixelWidth", 512).toInt(), 8192) * sx;
       const auto scaled_height = qBound(16, layer.value("pixelHeight", 128).toInt(), 8192) * sy;
       if (scaled_width <= 16384 && scaled_height <= 16384) {
@@ -2055,12 +2214,41 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         raster_layer.insert("pixelHeight", qMax(1, static_cast<int>(std::lround(height * scale_y))));
       }
     }
-    if (photo_layer.enabled && photo_layer.opacity > 0.0 && photo_layer.content_error.empty()) {
+    if (photo_layer.copy_base_image) {
+      photo_layer.x = raster_layer.value("x").toInt();
+      photo_layer.y = raster_layer.value("y").toInt();
+      photo_layer.transform_scale = qBound(0.05, layer.value("scale", 1.0).toDouble(), 32.0);
+      photo_layer.transform_rotation = qBound(-3600.0, layer.value("rotation").toDouble(), 3600.0);
+      // The pixels are resolved from the developed base by the layer stage.
+      photo_layer.pixel_width = output_size.width();
+      photo_layer.pixel_height = output_size.height();
+    } else if (photo_layer.enabled && photo_layer.opacity > 0.0 && photo_layer.content_error.empty()) {
       populate_photo_layer_pixels(&photo_layer, raster_layer, QString::fromStdString(color_pipeline.working_profile.profile_name), text_raster_size);
+    }
+    if (kind == QStringLiteral("group")) {
+      const auto source_width = canvas_width > 0 ? canvas_width : output_size.width();
+      const auto source_height = canvas_height > 0 ? canvas_height : output_size.height();
+      const auto scale_x = source_width > 0 && output_size.width() > 0
+          ? static_cast<double>(output_size.width()) / source_width : 1.0;
+      const auto scale_y = source_height > 0 && output_size.height() > 0
+          ? static_cast<double>(output_size.height()) / source_height : 1.0;
+      const auto scaled_offset = [](int offset, double scale) {
+        const auto value = std::round(static_cast<double>(offset) * scale);
+        return static_cast<int>(std::clamp(
+            value,
+            static_cast<double>(std::numeric_limits<int>::lowest()),
+            static_cast<double>(std::numeric_limits<int>::max())));
+      };
+      photo_layer.x = scaled_offset(layer.value(QStringLiteral("x")).toInt(), scale_x);
+      photo_layer.y = scaled_offset(layer.value(QStringLiteral("y")).toInt(), scale_y);
+      photo_layer.transform_scale = qBound(0.05, layer.value(QStringLiteral("scale"), 1.0).toDouble(), 32.0);
+      photo_layer.transform_rotation = qBound(-3600.0, layer.value(QStringLiteral("rotation")).toDouble(), 3600.0);
     }
     QString effect_error;
     if (auto effects = decode_photo_layer_effects(layer, &effect_error)) {
       photo_layer.effects = std::move(*effects);
+      if (!bind_photo_effect_maps(&photo_layer.effects, layer, &effect_error))
+        photo_layer.effect_error = effect_error.toStdString();
     } else {
       photo_layer.effect_error = effect_error.toStdString();
     }
@@ -2118,6 +2306,8 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
     }
     photo_layers.push_back(std::move(photo_layer));
   }
+  // Desktop rows are top first; the engine accumulates the bottom first.
+  std::reverse(photo_layers.begin(), photo_layers.end());
   return photo_layers;
 }
 namespace {
@@ -2571,6 +2761,17 @@ bool prewarm_source_image_decode_pyramid(
   return !cancellation.cancelled();
 }
 
+bool find_source_image_decode_cache(
+    const QString& file_path, const RenderEditState& state, int max_edge, QImage* image) {
+  if (!image || max_edge < 0) return false;
+  const QFileInfo source(file_path);
+  if (!source.exists() || !source.isReadable()) return false;
+  return find_decoded_image_cache_entry(
+      source_image_decode_cache_key(source, max_edge,
+                                    openexr_image_supported(file_path),
+                                    raw_image_supported(file_path), state), image);
+}
+
 bool source_image_decode_cache_contains(
     const QString& file_path,
     const RenderEditState& state,
@@ -2697,9 +2898,37 @@ QImage render_output_image_with_backend_impl(
     const photo_editor::pipeline::RenderPlan*
         canonical_plan,
     const DeferredRenderSource* deferred_source = nullptr,
-    photo_editor::pipeline::CancellationToken cancellation = {});
+    photo_editor::pipeline::CancellationToken cancellation = {},
+    const photo_editor::pipeline::ColorAdjustmentState*
+        compiled_pipeline_state = nullptr);
 
 }  // namespace
+
+QImage render_output_image_with_compiled_state(
+    const QImage& image,
+    const RenderEditState& state,
+    const photo_editor::pipeline::ColorAdjustmentState& compiled_state,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format,
+    const photo_editor::pipeline::RenderPlan& canonical_plan,
+    photo_editor::pipeline::CancellationToken cancellation) {
+  return render_output_image_with_backend_impl(
+      image,
+      state,
+      target_color_space,
+      output_format,
+      RenderBackendPreference::Auto,
+      nullptr,
+      nullptr,
+      RenderMaskOptions{.rebuild_editable_masks_at_output_resolution = true},
+      photo_editor::pipeline::RemovalQuality::Interactive,
+      RenderOutputPolicy::DisplayReferred,
+      nullptr,
+      &canonical_plan,
+      nullptr,
+      cancellation,
+      &compiled_state);
+}
 
 QImage render_output_image_with_backend(
     const QImage& image,
@@ -2844,6 +3073,97 @@ QImage render_output_file(
       cancellation);
 }
 
+QImage render_editable_base_pixels(const QString& source_path, EditRecipeState state, QString* error) {
+  QVariantList base_edits;
+  for (const auto& value : state.layers)
+    if (value.toMap().value(QStringLiteral("baseImageEdit")).toBool()) base_edits.push_back(value);
+  state.layers = base_edits;
+  const auto size = source_image_size(source_path);
+  photo_editor::pipeline::DecodedImageMetadata metadata;
+  if (raw_image_supported(source_path) && !read_raw_decoded_metadata(
+          source_path, &metadata, raw_decode_settings_for_state(state))) return {};
+  const auto admission = RenderPlanStore::shared().admit(
+      QStringLiteral("editable-base:%1").arg(source_path), source_path, state, size,
+      photo_editor::pipeline::RenderPurpose::Export,
+      photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation, std::nullopt,
+      metadata.valid ? &metadata : nullptr);
+  if (!admission.admitted) { if (error) *error = admission.error; return {}; }
+  RenderBackendTelemetry telemetry;
+  auto result = render_output_file(source_path, size, crop_rect_for_image(size, state), state,
+      working_color_space(state.working_color_profile), QImage::Format_RGBA32FPx4_Premultiplied,
+      metadata.valid ? &metadata : nullptr, &telemetry, {},
+      photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::SceneLinearWorking,
+      nullptr, &*admission.plan);
+  if (result.isNull() && error) *error = telemetry.canonical_plan_error + " " + telemetry.fallback_reason;
+  return result;
+}
+
+QImage render_photo_layer_snapshot(
+    const QImage& source_image,
+    EditRecipeState state,
+    const QString& layer_id,
+    QString* error) {
+  if (source_image.isNull() || layer_id.trimmed().isEmpty()) {
+    if (error) *error = QStringLiteral("The content-layer snapshot request is incomplete.");
+    return {};
+  }
+  QHash<QString, QVariantMap> layers_by_id;
+  for (const auto& value : state.layers) {
+    const auto layer = value.toMap();
+    const auto id = layer.value(QStringLiteral("id")).toString().simplified();
+    if (!id.isEmpty()) layers_by_id.insert(id, layer);
+  }
+  if (!layers_by_id.contains(layer_id)) {
+    if (error) *error = QStringLiteral("The source layer no longer exists.");
+    return {};
+  }
+  QSet<QString> isolated_ids{layer_id};
+  auto parent_id = layers_by_id.value(layer_id).value(QStringLiteral("parentId")).toString().simplified();
+  while (!parent_id.isEmpty()) {
+    if (isolated_ids.contains(parent_id) || !layers_by_id.contains(parent_id)) {
+      if (error) *error = QStringLiteral("The source layer has an invalid group hierarchy.");
+      return {};
+    }
+    isolated_ids.insert(parent_id);
+    parent_id = layers_by_id.value(parent_id).value(QStringLiteral("parentId")).toString().simplified();
+  }
+  QVariantList isolated_layers;
+  for (const auto& value : state.layers) {
+    const auto layer = value.toMap();
+    if (isolated_ids.contains(layer.value(QStringLiteral("id")).toString().simplified()))
+      isolated_layers.append(layer);
+  }
+  state.layers = std::move(isolated_layers);
+  state.crop_rect_x = 0.0;
+  state.crop_rect_y = 0.0;
+  state.crop_rect_width = 0.0;
+  state.crop_rect_height = 0.0;
+  state.crop_zoom = 1.0;
+  state.crop_preset = QStringLiteral("Original");
+  state.transform_rotation = 0.0;
+  state.transform_scale = 1.0;
+  state.transform_skew_x = 0.0;
+  state.transform_skew_y = 0.0;
+  state.perspective_vertical = 0.0;
+  state.perspective_horizontal = 0.0;
+  auto transparent = source_image.convertToFormat(QImage::Format_RGBA8888);
+  for (int y = 0; y < transparent.height(); ++y) {
+    auto* row = transparent.scanLine(y);
+    for (int x = 0; x < transparent.width(); ++x) row[x * 4 + 3] = 0;
+  }
+  RenderBackendTelemetry telemetry;
+  auto output = render_output_image_with_backend(transparent, state,
+      working_color_space(state.working_color_profile),
+      QImage::Format_RGBA32FPx4_Premultiplied, RenderBackendPreference::CpuOnly,
+      nullptr, &telemetry, {}, photo_editor::pipeline::RemovalQuality::Final,
+      RenderOutputPolicy::SceneLinearWorking);
+  if (output.isNull() && error) {
+    *error = telemetry.canonical_plan_error + QLatin1Char(' ') + telemetry.fallback_reason;
+    if (error->trimmed().isEmpty()) *error = QStringLiteral("The selected content layer could not be rasterized.");
+  }
+  return output;
+}
+
 QImage render_flattened_output_file(
     const QString& source_asset_id,
     const QString& source_path,
@@ -2964,7 +3284,9 @@ QImage render_output_image_with_backend_impl(
     const photo_editor::pipeline::RenderPlan*
         canonical_plan,
     const DeferredRenderSource* deferred_source,
-    photo_editor::pipeline::CancellationToken cancellation) {
+    photo_editor::pipeline::CancellationToken cancellation,
+    const photo_editor::pipeline::ColorAdjustmentState*
+        compiled_pipeline_state) {
   if (telemetry != nullptr) {
     *telemetry = {};
   }
@@ -3000,6 +3322,87 @@ QImage render_output_image_with_backend_impl(
           QStringLiteral("invalid_deferred_decode_source");
     }
     return {};
+  }
+  if (compiled_pipeline_state != nullptr && deferred_source != nullptr) {
+    return {};
+  }
+
+  std::optional<photo_editor::pipeline::RenderPlan> auto_admitted_plan;
+  if (canonical_plan == nullptr && deferred_source == nullptr &&
+      !image.isNull() && output_policy == RenderOutputPolicy::DisplayReferred &&
+      normalized_photographic_rendering_model_name(
+          state.photographic_rendering_model) ==
+          QStringLiteral("aces2-ocio-v1")) {
+    auto probe_state = compile_export_pipeline_state(
+        state,
+        metadata,
+        MaskRasterPolicy::UseStoredRaster,
+        image.size());
+    if (export_display_target_override != nullptr) {
+      probe_state.color_pipeline.export_display_target =
+          *export_display_target_override;
+      probe_state.color_pipeline.export_output_profile.color_space =
+          export_display_target_override->color_space;
+    }
+    const auto text_policy = classify_display_referred_text_layers(
+        state,
+        probe_state.color_pipeline,
+        DesktopRenderPurpose::Output,
+        image.size());
+    if (!text_policy.eligible_layer_ids.isEmpty()) {
+      auto device_profile =
+          std::optional<photo_editor::pipeline::AssetIdentifier>{};
+      if (!state.export_icc_profile_asset.asset_id.trimmed().isEmpty()) {
+        device_profile = photo_editor::pipeline::AssetIdentifier{
+            state.export_icc_profile_asset.asset_id.trimmed().toStdString()};
+      } else if (!state.export_icc_profile_asset.payload_sha256
+                      .trimmed()
+                      .isEmpty()) {
+        device_profile = photo_editor::pipeline::AssetIdentifier{
+            "sha256:" + state.export_icc_profile_asset.payload_sha256
+                              .trimmed()
+                              .toStdString()};
+      }
+      const auto& target = probe_state.color_pipeline.export_display_target;
+      const auto rendering_target = target.eotf ==
+              photo_editor::pipeline::DisplayEotf::Pq
+          ? photo_editor::pipeline::DisplayRenderingTarget::HdrPq
+          : target.eotf == photo_editor::pipeline::DisplayEotf::Hlg
+              ? photo_editor::pipeline::DisplayRenderingTarget::HdrHlg
+              : target.color_space.primaries ==
+                        photo_editor::pipeline::ColorPrimaries::DisplayP3
+                    ? photo_editor::pipeline::DisplayRenderingTarget::DisplayP3Simulation
+                    : photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation;
+      const auto source_identity = QStringLiteral("in-memory-qimage:%1")
+                                       .arg(QString::number(image.cacheKey(), 16));
+      const auto admission = RenderPlanStore::shared().admit(
+          source_identity,
+          QStringLiteral("in-memory-render.png"),
+          state,
+          image.size(),
+          photo_editor::pipeline::RenderPurpose::Export,
+          rendering_target,
+          device_profile,
+          metadata);
+      if (!admission.admitted || !admission.plan.has_value()) {
+        if (telemetry != nullptr) {
+          telemetry->canonical_plan_cache_key = admission.plan_cache_key;
+          telemetry->canonical_recipe_cache_key = admission.recipe_cache_key;
+          telemetry->canonical_plan_error = admission.error;
+          telemetry->backend = QStringLiteral("none");
+          telemetry->fallback_reason =
+              QStringLiteral("canonical_plan_admission_failed_for_display_text");
+        }
+        return {};
+      }
+      auto_admitted_plan = admission.plan;
+      canonical_plan = &*auto_admitted_plan;
+      if (telemetry != nullptr) {
+        telemetry->canonical_plan_cache_key = admission.plan_cache_key;
+        telemetry->canonical_recipe_cache_key = admission.recipe_cache_key;
+        telemetry->canonical_plan_error.clear();
+      }
+    }
   }
 
   const auto requested_input_profile =
@@ -3095,14 +3498,21 @@ QImage render_output_image_with_backend_impl(
   const auto raster_policy = mask_options.rebuild_editable_masks_at_output_resolution
                                  ? MaskRasterPolicy::RebuildEditableAtOutputResolution
                                  : MaskRasterPolicy::UseStoredRaster;
-  auto pipeline_state =
-      compile_export_pipeline_state(
-          state,
-          metadata,
-          raster_policy,
-          QSize(width, height),
-          pixels,
-          export_display_target_override);
+  auto pipeline_state_storage =
+      std::optional<photo_editor::pipeline::ColorAdjustmentState>{};
+  if (compiled_pipeline_state == nullptr) {
+    pipeline_state_storage.emplace(compile_export_pipeline_state(
+        state,
+        metadata,
+        raster_policy,
+        QSize(width, height),
+        pixels,
+        export_display_target_override));
+  }
+  auto& pipeline_state = compiled_pipeline_state == nullptr
+                             ? *pipeline_state_storage
+                             : const_cast<photo_editor::pipeline::ColorAdjustmentState&>(
+                                   *compiled_pipeline_state);
   if (const auto error = compiled_photo_layer_source_error(pipeline_state.photo_layers);
       !error.isEmpty()) {
     if (telemetry != nullptr) {
@@ -3133,7 +3543,9 @@ QImage render_output_image_with_backend_impl(
         target->input_transform.source_area_height =
             source_area.height();
       };
-  apply_camera_profile_source_area(&pipeline_state);
+  if (compiled_pipeline_state == nullptr) {
+    apply_camera_profile_source_area(&pipeline_state);
+  }
   const auto display_referred_output =
       output_policy == RenderOutputPolicy::DisplayReferred;
   const auto custom_export_profile_configured =

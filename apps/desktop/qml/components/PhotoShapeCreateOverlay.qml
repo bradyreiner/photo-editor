@@ -10,6 +10,7 @@ Item {
     Theme { id: theme }
     property bool active: false
     property bool panActive: false
+    property Item controlsParent: null
     property real imageX: 0
     property real imageY: 0
     property real imageWidth: 0
@@ -42,6 +43,16 @@ Item {
     function documentPoint(x, y) {
         return Qt.point(Math.max(0, Math.min(canvasWidth, (x - imageX) * canvasWidth / imageWidth)),
                         Math.max(0, Math.min(canvasHeight, (y - imageY) * canvasHeight / imageHeight)))
+    }
+
+    function shapeTypeIndex() {
+        switch (shapeType) {
+        case "rounded-rectangle": return 1
+        case "ellipse": return 2
+        case "line": return 3
+        case "arrow": return 4
+        default: return 0
+        }
     }
 
     function finishShape() {
@@ -137,135 +148,379 @@ Item {
         }
     }
 
-    Rectangle {
+    Item {
+        id: photoShapeControls
         objectName: "photoShapeCreateControls"
-        readonly property string shapeHudContract: "shape-hud:v2|surface:theme-graphite|shape-picker:true|color-swatches:true|no-raw-hex:true"
+        readonly property string shapeHudContract: "shape-hud:v4|placement:top-tool-rail-or-external-host|surface:transparent|responsive-control-rows:true|stroke-width-horizontal:true"
+        parent: root.controlsParent || root
+        visible: root.active
+        enabled: root.active && !root.panActive
         z: 2
-        anchors.top: parent.top
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.topMargin: theme.space12
-        width: Math.max(theme.scaled(300), Math.min(theme.scaled(560), parent.width - theme.space24))
-        height: shapeControls.implicitHeight + theme.space16
-        radius: theme.radiusPanel
-        color: theme.ink900
-        border.color: theme.lineSoft
-        border.width: 1
-        // Keep toolbar input out of the canvas drag gesture.
-        MouseArea { anchors.fill: parent }
+        x: root.controlsParent ? 0 : Math.max(0, (parent.width - width) / 2)
+        y: root.controlsParent ? 0 : theme.space6
+        width: root.controlsParent ? Math.max(1, parent.width)
+                                   : Math.min(theme.scaled(560), Math.max(1, parent.width - theme.space24))
+        height: shapeControls.implicitHeight
+        function shapeTypeLabel(type) {
+            if (type === "rounded-rectangle") return qsTr("Rounded rectangle")
+            if (type === "ellipse") return qsTr("Ellipse")
+            if (type === "line") return qsTr("Line")
+            if (type === "arrow") return qsTr("Arrow")
+            return qsTr("Rectangle")
+        }
+        function setShapeType(type) {
+            root.shapeType = type
+        }
+        function drawShapePreview(ctx, previewWidth, previewHeight, type, fill, stroke, strokeWidth) {
+            ctx.clearRect(0, 0, previewWidth, previewHeight)
+            const x = previewWidth * 0.16
+            const y = previewHeight * 0.18
+            const w = previewWidth * 0.68
+            const h = previewHeight * 0.64
+            const fillValue = String(fill || "")
+            const contrast = (stroke.r * 0.2126 + stroke.g * 0.7152 + stroke.b * 0.0722) < 0.3
+            ctx.lineWidth = Math.max(1.3, Math.min(3, Number(strokeWidth || 2) * 0.42))
+            ctx.lineCap = "round"
+            ctx.lineJoin = "round"
+            ctx.strokeStyle = contrast ? theme.textStrong : stroke
+            ctx.fillStyle = fillValue.length > 0 ? fillValue : "transparent"
+            ctx.beginPath()
+            if (type === "ellipse") {
+                ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
+            } else if (type === "line" || type === "arrow") {
+                ctx.moveTo(x + 2, y + h - 2)
+                ctx.lineTo(x + w - 2, y + 2)
+            } else if (type === "rounded-rectangle") {
+                const r = Math.min(w, h) * 0.2
+                ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y)
+                ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+                ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+                ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+                ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y)
+                ctx.closePath()
+            } else {
+                ctx.rect(x, y, w, h)
+            }
+            if (type !== "line" && type !== "arrow" && fillValue.length > 0) ctx.fill()
+            ctx.stroke()
+            if (type === "arrow") {
+                const angle = Math.atan2(-h + 4, w - 4)
+                const head = Math.min(9, Math.max(5, h * 0.3))
+                ctx.beginPath(); ctx.moveTo(x + w - 2, y + 2)
+                ctx.lineTo(x + w - 2 - head * Math.cos(angle - Math.PI / 6),
+                           y + 2 - head * Math.sin(angle - Math.PI / 6))
+                ctx.moveTo(x + w - 2, y + 2)
+                ctx.lineTo(x + w - 2 - head * Math.cos(angle + Math.PI / 6),
+                           y + 2 - head * Math.sin(angle + Math.PI / 6))
+                ctx.stroke()
+            }
+        }
 
-        ColumnLayout {
+        Popup {
+            id: shapeTypePopup
+            objectName: "photoShapeTypePopup"
+            parent: Overlay.overlay
+            modal: false
+            focus: true
+            width: Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))
+            height: Math.min(implicitHeight, parent ? Math.max(1, parent.height - theme.space8) : implicitHeight)
+            x: Math.max(theme.space4, Math.min(parent ? parent.width - width - theme.space4 : 0,
+                                                shapeTypeChooser.mapToItem(parent, 0, 0).x))
+            y: {
+                const anchor = shapeTypeChooser.mapToItem(parent, 0, 0)
+                const below = anchor.y + shapeTypeChooser.height + theme.space2
+                const above = anchor.y - height - theme.space2
+                const maxY = parent ? parent.height - height - theme.space4 : below
+                if (below <= maxY) return below
+                if (above >= theme.space4) return above
+                return Math.max(theme.space4, Math.min(maxY, below))
+            }
+            padding: theme.space8
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            background: Rectangle {
+                radius: theme.radiusPanel
+                color: theme.surfaceTop
+                border.width: theme.hairlineWidth
+                border.color: theme.glassEdge
+            }
+            onOpened: {
+                const currentOption = shapeTypeOptions.itemAt(root.shapeTypeIndex())
+                if (currentOption) currentOption.forceActiveFocus()
+            }
+            contentItem: ColumnLayout {
+                spacing: theme.space6
+                Label {
+                    text: qsTr("Choose a shape")
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    font.weight: theme.weightControl
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 3
+                    uniformCellWidths: true
+                    columnSpacing: theme.space4
+                    rowSpacing: theme.space4
+                    Repeater {
+                        id: shapeTypeOptions
+                        model: [
+                            { label: qsTr("Rectangle"), value: "rectangle" },
+                            { label: qsTr("Rounded rectangle"), value: "rounded-rectangle" },
+                            { label: qsTr("Ellipse"), value: "ellipse" },
+                            { label: qsTr("Line"), value: "line" },
+                            { label: qsTr("Arrow"), value: "arrow" }
+                        ]
+                        delegate: Button {
+                            id: shapeOption
+                            required property var modelData
+                            required property int index
+                            objectName: "photoShapeTypeOption" + index
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: theme.scaled(88)
+                            Layout.preferredHeight: theme.scaled(76)
+                            padding: theme.space4
+                            checkable: true
+                            checked: root.shapeType === modelData.value
+                            Accessible.name: modelData.label
+                            Accessible.description: checked ? qsTr("Selected shape type") : qsTr("Select shape type")
+                            onClicked: {
+                                photoShapeControls.setShapeType(modelData.value)
+                                shapeTypePopup.close()
+                            }
+                            background: Rectangle {
+                                radius: theme.radiusControl
+                                color: shapeOption.activeFocus ? theme.interactionFill
+                                       : shapeOption.pressed ? theme.actionSecondaryPressed
+                                       : shapeOption.checked ? theme.interactionFill
+                                       : shapeOption.hovered ? theme.actionSecondaryHover : theme.surfaceInset
+                                border.width: shapeOption.checked || shapeOption.activeFocus
+                                              ? theme.focusBorderWidth : theme.hairlineWidth
+                                border.color: shapeOption.checked || shapeOption.activeFocus
+                                              ? theme.interaction300 : theme.lineSoft
+                                Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
+                                Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
+                            }
+                            contentItem: ColumnLayout {
+                                spacing: theme.space2
+                                Canvas {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: theme.scaled(32)
+                                    property string fill: root.fillColor
+                                    property color stroke: root.strokeColor.length > 0 ? root.strokeColor : theme.textMuted
+                                    property real strokeWidth: root.strokeWidth
+                                    onFillChanged: requestPaint()
+                                    onStrokeChanged: requestPaint()
+                                    onStrokeWidthChanged: requestPaint()
+                                    onWidthChanged: requestPaint()
+                                    onHeightChanged: requestPaint()
+                                    onPaint: photoShapeControls.drawShapePreview(getContext("2d"), width, height,
+                                        shapeOption.modelData.value, fill, stroke, strokeWidth)
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: shapeOption.modelData.label
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeMicro
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Flow {
             id: shapeControls
-            anchors.fill: parent
-            anchors.margins: theme.panelPaddingCompact
-            spacing: theme.gapDense
+            width: parent.width
+            height: implicitHeight
+            spacing: theme.space8
 
             RowLayout {
-                Layout.fillWidth: true
+                width: root.controlsParent ? shapeControls.width : implicitWidth
+                spacing: theme.space6
                 AppIcon {
                     name: "shape-tool"
                     color: theme.textMain
-                    Layout.preferredWidth: theme.scaled(16)
-                    Layout.preferredHeight: theme.scaled(16)
+                    Layout.preferredWidth: theme.scaled(18)
+                    Layout.preferredHeight: theme.scaled(18)
                 }
                 Label {
-                    text: qsTr("Shape")
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeLabel
-                    font.weight: Font.DemiBold
-                }
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Drag on the image to draw")
+                    visible: root.controlsParent !== null
+                    text: qsTr("New shape")
                     color: theme.textMuted
                     font.family: theme.fontUi
                     font.pixelSize: theme.typeCaption
-                    horizontalAlignment: Text.AlignRight
+                    Accessible.name: qsTr("Create a new editable shape layer")
+                }
+                Button {
+                    id: shapeTypeChooser
+                    objectName: "photoShapeTypeChooser"
+                    Layout.fillWidth: root.controlsParent !== null
+                    Layout.preferredWidth: root.controlsParent ? 0 : theme.scaled(220)
+                    Layout.minimumWidth: theme.scaled(152)
+                    Layout.preferredHeight: theme.controlHeightDense
+                    padding: theme.space4
+                    onClicked: shapeTypePopup.open()
+                    Accessible.name: qsTr("Shape: %1").arg(photoShapeControls.shapeTypeLabel(root.shapeType))
+                    Accessible.description: qsTr("Choose a shape to draw.")
+                    ToolTip.text: qsTr("Choose a shape to draw.")
+                    ToolTip.visible: hovered
+                    ToolTip.delay: theme.durationSlow
+                    background: Rectangle {
+                        radius: theme.radiusControl
+                        color: shapeTypeChooser.activeFocus ? theme.interactionFill
+                               : shapeTypeChooser.pressed ? theme.actionSecondaryPressed
+                               : shapeTypeChooser.hovered ? theme.actionSecondaryHover : theme.actionSecondaryFill
+                        border.width: shapeTypeChooser.activeFocus ? theme.focusBorderWidth : theme.hairlineWidth
+                        border.color: shapeTypeChooser.activeFocus ? theme.focusRing : theme.controlEdge
+                        Behavior on color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
+                        Behavior on border.color { enabled: !theme.reducedMotion; ColorAnimation { duration: theme.durationFast } }
+                    }
+                    contentItem: RowLayout {
+                        spacing: theme.space4
+                        Canvas {
+                            Layout.preferredWidth: theme.scaled(30)
+                            Layout.preferredHeight: theme.scaled(20)
+                            property string shapeType: root.shapeType
+                            property string fill: root.fillColor
+                            property color stroke: root.strokeColor.length > 0 ? root.strokeColor : theme.textMuted
+                            property real strokeWidth: root.strokeWidth
+                            onFillChanged: requestPaint()
+                            onStrokeChanged: requestPaint()
+                            onStrokeWidthChanged: requestPaint()
+                            onShapeTypeChanged: requestPaint()
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onPaint: photoShapeControls.drawShapePreview(getContext("2d"), width, height,
+                                shapeType, fill, stroke, strokeWidth)
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: photoShapeControls.shapeTypeLabel(root.shapeType)
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            elide: Text.ElideNone
+                            wrapMode: Text.NoWrap
+                        }
+                        AppIcon {
+                            name: "chevron-down"
+                            color: theme.textMuted
+                            Layout.preferredWidth: theme.scaled(12)
+                            Layout.preferredHeight: theme.scaled(12)
+                        }
+                    }
+                }
+                ToneComboBox {
+                    objectName: "photoShapeTypeControl"
+                    visible: false
+                    Layout.preferredHeight: theme.controlHeightDense
+                    model: [qsTr("Rectangle"), qsTr("Rounded rectangle"), qsTr("Ellipse"), qsTr("Line"), qsTr("Arrow")]
+                    currentIndex: root.shapeTypeIndex()
+                    Accessible.name: qsTr("Shape type")
+                    onActivated: function(index) { root.shapeType = ["rectangle", "rounded-rectangle", "ellipse", "line", "arrow"][index] }
                 }
             }
 
             RowLayout {
-                Layout.fillWidth: true
+                width: root.controlsParent ? shapeControls.width : implicitWidth
                 spacing: theme.space6
-                ToneComboBox {
-                    objectName: "photoShapeTypeControl"
-                    Layout.preferredWidth: theme.scaled(164)
-                    Layout.minimumWidth: theme.scaled(112)
-                    model: [
-                        { label: qsTr("Rectangle"), value: "rectangle" },
-                        { label: qsTr("Rounded rectangle"), value: "rounded-rectangle" },
-                        { label: qsTr("Ellipse"), value: "ellipse" },
-                        { label: qsTr("Line"), value: "line" },
-                        { label: qsTr("Arrow"), value: "arrow" }
-                    ]
-                    textRole: "label"
-                    currentIndex: Math.max(0, indexForValue(root.shapeType))
-                    Accessible.name: qsTr("Shape type")
-                    function indexForValue(value) {
-                        for (let index = 0; index < model.length; ++index) {
-                            if (String(model[index].value) === String(value))
-                                return index
-                        }
-                        return 0
-                    }
-                    onActivated: function(index) { root.shapeType = String(model[index].value) }
+                Label {
+                    text: qsTr("Fill")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
                 }
-                Label { text: qsTr("Fill"); color: theme.textMuted }
                 ColorSwatchButton {
                     objectName: "photoShapeFillColorSwatch"
                     swatchColor: root.fillColor.length > 0 ? root.fillColor : theme.ink750
+                    selected: root.fillColor.length > 0
+                    accent: theme.interaction300
                     label: root.fillColor.length > 0 ? qsTr("Fill color") : qsTr("Fill is off")
-                    enabled: root.enabled && root.shapeType !== "line" && root.shapeType !== "arrow"
+                    enabled: root.shapeType !== "line" && root.shapeType !== "arrow"
                     onPicked: fillColorDialog.open()
                 }
                 MiniButton {
                     objectName: "photoShapeNoFillButton"
-                    text: qsTr("None")
-                    role: "segmented"
+                    square: root.controlsParent === null
+                    text: root.controlsParent ? qsTr("No fill") : ""
+                    iconName: "close"
+                    role: root.controlsParent ? "secondary" : "icon"
                     active: root.fillColor.length === 0
                     enabled: root.shapeType !== "line" && root.shapeType !== "arrow"
+                    tooltip: qsTr("No fill")
                     onClicked: root.fillColor = ""
                 }
-                Item { Layout.fillWidth: true }
             }
 
             RowLayout {
-                Layout.fillWidth: true
+                width: root.controlsParent ? shapeControls.width : implicitWidth
                 spacing: theme.space6
-                Label { text: qsTr("Stroke"); color: theme.textMuted }
+                Label {
+                    text: qsTr("Stroke")
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                }
                 ColorSwatchButton {
                     objectName: "photoShapeStrokeColorSwatch"
                     swatchColor: root.strokeColor.length > 0 ? root.strokeColor : theme.ink750
+                    selected: root.strokeColor.length > 0
+                    accent: theme.interaction300
                     label: root.strokeColor.length > 0 ? qsTr("Stroke color") : qsTr("Stroke is off")
-                    enabled: root.enabled
                     onPicked: strokeColorDialog.open()
                 }
                 MiniButton {
                     objectName: "photoShapeNoStrokeButton"
-                    text: qsTr("None")
-                    role: "segmented"
+                    square: root.controlsParent === null
+                    text: root.controlsParent ? qsTr("No stroke") : ""
+                    iconName: "close"
+                    role: root.controlsParent ? "secondary" : "icon"
                     active: root.strokeColor.length === 0
+                    tooltip: qsTr("No stroke")
                     onClicked: root.strokeColor = ""
                 }
-                Item { Layout.fillWidth: true }
-                Label { text: qsTr("Width"); color: theme.textMuted }
-                ToneTextField {
-                    id: strokeWidthField
-                    objectName: "photoShapeStrokeWidthField"
-                    Layout.preferredWidth: theme.scaled(56)
-                    Layout.preferredHeight: theme.controlHeightDense
-                    text: Number(root.strokeWidth).toString()
-                    Accessible.name: qsTr("Shape stroke width in image pixels")
-                    validator: DoubleValidator { bottom: 0; top: 512; decimals: 2; notation: DoubleValidator.StandardNotation; locale: "C" }
-                    onTextEdited: if (acceptableInput) root.strokeWidth = Number(text)
-                    onEditingFinished: {
-                        if (!acceptableInput)
-                            text = Number(root.strokeWidth).toString()
-                        else
-                            text = Qt.binding(function() { return Number(root.strokeWidth).toString() })
+            }
+
+            ColumnLayout {
+                width: root.controlsParent ? shapeControls.width : implicitWidth
+                spacing: theme.space2
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label {
+                        text: qsTr("Stroke width")
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        text: Math.round(root.strokeWidth) + " px"
+                        color: theme.textStrong
+                        font.family: theme.fontMono
+                        font.pixelSize: theme.typeCaption
                     }
                 }
-                Label { text: qsTr("px"); color: theme.textMuted }
+                ToolValueSlider {
+                    objectName: "photoShapeStrokeWidthSlider"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: theme.scaled(112)
+                    minimumReadableWidth: theme.scaled(112)
+                    Accessible.name: qsTr("Shape stroke width in pixels")
+                    tooltipText: qsTr("Stroke width: %1 px").arg(Math.round(root.strokeWidth))
+                    from: 0
+                    to: 1
+                    stepSize: 0.01
+                    value: root.strokeWidth <= 0 ? 0 : Math.log(Math.max(1, root.strokeWidth)) / Math.log(512)
+                    enabled: root.strokeColor.length > 0
+                    onMoved: root.strokeWidth = value <= 0.01 ? 0 : Math.max(1, Math.round(Math.pow(512, value)))
+                }
             }
         }
     }
@@ -273,17 +528,13 @@ Item {
     Label {
         z: 2
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: theme.space12
-        leftPadding: theme.space10
-        rightPadding: theme.space10
-        topPadding: theme.space5
-        bottomPadding: theme.space5
+        anchors.top: parent.top
+        anchors.topMargin: theme.space8
         text: qsTr("Move, scale, rotate, or restyle the shape from Layers.")
-        color: theme.textMain
+        color: theme.textMuted
         font.family: theme.fontUi
         font.pixelSize: theme.typeCaption
-        background: Rectangle { color: theme.ink900; border.color: theme.lineSoft; border.width: 1; radius: theme.radiusControl }
+        visible: false
     }
 
     ColorDialog {

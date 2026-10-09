@@ -10,6 +10,7 @@ Rectangle {
     property bool hidden: false
     property bool solo: false
     property bool changed: false
+    property bool recentlyAdded: false
     property bool compact: false
     property bool accentVisible: selected || activeMask || solo || changed
     property color accent: theme.accentWarm400
@@ -23,21 +24,22 @@ Rectangle {
 
     readonly property bool hovered: rowHover.hovered
     readonly property int motionDuration: Math.max(120, theme.durationFast)
-    readonly property int chromeRowHeight: compact ? 58 : 74
+    readonly property int chromeRowHeight: compact ? 48 : 56
     readonly property color activeMaskAccent: theme.accentCool400
-    readonly property color rowAccent: selected ? accent
-                                       : activeMask ? activeMaskAccent
+    readonly property color rowAccent: activeMask ? activeMaskAccent
+                                       : selected ? accent
                                        : solo ? theme.warning
                                        : changed ? accent
                                        : mutedAccent
-    readonly property color rowFill: !enabled ? theme.alpha(theme.glassBase, 0.26)
-                                 : hidden ? theme.alpha(theme.surfaceBottom, 0.46)
-                                 : selected ? theme.alpha(theme.glassLift, 0.52)
-                                 : activeMask ? theme.alpha(rowAccent, 0.11)
+    readonly property color rowFill: !enabled ? theme.alpha(theme.surfaceBottom, 0.26)
+                                 : recentlyAdded ? theme.alpha(theme.primaryAccent, 0.20)
+                                 : selected ? theme.editorSelectionFill
+                                 : hovered ? theme.editorControlHover
+                                 : activeMask ? theme.alpha(rowAccent, 0.08)
                                  : solo ? theme.alpha(rowAccent, 0.09)
-                                 : changed ? theme.alpha(rowAccent, 0.075)
-                                 : hovered ? theme.alpha(theme.glassLift, 0.30)
-                                 : theme.alpha(theme.surfaceTop, 0.44)
+                                 : changed ? theme.alpha(rowAccent, 0.045)
+                                 : hidden ? theme.alpha(theme.surfaceBottom, 0.10)
+                                 : "transparent"
     readonly property string rowStateSummary: {
         let parts = []
         if (locked)
@@ -62,14 +64,14 @@ Rectangle {
                                                 rowStateSummary +
                                                 "|hover:" +
                                                 String(hovered)
-    readonly property string zoneContract: "layer-row-chrome-zones:v1|accent-edge|thumbnail|content|state-summary|row-actions|nested-children"
+    readonly property string zoneContract: "layer-row-chrome-zones:v2|thumbnail|content|state-summary|row-actions|nested-children"
     readonly property real thumbnailDevicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
     readonly property int screenAwareThumbnailSourceSize: Math.round(Math.max(1, (compact ? 34 : 42) * thumbnailDevicePixelRatio))
     readonly property string thumbnailDprContract: "layer-row-thumbnail-dpr:v1|source-size:screen-aware|base-image:true|display:" +
                                                    String(compact ? 34 : 42) +
                                                    "|source:" +
                                                    String(screenAwareThumbnailSourceSize)
-    readonly property string premiumLayerContract: "premium-layer-chrome:v2|stable-height:true|nested-mask-relation:true|soft-selected-fill:true|single-left-accent:true|active-mask-secondary:true|quiet-hover:true|focus-ring:true"
+    readonly property string premiumLayerContract: "premium-layer-chrome:v3|stable-height:true|nested-mask-relation:true|selected-surface:true|left-accent:none|active-mask-secondary:true|quiet-hover:true|focus-ring:true"
     readonly property string layerInteractionAcceptanceContract: "layer-interaction-acceptance:v1|select:true|rename:true|reorder:true|visibility:true|opacity:true|mask-select:true|transform:true|escape:true"
     readonly property string statePriorityContract: "layer-row-state-priority:v2|selected-layer-primary>active-mask-secondary>solo>changed>locked>hidden>hover"
     readonly property string activeMaskIndicatorContract: "layer-active-mask-indicator:v1|secondary-edge:right|accent:cool|visible:" +
@@ -82,15 +84,13 @@ Rectangle {
 
     Layout.fillWidth: true
     Layout.preferredHeight: chromeRowHeight
-    radius: theme.radius8
+    radius: theme.radiusControl
     color: rowFill
-    border.width: activeFocus || selected ? 1
-                  : activeMask || solo || hovered || locked ? 1 : 0
-    border.color: activeFocus || selected ? theme.controlEdge
-                   : solo ? theme.alpha(rowAccent, 0.78)
-                       : selected || activeMask || hovered ? theme.alpha(rowAccent, 0.56)
-                       : locked ? theme.alpha(theme.textMuted, 0.42)
-                       : theme.alpha(theme.textMuted, 0.24)
+    border.width: activeFocus ? theme.focusBorderWidth : selected || activeMask ? theme.hairlineWidth : 0
+    border.color: activeFocus ? theme.focusRing
+                   : selected ? theme.alpha(theme.editorSelectionEdge, 0.72)
+                   : activeMask ? theme.alpha(activeMaskAccent, 0.56)
+                   : "transparent"
     clip: true
     opacity: enabled ? 1.0 : 0.58
     activeFocusOnTab: true
@@ -123,17 +123,6 @@ Rectangle {
 
     Behavior on opacity {
         NumberAnimation { duration: root.motionDuration; easing.type: Easing.OutCubic }
-    }
-
-    Rectangle {
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        width: 3
-        radius: 2
-        visible: root.activeMask || root.solo || (root.changed && !root.selected)
-        color: root.activeMask ? root.activeMaskAccent : (root.solo ? theme.warning : root.rowAccent)
-        z: 1
     }
 
     Rectangle {

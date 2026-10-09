@@ -35,8 +35,8 @@ Button {
                                              (root.primary || root.destructive || root.active)
     readonly property bool accentBorderVisible: false
     readonly property int commandCut: slashEdge ? 10 : 0
-    readonly property real availableContentWidth: Math.max(0, width - 16)
-    readonly property real labelAvailableWidth: Math.max(0, availableContentWidth - (iconName.length > 0 && !visualIconOnly ? 21 : 0))
+    readonly property real availableContentWidth: Math.max(0, width - theme.space12)
+    readonly property real labelAvailableWidth: Math.max(0, availableContentWidth - (iconName.length > 0 && !visualIconOnly ? theme.scaled(20) : 0))
     readonly property bool contentFitsControl: !visible || buttonContent.width <= availableContentWidth + 1
     readonly property bool labelFitsControl: !visible || visualIconOnly || label.width <= labelAvailableWidth + 1
     readonly property bool labelOverflowing: label.visible && label.contentWidth > label.width + 1
@@ -46,7 +46,15 @@ Button {
                                                      ? root.disabledReason
                                                      : root.disabledFallbackReason)
                                                   : root.tooltip
-    readonly property string miniButtonContract: "mini-button:v6|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|neutral-primary:true|flat-surface:true|borderless-rest:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
+    function humanizeAccessibleIdentifier(value) {
+        return String(value || "")
+            .replace(/((Button|Action|Control)+)$/i, "")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/[_-]+/g, " ")
+            .trim()
+    }
+
+    readonly property string miniButtonContract: "mini-button:v9|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-graphite-secondary-neutral-tertiary-quiet|monochrome-default:true|neutral-primary:true|flat-surface:true|borderless-rest:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true|disabled-reason-keeps-action-name:true|density-token-heights:true"
     readonly property string readableTextContract: "readable-text:v3|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:10|readable-width:true"
     readonly property string disabledReasonContract: "disabled-reason:v2|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true|fallback-reason:true"
     readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
@@ -69,23 +77,31 @@ Button {
         const visibleText = String(text || "").trim()
         if (visibleText.length > 0)
             return visibleText
-        const helpText = String(resolvedTooltipText || "").trim()
-        if (helpText.length > 0)
-            return helpText
-        return String(iconName || "").trim()
+        const actionName = String(root.tooltip || "").trim()
+        if (actionName.length > 0)
+            return actionName
+        const objectIdentifier = humanizeAccessibleIdentifier(root.objectName)
+        const identifier = objectIdentifier.length > 0
+                ? objectIdentifier
+                : humanizeAccessibleIdentifier(root.iconName)
+        return identifier.length > 0
+                ? identifier.charAt(0).toUpperCase() + identifier.slice(1)
+                : "Action"
     }
     readonly property bool accessibilityReady: resolvedAccessibleName.length > 0
 
     Theme { id: theme }
 
-    implicitHeight: visualIconOnly
+    implicitHeight: primary
+                    ? theme.controlHeightPrimary
+                    : visualIconOnly
                     ? theme.iconButtonSizeCompact
                     : (allowLabelWrap
-                       ? Math.max(theme.controlHeight, buttonContent.implicitHeight + 14)
+                       ? Math.max(theme.controlHeight, buttonContent.implicitHeight + theme.space8)
                        : theme.controlHeight)
     implicitWidth: visualIconOnly
                    ? theme.iconButtonSizeCompact
-                   : Math.max(62, minimumReadableWidth,
+                   : Math.max(54, minimumReadableWidth,
                               Math.min(maximumReadableWidth, readableImplicitWidth))
     clip: true
     hoverEnabled: true
@@ -97,31 +113,39 @@ Button {
     }
 
     Accessible.name: resolvedAccessibleName
-    Accessible.description: resolvedTooltipText
-    ToolTip.visible: hovered && (resolvedTooltipText.length > 0 || (!visualIconOnly && labelOverflowing))
-    ToolTip.delay: 300
-    ToolTip.timeout: 4200
-    ToolTip.text: resolvedTooltipText.length > 0 ? resolvedTooltipText : text
+    Accessible.description: !root.enabled
+                             ? resolvedTooltipText
+                             : (resolvedTooltipText !== resolvedAccessibleName
+                                ? resolvedTooltipText : "")
+    AppToolTip {
+        id: appToolTip
+        targetItem: root
+        followPointer: true
+        visible: root.hovered && (root.resolvedTooltipText.length > 0 || (!root.visualIconOnly && root.labelOverflowing))
+        delay: 300
+        timeout: 4200
+        text: root.resolvedTooltipText.length > 0 ? root.resolvedTooltipText : root.text
+    }
+
+    HoverHandler {
+        onPointChanged: {
+            if (appToolTip.parent)
+                appToolTip.pointerPosition = root.mapToItem(appToolTip.parent,
+                                                            point.position.x, point.position.y)
+        }
+    }
 
     background: CommandButtonSurface {
         cornerRadius: theme.radiusControl
-        fillColor: !root.enabled ? theme.alpha(theme.surfaceInset, 0.45)
-                   : root.primary && !root.destructive ? (root.down ? theme.actionPrimaryPressed
-                                                             : root.hovered ? theme.actionPrimaryHover : theme.actionPrimaryFill)
-                   : root.down ? theme.surfaceInset
-                   : root.active ? theme.ink750
-                   : root.hovered ? theme.editorControlHover
-                   : "transparent"
-        borderWidth: root.visualFocus ? theme.focusBorderWidth
-                     : root.destructive ? 1 : 0
-        borderColor: root.visualFocus ? theme.focusRing
-                     : root.destructive ? theme.alpha(theme.error, 0.48)
-                     : root.active || root.primary ? theme.alpha(root.accent, 0.42)
-                     : theme.alpha(theme.controlEdge, root.hovered ? 1 : 0.65)
-        accentColor: root.destructive ? theme.error : root.accent
-        accentWidth: root.active || root.primary ? 2 : 0
-        accentOpacity: root.enabled ? (root.active ? 0.9 : 0.4) : 0
-        topLineOpacity: root.hovered || root.active ? 0.09 : 0.04
+        hovered: root.hovered
+        pressed: root.down
+        selected: root.active
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill(root.destructive ? "danger" : root.primary ? "primary" : "secondary",
+                                     root.active, root.hovered, root.down, root.enabled,
+                                     root.ghost || root.segmented || root.visualIconOnly)
+        borderWidth: theme.commandBorderWidth(root.visualFocus)
+        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
     }
 
     contentItem: Item {
@@ -130,13 +154,15 @@ Button {
             anchors.centerIn: parent
             width: Math.min(implicitWidth, root.availableContentWidth)
             height: implicitHeight
-            spacing: root.visualIconOnly ? 0 : 8
+            spacing: root.visualIconOnly ? 0 : theme.gapDense
 
             AppIcon {
                 visible: root.iconName.length > 0
                 name: root.iconName
                 color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
-                       : root.customIconColor ? root.iconColor : (root.destructive ? theme.error : theme.textMain)
+                       : root.customIconColor ? root.iconColor
+                       : root.destructive ? theme.error
+                       : root.active ? theme.selectionAccent : theme.textMain
                 Layout.preferredWidth: theme.scaled(14)
                 Layout.preferredHeight: theme.scaled(14)
                 Layout.alignment: Qt.AlignCenter
@@ -149,8 +175,8 @@ Button {
                 color: root.primary && !root.destructive && root.enabled ? theme.actionPrimaryText
                        : root.destructive ? theme.error : (root.active ? theme.textStrong : theme.textMain)
                 font.family: theme.fontUi
-                font.pixelSize: theme.typeLabel
-                font.weight: root.active || root.role === "primary" ? Font.DemiBold : Font.Medium
+                font.pixelSize: theme.typeControl
+                font.weight: theme.weightControl
                 font.letterSpacing: 0
                 Layout.fillWidth: true
                 Layout.maximumWidth: root.labelAvailableWidth

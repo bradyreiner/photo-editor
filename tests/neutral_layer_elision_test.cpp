@@ -42,7 +42,60 @@ static std::vector<ColorPixel> render(const std::vector<ColorPixel>& source, int
   return pixels;
 }
 
+static bool verify_resolved_layer_adjustments() {
+  constexpr int width = 257, height = 129;
+  std::vector<ColorPixel> source;
+  for (int i = 0; i < width * height; ++i) {
+    const auto v = static_cast<float>(i % 131) / 200.0F;
+    source.push_back({v, v * 0.4F, 0.1F + v * 0.7F, 1.0F});
+  }
+  PhotoLayer cutout;
+  cutout.kind = "pixel";
+  cutout.copy_base_image = true;
+  cutout.mask_width = 3;
+  cutout.mask_height = 1;
+  cutout.mask_data = {0, 128, 255};
+  PhotoLayer grade;
+  grade.kind = "adjustment";
+  grade.exposure = 0.4;
+  grade.temperature = 18;
+  grade.contrast = -7;
+  auto second = grade;
+  second.exposure = -0.2;
+  second.temperature = -12;
+  PhotoLayer group;
+  group.kind = "group";
+  group.id = "group";
+  group.exposure = 0.3;
+  group.saturation = 12;
+  auto child = grade;
+  child.parent_id = group.id;
+  PhotoLayer fill;
+  fill.kind = "fill";
+  fill.parent_id = group.id;
+  fill.fill_color = {0.2F, 0.4F, 0.7F, 0.6F};
+  // Linked cutouts copy the layer vector; groups synthesize an adjustment.
+  // Neither callback argument belongs to the original vector. Empty IDs on
+  // adjustments also ensure preparation never depends on unique persisted IDs.
+  const std::array stacks{std::vector{grade, cutout, second},
+      std::vector{fill, child, group, second},
+      std::vector{fill, child, group, cutout, second}};
+  for (std::size_t i = 0; i < stacks.size(); ++i) {
+    const auto reference = render(source, width, height, stacks[i], false);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      if (!identical(reference, render(source, width, height, stacks[i], true))) {
+        std::cerr << "Resolved layer adjustment changed scalar output in stack " << i << '\n';
+        return false;
+      }
+    }
+  }
+  std::cout << "Copied cutout stacks and synthesized group adjustments match scalar pixels exactly\n";
+  return true;
+}
+
 int main(int argc, char** argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "--copied-layer-proof")
+    return verify_resolved_layer_adjustments() ? 0 : 1;
   PhotoLayer neutral;
   neutral.kind = "adjustment";
   neutral.mask_width = 3;
@@ -167,6 +220,7 @@ int main(int argc, char** argv) {
         hidden.enabled = false;
         PhotoLayer group;
         group.kind = "group";
+        group.id = "empty-group";
         PhotoLayer invalid;
         invalid.kind = "pixel";
         for (auto layers : {std::vector{first}, std::vector{first, fill},
@@ -275,6 +329,7 @@ int main(int argc, char** argv) {
       }
     }
   }
+  if (!verify_resolved_layer_adjustments()) return 1;
   source[1].red = std::numeric_limits<float>::infinity();
   if (!identical(render(source, 13, 9, {neutral}, false), render(source, 13, 9, {neutral}, true))) return 1;
   std::cout << "Exact scalar/optimized layers: " << cases << " combinations, 16 curve variants, parallel rows, transformed pixels and HDR/alpha edges\n";

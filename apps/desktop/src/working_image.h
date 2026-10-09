@@ -2,9 +2,11 @@
 
 #include "output_lut_publication_telemetry.h"
 #include "qimage_color_conversion.h"
+#include "preview_device_icc_options.h"
 
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
+#include "photo_editor/pipeline/cpu_work_scheduler.h"
 #include "photo_editor/pipeline/output_rendering.h"
 #include "photo_editor/pipeline/render_executor.h"
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
@@ -24,11 +26,9 @@
 #include <algorithm>
 #include <array>
 #include <deque>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <set>
-#include <thread>
 #include <vector>
 
 namespace photo_editor::desktop {
@@ -223,34 +223,12 @@ struct WorkingImageOutputTransform final {
     return pack_range(0, bounded.height());
   }
 
-  const auto hardware_threads = std::thread::hardware_concurrency();
-  const auto max_threads = hardware_threads > 0U ? static_cast<int>(hardware_threads) : 1;
-  if (max_threads <= 1) {
-    return pack_range(0, bounded.height());
-  }
-
-  const auto task_count = std::min(max_threads, bounded.height());
-  const auto rows_per_task = (bounded.height() + task_count - 1) / task_count;
-  std::vector<std::future<bool>> futures;
-  futures.reserve(static_cast<std::size_t>(task_count));
-  for (int task = 0; task < task_count; ++task) {
-    const auto begin_y = task * rows_per_task;
-    if (begin_y >= bounded.height()) {
-      break;
-    }
-    const auto end_y = std::min(bounded.height(), begin_y + rows_per_task);
-    futures.push_back(std::async(
-        std::launch::async,
-        [pack_range, begin_y, end_y]() {
-          return pack_range(begin_y, end_y);
-        }));
-  }
-  for (auto& future : futures) {
-    if (!future.get()) {
-      return false;
-    }
-  }
-  return true;
+  // Share persistent workers with color/effect stages. Each row still checks
+  // cancellation; the scheduler joins every callback before output can escape.
+  photo_editor::pipeline::run_cpu_parallel_for(bounded.height(), [&](int y) {
+    (void)pack_range(y, y + 1);
+  });
+  return !cancellation.cancelled();
 }
 
 [[nodiscard]] inline bool pack_working_rows_to_rgba32(
@@ -299,34 +277,12 @@ struct WorkingImageOutputTransform final {
   if (pixel_count < kParallelPackPixelThreshold || bounded.height() <= 1) {
     return pack_range(0, bounded.height());
   }
-  const auto hardware_threads = std::thread::hardware_concurrency();
-  const auto max_threads =
-      hardware_threads > 0U ? static_cast<int>(hardware_threads) : 1;
-  if (max_threads <= 1) {
-    return pack_range(0, bounded.height());
-  }
-  const auto task_count = std::min(max_threads, bounded.height());
-  const auto rows_per_task = (bounded.height() + task_count - 1) / task_count;
-  std::vector<std::future<bool>> futures;
-  futures.reserve(static_cast<std::size_t>(task_count));
-  for (int task = 0; task < task_count; ++task) {
-    const auto begin_y = task * rows_per_task;
-    if (begin_y >= bounded.height()) {
-      break;
-    }
-    const auto end_y = std::min(bounded.height(), begin_y + rows_per_task);
-    futures.push_back(std::async(
-        std::launch::async,
-        [pack_range, begin_y, end_y]() {
-          return pack_range(begin_y, end_y);
-        }));
-  }
-  for (auto& future : futures) {
-    if (!future.get()) {
-      return false;
-    }
-  }
-  return true;
+  // Share persistent workers with color/effect stages. Each row still checks
+  // cancellation; the scheduler joins every callback before output can escape.
+  photo_editor::pipeline::run_cpu_parallel_for(bounded.height(), [&](int y) {
+    (void)pack_range(y, y + 1);
+  });
+  return !cancellation.cancelled();
 }
 
 [[nodiscard]] inline bool high_precision_publication_format(
@@ -504,6 +460,8 @@ struct WorkingImageOutputTransform final {
       return true;
     case ColorPrimaries::Unknown:
     case ColorPrimaries::AdobeRgb:
+    case ColorPrimaries::SonySGamut3:
+    case ColorPrimaries::SonySGamut3Cine:
     case ColorPrimaries::AcesAp0:
     case ColorPrimaries::AcesAp1:
       return false;
@@ -941,24 +899,12 @@ inline void schedule_icc_transform_lut_prewarm(
         destination_payload,
         proof_options);
   } else {
+    auto options = preview_device_icc_options(*output_transform.color_pipeline, aces2_composition);
+    if (output_transform.target != photo_editor::pipeline::GamutWarningTarget::PreviewDisplay) {
+      options.target = aces2_composition ? "export-output:aces2-rec2020-interchange" : "export-output";
+    }
     transform = photo_editor::pipeline::compile_icc_transform(
-        source_payload,
-        destination_payload,
-        photo_editor::pipeline::IccTransformOptions{
-            .rendering_intent = icc_rendering_intent(
-                output_transform.color_pipeline->render_intent),
-            .black_point_compensation =
-                output_transform.color_pipeline->black_point_compensation_enabled,
-            .pixel_format = photo_editor::pipeline::IccPixelFormat::RgbaFloat32,
-            .target = output_transform.target ==
-                              photo_editor::pipeline::GamutWarningTarget::PreviewDisplay
-                          ? (aces2_composition
-                                 ? "preview-output:aces2-rec2020-interchange"
-                                 : "preview-output")
-                          : (aces2_composition
-                                 ? "export-output:aces2-rec2020-interchange"
-                                 : "export-output"),
-        });
+        source_payload, destination_payload, options);
   }
   if (telemetry != nullptr) {
     if (aces2_processor != nullptr) {

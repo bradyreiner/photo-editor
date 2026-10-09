@@ -148,6 +148,16 @@ def test_rss_manifest_fields() -> None:
             "rss_delta_bytes",
         ):
             assert_true(field in manifest, f"missing {field}")
+        if manifest["process_max_rss_source"] is not None:
+            assert_true(
+                isinstance(manifest["process_max_rss_kb"], int) and
+                manifest["process_max_rss_kb"] > 0,
+                "child-process peak RSS should be reported when getrusage is available",
+            )
+            assert_true(
+                manifest["process_max_rss_source"] == "getrusage.RUSAGE_CHILDREN.ru_maxrss",
+                "child-process peak RSS source should be identified",
+            )
         assert_true("workflow_id" in manifest, "missing workflow_id")
         assert_true(
             manifest["memory_growth_threshold_kb"] == 999999999,

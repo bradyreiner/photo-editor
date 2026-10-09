@@ -8,7 +8,7 @@ Rectangle {
     property string fileName: "Folder"
     property string fileUrl: ""
     property bool selected: false
-    readonly property string importFolderRowContract: "import-folder-row:v1|active-state:true|keyboard:true|hover:true|readable-text:true|no-elide:true"
+    readonly property string importFolderRowContract: "import-folder-row:v2|active-state:true|keyboard:true|hover:true|readable-text:true|no-elide:true|selection:surface-text"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
     signal activated(string fileUrl)
@@ -16,20 +16,21 @@ Rectangle {
     Theme { id: theme }
 
     width: ListView.view ? ListView.view.width : implicitWidth
-    implicitHeight: 36
-    radius: theme.radius8
+    implicitHeight: Math.max(theme.controlHeightDense, folderContent.implicitHeight + theme.space8)
+    radius: theme.radiusControl
     color: selected
-           ? theme.alpha(theme.accentCool500, 0.1)
-           : (folderHover.hovered || activeFocus ? theme.alpha(theme.ink800, 0.84) : theme.alpha(theme.ink950, 0.16))
-    border.width: activeFocus ? 2 : 1
+           ? theme.editorSelectionFill
+           : (folderHover.hovered ? theme.editorControlHover : "transparent")
+    border.width: activeFocus ? theme.focusBorderWidth : (selected ? theme.hairlineWidth : 0)
     border.color: activeFocus
-                  ? theme.alpha(theme.focusRing, 0.88)
+                  ? theme.focusRing
                   : selected
-                    ? theme.alpha(theme.accentWarm400, 0.44)
-                    : (folderHover.hovered ? theme.alpha(theme.lineSoft, 0.26) : theme.alpha(theme.lineSoft, 0.1))
+                    ? theme.alpha(theme.editorSelectionEdge, 0.72)
+                    : "transparent"
     clip: true
     activeFocusOnTab: true
     Accessible.name: fileName
+    Accessible.description: selected ? "Currently active folder" : "Open folder"
     Accessible.role: Accessible.Button
     Keys.onReturnPressed: root.activated(root.fileUrl)
     Keys.onEnterPressed: root.activated(root.fileUrl)
@@ -41,32 +42,26 @@ Rectangle {
     }
 
     RowLayout {
+        id: folderContent
         anchors.fill: parent
-        anchors.leftMargin: theme.space10
-        anchors.rightMargin: theme.space10
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        anchors.topMargin: theme.space4
+        anchors.bottomMargin: theme.space4
         spacing: theme.space8
-
-        Rectangle {
-            Layout.alignment: Qt.AlignVCenter
-            implicitWidth: 6
-            implicitHeight: 6
-            radius: 3
-            color: root.selected
-                   ? theme.accentWarm400
-                   : theme.alpha(theme.accentCool400, folderHover.hovered ? 0.82 : 0.46)
-        }
 
         Label {
             id: folderLabel
             Layout.fillWidth: true
             text: root.fileName
-            color: root.selected ? theme.textStrong : theme.textMain
+            color: root.selected ? theme.interaction300 : (folderHover.hovered ? theme.textMain : theme.textMuted)
             font.family: theme.fontUi
-            font.pixelSize: 11
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
+            font.pixelSize: theme.typeLabel
+            font.weight: theme.weightControl
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
             elide: Text.ElideNone
-            ToolTip.visible: folderHover.hovered && folderLabel.contentWidth > folderLabel.width + 1
+            ToolTip.visible: folderHover.hovered && (folderLabel.truncated || folderLabel.contentHeight > folderLabel.height + 1)
             ToolTip.delay: 350
             ToolTip.timeout: 3600
             ToolTip.text: root.fileName
@@ -78,6 +73,7 @@ Rectangle {
             implicitWidth: 12
             implicitHeight: 12
             Layout.alignment: Qt.AlignVCenter
+            opacity: folderHover.hovered || root.selected ? 1.0 : 0.65
         }
     }
 

@@ -2,9 +2,15 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QPointer>
+#include <QThread>
 #include <QTcpSocket>
+#include <QUuid>
 #include <QUrl>
 
 #include <algorithm>
@@ -12,6 +18,13 @@
 
 namespace photo_editor::desktop {
 namespace {
+
+struct InProcessEndpoint {
+  QPointer<QObject> owner;
+  std::function<QVariantMap(const QVariantMap&)> handler;
+};
+QMutex in_process_endpoints_mutex;
+QHash<QString, InProcessEndpoint> in_process_endpoints;
 
 QVariantMap result_map(bool ok, const QString& error = {}) {
   QVariantMap result{{QStringLiteral("ok"), ok}};
@@ -65,6 +78,20 @@ int status_code_from_header(const QByteArray& header) {
 
 AgentMcpClient::AgentMcpClient(QObject* parent) : QObject(parent) {}
 
+QString AgentMcpClient::registerInProcessEndpoint(
+    QObject* owner, std::function<QVariantMap(const QVariantMap&)> handler) {
+  const auto endpoint = QStringLiteral("in-process:%1")
+      .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  QMutexLocker lock(&in_process_endpoints_mutex);
+  in_process_endpoints.insert(endpoint, {owner, std::move(handler)});
+  return endpoint;
+}
+
+void AgentMcpClient::unregisterInProcessEndpoint(const QString& endpoint) {
+  QMutexLocker lock(&in_process_endpoints_mutex);
+  in_process_endpoints.remove(endpoint);
+}
+
 QString AgentMcpClient::endpoint() const {
   return endpoint_;
 }
@@ -82,7 +109,7 @@ int AgentMcpClient::timeoutMs() const {
 }
 
 void AgentMcpClient::setTimeoutMs(int timeout_ms) {
-  timeout_ms_ = std::clamp(timeout_ms, 250, 300000);
+  timeout_ms_ = timeout_ms < 0 ? -1 : std::clamp(timeout_ms, 250, 300000);
 }
 
 QStringList AgentMcpClient::allowedTools() const {
@@ -193,7 +220,26 @@ QVariantMap AgentMcpClient::callTool(const QString& name, const QVariantMap& arg
   }
   const auto tool_result = response.value(QStringLiteral("result")).toMap();
   const auto is_error = tool_result.value(QStringLiteral("isError")).toBool();
-  QVariantMap report = result_map(!is_error, is_error ? QStringLiteral("MCP tool returned an execution error.") : QString());
+  QString error;
+  if (is_error) {
+    const auto structured = tool_result.value(QStringLiteral("structuredContent")).toMap();
+    const auto detail = structured.value(QStringLiteral("error"));
+    error = detail.metaType().id() == QMetaType::QVariantMap
+        ? detail.toMap().value(QStringLiteral("message")).toString()
+        : detail.toString();
+    if (error.trimmed().isEmpty()) {
+      QStringList messages;
+      for (const auto& value : tool_result.value(QStringLiteral("content")).toList()) {
+        const auto block = value.toMap();
+        if (block.value(QStringLiteral("type")).toString() == QStringLiteral("text") &&
+            !block.value(QStringLiteral("text")).toString().trimmed().isEmpty())
+          messages.append(block.value(QStringLiteral("text")).toString());
+      }
+      error = messages.join(QStringLiteral("\n"));
+    }
+    if (error.trimmed().isEmpty()) error = QStringLiteral("MCP tool returned an execution error.");
+  }
+  QVariantMap report = result_map(!is_error, error);
   report.insert(QStringLiteral("mode"), QStringLiteral("mcp-tool-call"));
   report.insert(QStringLiteral("toolName"), tool_name);
   report.insert(QStringLiteral("endpoint"), endpoint_);
@@ -224,6 +270,29 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
     return cancellation_error(QStringLiteral("MCP request was canceled before it started."));
   }
 
+  if (endpoint_.startsWith(QStringLiteral("in-process:"))) {
+    InProcessEndpoint endpoint;
+    {
+      QMutexLocker lock(&in_process_endpoints_mutex);
+      endpoint = in_process_endpoints.value(endpoint_);
+    }
+    if (!endpoint.owner || !endpoint.handler ||
+        endpoint.owner->thread() != QThread::currentThread()) {
+      return result_map(false, QStringLiteral("Internal photo tools require the active workspace thread."));
+    }
+    const auto response = endpoint.handler(request);
+    if (response.contains(QStringLiteral("error"))) {
+      auto result = result_map(false, response.value(QStringLiteral("error")).toMap()
+          .value(QStringLiteral("message")).toString());
+      result.insert(QStringLiteral("protocolError"), response.value(QStringLiteral("error")));
+      return result;
+    }
+    return {{QStringLiteral("ok"), true},
+            {QStringLiteral("transport"), QStringLiteral("in-process")},
+            {QStringLiteral("response"), response},
+            {QStringLiteral("result"), response.value(QStringLiteral("result"))}};
+  }
+
   QUrl url(endpoint_);
   if (!url.isValid() || url.host().isEmpty() || url.port() <= 0) {
     return http_error(QStringLiteral("MCP endpoint is not a valid localhost HTTP URL."));
@@ -238,7 +307,7 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
 
   QTcpSocket socket;
   socket.connectToHost(url.host(), static_cast<quint16>(url.port()));
-  if (!socket.waitForConnected(timeout_ms_)) {
+  if (!socket.waitForConnected(timeout_ms_ < 0 ? 5000 : timeout_ms_)) {
     return http_error(QStringLiteral("Unable to connect to MCP endpoint: %1").arg(socket.errorString()));
   }
   if (QCoreApplication::instance() != nullptr) {
@@ -270,10 +339,13 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
   }
   QElapsedTimer write_timer;
   write_timer.start();
-  while (socket.bytesToWrite() > 0 && write_timer.elapsed() < timeout_ms_) {
+  while (socket.bytesToWrite() > 0 && (timeout_ms_ < 0 || write_timer.elapsed() < timeout_ms_)) {
     if (cancellationRequested()) {
       socket.abort();
       return cancellation_error(QStringLiteral("MCP request was canceled while writing."));
+    }
+    if (socket.state() == QAbstractSocket::UnconnectedState) {
+      return http_error(QStringLiteral("MCP socket disconnected before the request was written."));
     }
     flushed = socket.flush() || flushed;
     if (QCoreApplication::instance() != nullptr) {
@@ -295,7 +367,7 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
   QByteArray response;
   QElapsedTimer timer;
   timer.start();
-  while (timer.elapsed() < timeout_ms_) {
+  while (timeout_ms_ < 0 || timer.elapsed() < timeout_ms_) {
     if (cancellationRequested()) {
       socket.abort();
       return cancellation_error(QStringLiteral("MCP request was canceled."));

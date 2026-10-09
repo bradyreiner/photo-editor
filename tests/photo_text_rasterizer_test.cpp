@@ -40,6 +40,17 @@ int main(int argc, char** argv) {
   }).get();
   const auto left = photo_editor::desktop::rasterize_legacy_photo_text(text);
   const auto left_bounds = ink_bounds(left);
+  auto translucent_legacy_text = text;
+  translucent_legacy_text.insert(QStringLiteral("textColor"), QStringLiteral("#7fffffff"));
+  const auto translucent_legacy = photo_editor::desktop::rasterize_legacy_photo_text(translucent_legacy_text);
+  int legacy_maximum_alpha = 0;
+  for (int y = 0; y < translucent_legacy.height(); ++y)
+    for (int x = 0; x < translucent_legacy.width(); ++x)
+      legacy_maximum_alpha = std::max(legacy_maximum_alpha, translucent_legacy.pixelColor(x, y).alpha());
+  if (legacy_maximum_alpha == 0 || legacy_maximum_alpha > 127) {
+    std::cerr << "Legacy text rasterization must preserve stored alpha\n";
+    return 1;
+  }
   const auto enlarged = photo_editor::desktop::rasterize_legacy_photo_text(text, QSize(800, 200));
   const auto enlarged_bounds = ink_bounds(enlarged);
   if (enlarged.size() != QSize(800, 200) || enlarged_bounds.isEmpty() ||

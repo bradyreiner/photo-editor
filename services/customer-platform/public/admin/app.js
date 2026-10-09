@@ -25,6 +25,17 @@ async function details(customer) {
   try {
     selected=customer; const data=await api('customer?id='+encodeURIComponent(customer));
     $('detail').hidden=false; $('customer-name').textContent=customer;
+    $('privacy-actions').replaceChildren();
+    if (role === 'admin' || role === 'support') {
+      const exportButton=document.createElement('button'); exportButton.type='button'; exportButton.className='secondary'; exportButton.textContent='Export customer data';
+      exportButton.onclick=async()=>{const reason=prompt('Reason for exporting this customer data?');if(!reason?.trim())return;try{const result=await api('customer-export',{customerId:customer,reason:reason.trim()});const blob=new Blob([JSON.stringify(result.export,null,2)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='looksy-customer-export.json';link.click();URL.revokeObjectURL(link.href);await details(customer);}catch(error){$('status').textContent=error.message;}};
+      $('privacy-actions').append(exportButton);
+      if(role==='admin') {
+        const deleteButton=document.createElement('button'); deleteButton.type='button'; deleteButton.textContent='Delete personal data';
+        deleteButton.onclick=async()=>{if(!confirm('Erase contact details and disable this customer’s local licenses and devices? Historical revocations and audit records are retained.'))return;const reason=prompt('Reason for deleting personal data?');if(!reason?.trim())return;try{await api('customer-delete',{customerId:customer,reason:reason.trim()});await details(customer);}catch(error){$('status').textContent=error.message;}};
+        $('privacy-actions').append(deleteButton);
+      }
+    }
     for (const id of ['licenses','devices','audit']) $(id).replaceChildren();
     for (const license of data.licenses) row($('licenses'), `${license.plan} · ${license.mode}`, `License ${license.id} · ${license.blocked ? 'Blocked' : license.status} · ${license.device_limit} devices · ${license.expires_at ? 'expires '+date(license.expires_at) : 'No fixed license expiry'}`,
       role==='admin' ? [[license.blocked ? 'Restore access' : 'Block access',()=>ask(license.blocked?'unblock_license':'block_license',license.id,'Change license access')]] : []);
@@ -40,9 +51,22 @@ async function list() {
   try {
     const data=await api('customers?q='+encodeURIComponent($('query').value.trim())+'&after='+encodeURIComponent(after));
     role=data.role; after=data.next||''; $('next').hidden=!after; $('customers').replaceChildren();
+    if(role==='admin'||role==='support') await loadOperations();
     for(const customer of data.customers) row($('customers'),customer.email||'Guest trial', `${customer.id} · last seen ${date(customer.last_seen_at)}`, [['Open',()=>details(customer.id)]]);
     $('status').textContent=data.customers.length ? `${data.customers.length} customers` : 'No customers found.';
   } catch(error) { $('status').textContent=error.message; }
+}
+async function loadOperations() {
+  try {
+    const data=await api('operations'); $('ops').hidden=false;
+    const w=data.webhooks, l=data.licenses;
+    $('ops-summary').textContent=`${w.pending} pending webhooks · ${w.failed} failed at least once · ${w.due} ready to retry · ${l.stale} stale license checks · backup status not connected`;
+    if(role!=='admin') { $('webhooks').replaceChildren(); row($('webhooks'),'Webhook detail access is admin only',''); return; }
+    const queue=await api('webhooks'); $('webhooks').replaceChildren();
+    for(const item of queue.webhooks) row($('webhooks'),`${item.event} · ${item.attempts}/8 attempts`,`${item.digest} · next retry ${date(item.next_retry_at)} · ${item.last_error_code||'waiting'}`,
+      [[item.attempts>=8?'Retry manually':'Retry now',async()=>{const reason=prompt('Reason for manually retrying this webhook?');if(!reason?.trim())return;try{await api('webhook-retry',{digest:item.digest,reason:reason.trim()});await loadOperations();}catch(error){$('status').textContent=error.message;}}]]);
+    if(!queue.webhooks.length) row($('webhooks'),'No pending webhooks','New or failed provider events will appear here.');
+  } catch(error) { $('ops-summary').textContent=error.message; }
 }
 $('search').onsubmit=event=>{event.preventDefault();after='';void list();};
 $('next').onclick=()=>void list();

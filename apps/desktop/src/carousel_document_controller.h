@@ -19,22 +19,30 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMap>
+#include <QSet>
+#include <QHash>
 #include <QVariantList>
 #include <QTimer>
 #include <QVariantMap>
 #include <QVector>
+#include <memory>
 
 #include "edit_recipe_state.h"
+
+class QProcess;
+class QThreadPool;
 
 namespace photo_editor::desktop {
 
 class CarouselDocumentController final : public QObject {
+  friend struct CarouselPreviewTestAccess;
   Q_OBJECT
   Q_PROPERTY(QVariantList slides READ slides NOTIFY slidesChanged)
   Q_PROPERTY(QVariantList boardSections READ boardSections NOTIFY slidesChanged)
   Q_PROPERTY(QVariantList storyboardEntries READ storyboardEntries NOTIFY slidesChanged)
   Q_PROPERTY(QVariantList repeatedElementLinks READ repeatedElementLinks NOTIFY itemsChanged)
   Q_PROPERTY(QVariantMap selectedRepeatedElementLinkState READ selectedRepeatedElementLinkState NOTIFY selectionChanged)
+  Q_PROPERTY(QVariantList linkedPhotoTextGroups READ linkedPhotoTextGroups NOTIFY documentStateChanged)
   Q_PROPERTY(QVariantList canvasItems READ canvasItems NOTIFY itemsChanged)
   Q_PROPERTY(QVariantMap selectionDetails READ selectionDetails NOTIFY selectionChanged)
   Q_PROPERTY(QVariantMap readingOrderState READ readingOrderState NOTIFY readingOrderChanged)
@@ -104,6 +112,7 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(QString cutoutPreviewMode READ cutoutPreviewMode NOTIFY cutoutPreviewChanged)
   Q_PROPERTY(QStringList exportPartialCleanupPolicyOptions READ exportPartialCleanupPolicyOptions CONSTANT)
   Q_PROPERTY(bool canUndo READ canUndo NOTIFY historyChanged)
+  Q_PROPERTY(bool editBoardImageBusy READ editBoardImageBusy NOTIFY editBoardImageBusyChanged)
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY historyChanged)
   Q_PROPERTY(bool canPaste READ canPaste NOTIFY clipboardChanged)
   Q_PROPERTY(QVariantMap clipboardPastePreview READ clipboardPastePreview NOTIFY clipboardChanged)
@@ -155,6 +164,7 @@ class CarouselDocumentController final : public QObject {
   void setEditAccessPolicy(std::function<bool()> policy) { customer_edit_access_.setPolicy(std::move(policy)); }
 
   explicit CarouselDocumentController(QObject* parent = nullptr);
+  ~CarouselDocumentController() override;
 
   enum class MediaType { Empty, Image, Video };
   enum class FitMode { Cover, Contain };
@@ -319,6 +329,7 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QVariantList boardSections() const;
   [[nodiscard]] QVariantList storyboardEntries() const;
   [[nodiscard]] QVariantList repeatedElementLinks() const;
+  [[nodiscard]] QVariantList linkedPhotoTextGroups() const;
   [[nodiscard]] QVariantMap selectedRepeatedElementLinkState() const;
   [[nodiscard]] QVariantList canvasItems() const;
   [[nodiscard]] QVariantMap selectionDetails() const;
@@ -451,6 +462,7 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void selectSlideRange(int index);
   Q_INVOKABLE void addSlide();
   Q_INVOKABLE void duplicateCurrentSlide();
+  Q_INVOKABLE bool createBoardVariant();
   Q_INVOKABLE void removeCurrentSlide();
   Q_INVOKABLE void moveCurrentBackward();
   Q_INVOKABLE void moveCurrentForward();
@@ -467,6 +479,11 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE bool createRepeatedElementLink(const QString& name, const QString& scope);
   Q_INVOKABLE bool detachSelectedRepeatedElement();
   Q_INVOKABLE bool removeRepeatedElementLink(const QString& link_id);
+  Q_INVOKABLE QVariantList photoTextLinkCandidates(const QString& layer_id) const;
+  Q_INVOKABLE QVariantMap photoTextLinkState(const QString& layer_id) const;
+  Q_INVOKABLE bool linkEditBoardPhotoText(
+      const QString& layer_id, const QString& name, const QStringList& board_ids);
+  Q_INVOKABLE bool detachEditBoardPhotoText(const QString& layer_id);
   Q_INVOKABLE void setCurrentSlideBackgroundColor(const QString& color_value);
   Q_INVOKABLE void setCurrentSlideBackgroundGradient(
       const QString& gradient_kind,
@@ -778,6 +795,21 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE bool openCurrentSavedVersion();
   Q_INVOKABLE void closeCarousel();
   Q_INVOKABLE void createCarouselWithSettings(const QVariantMap& settings);
+  Q_INVOKABLE bool createBoardsFromEdit(const QString& file_path, const QString& display_name,
+      const QString& adjustment_patch_json, int pixel_width, int pixel_height, int initial_board_count = 2);
+  Q_INVOKABLE bool createEditCanvas(const QVariantMap& settings);
+  Q_INVOKABLE bool removeEditBoard();
+  Q_INVOKABLE bool addEditPhotoBoard(const QString& file_path = QString());
+  Q_INVOKABLE bool replaceEditBoardImage(const QString& file_path);
+  Q_INVOKABLE bool canUndoEditBoardImageReplacement() const;
+  Q_INVOKABLE bool undoEditBoardImageReplacement(const QString& baseline_patch);
+  bool editBoardImageBusy() const { return edit_board_image_busy_; }
+  Q_INVOKABLE bool prepareEditBoards();
+  Q_INVOKABLE QVariantMap editBoardPayload(int index);
+  Q_INVOKABLE bool addEditBoard(bool extend_current = false);
+  Q_INVOKABLE bool moveEditBoard(int from_index, int insertion_index);
+  Q_INVOKABLE bool canUndoEditBoardMove() const;
+  Q_INVOKABLE bool undoEditBoardMove();
   Q_INVOKABLE void commitMediaTransformState();
   Q_INVOKABLE void beginHistoryTransaction(const QString& label);
   Q_INVOKABLE void commitHistoryTransaction();
@@ -896,6 +928,8 @@ class CarouselDocumentController final : public QObject {
   void exportSettingsChanged();
   void cutoutPreviewChanged();
   void historyChanged();
+  void editBoardImageBusyChanged();
+  void editBoardImageReplaced(bool success, const QString& error);
   void clipboardChanged();
   void designLibraryChanged();
   void templatePackUpdatePreviewChanged();
@@ -915,9 +949,28 @@ class CarouselDocumentController final : public QObject {
   void readingOrderChanged();
 
  private:
+  friend struct CarouselHistoryTestAccess;
+  struct PreviewFiles;
+  struct PreviewResult;
+  static QThreadPool& previewThreadPool();
+  void queuePreviewRefresh(const QVector<int>& boards, const QSet<QString>& items);
+  void startPendingPreviewRefresh();
+  void finishPreviewRefresh();
+  void invalidatePreviewRefresh(bool reset_document);
+  struct ExportSnapshot;
+  struct ExportTaskState;
+  explicit CarouselDocumentController(const ExportSnapshot& snapshot);
+  [[nodiscard]] std::shared_ptr<const ExportSnapshot> captureExportSnapshot() const;
+  [[nodiscard]] QVariantMap runExportJob();
+  [[nodiscard]] bool exportCancellationRequested() const;
+  [[nodiscard]] bool waitForExportProcess(QProcess* process, int timeout_ms) const;
+  void invalidateExportForDocumentChange();
   CustomerEditAccess customer_edit_access_;
 
   struct Slide final {
+    QString edit_board_id;
+    bool edit_board_joined_previous = false;
+    QString edit_board_previous_id;
     SlideTemplate template_kind = SlideTemplate::Single;
     MediaItem primary;
     MediaItem secondary;
@@ -950,6 +1003,7 @@ class CarouselDocumentController final : public QObject {
   struct LinkedGroup final {
     QString id;
     GroupKind kind = GroupKind::None;
+    bool edit_spread = false;
     int start_index = 0;
     int span = 0;
     MediaItem media;
@@ -966,8 +1020,53 @@ class CarouselDocumentController final : public QObject {
     QString name;
   };
 
+  struct PhotoTextLink final {
+    QString id;
+    QString name;
+    QString layer_id;
+    QStringList board_ids;
+  };
+
+  struct DocumentSnapshot final {
+    QJsonObject metadata;
+    QJsonObject passthrough;
+    QVector<Slide> slides;
+    QVector<LinkedGroup> groups;
+    QVector<CanvasItem> items;
+    QVector<int> selected_slide_indices;
+  };
+  [[nodiscard]] std::shared_ptr<const DocumentSnapshot> captureDocumentSnapshot() const;
+  [[nodiscard]] static QJsonObject snapshotDocumentObject(const DocumentSnapshot& snapshot);
+  [[nodiscard]] static bool documentSnapshotsEqual(
+      const DocumentSnapshot& left, const DocumentSnapshot& right,
+      bool persistent = false, const QJsonObject* serialized_left = nullptr);
+  [[nodiscard]] static bool sameSerializedInputs(const MediaItem& left, const MediaItem& right);
+  [[nodiscard]] static bool sameSerializedInputs(const Slide& left, const Slide& right);
+  [[nodiscard]] static bool sameSerializedInputs(const LinkedGroup& left, const LinkedGroup& right);
+  [[nodiscard]] static bool sameSerializedInputs(const CanvasItem& left, const CanvasItem& right);
+  [[nodiscard]] QJsonObject documentMetadataObject() const;
+  [[nodiscard]] static QJsonObject serializeDocument(
+      QJsonObject metadata, const QJsonObject& passthrough, const QVector<Slide>& slides,
+      const QVector<LinkedGroup>& groups, const QVector<CanvasItem>& items,
+      bool resolve_identity);
+
+  struct AutosaveRequest final {
+    std::shared_ptr<const DocumentSnapshot> snapshot;
+    QString path;
+    QString document_id;
+    QString document_name;
+    QString captured_at;
+    quint64 generation = 0;
+    quint64 revision = 0;
+  };
+  static QThreadPool& autosaveThreadPool();
+  [[nodiscard]] static bool persistAutosave(const AutosaveRequest& request);
+  void startAutosave(AutosaveRequest request);
+  void finishAutosave();
+  void settleAutosaves();
+
   struct HistoryEntry final {
-    QJsonObject document;
+    std::shared_ptr<const DocumentSnapshot> document;
     QString label;
   };
 
@@ -1017,9 +1116,9 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] bool componentItemHasLocalOverrides(const CanvasItem& item) const;
   [[nodiscard]] QVariantMap selectionMap() const;
   [[nodiscard]] QString templateNameForIndex(int index) const;
-  [[nodiscard]] QString fitModeName(FitMode fit_mode) const;
+  [[nodiscard]] static QString fitModeName(FitMode fit_mode);
   [[nodiscard]] FitMode fitModeFromName(const QString& fit_mode) const;
-  [[nodiscard]] QString groupKindName(GroupKind kind) const;
+  [[nodiscard]] static QString groupKindName(GroupKind kind);
   [[nodiscard]] int spanForGroupKind(GroupKind kind) const;
   [[nodiscard]] GroupKind groupKindFromTemplate(const QString& template_kind) const;
   [[nodiscard]] bool currentSelectionIsLinked() const;
@@ -1045,6 +1144,9 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QString resolvedVariableTextForItem(const CanvasItem& item) const;
   [[nodiscard]] QString resolvedTextForItem(const CanvasItem& item) const;
   [[nodiscard]] int stepNumberForItem(const CanvasItem& item) const;
+  [[nodiscard]] QVariantMap textLayoutPresentation(
+      const CanvasItem& item,
+      const QString& resolved_text) const;
   [[nodiscard]] QVariantList textLayoutLines(const CanvasItem& item) const;
   [[nodiscard]] bool textVerticallyOverflows(const CanvasItem& item) const;
   [[nodiscard]] QSize probeVideoSize(const QString& file_path) const;
@@ -1059,13 +1161,13 @@ class CarouselDocumentController final : public QObject {
       const QStringList& command_arguments,
       QString* output = nullptr,
       QString* error_message = nullptr) const;
-  [[nodiscard]] QJsonObject mediaObject(const MediaItem& media) const;
+  [[nodiscard]] static QJsonObject mediaObject(const MediaItem& media, bool resolve_identity = true);
   [[nodiscard]] MediaItem mediaFromObject(const QJsonObject& object) const;
-  [[nodiscard]] QJsonObject slideObject(const Slide& slide) const;
+  [[nodiscard]] static QJsonObject slideObject(const Slide& slide, bool resolve_identity = true);
   [[nodiscard]] Slide slideFromObject(const QJsonObject& object) const;
-  [[nodiscard]] QJsonObject groupObject(const LinkedGroup& group) const;
+  [[nodiscard]] static QJsonObject groupObject(const LinkedGroup& group, bool resolve_identity = true);
   [[nodiscard]] LinkedGroup groupFromObject(const QJsonObject& object) const;
-  [[nodiscard]] QJsonObject itemObject(const CanvasItem& item) const;
+  [[nodiscard]] static QJsonObject itemObject(const CanvasItem& item, bool resolve_identity = true);
   [[nodiscard]] CanvasItem itemFromObject(const QJsonObject& object) const;
   [[nodiscard]] QVariantList readingOrderEntriesForSlide(
       int slide_index,
@@ -1171,13 +1273,14 @@ class CarouselDocumentController final : public QObject {
   void finishAsyncExport(const QString& state, const QString& failure_reason = QString());
   void markDocumentDirty();
   void updateDocumentDirty();
+  void rememberSavedContent();
   void setSaveState(const QString& state, const QString& error = QString());
   void scheduleAutosave();
   void writeAutosave();
   void refreshRecoveryState();
   [[nodiscard]] QString autosavePath() const;
   [[nodiscard]] bool loadRecoveryDocument(bool as_copy);
-  void removeCurrentRecoveryFiles();
+  void removeCurrentRecoveryFiles(const QString& previous_path = QString());
   void assignImageToCurrentSlot(
       const QString& file_path,
       const QString& display_label,
@@ -1188,9 +1291,20 @@ class CarouselDocumentController final : public QObject {
   void rebuildGroupIndices();
   void normalizeBoardSections();
   void moveSlideBlock(int start_index, int span, int destination_index);
+  [[nodiscard]] QPair<int, int> editBoardMoveRange(int index) const;
   void captureRepeatedElementSyncSources();
   void synchronizePendingRepeatedElements();
   void normalizeRepeatedElementLinks();
+  void normalizePhotoTextLinks();
+  [[nodiscard]] bool editBoardHasUnlockedPhotoTextLayer(
+      const Slide& slide, const QString& layer_id) const;
+  [[nodiscard]] int editBoardIndexForId(const QString& board_id) const;
+  [[nodiscard]] bool prepareLinkedPhotoTextSync(
+      const QString& source_board_id,
+      const QString& before_adjustment_patch,
+      const QString& after_adjustment_patch,
+      QVector<QPair<int, QString>>* peer_patches,
+      QString* error) const;
   bool ensureCapacityForGroup(int start_index, int span);
   void normalizeForCurrentTemplate();
   void loadDesignLibrary();
@@ -1213,6 +1327,7 @@ class CarouselDocumentController final : public QObject {
   QVector<LinkedGroup> groups_;
   QVector<BoardSection> board_sections_;
   QVector<RepeatedElementLink> repeated_element_links_;
+  QVector<PhotoTextLink> photo_text_links_;
   QVector<CanvasItem> items_;
   int current_index_ = 0;
   QString document_format_ = QStringLiteral("4x5");
@@ -1226,11 +1341,15 @@ class CarouselDocumentController final : public QObject {
   QVariantList status_notices_;
   int next_status_notice_id_ = 1;
   bool export_busy_ = false;
+  bool edit_board_image_busy_ = false;
   int preview_revision_ = 0;
   QString session_id_;
   QString selected_item_id_;
   QStringList selected_item_ids_;
   QVector<int> selected_slide_indices_;
+  mutable QHash<QString, QImage> text_contrast_sample_cache_;
+  mutable QStringList text_contrast_sample_cache_lru_;
+  mutable qint64 text_contrast_sample_cache_bytes_ = 0;
   QStringList pending_repeated_element_sync_source_ids_;
   QString document_name_ = QStringLiteral("Untitled Carousel");
   QString saved_document_id_;
@@ -1260,6 +1379,12 @@ class CarouselDocumentController final : public QObject {
   QVariantMap export_preset_baseline_;
   QString export_partial_cleanup_policy_ = QStringLiteral("keep");
   QTimer* export_step_timer_ = nullptr;
+  QFutureWatcher<QVariantMap>* export_watcher_ = nullptr;
+  std::shared_ptr<ExportTaskState> export_task_state_;
+  bool export_worker_context_ = false;
+  QString export_job_directory_;
+  quint64 export_request_generation_ = 0;
+  quint64 export_active_generation_ = 0;
   QString export_state_ = QStringLiteral("idle");
   int export_current_board_ = 0;
   int export_completed_count_ = 0;
@@ -1277,6 +1402,11 @@ class CarouselDocumentController final : public QObject {
   QJsonObject design_library_passthrough_;
   QString document_load_error_;
   QTimer* autosave_timer_ = nullptr;
+  QFutureWatcher<bool>* autosave_watcher_ = nullptr;
+  std::unique_ptr<AutosaveRequest> active_autosave_;
+  std::unique_ptr<AutosaveRequest> pending_autosave_;
+  quint64 autosave_generation_ = 0;
+  quint64 autosave_revision_ = 0;
   QVariantMap recovery_state_;
   QString recovery_path_;
   bool recovery_active_ = false;
@@ -1292,7 +1422,15 @@ class CarouselDocumentController final : public QObject {
   QStringList custom_dictionary_words_;
   QString copy_proof_current_issue_id_;
   QJsonObject saved_content_snapshot_;
+  std::shared_ptr<const DocumentSnapshot> saved_content_values_;
   QTimer* preview_debounce_timer_ = nullptr;
+  QFutureWatcher<PreviewResult>* preview_watcher_ = nullptr;
+  std::shared_ptr<ExportTaskState> preview_task_state_;
+  bool preview_worker_active_ = false;
+  QSet<int> pending_preview_boards_;
+  QSet<QString> pending_preview_items_;
+  QHash<QString, std::shared_ptr<PreviewFiles>> preview_file_owners_;
+  QString preview_output_directory_;
   QVariantMap preview_diagnostics_;
   bool preview_diagnostics_active_ = false;
   quint64 preview_request_revision_ = 0;
@@ -1301,7 +1439,7 @@ class CarouselDocumentController final : public QObject {
   bool transform_slides_changed_ = false;
   bool restoring_history_ = false;
   bool history_transaction_active_ = false;
-  QJsonObject history_transaction_start_;
+  std::shared_ptr<const DocumentSnapshot> history_transaction_start_;
   QString history_transaction_label_;
   QVector<HistoryEntry> undo_stack_;
   QVector<HistoryEntry> redo_stack_;

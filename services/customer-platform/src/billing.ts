@@ -74,10 +74,15 @@ export async function syncLicense(env: ServiceEnv, licenseId: string): Promise<L
   // The statement intentionally preserves staff revocation across billing updates.
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO customers(id,provider_customer_id,email,created_at) VALUES(?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET email=excluded.email`).bind(customerId, providerCustomer, str(a.user_email, 320), checked),
+      ON CONFLICT(id) DO UPDATE SET
+        provider_customer_id=CASE WHEN EXISTS(SELECT 1 FROM privacy_tombstones WHERE customer_id=excluded.id)
+          THEN NULL ELSE excluded.provider_customer_id END,
+        email=CASE WHEN EXISTS(SELECT 1 FROM privacy_tombstones WHERE customer_id=excluded.id)
+          THEN NULL ELSE excluded.email END`).bind(customerId, providerCustomer, str(a.user_email, 320), checked),
     env.DB.prepare(`INSERT INTO licenses(id,customer_id,order_id,order_item_id,variant_id,plan,mode,major,features,device_limit,status,expires_at,checked_at,refresh_revision)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET plan=excluded.plan,features=excluded.features,
-      device_limit=excluded.device_limit,status=excluded.status,expires_at=excluded.expires_at,checked_at=excluded.checked_at
+      device_limit=excluded.device_limit,status=CASE WHEN EXISTS(SELECT 1 FROM privacy_tombstones WHERE customer_id=excluded.customer_id)
+        THEN 'deleted' ELSE excluded.status END,expires_at=excluded.expires_at,checked_at=excluded.checked_at
       ,refresh_revision=excluded.refresh_revision WHERE licenses.refresh_revision<excluded.refresh_revision`)
       .bind(license.id, customerId, orderId, itemId, variant,
         license.plan, license.mode, license.major, license.features, license.device_limit, status, license.expires_at, checked, revision),

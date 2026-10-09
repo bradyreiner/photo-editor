@@ -1,0 +1,164 @@
+{
+  "upstream": "https://github.com/google/fonts",
+  "revision": "7085eb89a950e85db5b166b7a58d414544b4140c",
+  "families": [
+    {
+      "family": "Space Grotesk",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "spacegrotesk/OFL.txt",
+          "sha256": "564ce565c371c5e5bbf286006565a7c9aa55a9f56e7ca58d56e05d649dd61a72",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacegrotesk/OFL.txt"
+        },
+        {
+          "path": "spacegrotesk/SpaceGrotesk[wght].ttf",
+          "sha256": "acad6de1fc93436f5c0f1f4137751ef04f1aea3063e7036535970ffcfbd79f72",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf"
+        }
+      ]
+    },
+    {
+      "family": "Space Mono",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "spacemono/OFL.txt",
+          "sha256": "8e4ee42b2553e1e01504e61cb0d46d148cd8c9e5eacaa3622a7df2d4f2955b9f",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacemono/OFL.txt"
+        },
+        {
+          "path": "spacemono/SpaceMono-Bold.ttf",
+          "sha256": "405e73d41afb7e5906efce206a326af5c956f38e255f35421c260e861e599c59",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacemono/SpaceMono-Bold.ttf"
+        },
+        {
+          "path": "spacemono/SpaceMono-BoldItalic.ttf",
+          "sha256": "cdcc95eddee312879a9728494e595f591cb159f3f276d79bc58673dec7e57138",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacemono/SpaceMono-BoldItalic.ttf"
+        },
+        {
+          "path": "spacemono/SpaceMono-Italic.ttf",
+          "sha256": "eca264c8690a91fe837d19a6badf2d88961610c4c8aafcb196526192a9f258c5",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacemono/SpaceMono-Italic.ttf"
+        },
+        {
+          "path": "spacemono/SpaceMono-Regular.ttf",
+          "sha256": "95837e182baeeada83368f7748db28357f0a1b75c6b84ff7065b5edf933c8e18",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/spacemono/SpaceMono-Regular.ttf"
+        }
+      ]
+    },
+    {
+      "family": "DM Sans",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "dmsans/DMSans-Italic[opsz,wght].ttf",
+          "sha256": "22259c0cc8237221b80f44c76ba8d36e6bce3cda72779f5b2773643d499720ae",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/dmsans/DMSans-Italic%5Bopsz%2Cwght%5D.ttf"
+        },
+        {
+          "path": "dmsans/DMSans[opsz,wght].ttf",
+          "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/dmsans/DMSans%5Bopsz%2Cwght%5D.ttf"
+        },
+        {
+          "path": "dmsans/OFL.txt",
+          "sha256": "9af36190332437f5ecd09974de43c1f7c77a310a996cdd8ceb25628b458840e1",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/dmsans/OFL.txt"
+        }
+      ]
+    },
+    {
+      "family": "Cormorant Garamond",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "cormorantgaramond/CormorantGaramond-Italic[wght].ttf",
+          "sha256": "0f48ea6abb2084537854f7174c470991a463b13036309e3b50a81511611c530d",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/cormorantgaramond/CormorantGaramond-Italic%5Bwght%5D.ttf"
+        },
+        {
+          "path": "cormorantgaramond/CormorantGaramond[wght].ttf",
+          "sha256": "b20b7d9626dd956b2c5e558692ad328b1f19e3275e2782db4fa07670d83f35e0",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/cormorantgaramond/CormorantGaramond%5Bwght%5D.ttf"
+        },
+        {
+          "path": "cormorantgaramond/OFL.txt",
+          "sha256": "60700d351cac4650c51f3f9db318d2a420f8b45052dba2715eb5fec41f0f6956",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/cormorantgaramond/OFL.txt"
+        }
+      ]
+    },
+    {
+      "family": "Bebas Neue",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "bebasneue/BebasNeue-Regular.ttf",
+          "sha256": "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/bebasneue/BebasNeue-Regular.ttf"
+        },
+        {
+          "path": "bebasneue/OFL.txt",
+          "sha256": "72082f6cb4d04be2ecf7cc7d9e1e7d73787f0af8a5a278a47cade70c16b78341",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/bebasneue/OFL.txt"
+        }
+      ]
+    },
+    {
+      "family": "Archivo Black",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "archivoblack/ArchivoBlack-Regular.ttf",
+          "sha256": "dd9a89a019b4849f66ab75455fe7bdf931311042cbb0f0f97acc061539703180",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/archivoblack/ArchivoBlack-Regular.ttf"
+        },
+        {
+          "path": "archivoblack/OFL.txt",
+          "sha256": "3173acd82f8c6159b5b1037b539fcbd4edff68e65c2ea8b9412b5a5ca97b08ff",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/archivoblack/OFL.txt"
+        }
+      ]
+    },
+    {
+      "family": "Fraunces",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "fraunces/Fraunces-Italic[SOFT,WONK,opsz,wght].ttf",
+          "sha256": "b24448c43702fac4ee856781d461a0dfba8d8e594b6e8e190234b75fed2c0e01",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/fraunces/Fraunces-Italic%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf"
+        },
+        {
+          "path": "fraunces/Fraunces[SOFT,WONK,opsz,wght].ttf",
+          "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/fraunces/Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf"
+        },
+        {
+          "path": "fraunces/OFL.txt",
+          "sha256": "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/fraunces/OFL.txt"
+        }
+      ]
+    },
+    {
+      "family": "Outfit",
+      "license": "SIL Open Font License 1.1",
+      "files": [
+        {
+          "path": "outfit/OFL.txt",
+          "sha256": "c676351bf8576b9aba743cd5eaa8c0e7ee0d51f805d720447b4df4ddb6a2e416",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/outfit/OFL.txt"
+        },
+        {
+          "path": "outfit/Outfit[wght].ttf",
+          "sha256": "fc7287273e66929776e2ba54f144fe699080bec29f61bf649d70d871468aeade",
+          "source": "https://raw.githubusercontent.com/google/fonts/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/outfit/Outfit%5Bwght%5D.ttf"
+        }
+      ]
+    }
+  ]
+}

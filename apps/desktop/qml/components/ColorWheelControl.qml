@@ -15,17 +15,23 @@ Item {
     property real wheelSize: 82
     property real maxSaturation: 100
     property bool ringMode: false
+    property bool showValueReadouts: true
     readonly property int minimumUsefulWidth: Math.ceil(Math.max(root.wheelSize + 14,
-                                                                 titleLabel.implicitWidth + 10,
-                                                                 valueRow.implicitWidth + 2))
+                                                                 titleLabel.visible ? titleLabel.implicitWidth + 10 : 0,
+                                                                 valueRow.visible ? valueRow.implicitWidth + 2 : 0))
     signal hueEdited(real value)
     signal saturationEdited(real value)
     signal luminanceEdited(real value)
+    signal interactionStarted()
+    signal interactionFinished()
 
     Theme { id: theme }
 
     implicitWidth: minimumUsefulWidth
-    implicitHeight: titleLabel.implicitHeight + root.wheelSize + valueRow.implicitHeight + (root.ringMode ? 18 : 12)
+    implicitHeight: root.wheelSize +
+                    (titleLabel.visible ? titleLabel.implicitHeight + wheelColumn.spacing : 0) +
+                    (valueRow.visible ? valueRow.implicitHeight + wheelColumn.spacing : 0) +
+                    (root.ringMode ? 4 : 2)
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
@@ -57,17 +63,19 @@ Item {
     }
 
     ColumnLayout {
+        id: wheelColumn
         anchors.fill: parent
         spacing: root.ringMode ? 7 : 5
 
         Label {
             id: titleLabel
+            visible: root.title.trim().length > 0
             Layout.alignment: Qt.AlignHCenter
             text: root.title
-            color: root.ringMode ? theme.textStrong : theme.textFaint
+            color: theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: root.ringMode ? 12 : 9
-            font.weight: root.ringMode ? Font.Bold : Font.Medium
+            font.pixelSize: theme.typeCaption
+            font.weight: theme.weightSection
             font.capitalization: Font.MixedCase
             font.letterSpacing: 0
         }
@@ -96,11 +104,13 @@ Item {
                     const cy = height / 2
                     const radius = Math.min(width, height) * (root.ringMode ? 0.46 : 0.44)
                     const innerRadius = root.ringMode ? radius * 0.86 : 0
-                    const segments = 180
+                    const segments = root.ringMode ? 180 : 360
 
                     for (let i = 0; i < segments; ++i) {
                         const start = (Math.PI * 2 * i / segments) - Math.PI / 2
-                        const end = (Math.PI * 2 * (i + 1) / segments) - Math.PI / 2
+                        // Overlap adjacent disc wedges to avoid antialiased
+                        // seams showing the dark panel through the wheel.
+                        const end = (Math.PI * 2 * (i + (root.ringMode ? 1 : 1.35)) / segments) - Math.PI / 2
                         ctx.beginPath()
                         if (root.ringMode) {
                             ctx.arc(cx, cy, radius, start, end)
@@ -117,9 +127,9 @@ Item {
 
                     if (!root.ringMode) {
                         const desat = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
-                        desat.addColorStop(0, Qt.rgba(0.86, 0.90, 0.90, 0.92))
-                        desat.addColorStop(0.44, Qt.rgba(0.18, 0.22, 0.22, 0.38))
-                        desat.addColorStop(1, Qt.rgba(0.02, 0.03, 0.03, 0.0))
+                        desat.addColorStop(0, Qt.rgba(0.54, 0.55, 0.56, 0.98))
+                        desat.addColorStop(0.58, Qt.rgba(0.54, 0.55, 0.56, 0.28))
+                        desat.addColorStop(1, Qt.rgba(0.54, 0.55, 0.56, 0.0))
                         ctx.fillStyle = desat
                         ctx.beginPath()
                         ctx.arc(cx, cy, radius, 0, Math.PI * 2)
@@ -127,7 +137,8 @@ Item {
                     }
 
                     ctx.lineWidth = root.ringMode ? 2 : 1
-                    ctx.strokeStyle = theme.alpha(root.accent, root.ringMode ? 0.55 : 0.35)
+                    ctx.strokeStyle = root.ringMode ? theme.alpha(root.accent, 0.55)
+                                                    : theme.alpha(theme.polar, 0.14)
                     ctx.beginPath()
                     ctx.arc(cx, cy, radius, 0, Math.PI * 2)
                     ctx.stroke()
@@ -146,7 +157,7 @@ Item {
                     }
 
                     if (!root.ringMode) {
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.14)
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.08)
                         ctx.beginPath()
                         ctx.moveTo(cx - radius, cy)
                         ctx.lineTo(cx + radius, cy)
@@ -168,16 +179,15 @@ Item {
                 y: wheelWrap.height / 2 - innerBounds.height / 2
                 width: innerBounds.width
                 height: innerBounds.height
-                radius: 5
-                color: theme.alpha(theme.ink950, 0.58)
-                border.width: 1
-                border.color: theme.alpha(theme.polar, 0.10)
+                radius: theme.radiusControl
+                color: theme.alpha(theme.actionSecondaryFill, 0.88)
+                border.width: 0
                 clip: true
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 9
-                    spacing: 7
+                    anchors.margins: theme.space8
+                    spacing: theme.space6
 
                     Repeater {
                         model: [
@@ -189,14 +199,14 @@ Item {
                             id: railRow
                             required property var modelData
                             Layout.fillWidth: true
-                            spacing: 7
+                            spacing: theme.space8
 
                             Label {
-                                Layout.preferredWidth: 24
+                                Layout.preferredWidth: theme.scaled(24)
                                 text: String(railRow.modelData.label || "")
                                 color: theme.textMain
                                 font.family: theme.fontUi
-                                font.pixelSize: 9
+                                font.pixelSize: theme.typeMicro
                                 font.weight: Font.Bold
                                 font.letterSpacing: 0
                             }
@@ -204,7 +214,7 @@ Item {
                             Item {
                                 id: ringInnerRail
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 14
+                                Layout.preferredHeight: theme.scaled(14)
                                 readonly property real minimumValue: Number(railRow.modelData.minimum || 0)
                                 readonly property real maximumValue: Number(railRow.modelData.maximum || 100)
                                 readonly property real defaultValue: Number(railRow.modelData.defaultValue || 0)
@@ -216,8 +226,8 @@ Item {
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
-                                    height: 3
-                                    radius: 2
+                                    height: theme.scaled(3)
+                                    radius: height / 2
                                     color: theme.alpha(theme.polar, 0.18)
                                 }
 
@@ -225,8 +235,8 @@ Item {
                                     x: Math.min(ringInnerRail.defaultX, ringInnerRail.valueX)
                                     width: Math.max(1, Math.abs(ringInnerRail.valueX - ringInnerRail.defaultX))
                                     anchors.verticalCenter: parent.verticalCenter
-                                    height: 3
-                                    radius: 2
+                                    height: theme.scaled(3)
+                                    radius: height / 2
                                     color: root.accent
                                     opacity: Math.abs(ringInnerRail.railValue - ringInnerRail.defaultValue) > 0.5 ? 0.84 : 0
                                 }
@@ -234,11 +244,11 @@ Item {
                                 Rectangle {
                                     x: Math.max(0, Math.min(parent.width - width, ringInnerRail.valueX - width / 2))
                                     y: parent.height / 2 - height / 2
-                                    width: 10
-                                    height: 10
-                                    radius: 5
+                                    width: theme.scaled(10)
+                                    height: width
+                                    radius: width / 2
                                     color: theme.alpha(theme.polar, 0.94)
-                                    border.width: 1
+                                    border.width: theme.hairlineWidth
                                     border.color: theme.alpha(root.accent, 0.82)
                                 }
 
@@ -255,11 +265,16 @@ Item {
                                         else
                                             root.luminanceEdited(value)
                                     }
-                                    onPressed: function(mouse) { editFromX(mouse.x) }
+                                    onPressed: function(mouse) {
+                                        root.interactionStarted()
+                                        editFromX(mouse.x)
+                                    }
                                     onPositionChanged: function(mouse) {
                                         if (pressed)
                                             editFromX(mouse.x)
                                     }
+                                    onReleased: root.interactionFinished()
+                                    onCanceled: root.interactionFinished()
                                     onDoubleClicked: {
                                         if (railRow.modelData.kind === "saturation")
                                             root.saturationEdited(0)
@@ -282,24 +297,35 @@ Item {
 
                 x: wheelWrap.width / 2 + Math.cos(angle) * (root.ringMode ? ringHandleRadius : wheelRadius * radiusAmount) - width / 2
                 y: wheelWrap.height / 2 + Math.sin(angle) * (root.ringMode ? ringHandleRadius : wheelRadius * radiusAmount) - height / 2
-                width: root.ringMode ? 10 : 10
+                width: root.ringMode ? theme.scaled(10)
+                                     : wheelPointer.pressed ? theme.scaled(20)
+                                                            : wheelPointer.containsMouse ? theme.scaled(18)
+                                                                                         : theme.scaled(16)
                 height: width
                 radius: width / 2
-                color: root.ringMode ? theme.alpha(theme.polar, 0.96) : theme.alpha(theme.ink950, 0.74)
-                border.width: root.ringMode ? 1 : 2
-                border.color: root.ringMode ? root.accent : theme.polar
+                color: root.ringMode ? theme.alpha(theme.polar, 0.96)
+                                     : wheelPointer.pressed ? theme.selectionAccent : theme.polar
+                border.width: root.ringMode ? theme.hairlineWidth : theme.scaled(2)
+                border.color: root.ringMode ? root.accent : theme.ink950
             }
 
             MouseArea {
+                id: wheelPointer
                 z: 1
                 anchors.fill: parent
-                cursorShape: Qt.CrossCursor
+                hoverEnabled: true
+                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.CrossCursor
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                onPressed: function(mouse) { updateWheel(mouse.x, mouse.y) }
+                onPressed: function(mouse) {
+                    root.interactionStarted()
+                    updateWheel(mouse.x, mouse.y)
+                }
                 onPositionChanged: function(mouse) {
                     if (pressed)
                         updateWheel(mouse.x, mouse.y)
                 }
+                onReleased: root.interactionFinished()
+                onCanceled: root.interactionFinished()
                 onDoubleClicked: {
                     root.hueEdited(0)
                     root.saturationEdited(0)
@@ -319,7 +345,16 @@ Item {
                     const nextHue = normalizedHue
                     const nextSat = root.clamp(radius * root.maxSaturation, 0, root.maxSaturation)
                     if (pressedButtons & Qt.RightButton) {
-                        root.hueEdited(root.hue + (nextHue - root.hue) * 0.18)
+                        if (root.ringMode) {
+                            root.hueEdited(root.hue + (nextHue - root.hue) * 0.18)
+                        } else {
+                            let hueDelta = nextHue - root.normalizedHue(root.hue)
+                            if (hueDelta > 0.5)
+                                hueDelta -= 1
+                            else if (hueDelta < -0.5)
+                                hueDelta += 1
+                            root.hueEdited(root.normalizedHue(root.hue + hueDelta * 0.18))
+                        }
                         if (!root.ringMode)
                             root.saturationEdited(root.saturation + (nextSat - root.saturation) * 0.18)
                         return
@@ -333,36 +368,37 @@ Item {
 
         RowLayout {
             id: valueRow
+            visible: root.showValueReadouts
             Layout.fillWidth: true
-            spacing: root.ringMode ? 10 : 6
+            spacing: root.ringMode ? theme.space10 : theme.space6
             Label {
                 Layout.fillWidth: true
-                Layout.minimumWidth: 28
+                Layout.minimumWidth: theme.scaled(28)
                 text: "H " + root.displayHue(root.hue) + "\u00B0"
                 color: root.ringMode ? theme.textStrong : theme.textMain
                 font.family: theme.fontMono
-                font.pixelSize: root.ringMode ? 10 : 8
+                font.pixelSize: theme.typeMicro
                 font.weight: root.ringMode ? Font.DemiBold : Font.Normal
                 font.letterSpacing: 0
             }
             Label {
                 Layout.fillWidth: true
-                Layout.minimumWidth: 28
+                Layout.minimumWidth: theme.scaled(28)
                 text: "S " + root.displaySignedNumber(root.saturation)
                 color: root.ringMode ? theme.textStrong : theme.textMain
                 font.family: theme.fontMono
-                font.pixelSize: root.ringMode ? 10 : 8
+                font.pixelSize: theme.typeMicro
                 font.weight: root.ringMode ? Font.DemiBold : Font.Normal
                 font.letterSpacing: 0
             }
             Label {
                 visible: root.ringMode
                 Layout.fillWidth: true
-                Layout.minimumWidth: 28
+                Layout.minimumWidth: theme.scaled(28)
                 text: "L " + root.displaySignedNumber(root.luminance)
                 color: theme.textStrong
                 font.family: theme.fontMono
-                font.pixelSize: 10
+                font.pixelSize: theme.typeMicro
                 font.weight: Font.DemiBold
                 font.letterSpacing: 0
             }

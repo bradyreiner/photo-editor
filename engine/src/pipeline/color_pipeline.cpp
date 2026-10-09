@@ -262,9 +262,20 @@ RgbColorSpace make_rec709_color_space() {
   return RgbColorSpace{
       .name = "Rec.709",
       .primaries = ColorPrimaries::Rec709,
-      .transfer_function = TransferFunction::Gamma24,
+      .transfer_function = TransferFunction::Bt709,
       .white_point = WhitePoint::D65,
       .scene_referred = false,
+      .wide_gamut = false,
+  };
+}
+
+RgbColorSpace make_linear_rec709_color_space() {
+  return RgbColorSpace{
+      .name = "Linear Rec.709",
+      .primaries = ColorPrimaries::Rec709,
+      .transfer_function = TransferFunction::Linear,
+      .white_point = WhitePoint::D65,
+      .scene_referred = true,
       .wide_gamut = false,
   };
 }
@@ -276,6 +287,28 @@ RgbColorSpace make_rec2020_color_space() {
       .transfer_function = TransferFunction::Bt2020,
       .white_point = WhitePoint::D65,
       .scene_referred = false,
+      .wide_gamut = true,
+  };
+}
+
+RgbColorSpace make_linear_sony_s_gamut3_color_space() {
+  return RgbColorSpace{
+      .name = "Linear Sony S-Gamut3",
+      .primaries = ColorPrimaries::SonySGamut3,
+      .transfer_function = TransferFunction::Linear,
+      .white_point = WhitePoint::D65,
+      .scene_referred = true,
+      .wide_gamut = true,
+  };
+}
+
+RgbColorSpace make_linear_sony_s_gamut3_cine_color_space() {
+  return RgbColorSpace{
+      .name = "Linear Sony S-Gamut3.Cine",
+      .primaries = ColorPrimaries::SonySGamut3Cine,
+      .transfer_function = TransferFunction::Linear,
+      .white_point = WhitePoint::D65,
+      .scene_referred = true,
       .wide_gamut = true,
   };
 }
@@ -307,11 +340,20 @@ std::optional<RgbColorSpace> resolve_builtin_rgb_color_space(
   if (normalized == "rec709" || normalized == "bt709") {
     return make_rec709_color_space();
   }
+  if (normalized == "linearrec709" || normalized == "linearbt709") {
+    return make_linear_rec709_color_space();
+  }
   if (normalized == "rec2020" || normalized == "bt2020") {
     return make_rec2020_color_space();
   }
   if (normalized == "linearrec2020" || normalized == "linearbt2020") {
     return make_linear_rec2020_color_space();
+  }
+  if (normalized == "linearsgamut3") {
+    return make_linear_sony_s_gamut3_color_space();
+  }
+  if (normalized == "linearsgamut3cine") {
+    return make_linear_sony_s_gamut3_cine_color_space();
   }
   if (normalized == "aces20651" || normalized == "acesap0") {
     return make_aces2065_1_color_space();

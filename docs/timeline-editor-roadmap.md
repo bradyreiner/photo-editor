@@ -2,15 +2,19 @@
 
 ## Active milestone
 
-The active milestone is the proof-gated [Timeline MVP Checklist](timeline-mvp-checklist.md): a 15-capability workflow for producing a publishable 30–60 second social video. The professional material below is architectural direction and post-MVP scope; it must not expand the MVP release gate.
+Build creator-grade editing foundations across tracks, compositing, animation, audio, typography, and the timeline UI. The completed [Timeline MVP Checklist](timeline-mvp-checklist.md) remains the short-form workflow baseline; it is no longer the product ceiling.
 
 ## Goal
 
-Ship a fast, trustworthy social-video timeline whose Program Monitor, saved state, reopened state, and MP4 export agree. Preserve an architecture that can grow into professional workflows after the MVP gate passes.
+Let a creator finish social and YouTube videos in one coherent workflow: organize footage, cut quickly, animate framing and graphics, shape the image, mix music and dialogue, review, and export. Program playback, saved state, reopened state, and final export must agree throughout.
 
-## Current baseline
+## Product target
 
-The app now has a dedicated Timeline workspace and a track-based sequence model. It supports:
+The product targets professional execution on the workflows creators use every day: short-form social edits, talking-head videos, tutorials, interviews, and music-led edits. The interface should expose direct timeline controls and focused inspectors so users can work quickly without leaving the edit to assemble common effects elsewhere.
+
+## Existing foundation
+
+The app already has a dedicated Timeline workspace and a track-based sequence model. It supports:
 
 - source and program monitoring
 - a resizable monitor/timeline workspace with usable collapsible Source and Inspector panels
@@ -20,146 +24,62 @@ The app now has a dedicated Timeline workspace and a track-based sequence model.
 - cached audio waveforms, clip fades/gain, transitions, effects, framing, opacity, and playback rate
 - markers with notes, status, completion, filtering, and search
 - undo/redo, native playback, save/load, render export, and queued job status
+- editable title and caption tracks, with basic text styling and export rendering
+- photo-layer groups with nested parent identities, group compositing, and persistent expand/collapse state
+- clip keyframes for transform, opacity, audio, speed, effects, grading, title size, and first-class title/caption position anchors
 
-The main gap is no longer the workspace scaffold. It is professional depth: reliable high-performance playback, real animation/keyframes, proxies and render caching, captions/transcripts, and finishing-grade audio and delivery workflows.
+Those capabilities are useful foundations. Their remaining gaps are consistency across property types, fast direct manipulation, independent track creation, complete group controls, motion-graphics depth, and visual proof across real editing and export workflows.
 
-## Product target
+## Foundation work to finish
 
-The first serious milestone is a best-in-class short-form and internet-video workflow, with an architecture that can grow into longer-form professional work.
+### Track and sequence structure
 
-That means:
+- Add video, audio, music, dialogue, effects, title, and graphics lanes independently from the timeline.
+- Make add, reorder, rename, duplicate, lock, mute, solo, visibility, target, and delete actions predictable and undoable.
+- Preserve track identity, clips, automation, routing, and group relationships through save/reopen and sequence edits.
+- Support track-level transform, compositing, and grade controls where they produce a meaningful result.
 
-- dedicated Timeline workspace
-- source and program monitoring
-- multitrack video and audio editing
-- precise trim and transport tools
-- audio waveforms, meters, and fades
-- keyframeable clip properties
-- reliable export presets and queueing
+### Hierarchical compositing and layers
 
-## Required UI surfaces
+- Make nested groups work as editable compositions with direct transform, opacity, blend, masking, effects, and color controls.
+- Make the same hierarchy visible and manageable in the layer UI: clear indentation, collapse state, drag into/out of groups, selection, and group operations.
+- Keep photo layers, video overlays, titles, shapes, and adjustment layers consistent where they share compositing behavior.
 
-### Timeline workspace shell
+### Animation and keyframes
 
-- top toolbar for edit tools, snapping, linked selection, ripple state, markers, and timecode
-- source monitor for marking clip In and Out before edits
-- program monitor for sequence playback, overlays, and safe areas
-- media bins and effects browser
-- inspector for selected clip, effect stack, motion, audio, and metadata
-- multitrack timeline canvas with ruler, playhead, zoom, and track headers
-- audio meters and lightweight mixer
+- Use one keyframe model and editor for every animatable clip, track, effect, grade, text, and audio parameter.
+- Support precise key placement, selection, move, copy/paste, interpolation, Bezier handles, looping/roving where appropriate, and per-segment speed/easing controls.
+- Keep animation reversible, persistent, scrubbable, and identical in the Program Monitor and rendered output.
 
-### Timeline canvas
+### Text and motion graphics
 
-- separate video and audio tracks
-- drag-and-drop clip placement
-- trim handles and edge feedback
-- transitions and overlap indicators
-- clip labels, thumbnails, and audio waveforms
-- markers on clips and on the sequence
-- keyframe lanes for transform, opacity, and audio
-- track controls for lock, mute, solo, visibility, and targeting
+- Build text directly in the timeline with typography, paragraph/layout controls, outlines, backgrounds, shapes, and safe-area-aware placement.
+- Animate text and graphic properties with the shared keyframe system.
+- Provide polished reusable title, caption, lower-third, callout, and social-format motion presets that remain editable after insertion.
+- Keep preview, reopen, and export rendering consistent for fonts, transforms, transitions, and effects.
 
-## Required editing features
+### Music and audio
 
-### Core editorial
+- Create independent music, dialogue, voiceover, ambience, and effects lanes.
+- Make trim, fades, gain, pan, routing, EQ, dynamics, and automation accessible from the timeline and focused mixer controls.
+- Support ducking and common creator mix workflows with sample-accurate playback/export behavior.
 
-- insert and overwrite edits
-- lift and extract
-- razor tool
-- ripple, roll, slip, and slide trims
-- snapping and magnet toggle
-- linked audio/video selection
-- duplicate, replace, and match frame
-- copy and paste with insert and overwrite behavior
+### Creator-focused interface and proof
 
-### Sequence model
+- Keep track creation, trimming, transitions, titles, music, grading, and export reachable without hunting through unrelated panels.
+- Use direct manipulation in the timeline and monitor, with inspectors for precise values and automation.
+- Validate a complete social edit and a complete YouTube edit through capture, edit, graphics, music, review, save/reopen, and final export.
+- Measure visual output, audio behavior, responsiveness, recovery, and export parity on real project fixtures.
 
-- multiple sequences per project
-- sequence settings for resolution, frame rate, and audio sample rate
-- video and audio track collections
-- gap handling
-- linked clip groups
-- nested or compound sequences
-- markers and notes
+## Implementation order
 
-### Audio
-
-- waveform generation and caching
-- clip gain and track gain
-- audio fades
-- pan and balance
-- meters and clipping indicators
-- separate track types for dialogue, music, and effects later
-
-### Effects and motion
-
-- transform controls
-- opacity and blend modes
-- crop and basic retime
-- transitions
-- effect stack ordering
-- property keyframes
-
-### Media management
-
-- bins and smart collections
-- search and filtering
-- subclips
-- relink and offline states
-- proxy attachment and switching
-- media metadata columns
-
-### Delivery
-
-- export presets
-- queue with progress and status
-- codec, format, and destination controls
-- background render and failure reporting
-
-## Implementation phases
-
-1. Workspace split
-- make Timeline a top-level workspace
-- keep Carousel as its own separate workspace
-- route video assets and saved timelines directly into Timeline
-
-2. Sequence data model rewrite
-- replace the flat clip list with track-based sequence structures
-- preserve current save and load behavior through migration
-
-3. Timeline canvas
-- build the ruler, playhead, zoom, and track headers
-- support clip drag, selection, trimming, and snapping
-
-4. Monitoring and edit operations
-- add source monitor and program monitor
-- implement insert, overwrite, ripple, and roll workflows
-
-5. Audio lane support
-- render waveforms
-- add fades, gain, meters, and basic mixing
-
-6. Effect stack and keyframes
-- motion, opacity, crop, transitions, and keyframe lanes
-
-7. Playback and export hardening
-- proxy playback
-- render cache
-- export presets and queueing
-
-## Resolve and Premiere parity gaps after phase 7
-
-Still out of scope unless video becomes the primary product focus:
-
-- multicam editing
-- shared project collaboration
-- transcription and text-based editing
-- caption authoring
-- advanced color page workflows
-- Fairlight-class audio tooling
-- Fusion or After Effects class compositing
+1. Finish typed, independently creatable tracks and reliable row/clip editing.
+2. Complete group and compositing controls in the UI and renderer.
+3. Unify keyframe editing and per-keyframe interpolation/speed controls.
+4. Build editable text and motion-graphics workflows on that animation foundation.
+5. Complete creator audio tracks, mixing, routing, and automation.
+6. Polish the integrated UI and prove complete social and YouTube projects through export.
 
 ## Concrete backlog
 
-For the concrete 20-task execution sequence that turns this roadmap into an actionable build list, see [docs/timeline-state-of-the-art-backlog.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/timeline-state-of-the-art-backlog.md).
+The older [state-of-the-art backlog](timeline-state-of-the-art-backlog.md) remains a source of ideas. The implementation order above defines the active creator-editing scope.

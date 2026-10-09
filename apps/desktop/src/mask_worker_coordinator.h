@@ -40,6 +40,7 @@ struct SmartSelectPreviewResult final {
   QVector<int> instance_ids;
   int generation = 0;
   bool success = false;
+  QString error_message;
 };
 
 struct SmartSelectCommitRequest final {
@@ -48,6 +49,7 @@ struct SmartSelectCommitRequest final {
   QString asset_id;
   EditState state;
   QVariantList points;
+  QVariantMap matching_preview_mask;
   QString intent = QStringLiteral("selection");
   bool create_new = false;
   int generation = 0;
@@ -81,6 +83,7 @@ struct BrushRasterCommitRequest final {
   QString undo_label;
   double brush_spacing = 0.75;
   double feather = 0.0;
+  double hardness = 0.25;
   double auto_mask_tolerance = 0.18;
   bool auto_mask = false;
   bool protect_edges = false;

@@ -80,4 +80,37 @@ bool saveCustomerCredential(const QByteArray& credential, QString* error) {
   *error = QStringLiteral("Your installation credential could not be saved securely.");
   return false;
 }
+
+bool clearCustomerCredential(QString* error) {
+#ifdef Q_OS_MACOS
+  auto attributes = query();
+  const auto status = SecItemDelete(attributes);
+  CFRelease(attributes);
+  if (status == errSecSuccess || status == errSecItemNotFound) return true;
+#elif defined(Q_OS_WIN)
+  if (CredDeleteW(L"Looksy/customer-installation-v1", CRED_TYPE_GENERIC, 0) ||
+      GetLastError() == ERROR_NOT_FOUND) return true;
+#else
+  *error = QStringLiteral("Secure license storage is not supported on this platform.");
+  return false;
+#endif
+  *error = QStringLiteral("Your installation credential could not be cleared securely.");
+  return false;
+}
+
+namespace {
+class SystemCustomerCredentialStore final : public CustomerCredentialStore {
+ public:
+  QByteArray load(QString* error) override { return loadCustomerCredential(error); }
+  bool save(const QByteArray& credential, QString* error) override {
+    return saveCustomerCredential(credential, error);
+  }
+  bool clear(QString* error) override { return clearCustomerCredential(error); }
+};
+}
+
+CustomerCredentialStore& systemCustomerCredentialStore() {
+  static SystemCustomerCredentialStore store;
+  return store;
+}
 }  // namespace photo_editor::desktop

@@ -102,9 +102,10 @@ int main() {
   }
 
   const auto prompts = smart_select_prompts_for_path(source_prompts);
-  if (prompts.size() != 10 || prompts.at(4).negative != true ||
+  if (prompts.size() != 6 || prompts.at(4).negative != true ||
       prompts.at(4).x != 0.7 || prompts.at(5).x != 0.5 ||
-      prompts.at(5).y != 0.5) {
+      prompts.at(5).y != 0.5 ||
+      prompts.at(5).box != QRectF(QPointF(0.2, 0.1), QPointF(0.8, 0.9))) {
     return fail("canonical prompts must preserve sampled brush, negative, and box semantics");
   }
 

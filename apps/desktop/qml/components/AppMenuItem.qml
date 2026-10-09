@@ -7,6 +7,7 @@ MenuItem {
 
     property string iconName: ""
     property string shortcutText: ""
+    property string tooltipText: ""
     property bool danger: false
     property color accent: theme.focusRing
     readonly property string appMenuItemContract: "app-menu-item:v1|hover:true|keyboard:true|disabled-state:true|shortcut-fit:true|readable-text:true|no-elide:true"
@@ -27,9 +28,9 @@ MenuItem {
                    ? theme.alpha(theme.textMuted, 0.5)
                    : root.danger
                      ? theme.error
-                     : (root.highlighted ? root.accent : theme.textMain)
-            Layout.preferredWidth: theme.typeSection
-            Layout.preferredHeight: theme.typeSection
+                   : (root.highlighted ? theme.selectionAccent : theme.textMain)
+            Layout.preferredWidth: theme.typeControl
+            Layout.preferredHeight: theme.typeControl
             Layout.alignment: Qt.AlignVCenter
         }
 
@@ -40,16 +41,16 @@ MenuItem {
                    ? theme.alpha(theme.textMuted, 0.52)
                    : root.danger
                      ? theme.error
-                     : theme.textStrong
+                     : theme.textMain
             font.family: theme.fontUi
             font.pixelSize: theme.typeBody
-            font.weight: root.highlighted ? Font.DemiBold : Font.Medium
+            font.weight: theme.weightControl
             font.letterSpacing: 0
             verticalAlignment: Text.AlignVCenter
             maximumLineCount: 1
             elide: Text.ElideNone
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 9
+            minimumPixelSize: 10
             clip: true
         }
 
@@ -63,7 +64,7 @@ MenuItem {
             maximumLineCount: 1
             elide: Text.ElideNone
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
+            minimumPixelSize: 10
             Layout.maximumWidth: 72
             clip: true
         }
@@ -74,11 +75,31 @@ MenuItem {
         color: !root.enabled
                ? "transparent"
                : root.down
-                 ? theme.alpha(root.accent, 0.18)
+                 ? theme.actionSecondaryPressed
                  : root.highlighted
-                   ? theme.alpha(root.accent, 0.12)
+                   ? theme.actionSecondaryHover
                    : "transparent"
-        border.width: root.visualFocus ? theme.hairlineWidth : 0
-        border.color: theme.alpha(theme.focusRing, 0.82)
+        border.width: root.visualFocus ? theme.focusBorderWidth : 0
+        border.color: theme.focusRing
+    }
+
+    Accessible.description: root.tooltipText
+
+    AppToolTip {
+        id: appToolTip
+        targetItem: root
+        followPointer: true
+        visible: root.hovered && root.tooltipText.length > 0
+        delay: 200
+        timeout: 2500
+        text: root.tooltipText
+    }
+
+    HoverHandler {
+        onPointChanged: {
+            if (appToolTip.parent)
+                appToolTip.pointerPosition = root.mapToItem(appToolTip.parent,
+                                                            point.position.x, point.position.y)
+        }
     }
 }

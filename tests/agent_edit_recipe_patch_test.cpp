@@ -459,6 +459,8 @@ int main() {
   auto graphics_allowed_tools = graphics_style.value(QStringLiteral("allowedTools")).toMap();
   graphics_allowed_tools.insert(QStringLiteral("graphics"), true);
   graphics_style.insert(QStringLiteral("allowedTools"), graphics_allowed_tools);
+  photo_editor::desktop::PhotoTextStyle graphic_typography;
+  graphic_typography.axes.insert(QStringLiteral("wdth"), 85.0);
   const QVariantMap graphic_text_layer{
       {QStringLiteral("id"), QStringLiteral("agent-graphic-headline")},
       {QStringLiteral("kind"), QStringLiteral("text")},
@@ -475,7 +477,7 @@ int main() {
       {QStringLiteral("canvasHeight"), 1200},
       {QStringLiteral("textTypography"),
        photo_editor::desktop::encode_photo_text_style(
-           photo_editor::desktop::PhotoTextStyle{}).toVariantMap()},
+           graphic_typography).toVariantMap()},
   };
   const QVariantMap graphic_patch{
       {QStringLiteral("graphics"),
@@ -503,6 +505,9 @@ int main() {
       !graphic_schema.value(QStringLiteral("appendOnly")).toBool()) {
     return fail("agent graphics schema should advertise append-only editable text layers");
   }
+  if (!graphic_schema.value(QStringLiteral("typographyFields")).toStringList().contains(QStringLiteral("axes"))) {
+    return fail("agent typography schema should expose variable font axes");
+  }
   const auto effect_change_schema = photo_editor::desktop::agent_recipe_patch_tool_schema()
                                        .value(QStringLiteral("groups")).toMap()
                                        .value(QStringLiteral("layers")).toMap()
@@ -510,7 +515,7 @@ int main() {
                                        .value(QStringLiteral("effectChanges")).toMap();
   if (effect_change_schema.value(QStringLiteral("type")).toString() !=
           QStringLiteral("layerEffectChanges") ||
-      effect_change_schema.value(QStringLiteral("allowedTypes")).toStringList().size() != 6) {
+      effect_change_schema.value(QStringLiteral("allowedTypes")).toStringList().size() != 9) {
     return fail("agent layer-effect schema should expose every currently supported non-destructive effect");
   }
   photo_editor::desktop::EditRecipeState graphic_state;
@@ -525,7 +530,11 @@ int main() {
   if (graphic_state.layers.size() != 2 ||
       graphic_state.layers.at(0).toMap().value(QStringLiteral("agentGraphic")).toBool() != true ||
       graphic_state.layers.at(1).toMap().value(QStringLiteral("id")).toString() !=
-          QStringLiteral("user-existing-text")) {
+          QStringLiteral("user-existing-text") ||
+      !photo_editor::desktop::decode_photo_text_style(QJsonObject::fromVariantMap(
+          graphic_state.layers.at(0).toMap().value(QStringLiteral("textTypography")).toMap())) ||
+      photo_editor::desktop::decode_photo_text_style(QJsonObject::fromVariantMap(
+          graphic_state.layers.at(0).toMap().value(QStringLiteral("textTypography")).toMap()))->axes.value(QStringLiteral("wdth")) != 85.0) {
     return fail("agent graphic text should be editable and preserve existing user layers");
   }
   const auto graphic_diff = photo_editor::desktop::agent_recipe_patch_diff(
@@ -593,6 +602,100 @@ int main() {
           .value(QStringLiteral("after")).toMap().isEmpty()) {
     return fail("agent layer-effect diff should show the applied effect");
   }
+  const QVariantMap diffusion_change{
+      {QStringLiteral("layerId"), QStringLiteral("user-existing-text")},
+      {QStringLiteral("effectId"), QStringLiteral("agent-effect-diffusion")},
+      {QStringLiteral("type"), QStringLiteral("optical_diffusion")},
+      {QStringLiteral("enabled"), true}, {QStringLiteral("amount"), 0.75},
+      {QStringLiteral("diffusionRadius"), 31.5}, {QStringLiteral("highlightThreshold"), 1.25},
+      {QStringLiteral("highlightKnee"), 0.55}, {QStringLiteral("diffusionStrength"), 1.4},
+      {QStringLiteral("warmth"), 0.3}, {QStringLiteral("highlightProtection"), 0.65},
+  };
+  const QVariantMap diffusion_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{diffusion_change}}}},
+  };
+  const auto diffusion_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(diffusion_patch, layers_style);
+  if (!diffusion_validation.valid) {
+    std::cerr << diffusion_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("agent optical diffusion parameters should validate");
+  }
+  photo_editor::desktop::apply_agent_recipe_patch(&graphic_state, diffusion_patch);
+  const auto diffusion_effects = photo_editor::desktop::decode_photo_layer_effects(
+      graphic_state.layers.at(1).toMap());
+  if (!diffusion_effects || diffusion_effects->size() != 2 ||
+      diffusion_effects->back().type_id != "optical_diffusion" ||
+      !almost_equal(diffusion_effects->back().diffusion.radius, 31.5) ||
+      !almost_equal(diffusion_effects->back().diffusion.threshold, 1.25) ||
+      !almost_equal(diffusion_effects->back().diffusion.knee, 0.55) ||
+      !almost_equal(diffusion_effects->back().diffusion.strength, 1.4) ||
+      !almost_equal(diffusion_effects->back().diffusion.warmth, 0.3) ||
+      !almost_equal(diffusion_effects->back().diffusion.highlight_protection, 0.65)) {
+    return fail("agent optical diffusion parameters should reach the typed saved effect");
+  }
+  const QVariantMap print_change{
+      {QStringLiteral("layerId"), QStringLiteral("user-existing-text")},
+      {QStringLiteral("effectId"), QStringLiteral("agent-effect-print")},
+      {QStringLiteral("type"), QStringLiteral("imperfect_print")},
+      {QStringLiteral("enabled"), true}, {QStringLiteral("amount"), 0.9},
+      {QStringLiteral("paperScale"), 18.0}, {QStringLiteral("paperTexture"), 0.42},
+      {QStringLiteral("inkSpread"), 0.3}, {QStringLiteral("inkDensity"), 1.2},
+      {QStringLiteral("redRegistrationX"), -0.7}, {QStringLiteral("redRegistrationY"), 0.25},
+      {QStringLiteral("blueRegistrationX"), 0.45}, {QStringLiteral("blueRegistrationY"), -0.15},
+      {QStringLiteral("seed"), 4294967295.0},
+  };
+  const QVariantMap print_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{print_change}}}},
+  };
+  const auto print_validation =
+      photo_editor::desktop::validate_agent_recipe_patch(print_patch, layers_style);
+  if (!print_validation.valid) {
+    std::cerr << print_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("agent imperfect print parameters should validate");
+  }
+  photo_editor::desktop::apply_agent_recipe_patch(&graphic_state, print_patch);
+  const auto print_effects = photo_editor::desktop::decode_photo_layer_effects(
+      graphic_state.layers.at(1).toMap());
+  if (!print_effects || print_effects->size() != 3 || print_effects->back().type_id != "imperfect_print" ||
+      !almost_equal(print_effects->back().imperfect_print.paper_scale, 18.0) ||
+      !almost_equal(print_effects->back().imperfect_print.paper_texture, 0.42) ||
+      !almost_equal(print_effects->back().imperfect_print.red_offset_x, -0.7) ||
+      !almost_equal(print_effects->back().imperfect_print.blue_offset_y, -0.15) ||
+      print_effects->back().imperfect_print.seed != 4294967295U) {
+    return fail("agent imperfect print controls should reach the typed saved effect");
+  }
+  auto invalid_print_change = print_change;
+  invalid_print_change.insert(QStringLiteral("seed"), 2.5);
+  const QVariantMap invalid_print_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{invalid_print_change}}}},
+  };
+  if (photo_editor::desktop::validate_agent_recipe_patch(invalid_print_patch, layers_style).valid)
+    return fail("agent imperfect print seed must be an exact unsigned integer");
+  const QVariantMap shutter_change{
+      {QStringLiteral("layerId"), QStringLiteral("user-existing-text")},
+      {QStringLiteral("effectId"), QStringLiteral("agent-effect-shutter")},
+      {QStringLiteral("type"), QStringLiteral("dragged_shutter")},
+      {QStringLiteral("enabled"), true}, {QStringLiteral("amount"), 1.0},
+      {QStringLiteral("distance"), 84.0}, {QStringLiteral("angle"), -14.0},
+      {QStringLiteral("falloff"), 0.72}, {QStringLiteral("highlightWeighting"), 0.35},
+      {QStringLiteral("protectSubject"), true}, {QStringLiteral("maskId"), QStringLiteral("subject-mask")},
+  };
+  const QVariantMap shutter_patch{
+      {QStringLiteral("layers"), QVariantMap{{QStringLiteral("effectChanges"), QVariantList{shutter_change}}}},
+  };
+  const auto shutter_validation = photo_editor::desktop::validate_agent_recipe_patch(shutter_patch, layers_style);
+  if (!shutter_validation.valid) {
+    std::cerr << shutter_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("agent dragged shutter should accept a subject-protected trail recipe");
+  }
+  photo_editor::desktop::apply_agent_recipe_patch(&graphic_state, shutter_patch);
+  const auto shutter_effects = photo_editor::desktop::decode_photo_layer_effects(graphic_state.layers.at(1).toMap());
+  if (!shutter_effects || shutter_effects->size() != 4 || shutter_effects->back().type_id != "dragged_shutter" ||
+      shutter_effects->back().mask_ref != "subject-mask" || !shutter_effects->back().dragged_shutter.protect_subject ||
+      !almost_equal(shutter_effects->back().dragged_shutter.distance, 84.0) ||
+      !almost_equal(shutter_effects->back().dragged_shutter.falloff, 0.72) ||
+      !almost_equal(shutter_effects->back().dragged_shutter.highlight_weighting, 0.35))
+    return fail("agent dragged shutter must persist trail and protected subject mask settings");
   auto invalid_effect = effect_change;
   invalid_effect.insert(QStringLiteral("sigma"), 5000.0);
   const QVariantMap invalid_effect_patch{

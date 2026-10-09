@@ -16,10 +16,10 @@ Rectangle {
         id: theme
     }
 
-    readonly property string libraryVisibilityContract: "library-visibility:v1|always:header-view-actions-filter-summary-grid-inspector|contextual:selection-toolbar-import-browser-empty-state-offline-actions|one-expansion:review-filter-selection-actions-import-actions-project-assignment-export|hover-focus:gallery-selection-keyboard-review|diagnostic:import-progress-offline-state|preserve:functionality"
-    readonly property string librarySurfaceContract: "library-surfaces:v1|browse:grid-compare-survey|filters:search-date-media-project-review-clear|inspector:preview-metadata-review-source-actions|import-browser:folder-preview-handoff|selection:batch-project-export-delete|no-elide:true|no-overlap:true"
+    readonly property string libraryVisibilityContract: "library-visibility:v2|always:header-collections|contextual:media-grid-inspector-carousel-documents-project-collections-selection-import-empty-state|one-expansion:review-filter-selection-actions-import-actions-project-assignment-export|hover-focus:gallery-selection-keyboard-review|diagnostic:offline-state|preserve:functionality"
+    readonly property string librarySurfaceContract: "library-surfaces:v3|browse:images-and-timelines-separated|collections:carousels-groups-recent-import-sessions|filters:search-date-media-project-review-clear|inspector:responsive-preview-metadata-review-source-actions|import-browser:folder-preview-handoff|selection:batch-project-export-delete|no-elide:true|no-overlap:true"
     readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v1|first-glance:grid-dominant-header-filters-inspector|close-inspection:search-filter-selection-review-inspector-import|clutter:one-primary-selection-action-clear-filters-disabled|interaction:search-filter-select-rate-pick-reject-edit-compare-export|text:no-elide-no-overlap|functionality:preserved"
-    readonly property string libraryPageCompletionContract: "page-completion:v1|library|sidebar:sources-projects-storage|content:grid-compare-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:view-select-refresh-filters|actions:edit-compare-export-project-delete|states:default-selected-multi-filtered-import-empty-offline"
+    readonly property string libraryPageCompletionContract: "page-completion:v3|library|collections:images-timelines-carousels-groups-imports|content:grid-compare-survey-timeline-groups-import-sessions-empty|inspector:responsive-media-preview-metadata-review-source-batch|toolbar:collection-view-select-refresh-filters|actions:edit-compare-export-group-delete-carousel-open-session|states:default-selected-multi-filtered-import-empty-offline"
     readonly property string librarySearchBehaviorContract: "library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved"
 
     component InspectorRule: Rectangle {
@@ -46,10 +46,10 @@ Rectangle {
             text: detailRow.label
             color: rowTheme.textFaint
             font.family: rowTheme.fontMono
-            font.pixelSize: 10
+            font.pixelSize: rowTheme.typeMicro
             font.letterSpacing: 0.4
             fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
+            minimumPixelSize: rowTheme.typeMicro
             elide: Text.ElideNone
         }
 
@@ -58,7 +58,7 @@ Rectangle {
             text: detailRow.value
             color: rowTheme.textMain
             font.family: rowTheme.fontUi
-            font.pixelSize: 12
+            font.pixelSize: rowTheme.typeBody
             font.weight: Font.Medium
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
@@ -77,6 +77,10 @@ Rectangle {
     property string localSelectedFilePath: ""
     property string exportDestinationPath: ""
     property string catalogViewMode: "grid"
+    property string galleryCollection: "images"
+    property var carouselLibraryRecords: []
+    property string pendingCarouselDocumentId: ""
+    property bool pendingNewCarousel: false
     property string searchDraftText: catalogAssets.searchFilter
     property bool selectionModeActive: false
     property bool focusCheckEnabled: false
@@ -86,6 +90,16 @@ Rectangle {
         jobQueue.jobCount
         jobQueue.status
         return jobQueue.latestJobForKind("catalog_import")
+    }
+    readonly property var recentImportSessions: {
+        if (!jobQueue)
+            return []
+        jobQueue.jobCount
+        const sessions = jobQueue.jobsForCenter("catalog_import").slice()
+        sessions.sort(function(left, right) {
+            return new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+        })
+        return sessions.slice(0, 24)
     }
     readonly property bool hasSelection: catalogAssets.selectedAssetId.length > 0
     readonly property bool libraryActivityVisible: catalogAssets.loading
@@ -125,23 +139,32 @@ Rectangle {
     }
     readonly property bool filtersActive: catalogAssets.searchFilter !== ""
                                          || catalogAssets.importDateFilter !== "all"
+                                         || catalogAssets.importSessionFromFilter !== ""
+                                         || catalogAssets.importSessionToFilter !== ""
                                          || catalogAssets.captureYearFilter !== "all"
                                          || catalogAssets.cameraFilter !== "all"
                                          || catalogAssets.captureDateFromFilter !== ""
                                          || catalogAssets.captureDateToFilter !== ""
                                          || catalogAssets.projectFilter !== "all"
-                                         || catalogAssets.mediaTypeFilter !== "all"
+                                         || (root.galleryCollection === "groupAssets"
+                                             ? catalogAssets.mediaTypeFilter !== "all"
+                                             : catalogAssets.mediaTypeFilter !== "images")
                                          || catalogAssets.reviewFilter !== "all"
                                          || catalogAssets.availabilityFilter !== "all"
                                          || catalogAssets.minimumRatingFilter > 0
+                                         || root.galleryCollection !== "images"
     readonly property bool librarySearchHasText: root.searchDraftText.trim().length > 0
     readonly property bool librarySearchActive: catalogAssets.searchFilter.trim().length > 0
     readonly property bool librarySearchPending: root.searchDraftText !== catalogAssets.searchFilter
 
     readonly property var importFilterValues: ["all", "today", "7d", "30d", "year"]
     readonly property var importFilterLabels: ["All Imports", "Today", "Last 7 Days", "Recent", "This Year"]
-    readonly property var mediaFilterValues: ["all", "photos", "videos", "timelines"]
-    readonly property var mediaFilterLabels: ["All Media", "Photos", "Videos", "Timelines"]
+    readonly property var mediaFilterValues: root.galleryCollection === "groupAssets"
+                                             ? ["all", "images", "photos", "videos", "timelines"]
+                                             : ["images", "photos", "videos"]
+    readonly property var mediaFilterLabels: root.galleryCollection === "groupAssets"
+                                             ? ["All Media", "All Images", "Photos", "Videos", "Timelines"]
+                                             : ["All Images", "Photos", "Videos"]
     readonly property var reviewFilterValues: ["all", "picked", "rejected", "unmarked", "rated"]
     readonly property var reviewFilterLabels: ["All Review States", "Picked", "Rejected", "Unmarked", "Rated"]
     readonly property var availabilityFilterValues: ["all", "online", "offline"]
@@ -184,10 +207,131 @@ Rectangle {
             labels.push(catalogAssets.projectNames[i]);
         return labels;
     }
+    readonly property var projectCollectionNames: ["Unassigned"].concat(catalogAssets.projectNames)
 
     function indexForValue(values, value) {
         const index = values.indexOf(value);
         return index >= 0 ? index : 0;
+    }
+
+    function refreshCarouselLibrary() {
+        if (typeof carouselDocument === "undefined" || !carouselDocument ||
+                typeof carouselDocument.recentDocuments !== "function") {
+            carouselLibraryRecords = []
+            return
+        }
+        carouselLibraryRecords = carouselDocument.recentDocuments()
+    }
+
+    function showImageCollection() {
+        catalogAssets.setImportSessionFilter("", "")
+        catalogAssets.projectFilter = "all"
+        catalogAssets.mediaTypeFilter = "images"
+        root.galleryCollection = "images"
+        root.catalogViewMode = "grid"
+    }
+
+    function showTimelineCollection() {
+        librarySearchDebounceTimer.stop()
+        root.searchDraftText = ""
+        catalogAssets.clearFilters()
+        catalogAssets.setImportSessionFilter("", "")
+        catalogAssets.mediaTypeFilter = "timelines"
+        root.galleryCollection = "timelines"
+        root.catalogViewMode = "grid"
+    }
+
+    function applyGalleryMediaFilter() {
+        if (root.galleryCollection === "images")
+            catalogAssets.mediaTypeFilter = "images"
+        else if (root.galleryCollection === "timelines")
+            catalogAssets.mediaTypeFilter = "timelines"
+    }
+
+    function importSessionSummary(session) {
+        const metadata = session && session.metadata ? session.metadata : ({})
+        const result = metadata.importResult || ({})
+        const count = Number(result.importedCount || 0)
+        if (session.status === "Completed")
+            return count + (count === 1 ? " media item imported" : " media items imported")
+        if (session.status === "Failed")
+            return "Import failed · " + String(session.errorMessage || "Open job details")
+        return String(session.status || "Import session") +
+               (Number(session.progress || 0) > 0 ? " · " + Number(session.progress) + "%" : "")
+    }
+
+    function openImportSession(session) {
+        if (!session || session.status !== "Completed")
+            return
+        const metadata = session.metadata || ({})
+        const result = metadata.importResult || ({})
+        if (Number(result.importedCount || 0) <= 0)
+            return
+        librarySearchDebounceTimer.stop()
+        root.searchDraftText = ""
+        catalogAssets.clearFilters()
+        catalogAssets.setImportSessionFilter(String(session.createdAt || ""),
+                                             String(session.updatedAt || session.createdAt || ""))
+        catalogAssets.mediaTypeFilter = "images"
+        root.catalogViewMode = "grid"
+        root.galleryCollection = "images"
+    }
+
+    function openProjectCollection(projectName) {
+        const name = String(projectName || "")
+        catalogAssets.projectFilter = name.length > 0 ? name : "unassigned"
+        catalogAssets.setImportSessionFilter("", "")
+        catalogAssets.mediaTypeFilter = "all"
+        root.catalogViewMode = "grid"
+        root.galleryCollection = "groupAssets"
+    }
+
+    function requestOpenCarousel(documentId) {
+        const id = String(documentId || "").trim()
+        if (id.length === 0)
+            return false
+        if (carouselDocument.documentDirty) {
+            root.pendingCarouselDocumentId = id
+            root.pendingNewCarousel = false
+            unsavedCarouselOpenDialog.open()
+            return false
+        }
+        if (!carouselDocument.loadDocument(id))
+            return false
+        const appWindow = root.Window.window
+        return appWindow && appWindow.switchToWorkspaceIndex
+                ? appWindow.switchToWorkspaceIndex(appWindow.carouselWorkspaceIndex)
+                : true
+    }
+
+    function saveAndOpenPendingCarousel() {
+        const id = root.pendingCarouselDocumentId
+        const createNew = root.pendingNewCarousel
+        if ((!createNew && id.length === 0) || !carouselDocument.saveDocument())
+            return false
+        root.pendingCarouselDocumentId = ""
+        root.pendingNewCarousel = false
+        unsavedCarouselOpenDialog.close()
+        if (createNew) {
+            root.assetActivated("new-carousel")
+            return true
+        }
+        if (!carouselDocument.loadDocument(id))
+            return false
+        const appWindow = root.Window.window
+        return appWindow && appWindow.switchToWorkspaceIndex
+                ? appWindow.switchToWorkspaceIndex(appWindow.carouselWorkspaceIndex)
+                : true
+    }
+
+    function requestNewCarousel() {
+        if (carouselDocument.documentDirty) {
+            root.pendingCarouselDocumentId = ""
+            root.pendingNewCarousel = true
+            unsavedCarouselOpenDialog.open()
+            return
+        }
+        root.assetActivated("new-carousel")
     }
 
     function fileNameForPath(filePath) {
@@ -205,6 +349,8 @@ Rectangle {
         const parts = [];
         if (catalogAssets.searchFilter !== "")
             parts.push("\"" + catalogAssets.searchFilter + "\"");
+        if (catalogAssets.importSessionFromFilter !== "" || catalogAssets.importSessionToFilter !== "")
+            parts.push("Selected import session");
         if (catalogAssets.importDateFilter !== "all")
             parts.push(importFilterLabels[indexForValue(importFilterValues, catalogAssets.importDateFilter)]);
         if (catalogAssets.captureYearFilter !== "all")
@@ -216,7 +362,8 @@ Rectangle {
                        " to " + (catalogAssets.captureDateToFilter || "today"));
         if (catalogAssets.projectFilter !== "all")
             parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)]);
-        if (catalogAssets.mediaTypeFilter !== "all")
+        if ((root.galleryCollection === "groupAssets" && catalogAssets.mediaTypeFilter !== "all") ||
+                (root.galleryCollection !== "groupAssets" && catalogAssets.mediaTypeFilter !== "images"))
             parts.push(mediaFilterLabels[indexForValue(mediaFilterValues, catalogAssets.mediaTypeFilter)]);
         if (catalogAssets.reviewFilter !== "all")
             parts.push(reviewFilterLabels[indexForValue(reviewFilterValues, catalogAssets.reviewFilter)]);
@@ -224,7 +371,7 @@ Rectangle {
             parts.push(availabilityFilterLabels[indexForValue(availabilityFilterValues, catalogAssets.availabilityFilter)]);
         if (catalogAssets.minimumRatingFilter > 0)
             parts.push(minimumRatingLabels[indexForValue(minimumRatingValues, catalogAssets.minimumRatingFilter)]);
-        return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets";
+        return parts.length > 0 ? parts.join("  •  ") : "Showing all images";
     }
 
     function librarySearchBehaviorSignature() {
@@ -245,6 +392,7 @@ Rectangle {
                "|selection-mode:" + String(root.selectionModeActive) +
                "|selected:" + String(catalogAssets.selectedAssetCount || 0) +
                "|view:" + root.catalogViewMode +
+               "|collection:" + root.galleryCollection +
                "|inspector:" + (root.hasSelection ? (catalogAssets.hasMultiSelection ? "batch" : "single") : "empty") +
                "|import:" + String(root.importBrowserOpen) +
                "|activity:" + String(root.libraryActivityVisible) +
@@ -281,14 +429,8 @@ Rectangle {
         return ""
     }
 
-    function selectCatalogAsset(index) {
-        if (root.selectionModeActive) {
-            catalogAssets.selectIndex(index)
-            catalogAssets.toggleSelectionIndex(index)
-        } else {
-            catalogAssets.selectIndex(index)
-        }
-        root.syncPreviewWithSelection()
+    function selectCatalogAsset(index, modifiers) {
+        catalogAssets.selectIndexWithModifiers(index, Number(modifiers || 0), root.selectionModeActive)
     }
 
     function setSelectionModeActive(active) {
@@ -313,7 +455,6 @@ Rectangle {
             return
         root.selectionModeActive = true
         catalogAssets.selectAll()
-        root.syncPreviewWithSelection()
     }
 
     function canDeselect() {
@@ -459,19 +600,13 @@ Rectangle {
     }
 
     function clearFilters() {
+        const groupFilter = root.galleryCollection === "groupAssets" ? catalogAssets.projectFilter : ""
         librarySearchDebounceTimer.stop();
         root.searchDraftText = "";
-        catalogAssets.searchFilter = "";
-        catalogAssets.importDateFilter = "all";
-        catalogAssets.captureYearFilter = "all";
-        catalogAssets.cameraFilter = "all";
-        catalogAssets.captureDateFromFilter = "";
-        catalogAssets.captureDateToFilter = "";
-        catalogAssets.projectFilter = "all";
-        catalogAssets.mediaTypeFilter = "all";
-        catalogAssets.reviewFilter = "all";
-        catalogAssets.availabilityFilter = "all";
-        catalogAssets.minimumRatingFilter = 0;
+        catalogAssets.clearFilters();
+        if (groupFilter.length > 0)
+            catalogAssets.projectFilter = groupFilter;
+        catalogAssets.mediaTypeFilter = root.galleryCollection === "groupAssets" ? "all" : "images";
     }
 
     function updateLibrarySearchDraft(text) {
@@ -667,9 +802,7 @@ Rectangle {
             return
 
         if (root.selectedAssetsFullyInProject(projectName)) {
-            const selectedIds = catalogAssets.selectedAssetIds
-            for (let index = 0; index < selectedIds.length; ++index)
-                catalogAssets.removeAssetFromProject(selectedIds[index], projectName)
+            catalogAssets.removeSelectedAssetsFromProject(projectName)
             return
         }
 
@@ -687,8 +820,7 @@ Rectangle {
         if (trimmedName.length === 0)
             return
 
-        catalogAssets.createProject(trimmedName)
-        catalogAssets.addSelectedAssetsToProject(trimmedName)
+        catalogAssets.createProjectWithSelectedAssets(trimmedName)
         newProjectNameField.text = ""
     }
 
@@ -761,9 +893,9 @@ Rectangle {
         return !root.importBrowserOpen && !catalogAssets.busy && !root.selectionModeActive
     }
 
-    function syncPreviewWithSelection() {
+    function openSelectedAsset(destination) {
         if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo" || !catalogAssets.selectedOnline)
-            return
+            return root.assetActivated(destination)
 
         editorPreview.loadAsset(
                     catalogAssets.selectedAssetId,
@@ -773,6 +905,7 @@ Rectangle {
                     catalogAssets.selectedCaptureDate,
                     catalogAssets.selectedLensModel,
                     catalogAssets.selectedAdjustmentPatchJson)
+        root.assetActivated(destination)
     }
 
     function selectedAssetMap() {
@@ -786,7 +919,7 @@ Rectangle {
     function burstTextForAsset(asset) {
         if (!asset || !asset.burstSize || asset.burstSize <= 1)
             return ""
-        return "B " + asset.burstPosition + "/" + asset.burstSize
+        return (asset.burstTimeBased ? "Burst " : "Sequence ") + asset.burstPosition + "/" + asset.burstSize
     }
 
     function assetSubtitle(asset) {
@@ -909,6 +1042,7 @@ Rectangle {
             return;
         catalogAssets.createProject(trimmedName);
         root.applyProjectSelection(trimmedName);
+        root.galleryCollection = "images";
     }
 
     function syncProjectTarget() {
@@ -926,7 +1060,42 @@ Rectangle {
             projectTarget = catalogAssets.projectNames[0];
     }
 
-    Component.onCompleted: syncProjectTarget()
+    Component.onCompleted: {
+        syncProjectTarget()
+        refreshCarouselLibrary()
+        if (visible)
+            root.applyGalleryMediaFilter()
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            root.applyGalleryMediaFilter()
+            carouselRefreshTimer.restart()
+        } else {
+            catalogAssets.setImportSessionFilter("", "")
+            if (catalogAssets.mediaTypeFilter === "images" ||
+                    catalogAssets.mediaTypeFilter === "photos" ||
+                    catalogAssets.mediaTypeFilter === "videos" ||
+                    catalogAssets.mediaTypeFilter === "timelines")
+                catalogAssets.mediaTypeFilter = "all"
+        }
+    }
+
+    Timer {
+        id: carouselRefreshTimer
+        interval: 350
+        repeat: false
+        onTriggered: root.refreshCarouselLibrary()
+    }
+
+    Connections {
+        target: carouselDocument
+        function onDocumentStateChanged() {
+            if (root.visible && !carouselDocument.documentDirty &&
+                    (carouselDocument.saveState === "Saved" || carouselDocument.saveState === "Autosaved"))
+                carouselRefreshTimer.restart()
+        }
+    }
 
     Connections {
         target: catalogAssets
@@ -944,9 +1113,6 @@ Rectangle {
                 root.importBrowserOpen = false;
         }
 
-        function onSelectedIndexChanged() {
-            root.syncPreviewWithSelection()
-        }
     }
 
     Dialog {
@@ -962,7 +1128,7 @@ Rectangle {
         background: Rectangle {
             radius: theme.radiusPanel
             color: theme.ink900
-            border.width: 1
+            border.width: theme.hairlineWidth
             border.color: theme.alpha(theme.lineStrong, 0.36)
         }
 
@@ -976,7 +1142,7 @@ Rectangle {
                       : "This removes " + catalogAssets.selectedAssetCount + " selected images from Gallery."
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: theme.typeBody
                 wrapMode: Text.WordWrap
             }
 
@@ -985,7 +1151,7 @@ Rectangle {
                 text: "Source files stay on disk. You can re-import them later if needed."
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WordWrap
             }
         }
@@ -1012,9 +1178,8 @@ Rectangle {
                         catalogAssets.deleteSelectedAssets()
                         deleteAssetsDialog.close()
                         root.setSelectionModeActive(false)
-                    }
-                }
-            }
+    }
+}
         }
     }
 
@@ -1031,7 +1196,7 @@ Rectangle {
         background: Rectangle {
             radius: theme.radiusPanel
             color: theme.ink900
-            border.width: 1
+            border.width: theme.hairlineWidth
             border.color: theme.alpha(theme.lineStrong, 0.36)
         }
 
@@ -1043,7 +1208,7 @@ Rectangle {
                 text: "Add the current selection to as many projects as you want, or remove it from projects it already belongs to."
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: theme.typeBody
                 wrapMode: Text.WordWrap
             }
 
@@ -1061,7 +1226,7 @@ Rectangle {
                         visible: catalogAssets.projectNames.length === 0
                         radius: theme.radius12
                         color: theme.alpha(theme.ink950, 0.5)
-                        border.width: 1
+                        border.width: theme.hairlineWidth
                         border.color: theme.alpha(theme.lineSoft, 0.2)
                         implicitHeight: emptyProjectsLabel.implicitHeight + theme.space20
 
@@ -1072,7 +1237,7 @@ Rectangle {
                             text: "No projects yet. Create one below."
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 12
+                            font.pixelSize: theme.typeBody
                             verticalAlignment: Text.AlignVCenter
                             wrapMode: Text.WordWrap
                         }
@@ -1098,7 +1263,7 @@ Rectangle {
                 Layout.fillWidth: true
                 radius: theme.radius12
                 color: theme.alpha(theme.ink950, 0.4)
-                border.width: 1
+                border.width: theme.hairlineWidth
                 border.color: theme.alpha(theme.lineSoft, 0.22)
                 implicitHeight: newProjectRow.implicitHeight + theme.space14
 
@@ -1142,6 +1307,72 @@ Rectangle {
     }
 
     Dialog {
+        id: unsavedCarouselOpenDialog
+        objectName: "libraryUnsavedCarouselOpenDialog"
+        parent: Overlay.overlay
+        modal: true
+        width: Math.min(theme.scaled(460), parent ? parent.width - theme.space24 : theme.scaled(460))
+        title: root.pendingNewCarousel ? "Save before creating a Carousel?" : "Save before opening another Carousel?"
+
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
+
+        background: Rectangle {
+            radius: theme.radiusPanel
+            color: theme.surfaceTop
+            border.width: theme.hairlineWidth
+            border.color: theme.alpha(theme.lineStrong, 0.42)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: theme.space10
+
+            Label {
+                Layout.fillWidth: true
+                text: root.pendingNewCarousel
+                      ? "Save the open Carousel before starting a new one?"
+                      : "Save the open Carousel before loading another one?"
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeBody
+                wrapMode: Text.WordWrap
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Saving keeps your current edits in the Gallery."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        footer: RowLayout {
+            spacing: theme.space8
+
+            Item { Layout.fillWidth: true }
+
+            ActionButton {
+                text: "Cancel"
+                onClicked: {
+                    root.pendingCarouselDocumentId = ""
+                    root.pendingNewCarousel = false
+                    unsavedCarouselOpenDialog.close()
+                }
+            }
+
+            ActionButton {
+                objectName: "librarySaveAndOpenCarouselButton"
+                text: root.pendingNewCarousel ? "Save & Create" : "Save & Open"
+                iconName: "save"
+                tone: "primary"
+                onClicked: root.saveAndOpenPendingCarousel()
+            }
+        }
+    }
+
+    Dialog {
         id: exportSelectionDialog
         parent: Overlay.overlay
         modal: true
@@ -1154,7 +1385,7 @@ Rectangle {
         background: Rectangle {
             radius: theme.radiusPanel
             color: theme.ink900
-            border.width: 1
+            border.width: theme.hairlineWidth
             border.color: theme.alpha(theme.lineStrong, 0.36)
         }
 
@@ -1166,7 +1397,7 @@ Rectangle {
                 text: "Choose a format preset and destination. Videos and timelines always export as original copies."
                 color: theme.textMuted
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: theme.typeBody
                 wrapMode: Text.WordWrap
             }
 
@@ -1178,11 +1409,12 @@ Rectangle {
                     text: "Format Preset"
                     color: theme.textMuted
                     font.family: theme.fontMono
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeMicro
                 }
 
                 ToneComboBox {
                     id: exportDialogPresetCombo
+                    accessibleLabel: qsTr("Format preset")
                     Layout.fillWidth: true
                     model: ["Full Resolution", "Archive TIFF", "OpenEXR Half", "ACES2065-1 OpenEXR", "ACEScg OpenEXR", "HDR PQ AVIF", "HDR HLG AVIF", "Web Proof", "Client Preview", "Quick Web", "Original Copy"]
                 }
@@ -1196,7 +1428,7 @@ Rectangle {
                     text: "Destination"
                     color: theme.textMuted
                     font.family: theme.fontMono
-                    font.pixelSize: 10
+                    font.pixelSize: theme.typeMicro
                 }
 
                 RowLayout {
@@ -1472,7 +1704,7 @@ Rectangle {
 
             RowLayout {
                 anchors.fill: parent
-                spacing: 10
+                spacing: theme.space10
 
                 Repeater {
                     model: root.compareAssetModel()
@@ -1494,7 +1726,7 @@ Rectangle {
                         burstText: root.burstTextForAsset(modelData)
                         showDoubleClickHint: true
                         onActivated: root.selectCatalogAsset(modelData.visibleIndex)
-                        onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
+                        onDoubleActivated: root.openSelectedAsset(modelData.mediaType === "photo" ? "edit" : "timeline")
                     }
                 }
             }
@@ -1533,7 +1765,7 @@ Rectangle {
                         rejected: modelData.rejected
                         burstText: root.burstTextForAsset(modelData)
                         onActivated: root.selectCatalogAsset(modelData.visibleIndex)
-                        onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
+                        onDoubleActivated: root.openSelectedAsset(modelData.mediaType === "photo" ? "edit" : "timeline")
                     }
                 }
             }
@@ -1551,7 +1783,7 @@ Rectangle {
             Layout.fillHeight: true
             radius: theme.radiusSurface
             color: theme.ink850
-            border.width: 1
+            border.width: theme.hairlineWidth
             border.color: theme.alpha(theme.lineSoft, 0.18)
 
             gradient: Gradient {
@@ -1572,7 +1804,7 @@ Rectangle {
                     implicitHeight: galleryHeaderColumn.implicitHeight + (theme.space12 * 2)
                     radius: theme.radiusSurface
                     color: theme.alpha(theme.ink900, 0.92)
-                    border.width: 1
+                    border.width: theme.hairlineWidth
                     border.color: theme.alpha(theme.lineSoft, 0.32)
 
                     gradient: Gradient {
@@ -1592,34 +1824,53 @@ Rectangle {
                             spacing: theme.space12
 
                             Label {
-                                text: "Gallery"
+                                text: root.galleryCollection === "timelines" ? "Timelines"
+                                      : root.galleryCollection === "carousels" ? "Carousels"
+                                      : root.galleryCollection === "projects" ? "Groups"
+                                      : root.galleryCollection === "groupAssets"
+                                        ? (catalogAssets.projectFilter === "unassigned" ? "Unassigned" : catalogAssets.projectFilter)
+                                      : root.galleryCollection === "imports" ? "Recent Imports"
+                                      : "Images"
                                 color: theme.textStrong
                                 font.family: theme.fontDisplay
-                                font.pixelSize: 24
+                                font.pixelSize: theme.typePageTitle
                                 font.weight: Font.DemiBold
                             }
 
                             Label {
                                 Layout.fillWidth: true
-                                text: catalogAssets.assetCount + " visible  •  "
-                                      + catalogAssets.totalAssetCount + " total  •  "
-                                      + catalogAssets.driveCount + " drives"
+                                text: root.galleryCollection === "carousels"
+                                      ? root.carouselLibraryRecords.length + " saved carousels"
+                                      : root.galleryCollection === "projects"
+                                        ? root.projectCollectionNames.length +
+                                          (root.projectCollectionNames.length === 1 ? " group" : " groups")
+                                      : root.galleryCollection === "groupAssets"
+                                        ? catalogAssets.assetCount + " items in this group"
+                                      : root.galleryCollection === "imports"
+                                          ? root.recentImportSessions.length +
+                                            (root.recentImportSessions.length === 1 ? " recent import session" : " recent import sessions")
+                                          : root.galleryCollection === "timelines"
+                                            ? catalogAssets.assetCount + " saved timelines"
+                                            : catalogAssets.assetCount + " visible images  •  "
+                                              + catalogAssets.totalAssetCount + " total assets  •  "
+                                              + catalogAssets.driveCount + " drives"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 11
+                                font.pixelSize: theme.typeCaption
                                 verticalAlignment: Text.AlignVCenter
                                 fontSizeMode: Text.HorizontalFit
-                                minimumPixelSize: 8
+                                minimumPixelSize: theme.typeMicro
                                 elide: Text.ElideNone
                             }
 
                             Rectangle {
+                                visible: root.galleryCollection === "images" || root.galleryCollection === "groupAssets"
                                 Layout.alignment: Qt.AlignTop
                                 implicitWidth: utilityRow.implicitWidth + (theme.space8 * 2)
                                 implicitHeight: utilityRow.implicitHeight + (theme.space8 * 2)
                                 radius: theme.radius12
                                 color: theme.alpha(theme.ink950, 0.28)
-                                border.width: 1
+                                border.width: theme.hairlineWidth
                                 border.color: theme.alpha(theme.lineSoft, 0.24)
 
                                 RowLayout {
@@ -1635,7 +1886,7 @@ Rectangle {
                                         implicitHeight: viewModeSegments.implicitHeight + (theme.space4 * 2)
                                         radius: theme.radius8
                                         color: theme.alpha(theme.ink900, 0.62)
-                                        border.width: 1
+                                        border.width: theme.hairlineWidth
                                         border.color: theme.alpha(theme.lineSoft, 0.22)
 
                                         RowLayout {
@@ -1704,14 +1955,82 @@ Rectangle {
                     }
                 }
 
+                RowLayout {
+                    objectName: "libraryCollectionNavigation"
+                    readonly property string collectionNavigationContract: "gallery-collections:v2|images:photos-videos|timelines:saved-documents|carousels:saved-documents|groups:projects-unassigned|imports:recent-sessions|keyboard:true"
+                    Layout.fillWidth: true
+                    spacing: theme.space6
+
+                    ActionButton {
+                        objectName: "libraryImagesCollectionButton"
+                        text: "Images"
+                        iconName: "grid"
+                        compact: true
+                        active: root.galleryCollection === "images"
+                        onClicked: root.showImageCollection()
+                    }
+
+                    ActionButton {
+                        objectName: "libraryTimelinesCollectionButton"
+                        text: "Timelines"
+                        iconName: "timeline"
+                        compact: true
+                        active: root.galleryCollection === "timelines"
+                        onClicked: root.showTimelineCollection()
+                    }
+
+                    ActionButton {
+                        objectName: "libraryCarouselsCollectionButton"
+                        text: "Boards"
+                        iconName: "carousel"
+                        compact: true
+                        active: root.galleryCollection === "carousels"
+                        onClicked: {
+                            catalogAssets.setImportSessionFilter("", "")
+                            root.galleryCollection = "carousels"
+                            root.refreshCarouselLibrary()
+                        }
+                    }
+
+                    ActionButton {
+                        objectName: "libraryGroupsCollectionButton"
+                        text: "Groups"
+                        iconName: "folder"
+                        compact: true
+                        active: root.galleryCollection === "projects" || root.galleryCollection === "groupAssets"
+                        onClicked: {
+                            catalogAssets.setImportSessionFilter("", "")
+                            catalogAssets.projectFilter = "all"
+                            catalogAssets.mediaTypeFilter = "images"
+                            root.galleryCollection = "projects"
+                        }
+                    }
+
+                    ActionButton {
+                        objectName: "libraryImportsCollectionButton"
+                        text: "Recent Imports"
+                        iconName: "clock"
+                        compact: true
+                        active: root.galleryCollection === "imports"
+                        onClicked: {
+                            root.galleryCollection = "imports"
+                            if (jobQueue)
+                                jobQueue.refresh()
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
                 Rectangle {
                     objectName: "libraryFilterBar"
                     readonly property string visibilityRole: "always-visible|search-date-media-project-review-clear-summary"
                     Layout.fillWidth: true
+                    visible: root.galleryCollection === "images" || root.galleryCollection === "groupAssets"
                     implicitHeight: libraryFilterColumn.implicitHeight + (theme.space10 * 2)
                     radius: theme.radius12
                     color: theme.alpha(theme.ink950, 0.24)
-                    border.width: 1
+                    border.width: theme.hairlineWidth
                     border.color: theme.alpha(theme.lineSoft, 0.2)
 
                     ColumnLayout {
@@ -1794,6 +2113,7 @@ Rectangle {
                             }
 
                             ToneComboBox {
+                                accessibleLabel: qsTr("Import date filter")
                                 Layout.preferredWidth: 126
                                 model: root.importFilterLabels
                                 currentIndex: root.indexForValue(root.importFilterValues, catalogAssets.importDateFilter)
@@ -1801,6 +2121,7 @@ Rectangle {
                             }
 
                             ToneComboBox {
+                                accessibleLabel: qsTr("Media type filter")
                                 Layout.preferredWidth: 126
                                 model: root.mediaFilterLabels
                                 currentIndex: root.indexForValue(root.mediaFilterValues, catalogAssets.mediaTypeFilter)
@@ -1808,6 +2129,7 @@ Rectangle {
                             }
 
                             ToneComboBox {
+                                accessibleLabel: qsTr("Project filter")
                                 Layout.preferredWidth: 142
                                 model: root.projectFilterLabels
                                 currentIndex: root.indexForValue(root.projectFilterValues, catalogAssets.projectFilter)
@@ -1849,7 +2171,7 @@ Rectangle {
                                 text: "Captured"
                                 color: theme.textFaint
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 font.weight: Font.Medium
                             }
 
@@ -1914,7 +2236,7 @@ Rectangle {
                             text: root.activeFilterSummary()
                             color: root.filtersActive ? theme.textMain : theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 11
+                            font.pixelSize: theme.typeCaption
                             wrapMode: Text.WordWrap
                         }
 
@@ -1940,11 +2262,11 @@ Rectangle {
                     objectName: "librarySelectionActionBar"
                     readonly property string visibilityRole: "contextual|batch-summary-project-export-more-clear"
                     Layout.fillWidth: true
-                    visible: root.selectionModeActive
+                    visible: (root.galleryCollection === "images" || root.galleryCollection === "groupAssets") && root.selectionModeActive
                     implicitHeight: selectionActionRow.implicitHeight + (theme.space8 * 2)
                     radius: theme.radius12
                     color: theme.alpha(theme.accentCool500, 0.08)
-                    border.width: 1
+                    border.width: theme.hairlineWidth
                     border.color: theme.alpha(theme.accentCool400, 0.22)
 
                     RowLayout {
@@ -1958,9 +2280,9 @@ Rectangle {
                             text: root.selectionToolbarText()
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 12
+                            font.pixelSize: theme.typeBody
                             fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: 8
+                            minimumPixelSize: theme.typeMicro
                             elide: Text.ElideNone
                         }
 
@@ -2002,271 +2324,481 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
 
-                    Flickable {
-                        id: galleryFlick
+                    GridView {
+                        id: galleryFlow
                         objectName: "libraryGalleryGrid"
                         readonly property string visibilityRole: "always-visible|asset-grid-keyboard-selection-review-open"
                         anchors.fill: parent
-                        visible: root.catalogViewMode === "grid" && !root.importBrowserOpen
+                        visible: (root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets") &&
+                                 root.catalogViewMode === "grid" && !root.importBrowserOpen
                         clip: true
-                        contentWidth: width
-                        contentHeight: galleryFlow.height
+                        property int columns: Math.max(2, Math.floor(width / 256))
+                        property real tileSpacing: theme.space12
+                        property real tileWidth: Math.floor((width - ((columns - 1) * tileSpacing)) / columns)
+                        property real tileHeight: Math.max(168, tileWidth * 0.72)
+                        cellWidth: columns > 0 ? width / columns : width
+                        cellHeight: tileHeight + tileSpacing
+                        cacheBuffer: cellHeight * 2
+                        keyNavigationEnabled: false
+                        model: catalogAssets
                         boundsBehavior: Flickable.StopAtBounds
 
                         function updateVisibleAssetRange() {
                             if (!catalogAssets)
                                 return
-                            if (!visible || catalogAssets.assetCount <= 0 || galleryFlow.columns <= 0) {
+                            if (!visible || catalogAssets.assetCount <= 0 || columns <= 0) {
                                 catalogAssets.setVisibleAssetRange(-1, -1)
                                 return
                             }
-                            const tileHeight = Math.max(1, Math.max(168, galleryFlow.tileWidth * 0.72) + galleryFlow.spacing)
-                            const firstRow = Math.max(0, Math.floor(contentY / tileHeight))
-                            const visibleRows = Math.max(1, Math.ceil(height / tileHeight) + 1)
-                            const first = Math.max(0, firstRow * galleryFlow.columns)
-                            const last = Math.min(catalogAssets.assetCount - 1, ((firstRow + visibleRows) * galleryFlow.columns) - 1)
+                            const rowHeight = Math.max(1, cellHeight)
+                            const firstRow = Math.max(0, Math.floor(contentY / rowHeight))
+                            const visibleRows = Math.max(1, Math.ceil(height / rowHeight) + 1)
+                            const first = Math.max(0, firstRow * columns)
+                            const last = Math.min(catalogAssets.assetCount - 1, ((firstRow + visibleRows) * columns) - 1)
                             catalogAssets.setVisibleAssetRange(first, last)
                         }
 
                         Component.onCompleted: updateVisibleAssetRange()
+                        onCountChanged: updateVisibleAssetRange()
                         onContentYChanged: updateVisibleAssetRange()
                         onHeightChanged: updateVisibleAssetRange()
                         onWidthChanged: updateVisibleAssetRange()
                         onVisibleChanged: updateVisibleAssetRange()
+                        onColumnsChanged: updateVisibleAssetRange()
+                        onCellHeightChanged: updateVisibleAssetRange()
 
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
                         }
 
-                        Flow {
-                            id: galleryFlow
-                            width: galleryFlick.width
-                            spacing: theme.space12
+                        delegate: FocusScope {
+                            id: galleryTile
+                            required property int index
+                            required property string assetId
+                            required property string captureDate
+                            required property string cameraLabel
+                            required property string mediaType
+                            required property string durationText
+                            required property string lensModel
+                            required property string locationPath
+                            required property string filePath
+                            required property string thumbnailSource
+                            required property string adjustmentPatchJson
+                            required property int rating
+                            required property bool picked
+                            required property bool rejected
+                            required property string colorLabel
+                            required property string cullStatus
+                            required property int burstSize
+                            required property int burstPosition
+                            required property int duplicateGroupSize
+                            required property bool bestShotSuggested
+                            required property int syncGroupSize
+                            required property bool online
+                            readonly property bool selected: catalogAssets.assetSelected(assetId)
 
-                            property int columns: Math.max(2, Math.floor(width / 256))
-                            property real tileWidth: Math.floor((width - ((columns - 1) * spacing)) / columns)
+                            width: galleryFlow.tileWidth
+                            height: galleryFlow.tileHeight
+                            activeFocusOnTab: true
 
-                            onColumnsChanged: galleryFlick.updateVisibleAssetRange()
-                            onTileWidthChanged: galleryFlick.updateVisibleAssetRange()
+                            Keys.onReturnPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
+                            Keys.onEnterPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
+                            Keys.onSpacePressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, Qt.ControlModifier)
 
-                            Repeater {
-                                model: catalogAssets
+                            Rectangle {
+                                id: previewFrame
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                readonly property real cardAspectRatio: 0.72
+                                height: Math.max(168, width * cardAspectRatio)
+                                radius: theme.radius12
+                                color: selected
+                                         ? theme.alpha(theme.accentCool500, 0.1)
+                                       : (thumbnailMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.94) : theme.alpha(theme.ink900, 0.94))
+                                clip: true
+                                border.width: selected || galleryTile.activeFocus ? 2 : 1
+                                border.color: galleryTile.activeFocus
+                                              ? theme.alpha(theme.focusRing, 0.92)
+                                              : selected
+                                                ? theme.alpha(theme.accentCool400, 0.76)
+                                              : (thumbnailMouseArea.containsMouse ? theme.alpha(theme.lineStrong, 0.4) : theme.alpha(theme.lineSoft, 0.28))
 
-                                delegate: FocusScope {
-                                    id: galleryTile
-                                    required property int index
-                                    required property string assetId
-                                    required property string captureDate
-                                    required property string cameraLabel
-                                    required property string mediaType
-                                    required property string durationText
-                                    required property string lensModel
-                                    required property string locationPath
-                                    required property string filePath
-                                    required property string thumbnailSource
-                                    required property string adjustmentPatchJson
-                                    required property int rating
-                                    required property bool picked
-                                    required property bool rejected
-                                    required property string colorLabel
-                                    required property string cullStatus
-                                    required property int burstSize
-                                    required property int burstPosition
-                                    required property int duplicateGroupSize
-                                    required property bool bestShotSuggested
-                                    required property int syncGroupSize
-                                    required property bool online
-                                    readonly property bool selected: catalogAssets.assetSelected(assetId)
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    height: 4
+                                    visible: galleryTile.colorLabel.length > 0
+                                    color: galleryTile.colorLabel === "red" ? "#ef6666"
+                                         : galleryTile.colorLabel === "yellow" ? "#e8bd55"
+                                         : galleryTile.colorLabel === "green" ? "#62c88a"
+                                         : galleryTile.colorLabel === "blue" ? "#67a8ed"
+                                         : "#ae7de0"
+                                    z: 4
+                                }
 
-                                    width: galleryFlow.tileWidth
-                                    height: previewFrame.height
-                                    activeFocusOnTab: true
+                                Rectangle {
+                                    anchors.fill: parent
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: selected ? theme.alpha(theme.accentCool500, 0.12) : theme.alpha(theme.accentCool500, 0.04) }
+                                        GradientStop { position: 1.0; color: theme.alpha(theme.ink950, selected ? 0.14 : 0.18) }
+                                    }
+                                }
 
-                                    Keys.onReturnPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
-                                    Keys.onEnterPressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType)
-                                    Keys.onSpacePressed: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, Qt.ControlModifier)
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: theme.space2
+                                    radius: Math.max(1, parent.radius - 2)
+                                    visible: selected
+                                    color: "transparent"
+                                    border.width: theme.hairlineWidth
+                                    border.color: theme.alpha(theme.accentCool400, 0.36)
+                                }
+
+                                Image {
+                                    id: previewImage
+                                    anchors.fill: parent
+                                    source: thumbnailSource
+                                    asynchronous: true
+                                    cache: true
+                                    fillMode: Image.PreserveAspectCrop
+                                    sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+                                    sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+                                    opacity: online ? 1.0 : 0.42
+                                }
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    color: theme.alpha(theme.ink950, thumbnailMouseArea.containsMouse ? 0.06 : (selected ? 0.1 : 0.0))
+                                }
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    visible: galleryTile.activeFocus
+                                    color: theme.alpha(theme.focusFill, 0.14)
+                                }
+
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.margins: theme.space8
+                                    visible: root.selectionModeActive
+                                    width: 24
+                                    height: 24
+                                    radius: theme.radius12
+                                    color: selected ? theme.accentCool400 : theme.alpha(theme.ink950, 0.62)
+                                    border.width: theme.hairlineWidth
+                                    border.color: selected
+                                                  ? theme.alpha(theme.accentCool300, 0.92)
+                                                  : theme.alpha(theme.lineStrong, 0.42)
 
                                     Rectangle {
-                                        id: previewFrame
-                                        anchors.top: parent.top
-                                        anchors.left: parent.left
-                                        anchors.right: parent.right
-                                        readonly property real cardAspectRatio: 0.72
-                                        height: Math.max(168, width * cardAspectRatio)
-                                        radius: theme.radius12
-                                        color: selected
-                                                 ? theme.alpha(theme.accentCool500, 0.1)
-                                               : (thumbnailMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.94) : theme.alpha(theme.ink900, 0.94))
-                                        clip: true
-                                        border.width: selected || galleryTile.activeFocus ? 2 : 1
-                                        border.color: galleryTile.activeFocus
-                                                      ? theme.alpha(theme.focusRing, 0.92)
-                                                      : selected
-                                                        ? theme.alpha(theme.accentCool400, 0.76)
-                                                      : (thumbnailMouseArea.containsMouse ? theme.alpha(theme.lineStrong, 0.4) : theme.alpha(theme.lineSoft, 0.28))
+                                        anchors.centerIn: parent
+                                        width: 8
+                                        height: 8
+                                        radius: theme.radius4
+                                        color: selected ? theme.ink950 : "transparent"
+                                    }
+                                }
 
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            height: 4
-                                            visible: galleryTile.colorLabel.length > 0
-                                            color: galleryTile.colorLabel === "red" ? "#ef6666"
-                                                 : galleryTile.colorLabel === "yellow" ? "#e8bd55"
-                                                 : galleryTile.colorLabel === "green" ? "#62c88a"
-                                                 : galleryTile.colorLabel === "blue" ? "#67a8ed"
-                                                 : "#ae7de0"
-                                            z: 4
+                                Rectangle {
+                                    anchors.top: parent.top
+                                    anchors.right: parent.right
+                                    anchors.margins: theme.space8
+                                    visible: selected
+                                    radius: theme.radiusChip
+                                    color: theme.alpha(theme.accentCool500, 0.78)
+                                    implicitWidth: selectionBadge.implicitWidth + theme.space12
+                                    implicitHeight: 22
+
+                                    Label {
+                                        id: selectionBadge
+                                        anchors.centerIn: parent
+                                        text: "Selected"
+                                        color: theme.ink950
+                                        font.family: theme.fontMono
+                                        font.pixelSize: theme.typeMicro
+                                        font.weight: Font.DemiBold
+                                    }
+                                }
+
+                                Rectangle {
+                                    id: mediaTypeBadge
+                                    readonly property string mediaKind: mediaType
+                                    anchors.top: parent.top
+                                    anchors.left: parent.left
+                                    anchors.topMargin: theme.space8
+                                    anchors.leftMargin: root.selectionModeActive ? theme.space8 + 32 : theme.space8
+                                    visible: mediaType !== "photo"
+                                    radius: theme.radiusChip
+                                    color: theme.alpha(theme.ink950, 0.66)
+                                    border.width: theme.hairlineWidth
+                                    border.color: theme.alpha(theme.lineSoft, 0.48)
+                                    implicitWidth: mediaBadge.implicitWidth + theme.space12
+                                    implicitHeight: 22
+
+                                    RowLayout {
+                                        id: mediaBadge
+                                        anchors.centerIn: parent
+                                        spacing: theme.space4
+
+                                        MediaTypeIcon {
+                                            mediaType: String(mediaTypeBadge.mediaKind)
+                                            color: theme.textStrong
+                                            Layout.preferredWidth: theme.scaled(14)
+                                            Layout.preferredHeight: theme.scaled(14)
                                         }
 
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            gradient: Gradient {
-                                                GradientStop { position: 0.0; color: selected ? theme.alpha(theme.accentCool500, 0.12) : theme.alpha(theme.accentCool500, 0.04) }
-                                                GradientStop { position: 1.0; color: theme.alpha(theme.ink950, selected ? 0.14 : 0.18) }
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            anchors.margins: 2
-                                            radius: Math.max(1, parent.radius - 2)
-                                            visible: selected
-                                            color: "transparent"
-                                            border.width: 1
-                                            border.color: theme.alpha(theme.accentCool400, 0.36)
-                                        }
-
-                                        Image {
-                                            id: previewImage
-                                            anchors.fill: parent
-                                            source: thumbnailSource
-                                            asynchronous: true
-                                            cache: true
-                                            fillMode: Image.PreserveAspectCrop
-                                            sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
-                                            sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
-                                            opacity: online ? 1.0 : 0.42
-                                        }
-
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            color: theme.alpha(theme.ink950, thumbnailMouseArea.containsMouse ? 0.06 : (selected ? 0.1 : 0.0))
-                                        }
-
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            visible: galleryTile.activeFocus
-                                            color: theme.alpha(theme.focusFill, 0.14)
-                                        }
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            anchors.left: parent.left
-                                            anchors.margins: theme.space8
-                                            visible: root.selectionModeActive
-                                            width: 24
-                                            height: 24
-                                            radius: 12
-                                            color: selected ? theme.accentCool400 : theme.alpha(theme.ink950, 0.62)
-                                            border.width: 1
-                                            border.color: selected
-                                                          ? theme.alpha(theme.accentCool300, 0.92)
-                                                          : theme.alpha(theme.lineStrong, 0.42)
-
-                                            Rectangle {
-                                                anchors.centerIn: parent
-                                                width: 8
-                                                height: 8
-                                                radius: 4
-                                                color: selected ? theme.ink950 : "transparent"
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            anchors.right: parent.right
-                                            anchors.margins: theme.space8
-                                            visible: selected
-                                            radius: theme.radiusChip
-                                            color: theme.alpha(theme.accentCool500, 0.78)
-                                            implicitWidth: selectionBadge.implicitWidth + theme.space12
-                                            implicitHeight: 22
-
-                                            Label {
-                                                id: selectionBadge
-                                                anchors.centerIn: parent
-                                                text: "Selected"
-                                                color: theme.ink950
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 9
-                                                font.weight: Font.DemiBold
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            anchors.left: parent.left
-                                            anchors.topMargin: theme.space8
-                                            anchors.leftMargin: root.selectionModeActive ? theme.space8 + 32 : theme.space8
-                                            visible: mediaType !== "photo"
-                                            radius: theme.radiusChip
-                                            color: theme.alpha(theme.ink950, 0.66)
-                                            border.width: 1
-                                            border.color: theme.alpha(theme.lineSoft, 0.48)
-                                            implicitWidth: mediaBadge.implicitWidth + theme.space12
-                                            implicitHeight: 22
-
-                                            Label {
-                                                id: mediaBadge
-                                                anchors.centerIn: parent
-                                                text: mediaType === "timeline" ? "Timeline" : "Video"
-                                                color: theme.textStrong
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 9
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            anchors.right: parent.right
-                                            anchors.bottom: parent.bottom
-                                            anchors.margins: theme.space8
-                                            visible: mediaType !== "photo" && durationText.length > 0
-                                            radius: theme.radiusChip
-                                            color: theme.alpha(theme.ink950, 0.68)
-                                            border.width: 1
-                                            border.color: theme.alpha(theme.lineSoft, 0.48)
-                                            implicitWidth: durationBadge.implicitWidth + theme.space12
-                                            implicitHeight: 22
-
-                                            Label {
-                                                id: durationBadge
-                                                anchors.centerIn: parent
-                                                text: durationText
-                                                color: theme.textStrong
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 9
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: thumbnailMouseArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            onClicked: function(mouse) {
-                                                galleryTile.forceActiveFocus()
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType, mouse.modifiers)
-                                            }
-                                            onDoubleClicked: {
-                                                if (root.selectionModeActive)
-                                                    return
-                                                galleryTile.forceActiveFocus()
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, adjustmentPatchJson, mediaType);
-                                                root.assetActivated(mediaType === "photo" ? "edit" : "timeline");
-                                            }
+                                        Label {
+                                            text: mediaTypeBadge.mediaKind === "timeline" ? "Timeline" : "Video"
+                                            color: theme.textStrong
+                                            font.family: theme.fontMono
+                                            font.pixelSize: theme.typeMicro
                                         }
                                     }
                                 }
+
+                                Rectangle {
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    anchors.margins: theme.space8
+                                    visible: mediaType !== "photo" && durationText.length > 0
+                                    radius: theme.radiusChip
+                                    color: theme.alpha(theme.ink950, 0.68)
+                                    border.width: theme.hairlineWidth
+                                    border.color: theme.alpha(theme.lineSoft, 0.48)
+                                    implicitWidth: durationBadge.implicitWidth + theme.space12
+                                    implicitHeight: 22
+
+                                    Label {
+                                        id: durationBadge
+                                        anchors.centerIn: parent
+                                        text: durationText
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: theme.typeMicro
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: thumbnailMouseArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: function(mouse) {
+                                        galleryTile.forceActiveFocus()
+                                        root.selectCatalogAsset(index, mouse.modifiers)
+                                    }
+                                    onDoubleClicked: {
+                                        if (root.selectionModeActive)
+                                            return
+                                        galleryTile.forceActiveFocus()
+                                        root.selectCatalogAsset(index);
+                                        root.openSelectedAsset(mediaType === "photo" ? "edit" : "timeline");
+                                    }
+                                }
+                            }
+                        }
+                }
+            }
+
+                    Item {
+                        objectName: "libraryRecentImportsCollection"
+                        anchors.fill: parent
+                        visible: root.galleryCollection === "imports" && !root.importBrowserOpen
+                        clip: true
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: theme.space12
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space4
+
+                                Label {
+                                    text: "Recent Import Sessions"
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: theme.typeSection
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Each import stays together with its source, date, result, and a direct link to the media it added."
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeBody
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            GridView {
+                                id: recentImportSessionsGrid
+                                objectName: "libraryRecentImportSessionsGrid"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                cellWidth: Math.max(1, Math.min(width,
+                                                               Math.max(theme.scaled(280),
+                                                                        Math.floor(width / Math.max(1, Math.floor(width / theme.scaled(330)))))))
+                                cellHeight: theme.scaled(224)
+                                model: root.recentImportSessions
+                                visible: root.recentImportSessions.length > 0
+                                boundsBehavior: Flickable.StopAtBounds
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    required property int index
+                                    readonly property var sessionMetadata: modelData.metadata || ({})
+                                    readonly property var importReceipt: sessionMetadata.importResult || ({})
+                                    readonly property int importedCount: Number(importReceipt.importedCount || 0)
+
+                                    width: Math.max(1, recentImportSessionsGrid.cellWidth - theme.space12)
+                                    height: recentImportSessionsGrid.cellHeight - theme.space12
+                                    radius: theme.radiusPanel
+                                    color: importSessionHover.hovered
+                                           ? theme.alpha(theme.ink800, 0.96)
+                                           : theme.alpha(theme.ink900, 0.86)
+                                    border.width: theme.hairlineWidth
+                                    border.color: importSessionHover.hovered
+                                                  ? theme.alpha(theme.accentCool400, 0.48)
+                                                  : theme.alpha(theme.lineSoft, 0.3)
+
+                                    HoverHandler { id: importSessionHover }
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: theme.space12
+                                        spacing: theme.space8
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: theme.space8
+
+                                            Rectangle {
+                                                Layout.preferredWidth: theme.scaled(38)
+                                                Layout.preferredHeight: theme.scaled(38)
+                                                radius: theme.radius12
+                                                color: theme.alpha(theme.accentCool400, 0.12)
+                                                border.width: theme.hairlineWidth
+                                                border.color: theme.alpha(theme.accentCool400, 0.28)
+
+                                                AppIcon {
+                                                    anchors.centerIn: parent
+                                                    name: "source"
+                                                    color: theme.accentCool300
+                                                    implicitWidth: theme.scaled(18)
+                                                    implicitHeight: theme.scaled(18)
+                                                }
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: theme.space2
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: String(modelData.displayLabel || root.fileNameForPath(String(modelData.sourcePath || "")) || "Imported folder")
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: theme.typeTitle
+                                                    font.weight: Font.DemiBold
+                                                    maximumLineCount: 1
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: {
+                                                        const date = new Date(String(modelData.createdAt || ""))
+                                                        return isNaN(date.getTime()) ? "Import date unavailable" : date.toLocaleString()
+                                                    }
+                                                    color: theme.textFaint
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: theme.typeMicro
+                                                    maximumLineCount: 1
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.sourcePath || "Source folder unavailable")
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                            wrapMode: Text.WrapAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: root.importSessionSummary(modelData)
+                                            color: modelData.status === "Completed" ? theme.success
+                                                 : modelData.status === "Failed" ? theme.error
+                                                 : theme.accentWarm400
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                            font.weight: Font.DemiBold
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Item { Layout.fillHeight: true }
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            text: "View Imported Media"
+                                            iconName: "grid"
+                                            compact: true
+                                            enabled: modelData.status === "Completed" && importedCount > 0
+                                            onClicked: root.openImportSession(modelData)
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                visible: root.recentImportSessions.length === 0
+                                spacing: theme.space8
+
+                                Item { Layout.fillHeight: true }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Your import sessions will appear here."
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: theme.typeSection
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Import a folder to keep each new batch easy to find and review."
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeBody
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ActionButton {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "Choose Folder"
+                                    iconName: "folder"
+                                    tone: "primary"
+                                    onClicked: root.chooseImportFolder()
+                                }
+
+                                Item { Layout.fillHeight: true }
                             }
                         }
                     }
@@ -2275,124 +2807,481 @@ Rectangle {
                         objectName: "libraryReviewLoader"
                         readonly property string visibilityRole: "contextual|compare-survey-review-cull"
                         anchors.fill: parent
-                        visible: !root.importBrowserOpen && root.catalogViewMode !== "grid"
+                        visible: (root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets") &&
+                                 !root.importBrowserOpen && root.catalogViewMode !== "grid"
                         active: visible
                         sourceComponent: root.catalogViewMode === "compare" ? compareView : surveyView
+                    }
+
+                    Item {
+                        objectName: "libraryCarouselsCollection"
+                        anchors.fill: parent
+                        visible: root.galleryCollection === "carousels" && !root.importBrowserOpen
+                        clip: true
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: theme.space12
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space12
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space4
+
+                                    Label {
+                                        text: "Saved Boards"
+                                        color: theme.textStrong
+                                        font.family: theme.fontDisplay
+                                        font.pixelSize: theme.typeSection
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Open a saved design or start a new set of boards."
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeBody
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                ActionButton {
+                                    objectName: "libraryNewCarouselButton"
+                                    text: "New Boards"
+                                    iconName: "plus"
+                                    tone: "primary"
+                                    onClicked: root.requestNewCarousel()
+                                }
+                            }
+
+                            GridView {
+                                id: carouselDocumentsGrid
+                                objectName: "libraryCarouselDocumentsGrid"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                cellWidth: Math.max(1, Math.min(width,
+                                                               Math.max(theme.scaled(244),
+                                                                        Math.floor(width / Math.max(1, Math.floor(width / theme.scaled(300)))))))
+                                cellHeight: theme.scaled(272)
+                                model: root.carouselLibraryRecords
+                                visible: root.carouselLibraryRecords.length > 0
+                                boundsBehavior: Flickable.StopAtBounds
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    required property int index
+
+                                    width: Math.max(1, carouselDocumentsGrid.cellWidth - theme.space12)
+                                    height: carouselDocumentsGrid.cellHeight - theme.space12
+                                    radius: theme.radius12
+                                    color: carouselCardHover.hovered
+                                           ? theme.alpha(theme.ink800, 0.96)
+                                           : theme.alpha(theme.ink900, 0.9)
+                                    border.width: theme.hairlineWidth
+                                    border.color: carouselCardHover.hovered
+                                                  ? theme.alpha(theme.accentCool400, 0.5)
+                                                  : theme.alpha(theme.lineSoft, 0.42)
+
+                                    HoverHandler { id: carouselCardHover }
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: theme.space12
+                                        spacing: theme.space10
+
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: theme.scaled(104)
+                                            radius: theme.radius8
+                                            color: theme.alpha(theme.surfaceInset, 0.84)
+                                            border.width: theme.hairlineWidth
+                                            border.color: theme.alpha(theme.lineSoft, 0.38)
+
+                                            RowLayout {
+                                                anchors.centerIn: parent
+                                                spacing: theme.space6
+
+                                                Repeater {
+                                                    model: Math.min(3, Math.max(1, Number(modelData.slideCount || 1)))
+
+                                                    Rectangle {
+                                                        required property int index
+                                                        Layout.preferredWidth: theme.scaled(42)
+                                                        Layout.preferredHeight: theme.scaled(62)
+                                                        radius: theme.radius4
+                                                        color: index === 1
+                                                               ? theme.alpha(theme.accentCool400, 0.12)
+                                                               : theme.alpha(theme.textStrong, 0.045)
+                                                        border.width: theme.hairlineWidth
+                                                        border.color: index === 1
+                                                                      ? theme.alpha(theme.accentCool400, 0.6)
+                                                                      : theme.alpha(theme.lineSoft, 0.7)
+
+                                                        AppIcon {
+                                                            anchors.centerIn: parent
+                                                            name: "carousel"
+                                                            color: theme.alpha(theme.textMuted, index === 1 ? 0.9 : 0.56)
+                                                            implicitWidth: theme.scaled(16)
+                                                            implicitHeight: theme.scaled(16)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: theme.space6
+
+                                            MediaTypeIcon {
+                                                mediaType: "carousel"
+                                                color: theme.textMuted
+                                                Layout.preferredWidth: theme.scaled(16)
+                                                Layout.preferredHeight: theme.scaled(16)
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: "CAROUSEL"
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: theme.typeMicro
+                                                font.letterSpacing: 0.8
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.name || "Untitled Boards")
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeTitle
+                                            font.weight: Font.DemiBold
+                                            maximumLineCount: 1
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: {
+                                                const format = String(modelData.documentFormat || "4x5").toUpperCase()
+                                                const slides = Number(modelData.slideCount || 0)
+                                                const updatedAt = String(modelData.updatedAt || modelData.createdAt || "")
+                                                const readableDate = updatedAt.length > 0
+                                                                     ? updatedAt.replace("T", " ").slice(0, 16)
+                                                                     : "Not saved yet"
+                                                return format + "  ·  " + slides + " board" + (slides === 1 ? "" : "s")
+                                                       + "  ·  " + readableDate
+                                            }
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeMicro
+                                            maximumLineCount: 1
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Item { Layout.fillHeight: true }
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            objectName: "libraryOpenBoardsButton" + String(modelData.documentId || "")
+                                            text: "Open Boards"
+                                            iconName: "chevron-right"
+                                            compact: true
+                                            onClicked: root.requestOpenCarousel(String(modelData.documentId || ""))
+                                        }
+                                    }
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                visible: root.carouselLibraryRecords.length === 0
+                                spacing: theme.space8
+
+                                Item { Layout.fillHeight: true }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Your saved board documents will live here."
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: theme.typeSection
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Keep multi-board photo stories alongside the rest of your creative library."
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeBody
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ActionButton {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "Create boards"
+                                    iconName: "plus"
+                                    tone: "primary"
+                                    onClicked: root.requestNewCarousel()
+                                }
+
+                                Item { Layout.fillHeight: true }
+                            }
+                        }
+                    }
+
+                    Item {
+                        objectName: "libraryProjectsCollection"
+                        anchors.fill: parent
+                        visible: root.galleryCollection === "projects" && !root.importBrowserOpen
+                        clip: true
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: theme.space12
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space12
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space4
+
+                                    Label {
+                                        text: "Groups"
+                                        color: theme.textStrong
+                                        font.family: theme.fontDisplay
+                                        font.pixelSize: theme.typeSection
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Keep related photos, videos, and timelines together. Items can belong to more than one group."
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeBody
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+
+                                ToneTextField {
+                                    id: newGalleryProjectName
+                                    objectName: "libraryNewProjectNameField"
+                                    Layout.preferredWidth: theme.scaled(220)
+                                    placeholderText: "New group name"
+                                    Accessible.name: "New group name"
+                                    onAccepted: {
+                                        root.createAndFocusProject(text)
+                                        text = ""
+                                    }
+                                }
+
+                                ActionButton {
+                                    objectName: "libraryCreateProjectButton"
+                                    text: "Create Group"
+                                    iconName: "plus"
+                                    compact: true
+                                    enabled: newGalleryProjectName.text.trim().length > 0
+                                    onClicked: {
+                                        root.createAndFocusProject(newGalleryProjectName.text)
+                                        newGalleryProjectName.text = ""
+                                    }
+                                }
+                            }
+
+                            GridView {
+                                id: projectCollectionsGrid
+                                objectName: "libraryProjectCollectionsGrid"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                cellWidth: Math.max(1, Math.min(width,
+                                                               Math.max(theme.scaled(228),
+                                                                        Math.floor(width / Math.max(1, Math.floor(width / theme.scaled(280)))))))
+                                cellHeight: theme.scaled(180)
+                                model: root.projectCollectionNames
+                                boundsBehavior: Flickable.StopAtBounds
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                                delegate: Button {
+                                    required property string modelData
+                                    required property int index
+                                    id: projectCollectionCard
+
+                                    readonly property int memberCount: catalogAssets.assetCountForProject(
+                                                                          modelData === "Unassigned" ? "unassigned" : modelData)
+
+                                    width: Math.max(1, projectCollectionsGrid.cellWidth - theme.space12)
+                                    height: projectCollectionsGrid.cellHeight - theme.space12
+                                    hoverEnabled: true
+                                    activeFocusOnTab: true
+                                    Accessible.name: "Open " + modelData + " group"
+                                    Accessible.description: memberCount + " media " + (memberCount === 1 ? "item" : "items") +
+                                                            (modelData === "Unassigned"
+                                                             ? " outside a project."
+                                                             : " in the " + modelData + " group.")
+                                    onClicked: root.openProjectCollection(modelData === "Unassigned" ? "unassigned" : modelData)
+
+                                    background: Rectangle {
+                                        radius: theme.radius12
+                                        color: projectCollectionCard.down
+                                               ? theme.alpha(theme.ink750, 0.96)
+                                               : projectCollectionCard.hovered
+                                                 ? theme.alpha(theme.ink800, 0.96)
+                                                 : theme.alpha(theme.ink900, 0.9)
+                                        border.width: projectCollectionCard.visualFocus ? theme.focusBorderWidth : theme.hairlineWidth
+                                        border.color: projectCollectionCard.visualFocus
+                                                      ? theme.focusRing
+                                                      : projectCollectionCard.hovered
+                                                        ? theme.alpha(theme.accentCool400, 0.5)
+                                                        : theme.alpha(theme.lineSoft, 0.42)
+                                    }
+
+                                    contentItem: ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: theme.space14
+                                        spacing: theme.space8
+
+                                        Rectangle {
+                                            Layout.preferredWidth: theme.scaled(40)
+                                            Layout.preferredHeight: theme.scaled(40)
+                                            radius: theme.radius10
+                                            color: theme.alpha(theme.accentCool400, 0.12)
+                                            border.width: theme.hairlineWidth
+                                            border.color: theme.alpha(theme.accentCool400, 0.3)
+
+                                            AppIcon {
+                                                anchors.centerIn: parent
+                                            name: "folder"
+                                                color: theme.accentCool300
+                                                implicitWidth: theme.scaled(18)
+                                                implicitHeight: theme.scaled(18)
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: modelData
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeTitle
+                                            font.weight: Font.DemiBold
+                                            maximumLineCount: 1
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(projectCollectionCard.memberCount) +
+                                                  (projectCollectionCard.memberCount === 1 ? " item" : " items") +
+                                                  (modelData === "Unassigned" ? " · outside a project" : " · in this project")
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                        }
+                                    }
+                                }
+                            }
+
+                            Label {
+                                visible: catalogAssets.projectNames.length === 0
+                                Layout.fillWidth: true
+                                text: "No groups yet. Create one above; unassigned images stay available here."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeBody
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+                        }
                     }
 
                     Item {
                         id: libraryLoadingSkeleton
                         objectName: "libraryLoadingSkeleton"
                         anchors.fill: parent
-                        visible: catalogAssets.loading && catalogAssets.assetCount === 0 && !root.importBrowserOpen
+                        visible: (root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets") && catalogAssets.loading &&
+                                 catalogAssets.assetCount === 0 && !root.importBrowserOpen
                         z: 1
 
-                        Flow {
-                            anchors.fill: parent
-                            anchors.margins: theme.space12
-                            spacing: theme.space12
-
-                            Repeater {
-                                model: 8
-
-                                delegate: Item {
-                                    required property int index
-                                    width: galleryFlow.tileWidth
-                                    height: Math.max(168, width * 0.72)
-
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        radius: theme.radius8
-                                        color: theme.alpha(theme.surfaceBottom, 0.5)
-                                        border.width: 1
-                                        border.color: theme.alpha(theme.lineSoft, 0.28)
-
-                                        SkeletonBlock {
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            anchors.top: parent.top
-                                            anchors.margins: theme.space8
-                                            height: parent.height - 62
-                                            phaseDelay: index * 115
-                                            animate: visible && !theme.reducedMotion
-                                        }
-
-                                        SkeletonBlock {
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: theme.space8
-                                            anchors.bottom: parent.bottom
-                                            anchors.bottomMargin: theme.space24
-                                            width: parent.width * 0.54
-                                            height: 8
-                                            phaseDelay: index * 115 + 80
-                                            animate: false
-                                        }
-
-                                        SkeletonBlock {
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: theme.space8
-                                            anchors.bottom: parent.bottom
-                                            anchors.bottomMargin: theme.space10
-                                            width: parent.width * 0.34
-                                            height: 6
-                                            phaseDelay: index * 115 + 160
-                                            animate: false
-                                        }
-                                    }
-                                }
-                            }
+                        LooksyLoadingScene {
+                            objectName: "libraryLoadingScene"
+                            anchors.centerIn: parent
+                            width: Math.max(100, Math.min(560, parent.width - 40, (parent.height - 90) * 1.5))
+                            scene: "library"
+                            title: "Opening your library"
+                            detail: "Loading photos and saved edits."
+                            active: libraryLoadingSkeleton.visible
                         }
                     }
 
                     Rectangle {
+                        id: libraryEmptyArtworkHost
                         objectName: "libraryEmptyState"
                         readonly property string visibilityRole: "contextual|empty-filter-reset-import-handoff"
                         anchors.fill: parent
-                        visible: catalogAssets.assetCount === 0 && !catalogAssets.loading && !root.importBrowserOpen
+                        visible: (root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets") && catalogAssets.assetCount === 0 &&
+                                 !catalogAssets.loading && !root.importBrowserOpen
                         radius: theme.radiusSurface
                         color: theme.alpha(theme.ink900, 0.9)
-                        border.width: 1
+                        border.width: theme.hairlineWidth
                         border.color: theme.alpha(theme.lineSoft, 0.24)
 
                         Column {
                             anchors.centerIn: parent
+                            width: Math.max(100, Math.min(600, parent.width - 40))
                             spacing: theme.space12
 
-                            Rectangle {
+                            LooksyLoadingScene {
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                width: 44
-                                height: 44
-                                radius: 14
-                                color: theme.alpha(theme.ink800, 0.9)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.24)
-
-                                AppIcon {
-                                    anchors.centerIn: parent
-                                    name: catalogAssets.totalAssetCount === 0 ? "source" : "grid"
-                                    color: theme.textStrong
-                                    implicitWidth: 18
-                                    implicitHeight: 18
-                                }
+                                width: Math.max(100, Math.min(520, libraryEmptyArtworkHost.width - 40, (libraryEmptyArtworkHost.height - 100) * 1.5))
+                                scene: "library"
+                                active: false
+                                showProgress: false
                             }
 
                             Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: catalogAssets.totalAssetCount === 0 ? "No imported media yet." : "No assets match the current filters."
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                                text: root.galleryCollection === "timelines"
+                                      ? "No saved timelines yet."
+                                      : root.galleryCollection === "groupAssets"
+                                        ? "This group is empty."
+                                      : catalogAssets.totalAssetCount === 0
+                                        ? "No imported images yet."
+                                        : "No images match the current filters."
                                 color: theme.textStrong
                                 font.family: theme.fontDisplay
-                                font.pixelSize: 20
+                                font.pixelSize: theme.typePageTitle
                                 font.weight: Font.DemiBold
                             }
 
                             Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: catalogAssets.totalAssetCount === 0
-                                      ? "Switch to Import to bring photos and videos in from folders, cards, and drives."
-                                      : "Broaden the search or reset a few filters to reopen the working set."
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WordWrap
+                                text: root.galleryCollection === "timelines"
+                                      ? "Create or save a timeline and it will appear in this collection."
+                                      : root.galleryCollection === "groupAssets"
+                                        ? "Add images or timelines to this group from the Inspector or selection actions."
+                                      : catalogAssets.totalAssetCount === 0
+                                        ? "Switch to Import to bring photos and videos in from folders, cards, and drives."
+                                        : "Broaden the search or reset a few filters to reopen the working set."
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
+                                font.pixelSize: theme.typeBody
                             }
                         }
                     }
@@ -2404,7 +3293,7 @@ Rectangle {
                         visible: root.importBrowserOpen
                         radius: theme.radiusSurface
                         color: theme.alpha(theme.ink950, 0.98)
-                        border.width: 1
+                        border.width: theme.hairlineWidth
                         border.color: theme.alpha(theme.lineSoft, 0.52)
 
                         ColumnLayout {
@@ -2418,13 +3307,13 @@ Rectangle {
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    spacing: 4
+                                    spacing: theme.space4
 
                                     Label {
                                         text: "Import From Finder"
                                         color: theme.textStrong
                                         font.family: theme.fontDisplay
-                                        font.pixelSize: 24
+                                        font.pixelSize: theme.typePageTitle
                                         font.weight: Font.DemiBold
                                     }
 
@@ -2434,7 +3323,7 @@ Rectangle {
                                               : "Choose a folder, preview it, then hand it off to Import."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: theme.typeBody
                                         wrapMode: Text.WrapAnywhere
                                         maximumLineCount: 2
                                         elide: Text.ElideNone
@@ -2491,7 +3380,7 @@ Rectangle {
                                 text: root.importJobStatus()
                                 color: root.hasActiveImportJobs() ? theme.accentWarm300 : theme.textMuted
                                 font.family: theme.fontMono
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeMicro
                                 wrapMode: Text.Wrap
                             }
 
@@ -2535,6 +3424,7 @@ Rectangle {
             readonly property string surfaceContract: "library-inspector:v1|preview:always|metadata:selection|review:single-selection|source-actions:selection|batch-summary:multi-selection|no-elide:true|no-overlap:true"
             Layout.preferredWidth: 332
             Layout.fillHeight: true
+            visible: root.galleryCollection === "images" || root.galleryCollection === "timelines" || root.galleryCollection === "groupAssets"
             radius: 0
             color: theme.alpha(theme.ink900, 0.74)
             border.width: 0
@@ -2557,7 +3447,7 @@ Rectangle {
                         text: "Inspector"
                         color: theme.textStrong
                         font.family: theme.fontDisplay
-                        font.pixelSize: 24
+                        font.pixelSize: theme.typePageTitle
                         font.weight: Font.Bold
                     }
 
@@ -2570,7 +3460,7 @@ Rectangle {
                               : "Select media to inspect it, review it, and organize it."
                         color: theme.textMuted
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeBody
                         font.weight: Font.Medium
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
@@ -2578,16 +3468,24 @@ Rectangle {
                     }
 
                     Rectangle {
+                        id: inspectorPreviewCard
                         Layout.fillWidth: true
-                        Layout.preferredHeight: root.hasSelection && !catalogAssets.hasMultiSelection ? 254 : 152
+                        Layout.preferredHeight: root.hasSelection && !catalogAssets.hasMultiSelection
+                                                ? Math.max(112, Math.min(420,
+                                                                        width / selectedInspectorPreview.sourceAspectRatio))
+                                                : 152
                         visible: true
-                        radius: 0
-                        color: theme.alpha(theme.ink950, 0.64)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.12)
+                        radius: theme.radius12
+                        color: theme.ink850
+                        border.width: theme.hairlineWidth
+                        border.color: theme.alpha(theme.lineSoft, 0.3)
                         clip: true
 
                         Image {
+                            id: selectedInspectorPreview
+                            readonly property real sourceAspectRatio: status === Image.Ready && implicitHeight > 0
+                                                                      ? implicitWidth / implicitHeight
+                                                                      : 1.35
                             anchors.fill: parent
                             anchors.margins: root.hasSelection && !catalogAssets.hasMultiSelection ? 0 : theme.space16
                             visible: root.hasSelection && !catalogAssets.hasMultiSelection
@@ -2608,7 +3506,7 @@ Rectangle {
                                 text: !root.hasSelection ? "No Selection" : (catalogAssets.selectedAssetCount + " Selected")
                                 color: theme.textStrong
                                 font.family: theme.fontDisplay
-                                font.pixelSize: 18
+                                font.pixelSize: theme.typeHero
                                 font.weight: Font.Bold
                             }
 
@@ -2619,7 +3517,7 @@ Rectangle {
                                 text: !root.hasSelection ? "Select media from the grid to inspect it." : root.selectionSummaryText()
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
+                                font.pixelSize: theme.typeBody
                                 font.weight: Font.Medium
                                 wrapMode: Text.WordWrap
                             }
@@ -2696,7 +3594,7 @@ Rectangle {
                                     text: "Details"
                                     color: theme.textStrong
                                     font.family: theme.fontUi
-                                    font.pixelSize: 13
+                                    font.pixelSize: theme.typeLabel
                                     font.weight: Font.Bold
                                 }
 
@@ -2756,7 +3654,7 @@ Rectangle {
                                     text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
                                     color: theme.textFaint
                                     font.family: theme.fontMono
-                                    font.pixelSize: 10
+                                    font.pixelSize: theme.typeMicro
                                     maximumLineCount: 2
                                     elide: Text.ElideNone
                                     wrapMode: Text.WrapAnywhere
@@ -2785,7 +3683,7 @@ Rectangle {
                                         text: "Review"
                                         color: theme.textStrong
                                         font.family: theme.fontUi
-                                        font.pixelSize: 13
+                                        font.pixelSize: theme.typeLabel
                                         font.weight: Font.Bold
                                     }
 
@@ -2793,7 +3691,7 @@ Rectangle {
                                         text: (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
                                         color: theme.textFaint
                                         font.family: theme.fontMono
-                                        font.pixelSize: 10
+                                        font.pixelSize: theme.typeMicro
                                     }
                                 }
 
@@ -2929,7 +3827,7 @@ Rectangle {
                                           : "Source offline. Recheck mounted drives or relink it."
                                     color: catalogAssets.selectedOnline ? theme.textMuted : theme.warning
                                     font.family: theme.fontUi
-                                    font.pixelSize: 11
+                                    font.pixelSize: theme.typeCaption
                                     font.weight: Font.Medium
                                     wrapMode: Text.WordWrap
                                 }

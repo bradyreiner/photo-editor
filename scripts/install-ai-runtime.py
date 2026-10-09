@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and verify Looksy's checksum-pinned local inpaint runtime."""
+"""Install and verify Looksy's checksum-pinned local AI model runtime."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,13 @@ DEFAULT_LOCK = REPO_ROOT / "apps/desktop/models/production-runtime.lock.json"
 DEFAULT_INSTALL_ROOT = REPO_ROOT / ".photo-editor/ai"
 LOCK_SCHEMA = "framehouse-ai-runtime-lock-v1"
 INPAINT_CONTRACT = "opencv-lama-image-mask-nchw-float32-512-v1"
+INPAINT_PATH = "inpaint/lama.onnx"
+SELECTION_ARTIFACTS = {
+    "sam2-hiera-tiny-image-encoder-fp32-1024-v1":
+        "selection/sam2_hiera_tiny_image_encoder.onnx",
+    "sam2-hiera-tiny-image-decoder-fp32-1024-v1":
+        "selection/sam2_hiera_tiny_image_decoder.onnx",
+}
 RECEIPT_NAME = ".framehouse-install-receipt.json"
 
 
@@ -78,11 +86,39 @@ def load_lock(path: Path) -> dict[str, Any]:
     if not isinstance(bundle, dict) or bundle.get("schema") != "framehouse-ai-model-bundle-v1":
         raise InstallError("runtime lock modelBundle is invalid")
     artifacts = bundle.get("artifacts")
-    if not isinstance(artifacts, list) or len(artifacts) != 1:
-        raise InstallError("runtime lock must declare exactly one production model artifact")
-    artifact = artifacts[0]
-    if not isinstance(artifact, dict) or artifact.get("contract") != INPAINT_CONTRACT:
-        raise InstallError(f"production model must use {INPAINT_CONTRACT}")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise InstallError("runtime lock must declare a non-empty production model artifact list")
+    artifact_ids: set[str] = set()
+    selection_contracts: set[str] = set()
+    inpaint_count = 0
+    for index, artifact in enumerate(artifacts):
+        if not isinstance(artifact, dict):
+            raise InstallError(f"model artifact {index} must be an object")
+        artifact_id = required_string(artifact.get("id"), f"model artifact {index} id")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", artifact_id):
+            raise InstallError(f"model artifact {index} id contains unsupported characters")
+        if artifact_id in artifact_ids:
+            raise InstallError(f"duplicate model artifact id: {artifact_id}")
+        artifact_ids.add(artifact_id)
+        role = required_string(artifact.get("role"), f"model artifact {index} role")
+        contract = required_string(artifact.get("contract"), f"model artifact {index} contract")
+        path = required_string(artifact.get("path"), f"model artifact {index} path")
+        if role == "inpaint":
+            if contract != INPAINT_CONTRACT or path != INPAINT_PATH:
+                raise InstallError(f"inpaint model must use {INPAINT_CONTRACT} at {INPAINT_PATH}")
+            inpaint_count += 1
+        elif role == "selection":
+            if SELECTION_ARTIFACTS.get(contract) != path:
+                raise InstallError(f"model artifact {index} has an unsupported SAM2 contract or path")
+            if contract in selection_contracts:
+                raise InstallError(f"duplicate SAM2 selection component: {contract}")
+            selection_contracts.add(contract)
+        else:
+            raise InstallError(f"model artifact {index} role must be inpaint or selection")
+    if inpaint_count != 1:
+        raise InstallError("runtime lock must declare exactly one LaMa inpaint model")
+    if selection_contracts and selection_contracts != set(SELECTION_ARTIFACTS):
+        raise InstallError("SAM2 selection requires exactly one encoder and one decoder artifact")
     runtime = lock.get("onnxRuntime")
     if not isinstance(runtime, dict) or not isinstance(runtime.get("archive"), dict):
         raise InstallError("runtime lock onnxRuntime archive is invalid")
@@ -152,27 +188,36 @@ def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def install_model_bundle(lock: dict[str, Any], model_download: Path, bundle_root: Path) -> None:
+def install_model_bundle(
+    lock: dict[str, Any], model_downloads: dict[str, Path], bundle_root: Path
+) -> None:
     bundle = lock["modelBundle"]
-    artifact = bundle["artifacts"][0]
-    relative = checked_relative(artifact.get("path"), "model artifact path")
-    destination = bundle_root / relative
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.tmp")
-    shutil.copyfile(model_download, temporary)
-    verify_pinned_file(temporary, artifact, "installed LaMa model")
-    os.replace(temporary, destination)
-    manifest_artifact = {
-        key: value
-        for key, value in artifact.items()
-        if key not in {"downloadUrl", "upstreamArchitectureUrl"}
-    }
+    manifest_artifacts = []
+    for artifact in bundle["artifacts"]:
+        artifact_id = required_string(artifact.get("id"), "model artifact id")
+        model_download = model_downloads.get(artifact_id)
+        if model_download is None:
+            raise InstallError(f"downloaded model artifact is missing: {artifact_id}")
+        relative = checked_relative(artifact.get("path"), f"{artifact_id} path")
+        destination = bundle_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f".{destination.name}.tmp")
+        shutil.copyfile(model_download, temporary)
+        verify_pinned_file(temporary, artifact, f"installed model {artifact_id}")
+        os.replace(temporary, destination)
+        manifest_artifacts.append(
+            {
+                key: value
+                for key, value in artifact.items()
+                if key not in {"downloadUrl", "upstreamArchitectureUrl"}
+            }
+        )
     write_json_atomic(
         bundle_root / "manifest.json",
         {
             "schema": bundle["schema"],
             "version": bundle["version"],
-            "artifacts": [manifest_artifact],
+            "artifacts": manifest_artifacts,
         },
     )
 
@@ -280,11 +325,17 @@ def verify_install(lock: dict[str, Any], install_root: Path) -> tuple[Path, Path
 def install(lock: dict[str, Any], install_root: Path, allow_download: bool, timeout: float) -> tuple[Path, Path]:
     install_root.mkdir(parents=True, exist_ok=True)
     downloads = install_root / "downloads"
-    artifact = lock["modelBundle"]["artifacts"][0]
-    model_name = Path(required_string(artifact.get("downloadUrl"), "model downloadUrl")).name
-    model_download = ensure_download(
-        downloads, artifact, model_name, "OpenCV LaMa model", allow_download, timeout
-    )
+    model_downloads = {}
+    for artifact in lock["modelBundle"]["artifacts"]:
+        artifact_id = required_string(artifact.get("id"), "model artifact id")
+        download_url = required_string(artifact.get("downloadUrl"), f"{artifact_id} downloadUrl")
+        file_name = Path(download_url.split("?", maxsplit=1)[0]).name
+        if not file_name:
+            raise InstallError(f"{artifact_id} downloadUrl must end with a filename")
+        model_name = f"{artifact_id}-{file_name}"
+        model_downloads[artifact_id] = ensure_download(
+            downloads, artifact, model_name, artifact_id, allow_download, timeout
+        )
     runtime = lock["onnxRuntime"]
     archive = runtime["archive"]
     archive_download = ensure_download(
@@ -295,7 +346,7 @@ def install(lock: dict[str, Any], install_root: Path, allow_download: bool, time
         allow_download,
         timeout,
     )
-    install_model_bundle(lock, model_download, install_root / "model-bundle")
+    install_model_bundle(lock, model_downloads, install_root / "model-bundle")
     install_sdk(lock, archive_download, install_root)
     return verify_install(lock, install_root)
 
@@ -304,6 +355,8 @@ def run_self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="framehouse-ai-runtime-self-test-") as temporary:
         root = Path(temporary)
         model_bytes = b"pinned-lama-self-test-model"
+        encoder_bytes = b"pinned-sam2-encoder-self-test"
+        decoder_bytes = b"pinned-sam2-decoder-self-test"
         archive_root = "onnxruntime-osx-arm64-test"
         source_sdk = root / "source" / archive_root
         required_files = [
@@ -322,6 +375,10 @@ def run_self_test() -> None:
         downloads.mkdir(parents=True)
         model_download = downloads / "lama-test.onnx"
         model_download.write_bytes(model_bytes)
+        encoder_download = downloads / "encoder-test.onnx"
+        decoder_download = downloads / "decoder-test.onnx"
+        encoder_download.write_bytes(encoder_bytes)
+        decoder_download.write_bytes(decoder_bytes)
         archive_download = downloads / "onnxruntime-test.tgz"
         with tarfile.open(archive_download, "w:gz") as archive:
             archive.add(source_sdk, arcname=archive_root)
@@ -343,7 +400,33 @@ def run_self_test() -> None:
                         "downloadUrl": model_download.as_uri(),
                         "sourceUrl": "https://example.invalid/model",
                         "license": {"name": "test", "url": "https://example.invalid/license"},
-                    }
+                    },
+                    {
+                        "id": "self-test-sam2-encoder",
+                        "role": "selection",
+                        "contract": "sam2-hiera-tiny-image-encoder-fp32-1024-v1",
+                        "path": SELECTION_ARTIFACTS[
+                            "sam2-hiera-tiny-image-encoder-fp32-1024-v1"
+                        ],
+                        "bytes": len(encoder_bytes),
+                        "sha256": hashlib.sha256(encoder_bytes).hexdigest(),
+                        "downloadUrl": encoder_download.as_uri(),
+                        "sourceUrl": "https://example.invalid/sam2-encoder.onnx",
+                        "license": {"name": "test", "url": "https://example.invalid/license"},
+                    },
+                    {
+                        "id": "self-test-sam2-decoder",
+                        "role": "selection",
+                        "contract": "sam2-hiera-tiny-image-decoder-fp32-1024-v1",
+                        "path": SELECTION_ARTIFACTS[
+                            "sam2-hiera-tiny-image-decoder-fp32-1024-v1"
+                        ],
+                        "bytes": len(decoder_bytes),
+                        "sha256": hashlib.sha256(decoder_bytes).hexdigest(),
+                        "downloadUrl": decoder_download.as_uri(),
+                        "sourceUrl": "https://example.invalid/sam2-decoder.onnx",
+                        "license": {"name": "test", "url": "https://example.invalid/license"},
+                    },
                 ],
             },
             "onnxRuntime": {
@@ -360,8 +443,22 @@ def run_self_test() -> None:
                 "requiredFiles": required_files,
             },
         }
+        lock_path = root / "runtime-lock.json"
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        lock = load_lock(lock_path)
+        partial_lock = json.loads(json.dumps(lock))
+        partial_lock["modelBundle"]["artifacts"].pop()
+        partial_lock_path = root / "partial-runtime-lock.json"
+        partial_lock_path.write_text(json.dumps(partial_lock), encoding="utf-8")
+        try:
+            load_lock(partial_lock_path)
+        except InstallError as error:
+            if "exactly one encoder and one decoder" not in str(error):
+                raise
+        else:
+            raise InstallError("runtime lock loader accepted a partial SAM2 model pair")
         install_root = root / "install"
-        install(lock, install_root, allow_download=False, timeout=1.0)
+        install(lock, install_root, allow_download=True, timeout=1.0)
         verify_install(lock, install_root)
         (install_root / "model-bundle/inpaint/lama.onnx").write_bytes(b"corrupted")
         try:

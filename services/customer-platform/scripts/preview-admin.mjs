@@ -10,6 +10,9 @@ createServer(async(req,res)=>{
     licenses:[{id:'10',plan:'Studio',mode:'perpetual',status:'active',blocked:0,device_limit:2,expires_at:null}],
     devices:[{id:'example-mac-device',platform:'mac-arm',app_version:'1.0.0',revoked:0,last_seen_at:1790180000,license_id:'10'}],
     audit:[]}));return;}
+  if(url.pathname==='/admin/api/operations') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({generatedAt:1790180000,webhooks:{pending:1,failed:1,due:1,oldestPendingAt:1790180000,maxAttempts:2},licenses:{stale:0},backup:{lastSuccessfulAt:null}}));return;}
+  if(url.pathname==='/admin/api/webhooks') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({webhooks:[{digest:'a'.repeat(64),event:'order_created',received_at:1790180000,attempts:2,next_retry_at:1790183600,last_error_code:'processing_failed'}]}));return;}
+  if(url.pathname.startsWith('/admin/api/')&&req.method==='POST') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:true,export:{schema:1,customer,licenses:[],devices:[],audit:[]}}));return;}
   const paths={'/admin/':'admin/index.html','/admin/app.js':'admin/app.js','/admin/style.css':'admin/style.css'};
   if(req.method!=='GET'||!paths[url.pathname]){res.writeHead(404);res.end();return;}
   const path=paths[url.pathname];res.setHeader('Content-Type',path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html');

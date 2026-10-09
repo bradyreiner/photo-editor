@@ -1,12 +1,15 @@
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Layouts
 import "." as Components
 
 Item {
     id: root
 
     property string label: ""
+    readonly property point agentContactPoint: Qt.point(control.x + control.handle.x + control.handle.width / 2,
+                                                       control.y + control.handle.y + control.handle.height / 2)
+    readonly property rect agentSurfaceRect: Qt.rect(control.x + control.handle.width / 2,
+        agentContactPoint.y, control.width - control.handle.width, 0)
     // A symmetric quadratic track gives exposure more room around zero while
     // keeping the value, keyboard increment and saved recipe in actual EV.
     property bool precisionResponse: false
@@ -31,7 +34,23 @@ Item {
     property bool hasPendingDraggedValue: false
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
     property real modifiedEpsilon: stepSize > 0 ? Math.max(stepSize / 2, 0.0001) : 0.0001
-    property int controlHeight: theme.scaled(38)
+    property int controlHeight: theme.scaled(theme.densityComfortable ? 62 : theme.densityCompact ? 50 : 56)
+    property bool forceCompact: false
+    readonly property bool wideRailLayout: !forceCompact && (controlHeight >= theme.scaled(52)
+                                            || width < theme.scaled(280))
+    readonly property int effectiveResetWidth: showResetButton ? resetColumnWidth : 0
+    readonly property real compactLabelWidth: Math.max(
+                                                  theme.scaled(32),
+                                                  Math.min(Math.max(theme.scaled(48), labelColumnWidth),
+                                                           width - valueColumnWidth - effectiveResetWidth
+                                                           - theme.space12 - theme.space24))
+    readonly property real compactTrackX: theme.space6 + compactLabelWidth + theme.space8
+    readonly property real compactValueX: width - theme.space6 - effectiveResetWidth
+                                          - (effectiveResetWidth > 0 ? theme.space8 : 0)
+                                          - valueColumnWidth
+    readonly property real resolvedSliderHeight: wideRailLayout
+                                                 ? Math.max(controlHeight, theme.controlHeightDense + theme.scaled(24) + theme.space6)
+                                                 : Math.max(controlHeight, theme.controlHeightDense)
     readonly property real sliderScale: theme.interfaceScale
     readonly property int trackHeight: 3
     readonly property int thumbRestSize: 12
@@ -57,14 +76,12 @@ Item {
     readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0
                                                  ? root.label + " - " + root.disabledReason
                                                  : root.label + (root.precisionResponse ? " · Shift: fine adjustment · Esc: cancel" : "")
-    readonly property string sliderContract: "inspector-slider:v2|label-column:" +
-                                             String(labelColumnWidth) +
-                                             "|value-column:" +
+    readonly property string sliderContract: "inspector-slider:v4|layout:adaptive-compact-row-or-label-value-header-wide-rail|label-column:fluid|value-column:" +
                                              String(valueColumnWidth) +
                                              "|reset-column:" +
                                              String(resetColumnWidth) +
                                              "|row-height:" +
-                                             String(controlHeight) +
+                                             String(resolvedSliderHeight) +
                                              "|track:" +
                                              String(trackHeight) +
                                              "|thumb:" +
@@ -75,14 +92,16 @@ Item {
                                              String(thumbReservedSize) +
                                              "|typed-entry:" +
                                              String(valueInputEnabled) +
-                                             "|modified-marker:true|center-marker:" +
+                                             "|modified-marker:false|wide-rail:" + String(wideRailLayout) + "|compact-row:" +
+                                             String(!wideRailLayout) + "|center-marker:" +
                                              String(hasCenterMarker) +
-                                             "|default-marker:true|fixed-reset:true|stable-value:true|fixed-label:true|disabled-reason:true|no-elide:true|double-click-reset:true|no-handle-layout-shift:true|drag-commit-throttle:" +
+                                             "|default-marker:true|fixed-reset:true|stable-value:true|label-layout:fluid|disabled-reason:true|no-elide:true|double-click-reset:true|no-handle-layout-shift:true|drag-commit-throttle:" +
                                              String(throttleDraggedValues) +
                                              "|drag-commit-interval-ms:" +
                                              String(dragCommitIntervalMs)
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|value-fit:true|tooltip-full:true|accessibility-full:true"
-    readonly property string valueGeometryContract: "slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:38|track-height:3|thumb:12-16|reserved-thumb:16|handle-layout-shift:false"
+    readonly property string valueGeometryContract: "slider-value-geometry:v5|layout:adaptive-compact-row-or-label-value-header-wide-rail|label-column-fixed:false|value-column-fixed:true|reset-column-fixed:true|wide-row-height:density-fit|compact-row-height:configured|track-hit-height:24|track-height:3|thumb:12-16|reserved-thumb:16|handle-layout-shift:false"
+    readonly property string sliderVisualContract: "inspector-slider-visual:v1|thumb-fill:neutral-pearl|rest-outline:1px|focus-outline:2px|reserved-handle-size:true|motion:reduced-motion-aware"
     readonly property string resetActionContract: "slider-reset-action:v1|icon-only:true|tooltip-full:true|accessible-label:true|disabled-reason:true|active-when-modified:true|fixed-column:" +
                                                   String(root.resetColumnWidth)
     signal interactionStarted()
@@ -92,7 +111,7 @@ Item {
 
     Theme { id: theme }
 
-    implicitHeight: controlHeight
+    implicitHeight: resolvedSliderHeight
     Accessible.name: root.label
     Accessible.description: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.valueText
 
@@ -125,27 +144,42 @@ Item {
     }
 
     function parsedInputValue(text) {
-        const numeric = Number(String(text).replace(/[^0-9+\-.]/g, ""))
+        // The displayed value may include a unit (for example "0.3 EV"),
+        // but stripping arbitrary characters turns an empty or malformed
+        // edit into Number("") === 0. Accept a complete numeric token and an
+        // optional unit suffix only.
+        const match = String(text).trim().match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(?:[A-Za-z%°]+)?$/)
+        if (!match)
+            return NaN
+        const numeric = Number(match[1])
         if (!Number.isFinite(numeric))
-            return control.value
+            return NaN
         if (root.valueInputMode === "kelvin")
             return kelvinToControlValue(numeric)
         if (root.valueInputMode === "degreesNormalized")
             return numeric / 360
         if (root.valueInputMode === "percentNormalized")
             return numeric / 100
+        if (root.valueInputMode === "gamma")
+            return numeric > 0 ? -Math.log(numeric) / Math.LN2 * 100 / 1.45 : NaN
         return numeric
     }
 
     function commitValueText() {
         if (!root.valueInputEnabled || !root.valueInputDirty)
-            return
-        const nextValue = clamp(parsedInputValue(valueField.text), control.from, control.to)
+            return false
+        const parsedValue = parsedInputValue(valueField.text)
         root.valueInputDirty = false
+        if (!Number.isFinite(parsedValue)) {
+            valueField.text = Qt.binding(function() { return root.valueText })
+            return false
+        }
+        const nextValue = clamp(parsedValue, control.from, control.to)
         root.valueDragged(nextValue)
         // Typing replaces the text binding. Restore it after committing so a
         // later focus change cannot submit the previous displayed value.
         valueField.text = Qt.binding(function() { return root.valueText })
+        return true
     }
 
     function queueDraggedValue(value) {
@@ -193,73 +227,121 @@ Item {
         onTriggered: root.flushQueuedDraggedValue()
     }
 
-    RowLayout {
-        anchors.fill: parent
-        anchors.leftMargin: theme.space6
-        anchors.rightMargin: theme.space6
-        anchors.topMargin: 2
-        anchors.bottomMargin: 2
-        spacing: theme.space8
+    Label {
+        id: labelText
+        x: theme.space6
+        y: root.wideRailLayout ? theme.space2 : 0
+        width: Math.max(1, root.wideRailLayout
+                           ? root.compactValueX - x - theme.space8
+                           : root.compactLabelWidth)
+        height: root.wideRailLayout ? theme.controlHeightDense : root.resolvedSliderHeight
+        verticalAlignment: Text.AlignVCenter
+        text: root.label
+        color: root.enabled
+               ? (root.pressed ? theme.textStrong : theme.textMain)
+               : theme.textFaint
+        elide: Text.ElideNone
+        fontSizeMode: Text.HorizontalFit
+        minimumPixelSize: theme.typeCaption
+        maximumLineCount: 1
+        font.family: theme.fontUi
+        font.pixelSize: theme.typeLabel
+        font.weight: theme.weightControl
+        font.capitalization: Font.MixedCase
+        font.letterSpacing: 0
 
-        Label {
-            id: labelText
-            Layout.preferredWidth: root.labelColumnWidth
-            Layout.minimumWidth: root.labelColumnWidth
-            Layout.maximumWidth: root.labelColumnWidth
-            Layout.alignment: Qt.AlignVCenter
-            text: root.label
-            color: root.enabled
-                   ? (root.pressed ? theme.textStrong : theme.textMain)
-                   : theme.textFaint
-            elide: Text.ElideNone
-            fontSizeMode: Text.HorizontalFit
-            minimumPixelSize: 8
-            maximumLineCount: 1
-            font.family: theme.fontUi
-            font.pixelSize: theme.typeLabel
-            font.weight: root.pressed ? Font.DemiBold : Font.Normal
-            font.capitalization: Font.MixedCase
-            font.letterSpacing: 0
-            ToolTip.visible: root.showFullLabelTooltip &&
-                             (root.precisionResponse || labelText.contentWidth > labelText.width + 1 ||
-                              (!root.enabled && root.disabledReason.length > 0)) &&
-                             labelHover.hovered
-            ToolTip.text: root.resolvedTooltipText
-
-            HoverHandler {
-                id: labelHover
-            }
-
-            Rectangle {
-                objectName: root.objectName.length > 0 ? root.objectName + "ModifiedMarker" : ""
-                visible: root.modified
-                width: 4
-                height: 4
-                radius: width / 2
-                anchors.left: parent.left
-                anchors.leftMargin: -7
-                anchors.verticalCenter: parent.verticalCenter
-                color: root.accent
-            }
+        HoverHandler {
+            id: labelHover
         }
 
-        Item {
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignVCenter
-            implicitHeight: Math.max(20, root.controlHeight - 14)
+        Components.AppToolTip {
+            targetItem: labelText
+            visible: root.showFullLabelTooltip &&
+                     (root.precisionResponse || labelText.contentWidth > labelText.width + 1 ||
+                      (!root.enabled && root.disabledReason.length > 0)) &&
+                     labelHover.hovered
+            text: root.resolvedTooltipText
+        }
+    }
 
-            Slider {
-                id: control
-                anchors.fill: parent
-                anchors.leftMargin: 2
-                anchors.rightMargin: 2
-                leftPadding: 0
-                rightPadding: 0
-                topPadding: 0
-                bottomPadding: 0
-                Accessible.name: root.label
-                Accessible.description: root.valueText
-                Accessible.role: Accessible.Slider
+    ToneTextField {
+        id: valueField
+        objectName: root.objectName.length > 0 ? root.objectName + "ValueField" : ""
+        accessibleLabel: root.label + " value"
+        x: root.compactValueX
+        y: root.wideRailLayout ? theme.space2
+                               : Math.round((root.resolvedSliderHeight - height) / 2)
+        width: root.valueColumnWidth
+        height: root.wideRailLayout ? theme.controlHeightDense
+                                    : Math.min(theme.controlHeightDense, root.resolvedSliderHeight)
+        horizontalAlignment: Text.AlignRight
+        leftPadding: theme.space4
+        rightPadding: theme.space4
+        enabled: root.enabled && root.valueInputEnabled
+        Accessible.description: "Type a value for " + root.label
+        text: root.valueText
+        color: root.enabled ? theme.textStrong : theme.textFaint
+        font.family: theme.fontUi
+        font.pixelSize: theme.typeControl
+        font.weight: theme.weightControl
+        font.letterSpacing: 0
+        hoverEnabled: true
+        selectByMouse: true
+        inputMethodHints: Qt.ImhFormattedNumbersOnly
+        background: Rectangle {
+            color: valueField.activeFocus ? theme.fieldHoverFill
+                   : valueField.hovered ? theme.alpha(theme.fieldFill, 0.8) : "transparent"
+            border.width: valueField.activeFocus ? theme.focusBorderWidth
+                          : valueField.hovered ? theme.hairlineWidth : 0
+            border.color: valueField.activeFocus ? theme.focusRing : theme.alpha(theme.controlEdge, 0.72)
+            radius: theme.radiusControl
+        }
+        onTextEdited: root.valueInputDirty = true
+        onAccepted: root.commitValueText()
+        onActiveFocusChanged: {
+            if (!activeFocus)
+                root.commitValueText()
+        }
+    }
+
+    Components.ToolButton {
+        objectName: root.objectName.length > 0 ? root.objectName + "ResetButton" : ""
+        x: root.width - theme.space6 - width
+        y: root.wideRailLayout ? theme.space2
+                               : Math.round((root.resolvedSliderHeight - height) / 2)
+        width: root.effectiveResetWidth
+        height: Math.min(theme.controlHeightDense, root.resolvedSliderHeight)
+        visible: root.showResetButton
+        opacity: root.modified ? 1 : 0
+        iconName: "reset"
+        compact: true
+        showLabel: false
+        label: root.label.length > 0 ? "Reset " + root.label : "Reset value"
+        active: false
+        enabled: root.enabled && root.modified
+        commandEnabled: root.enabled && root.modified
+        disabledReason: root.modified ? "" : "Value is already at its default."
+        onClicked: if (root.modified) root.resetRequested()
+    }
+
+    Slider {
+        id: control
+        x: root.wideRailLayout ? theme.space6 : root.compactTrackX
+        y: root.wideRailLayout
+           ? Math.max(theme.controlHeightDense + theme.space4,
+                      root.resolvedSliderHeight - height - theme.space2)
+           : 0
+        width: root.wideRailLayout
+               ? Math.max(1, root.width - theme.space12)
+               : Math.max(1, root.compactValueX - x - theme.space8)
+        height: root.wideRailLayout ? theme.scaled(24) : root.resolvedSliderHeight
+        leftPadding: 0
+        rightPadding: 0
+        topPadding: 0
+        bottomPadding: 0
+        Accessible.name: root.label
+        Accessible.description: root.valueText
+        Accessible.role: Accessible.Slider
 
                 background: Item {
                     x: control.leftPadding
@@ -270,7 +352,7 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         radius: height / 2
-                        color: root.hasTrackGradient ? "transparent" : theme.alpha(theme.polar, 0.18)
+                        color: root.hasTrackGradient ? "transparent" : theme.alpha(theme.lineStrong, 0.30)
                     }
 
                     Row {
@@ -300,8 +382,8 @@ Item {
                         anchors.fill: parent
                         radius: height / 2
                         color: Array.isArray(root.trackColors) && root.trackColors.length > 1
-                               ? theme.alpha(theme.ink950, 0.16)
-                               : theme.alpha(theme.ink950, 0.24)
+                               ? theme.alpha(theme.ink950, 0.08)
+                               : "transparent"
                     }
 
                     Repeater {
@@ -309,10 +391,10 @@ Item {
                         Rectangle {
                             required property int index
                             x: parent ? index * (parent.width - 1) / 10 : 0
-                            y: -5
+                            y: -4
                             width: 1
                             height: index % 5 === 0 ? 4 : 2
-                            color: theme.alpha(theme.textMuted, index % 5 === 0 ? 0.42 : 0.22)
+                            color: theme.alpha(theme.textMuted, index % 5 === 0 ? 0.28 : 0.12)
                         }
                     }
 
@@ -352,11 +434,11 @@ Item {
                         width: parent.width * root.thumbVisualScale
                         height: width
                         radius: width / 2
-                        color: root.pressed ? theme.polar : "#D1D8E2"
-                        border.width: control.visualFocus ? theme.focusBorderWidth : 2
+                        color: root.pressed ? theme.brandPaper : "#D1D8E2"
+                        border.width: control.visualFocus ? theme.focusBorderWidth : 1
                         border.color: control.visualFocus
                                       ? theme.focusRing
-                                      : (root.pressed ? theme.alpha(root.accent, 0.95) : theme.alpha(theme.ink950, 0.76))
+                                      : (root.pressed ? theme.alpha(root.accent, 0.9) : theme.alpha(theme.ink950, 0.62))
 
                         Behavior on width {
                             NumberAnimation { duration: theme.durationFast }
@@ -454,61 +536,5 @@ Item {
                         root.interactionFinished()
                     }
                 }
-            }
-        }
-
-        TextField {
-            id: valueField
-            objectName: root.objectName.length > 0 ? root.objectName + "ValueField" : ""
-            Layout.preferredWidth: root.valueColumnWidth
-            Layout.minimumWidth: root.valueColumnWidth
-            Layout.maximumWidth: root.valueColumnWidth
-            Layout.alignment: Qt.AlignVCenter
-            horizontalAlignment: Text.AlignRight
-            enabled: root.enabled && root.valueInputEnabled
-            Accessible.name: root.label + " value"
-            Accessible.description: "Type a value for " + root.label
-            text: root.valueText
-            color: root.enabled ? theme.textStrong : theme.textFaint
-            font.family: theme.fontUi
-            font.pixelSize: theme.typeLabel
-            font.weight: Font.Medium
-            font.letterSpacing: 0
-            hoverEnabled: true
-            selectByMouse: true
-            inputMethodHints: Qt.ImhFormattedNumbersOnly
-            background: Rectangle {
-                color: valueField.activeFocus || valueField.hovered ? theme.ink800 : "transparent"
-                border.width: valueField.activeFocus ? theme.focusBorderWidth : 0
-                border.color: theme.focusRing
-                radius: 2
-            }
-            onTextEdited: root.valueInputDirty = true
-            onAccepted: root.commitValueText()
-            onActiveFocusChanged: {
-                if (!activeFocus)
-                    root.commitValueText()
-            }
-        }
-
-        Components.ToolButton {
-            objectName: root.objectName.length > 0 ? root.objectName + "ResetButton" : ""
-            Layout.preferredWidth: root.resetColumnWidth
-            Layout.minimumWidth: root.resetColumnWidth
-            Layout.maximumWidth: root.resetColumnWidth
-            Layout.preferredHeight: Math.min(root.controlHeight - 8, 30)
-            Layout.alignment: Qt.AlignVCenter
-            visible: root.showResetButton
-            opacity: root.modified ? 1 : 0
-            iconName: "reset"
-            compact: true
-            showLabel: false
-            label: root.label.length > 0 ? "Reset " + root.label : "Reset value"
-            active: false
-            enabled: root.enabled && root.modified
-            commandEnabled: root.enabled && root.modified
-            disabledReason: root.modified ? "" : "Value is already at its default."
-            onClicked: if (root.modified) root.resetRequested()
-        }
     }
 }

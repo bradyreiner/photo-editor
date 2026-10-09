@@ -150,6 +150,14 @@ bool apply_compiled_fill_layer_program(
             ? composition_weight
             : std::clamp(source.alpha * composition_weight, 0.0F, 1.0F);
         current_layer_alpha[pixel_index] = alpha;
+        if (layer.erase_base_image) {
+          if (alpha > 1.0e-6F) {
+            pixel.alpha *= 1.0F - alpha;
+            if (pixel.alpha <= 1.0e-6F) pixel = ColorPixel{0.0F, 0.0F, 0.0F, 0.0F};
+          }
+          current_layer_alpha[pixel_index] = pixel.alpha;
+          continue;
+        }
         const auto blended = apply_retained_layer_blend(
             program, pixel, source, layer.blend_mode);
         if (adjustment) {

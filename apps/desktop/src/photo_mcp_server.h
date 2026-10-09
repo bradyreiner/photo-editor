@@ -12,7 +12,8 @@ class PhotoMcpServer final : public QObject {
   Q_OBJECT
 
  public:
-  explicit PhotoMcpServer(PhotoAutomationBridge* automation_bridge, QObject* parent = nullptr);
+  explicit PhotoMcpServer(PhotoAutomationBridge* automation_bridge, QObject* parent = nullptr,
+                          bool internal_agent = false);
 
   [[nodiscard]] QJsonObject handleJsonRpc(const QJsonObject& request) const;
   [[nodiscard]] QJsonObject handleJsonRpc(
@@ -28,6 +29,7 @@ class PhotoMcpServer final : public QObject {
 
  private:
   PhotoAutomationBridge* automation_bridge_ = nullptr;
+  bool internal_agent_ = false;
 };
 
 }  // namespace photo_editor::desktop

@@ -199,5 +199,107 @@ int main(int argc, char** argv) {
     return fail("runtime bundle verification should reject missing source or license evidence");
   }
 
+  const auto selection_dir = QDir(root).filePath(QStringLiteral("selection"));
+  const auto encoder_path = QDir(root).filePath(
+      QStringLiteral("selection/sam2_hiera_tiny_image_encoder.onnx"));
+  const auto decoder_path = QDir(root).filePath(
+      QStringLiteral("selection/sam2_hiera_tiny_image_decoder.onnx"));
+  const QByteArray encoder_bytes("deterministic-sam2-encoder-fixture");
+  const QByteArray decoder_bytes("deterministic-sam2-decoder-fixture");
+  if (!QDir().mkpath(selection_dir) ||
+      !write_bytes(encoder_path, encoder_bytes) ||
+      !write_bytes(decoder_path, decoder_bytes)) {
+    return fail("AI runtime bundle test should write paired SAM2 fixtures");
+  }
+  const auto selection_artifact = [](
+      const QString& id,
+      const QString& relative_path,
+      const QString& contract,
+      const QByteArray& bytes) {
+    return QJsonObject{
+        {QStringLiteral("id"), id},
+        {QStringLiteral("role"), QStringLiteral("selection")},
+        {QStringLiteral("contract"), contract},
+        {QStringLiteral("path"), relative_path},
+        {QStringLiteral("bytes"), static_cast<double>(bytes.size())},
+        {QStringLiteral("sha256"),
+         QString::fromLatin1(
+             QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
+        {QStringLiteral("sourceUrl"), QStringLiteral("https://example.invalid/%1").arg(id)},
+        {QStringLiteral("license"), QJsonObject{
+             {QStringLiteral("name"), QStringLiteral("fixture-license")},
+             {QStringLiteral("url"), QStringLiteral("https://example.invalid/license")}}},
+    };
+  };
+  auto paired_manifest = manifest_for(model_bytes);
+  auto artifacts = paired_manifest.value(QStringLiteral("artifacts")).toArray();
+  artifacts.append(selection_artifact(
+      QStringLiteral("sam2-encoder"),
+      QStringLiteral("selection/sam2_hiera_tiny_image_encoder.onnx"),
+      QStringLiteral("sam2-hiera-tiny-image-encoder-fp32-1024-v1"),
+      encoder_bytes));
+  artifacts.append(selection_artifact(
+      QStringLiteral("sam2-decoder"),
+      QStringLiteral("selection/sam2_hiera_tiny_image_decoder.onnx"),
+      QStringLiteral("sam2-hiera-tiny-image-decoder-fp32-1024-v1"),
+      decoder_bytes));
+  paired_manifest.insert(QStringLiteral("artifacts"), artifacts);
+  if (!write_bytes(inpaint_path, model_bytes) ||
+      !write_manifest(root, paired_manifest)) {
+    return fail("AI runtime bundle test should write its paired-model manifest");
+  }
+  const auto paired = photo_editor::desktop::verify_ai_model_bundle(root);
+  if (!paired.ok || !paired.smart_selection_artifacts_verified ||
+      paired.artifact_count != 3 ||
+      paired.smart_selection_encoder_path != QFileInfo(encoder_path).canonicalFilePath() ||
+      paired.smart_selection_decoder_path != QFileInfo(decoder_path).canonicalFilePath()) {
+    return fail("runtime bundle verification should accept a complete, pinned SAM2 model pair");
+  }
+  qputenv("PHOTO_EDITOR_AI_MODEL_DIR", root.toUtf8());
+  const auto paired_runtime_status =
+      photo_editor::desktop::ai_model_runtime_status();
+  qunsetenv("PHOTO_EDITOR_AI_MODEL_DIR");
+  if (!paired_runtime_status.smart_selection_artifacts_verified) {
+    return fail("runtime readiness should preserve verified SAM2 artifact status");
+  }
+  if (paired_runtime_status.smart_selection_available) {
+    return fail("verified SAM2 artifacts must not imply implemented inference");
+  }
+  if (!paired_runtime_status.diagnostics.contains(QStringLiteral("sam:runtime-missing"))) {
+    return fail("runtime diagnostics should distinguish verified SAM2 files from the missing runtime");
+  }
+  if (!paired_runtime_status.summary.contains(QStringLiteral("inference is not implemented"))) {
+    return fail("runtime summary should report that SAM2 inference is not implemented");
+  }
+  auto corrupted_decoder_bytes = decoder_bytes;
+  corrupted_decoder_bytes[0] =
+      corrupted_decoder_bytes.at(0) == 'x' ? 'y' : 'x';
+  if (!write_bytes(decoder_path, corrupted_decoder_bytes)) {
+    return fail("AI runtime bundle test should corrupt the SAM2 decoder fixture");
+  }
+  qputenv("PHOTO_EDITOR_AI_MODEL_DIR", root.toUtf8());
+  const auto corrupted_pair_status =
+      photo_editor::desktop::ai_model_runtime_status();
+  qunsetenv("PHOTO_EDITOR_AI_MODEL_DIR");
+  if (corrupted_pair_status.bundle_verified ||
+      corrupted_pair_status.smart_selection_artifacts_verified ||
+      corrupted_pair_status.bundle_verification_error_code !=
+          QStringLiteral("artifact_sha256_mismatch")) {
+    return fail("runtime readiness cache should invalidate when a paired SAM2 artifact changes");
+  }
+  if (!write_bytes(decoder_path, decoder_bytes)) {
+    return fail("AI runtime bundle test should restore the SAM2 decoder fixture");
+  }
+  artifacts.removeLast();
+  paired_manifest.insert(QStringLiteral("artifacts"), artifacts);
+  if (!write_manifest(root, paired_manifest)) {
+    return fail("AI runtime bundle test should write its incomplete-pair fixture");
+  }
+  const auto incomplete_pair = photo_editor::desktop::verify_ai_model_bundle(root);
+  if (incomplete_pair.ok ||
+      incomplete_pair.error_code != QStringLiteral("selection_artifact_pair_incomplete")) {
+    return fail("runtime bundle verification should reject an incomplete SAM2 model pair");
+  }
+
   return EXIT_SUCCESS;
 }

@@ -19,6 +19,9 @@ void apply_lens_vignette_correction(
     int height,
     const ColorAdjustmentState& state);
 
+[[nodiscard]] bool geometry_corrections_are_identity(
+    const ColorAdjustmentState& state);
+
 void apply_geometry_corrections(
     std::vector<ColorPixel>* pixels,
     int width,

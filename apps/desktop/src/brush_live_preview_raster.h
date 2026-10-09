@@ -32,7 +32,8 @@ struct BrushLivePreviewRaster final {
           size.width(), size.height(), source, point.x, point.y, point.size,
           point.flow, point.opacity, style.feather, false, source != nullptr,
           tolerance, point.auto_mask_anchor_x, point.auto_mask_anchor_y,
-          protect_edges, cancellation));
+          protect_edges, cancellation, nullptr, nullptr, nullptr,
+          {.circular = style.circular, .hardness = style.hardness}));
       if (cancellation.cancelled()) return {};
     }
     if (color != style.color || opacity != style.opacity) dirty = image.rect();
@@ -57,7 +58,9 @@ struct BrushLivePreviewFrame final {
   BrushLivePreviewRaster raster;
   QImage source;
   bool source_attempted = false;
+  bool auto_mask = false;
   int generation = 0;
+  qsizetype point_count = 0;
   qint64 elapsed_ms = 0;
 };
 

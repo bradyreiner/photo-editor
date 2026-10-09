@@ -119,6 +119,14 @@ QString actionable_segmentation_failure_status(
                "Image decode failed for %1. Reload the source image and try again.")
         .arg(label);
   }
+  if (lower_detail.contains(QStringLiteral("anecf")) ||
+      lower_detail.contains(QStringLiteral("failed to load ane model")) ||
+      lower_detail.contains(QStringLiteral("could not build inference plan"))) {
+    return QStringLiteral(
+               "macOS Vision could not initialize its on-device model for %1. "
+               "Use Lasso or Brush Add/Remove, then retry. Details: %2")
+        .arg(label, detail);
+  }
   if (segmentation_result_is_too_small_to_use(result)) {
     return QStringLiteral(
                "Selection too small for %1. Drag across more of the target or use Brush Add.")
@@ -165,6 +173,11 @@ QString segmentation_failure_reason_code(
   if (detail.contains(QStringLiteral("invalid source")) ||
       detail.contains(QStringLiteral("decode"))) {
     return QStringLiteral("decode-failed");
+  }
+  if (detail.contains(QStringLiteral("anecf")) ||
+      detail.contains(QStringLiteral("failed to load ane model")) ||
+      detail.contains(QStringLiteral("could not build inference plan"))) {
+    return QStringLiteral("model-initialization-failed");
   }
   if (segmentation_result_is_too_small_to_use(result)) {
     return QStringLiteral("insufficient-selection");

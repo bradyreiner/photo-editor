@@ -1,6 +1,7 @@
 #pragma once
 
 #include "customer_edit_access.h"
+#include "agent_task_journal.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -10,6 +11,7 @@
 #include <QHash>
 #include <QImage>
 #include "photo_paint_session.h"
+#include "photo_fragment_layer_tip_cache.h"
 #include <QJsonArray>
 #include <QMap>
 #include <QMutex>
@@ -23,6 +25,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
+#include <QThreadPool>
 #include <QVector>
 #include <QVariantMap>
 #include <QVariantList>
@@ -57,7 +60,9 @@
 namespace photo_editor::desktop {
 class EditorPreviewImageSink;
 class LinkedImageSourceMonitor;
+class AgentTaskJournal;
 using EditState = EditRecipeState;
+struct PreparedEditorRecipePersistence;
 struct EditorPreviewControllerTestAccess;
 struct RenderRequest final {
   QImage paint_preview_base;
@@ -101,6 +106,8 @@ struct RenderRequest final {
   int max_edge = 0;
   int jpeg_quality = 90;
   int generation = 0;
+  quint64 edit_transaction_generation = 0;
+  quint64 layer_source_content_revision = 0;
   qint64 requested_at_msecs = 0;
   qint64 queue_wait_ms = 0;
   qint64 render_latency_budget_ms = 0;
@@ -117,6 +124,10 @@ struct RenderRequest final {
   QRectF preview_overlay_rect;
   int preview_overlay_max_edge = 0;
   bool draft_interactive = false, allow_texture_patch_only = false, allow_native_srgb_surface = false, allow_native_device_surface = false, require_cpu_preview_image = false;
+  bool reuse_layer_transform_prefix = false;
+  // Image-provider consumers may copy final display pixels from native output;
+  // they do not require CPU materialization of the float working pipeline.
+  bool require_cpu_display_image = false;
   bool visible_tile_only = false;
   bool generate_proof_gamut_warning_mask = false;
   bool require_canonical_render_plan = false;
@@ -139,6 +150,14 @@ struct RenderResult final {
       QStringLiteral("final-display");
   QString scope_surface_stage;
   QStringList completed_render_stages;
+  QVariantMap render_stage_elapsed_ms;
+  QVariantMap render_stage_cache_hits;
+  QString failed_render_stage;
+  qint64 in_flight_render_stage_elapsed_ms = 0;
+  qint64 render_plan_overhead_ms = 0;
+  qint64 render_executor_cache_bytes = 0;
+  bool render_executor_cache_bypassed = false;
+  bool render_executor_cache_writes_skipped = false;
   bool geometry_executor_cache_hit = false;
   bool photographic_output_executor_cache_hit = false;
   QString file_path;
@@ -190,6 +209,7 @@ struct RenderResult final {
   int mask_tile_cache_miss_count = 0;
   qint64 crop_geometry_elapsed_ms = 0;
   qint64 output_stage_elapsed_ms = 0;
+  qint64 photographic_output_stage_elapsed_ms = 0;
   qint64 output_linear_pack_elapsed_ms = 0;
   qint64 output_color_convert_elapsed_ms = 0;
   OutputLutPublicationTelemetry output_lut;
@@ -241,6 +261,8 @@ struct RenderResult final {
   bool overlay_only = false;
   bool draft_interactive = false;
   int generation = 0;
+  quint64 edit_transaction_generation = 0;
+  quint64 layer_source_content_revision = 0;
   int max_edge = 0;
   int source_width = 0;
   int source_height = 0;
@@ -295,6 +317,20 @@ struct RenderResult final {
   bool updated_persistent_sources = false;
 };
 
+struct ColorToolMaskPreviewResult final {
+  QString cache_key;
+  QString data_uri;
+  bool cancelled = false;
+};
+
+struct ColorToolMaskPreviewRequest final {
+  QString cache_key;
+  QString file_path;
+  EditState state;
+  QVariantMap settings;
+  std::shared_ptr<std::atomic_bool> cancellation;
+};
+
 struct EditIntent final {
   QString operation;
   QString phase = QStringLiteral("commit");
@@ -316,6 +352,7 @@ struct RenderGraphResolution final {
 
 class EditorPreviewController final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(bool sourceSamplingBusy READ sourceSamplingBusy NOTIFY sourceSamplingBusyChanged)
   Q_PROPERTY(bool photoPaintBusy READ photoPaintBusy NOTIFY photoPaintStateChanged)
   Q_PROPERTY(QString photoPaintError READ photoPaintError NOTIFY photoPaintStateChanged)
   Q_PROPERTY(QString previewSource READ previewSource NOTIFY previewChanged)
@@ -333,6 +370,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QString zoneMapOverlaySource READ zoneMapOverlaySource NOTIFY diagnosticOverlaysChanged)
   Q_PROPERTY(bool colorToolMaskPreviewEnabled READ colorToolMaskPreviewEnabled WRITE setColorToolMaskPreviewEnabled NOTIFY controlsChanged)
   Q_PROPERTY(QString colorToolMaskPreviewSource READ colorToolMaskPreviewSource NOTIFY controlsChanged)
+  Q_PROPERTY(bool colorToolMaskPreviewBusy READ colorToolMaskPreviewBusy NOTIFY controlsChanged)
   Q_PROPERTY(bool displayPreviewNativeAvailable READ displayPreviewNativeAvailable NOTIFY previewChanged)
   Q_PROPERTY(quint64 displayPreviewNativeHandle READ displayPreviewNativeHandle NOTIFY previewChanged)
   Q_PROPERTY(QSize displayPreviewNativeSize READ displayPreviewNativeSize NOTIFY previewChanged)
@@ -382,6 +420,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QVariantMap cameraDcpProfileAsset READ cameraDcpProfileAsset NOTIFY controlsChanged)
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(QString recipeSaveError READ recipeSaveError NOTIFY recipeSaveStateChanged)
+  Q_PROPERTY(bool catalogRecipePersistenceEnabled READ catalogRecipePersistenceEnabled WRITE setCatalogRecipePersistenceEnabled NOTIFY controlsChanged)
   Q_PROPERTY(bool recipeSavePending READ recipeSavePending NOTIFY recipeSaveStateChanged)
   Q_PROPERTY(QString selectionFailureReason READ selectionFailureReason NOTIFY statusChanged)
   Q_PROPERTY(QString previewFailureStage READ previewFailureStage NOTIFY statusChanged)
@@ -435,6 +474,11 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(bool hasCopiedSettings READ hasCopiedSettings NOTIFY clipboardChanged)
   Q_PROPERTY(bool hasCopiedPhotoLayerAdjustments READ hasCopiedPhotoLayerAdjustments NOTIFY clipboardChanged)
   Q_PROPERTY(QVariantList photoLayers READ photoLayers NOTIFY controlsChanged)
+  Q_PROPERTY(bool baseImageLocked READ baseImageLocked NOTIFY controlsChanged)
+  Q_PROPERTY(bool hasCopiedPhotoLayers READ hasCopiedPhotoLayers NOTIFY clipboardChanged)
+  Q_PROPERTY(bool photoLayerClipboardBusy READ photoLayerClipboardBusy NOTIFY clipboardChanged)
+  Q_PROPERTY(QVariantMap baseImageLayerData READ baseImageLayerData NOTIFY controlsChanged)
+  Q_PROPERTY(QStringList photoFragmentBrushPresetNames READ photoFragmentBrushPresetNames NOTIFY controlsChanged)
   Q_PROPERTY(int photoLayerCount READ photoLayerCount NOTIFY controlsChanged)
   Q_PROPERTY(bool photoLayerSoloActive READ photoLayerSoloActive NOTIFY controlsChanged)
   Q_PROPERTY(QVariantList photoLayerVisibilityStates READ photoLayerVisibilityStates NOTIFY controlsChanged)
@@ -708,13 +752,14 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QStringList brushPresetNames READ brushPresetNames NOTIFY controlsChanged)
   Q_PROPERTY(int activeMaskBrushPointCount READ activeMaskBrushPointCount NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QVariantList activeMaskLiveBrushPoints READ activeMaskLiveBrushPoints NOTIFY activeBrushStrokeChanged)
+  Q_PROPERTY(int activeMaskLiveBrushPreviewPointCount READ activeMaskLiveBrushPreviewPointCount NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QString activeMaskLiveBrushPreviewSource READ activeMaskLiveBrushPreviewSource NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(bool activeMaskLiveBrushPreviewNativeAvailable READ activeMaskLiveBrushPreviewNativeAvailable NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QString activeMaskLiveBrushPreviewBackend READ activeMaskLiveBrushPreviewBackend NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(qint64 activeMaskLiveBrushPreviewElapsedMs READ activeMaskLiveBrushPreviewElapsedMs NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(bool activeMaskLiveBrushPreviewWithinLatencyBudget READ activeMaskLiveBrushPreviewWithinLatencyBudget NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QString activeMaskLiveBrushPreviewFallbackReason READ activeMaskLiveBrushPreviewFallbackReason NOTIFY activeBrushStrokeChanged)
-  Q_PROPERTY(bool brushStrokeActive READ brushStrokeActive NOTIFY activeBrushStrokeChanged)
+  Q_PROPERTY(bool brushStrokeActive READ brushStrokeActive NOTIFY brushStrokeActiveChanged)
   Q_PROPERTY(bool activeMaskCloneSourceSet READ activeMaskCloneSourceSet NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskCloneSourceX READ activeMaskCloneSourceX NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskCloneSourceY READ activeMaskCloneSourceY NOTIFY controlsChanged)
@@ -730,8 +775,8 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(double activeMaskPatchSourceWidth READ activeMaskPatchSourceWidth NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskPatchSourceHeight READ activeMaskPatchSourceHeight NOTIFY controlsChanged)
   Q_PROPERTY(bool hasSensorDustMap READ hasSensorDustMap NOTIFY controlsChanged)
-  Q_PROPERTY(QVariantList activeMaskPolygonPoints READ activeMaskPolygonPoints NOTIFY controlsChanged)
-  Q_PROPERTY(int activeMaskPolygonPointCount READ activeMaskPolygonPointCount NOTIFY controlsChanged)
+  Q_PROPERTY(QVariantList activeMaskPolygonPoints READ activeMaskPolygonPoints NOTIFY polygonPathChanged)
+  Q_PROPERTY(int activeMaskPolygonPointCount READ activeMaskPolygonPointCount NOTIFY polygonPathChanged)
   Q_PROPERTY(bool activeMaskPolygonSelfIntersecting READ activeMaskPolygonSelfIntersecting NOTIFY controlsChanged)
   Q_PROPERTY(QVariantList activeMaskOutlinePoints READ activeMaskOutlinePoints NOTIFY maskOverlayChanged)
   Q_PROPERTY(QVariantList activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY maskOverlayChanged)
@@ -813,6 +858,7 @@ class EditorPreviewController final : public QObject {
 
   explicit EditorPreviewController(QObject* parent = nullptr);
   ~EditorPreviewController() override;
+  bool sourceSamplingBusy() const { return source_sample_active_; }
   bool prepareRecipeClose(QString* error);
   void pauseRecipePersistence(bool paused);
   QProcess* recipeSaveProcessForClose() { return &persist_process_; }
@@ -830,6 +876,7 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE void setDiagnosticOverlaysRequested(bool requested);
   [[nodiscard]] bool colorToolMaskPreviewEnabled() const;
   [[nodiscard]] QString colorToolMaskPreviewSource() const;
+  [[nodiscard]] bool colorToolMaskPreviewBusy() const;
   [[nodiscard]] bool displayPreviewNativeAvailable() const;
   [[nodiscard]] quint64 displayPreviewNativeHandle() const;
   [[nodiscard]] std::shared_ptr<void> displayPreviewNativeTextureLease() const;
@@ -880,6 +927,12 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QVariantMap cameraDcpProfileAsset() const;
   [[nodiscard]] QString status() const;
   [[nodiscard]] QString recipeSaveError() const { return recipe_save_error_; }
+  [[nodiscard]] bool catalogRecipePersistenceEnabled() const { return catalog_recipe_persistence_enabled_; }
+  void setCatalogRecipePersistenceEnabled(bool enabled) {
+    if (catalog_recipe_persistence_enabled_ == enabled) return;
+    catalog_recipe_persistence_enabled_ = enabled;
+    emit controlsChanged();
+  }
   [[nodiscard]] bool recipeSavePending() const { return recipe_save_queue_.active() || recipe_save_queue_.pending(); }
   [[nodiscard]] QString selectionFailureReason() const;
   [[nodiscard]] QString previewFailureStage() const;
@@ -928,6 +981,7 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QVariantList editHistoryEntries() const;
   [[nodiscard]] int editHistoryCurrentIndex() const;
   [[nodiscard]] QVariantList editHistorySnapshots() const;
+  Q_INVOKABLE bool setEditHistoryPreviewIndex(int index);
   [[nodiscard]] bool hasCopiedPhotoRecipe() const;
   [[nodiscard]] QString copiedPhotoRecipePatchJson() const;
   Q_INVOKABLE bool copyPhotoRecipe(const QString& payload, const QStringList& groups);
@@ -1120,12 +1174,20 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] double uprightVerticalGuideAngle() const;
   [[nodiscard]] double uprightHorizontalGuideAngle() const;
   [[nodiscard]] QVariantList maskSets() const;
+  Q_INVOKABLE QVariantList maskSetSnapshot() const { return maskSets(); }
   [[nodiscard]] int maskSetCount() const;
   [[nodiscard]] QVariantList retouchStack() const;
   [[nodiscard]] int retouchCount() const;
   [[nodiscard]] QVariantList photoLayers() const;
   Q_INVOKABLE QVariantList photoLayerSnapshot() const { return photoLayers(); }
   [[nodiscard]] int photoLayerCount() const;
+  bool baseImageLocked() const;
+  QVariantMap baseImageLayerData() const;
+  Q_INVOKABLE bool setBaseImageLocked(bool locked);
+  bool hasCopiedPhotoLayers() const;
+  bool photoLayerClipboardBusy() const { return photo_layer_clipboard_busy_; }
+  Q_INVOKABLE bool copyPhotoLayers(const QVariantList& indices);
+  Q_INVOKABLE QStringList pastePhotoLayers(int above_index = 0, bool in_place = false);
   [[nodiscard]] bool photoLayerSoloActive() const;
   [[nodiscard]] QVariantList photoLayerVisibilityStates() const;
   [[nodiscard]] int photoLayerVisibilityStateCount() const;
@@ -1216,6 +1278,8 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QStringList brushPresetNames() const;
   [[nodiscard]] int activeMaskBrushPointCount() const;
   [[nodiscard]] QVariantList activeMaskLiveBrushPoints() const;
+  [[nodiscard]] BrushPreviewStyle activeBrushPreviewStyle() const;
+  [[nodiscard]] int activeMaskLiveBrushPreviewPointCount() const { return static_cast<int>(active_brush_live_preview_frame_.point_count); }
   [[nodiscard]] QString activeMaskLiveBrushPreviewSource() const;
   [[nodiscard]] bool activeMaskLiveBrushPreviewNativeAvailable() const;
   [[nodiscard]] quint64 activeMaskLiveBrushPreviewNativeHandle() const;
@@ -1714,6 +1778,17 @@ class EditorPreviewController final : public QObject {
       const QString& name,
       const QString& pack,
       bool overwrite = true);
+  Q_INVOKABLE QStringList presetAuthoringAdjustmentGroups() const;
+  Q_INVOKABLE QVariantMap saveCustomPreset(
+      const QString& name,
+      const QString& pack,
+      const QStringList& adjustment_groups = {},
+      int layer_index = -1,
+      bool overwrite = false);
+  Q_INVOKABLE QVariantMap duplicatePreset(
+      const QString& source_name,
+      const QString& new_name,
+      const QString& pack = {});
   Q_INVOKABLE bool applyPreset(const QString& name, const QStringList& adjustment_groups = {});
   Q_INVOKABLE bool applyPresetWithIntensity(
       const QString& name,
@@ -1751,13 +1826,43 @@ class EditorPreviewController final : public QObject {
       const QString& fill_color, const QString& stroke_color, double stroke_width);
   Q_INVOKABLE bool setPhotoLayerShapeStyle(int index, const QString& fill_color,
       const QString& stroke_color, double stroke_width);
+  Q_INVOKABLE bool setPhotoLayerShapeFill(int index, const QVariantMap& options);
+  Q_INVOKABLE bool setPhotoLayerShapeTexture(int index, const QString& file_path);
   Q_INVOKABLE bool addTextLayer(const QString& text = {}, const QString& name = {});
   Q_INVOKABLE bool addParagraphTextLayer(const QString& text, int x, int y,
       int width, int height, int canvas_width, int canvas_height);
   bool photoPaintBusy() const { return !photo_paint_jobs_.empty(); }
   QString photoPaintError() const { return photo_paint_error_; }
   Q_INVOKABLE bool addPointTextLayer(const QString& text, int x, int y, int canvas_width, int canvas_height);
+  Q_INVOKABLE bool copyPixelsFromSelection(int source_layer_index = -1, bool independent = false);
+  Q_INVOKABLE bool erasePixelsFromSelection(int layer_index);
+  Q_INVOKABLE QVariantMap photoCompositionCommand(const QVariantMap& request);
+  // Native task ownership hooks. These are not generic QObject invocation tools.
+  QVariantMap beginAgentTask(const QString& task_id);
+  void setAgentTaskJournal(std::shared_ptr<AgentTaskJournal> journal) { agent_task_journal_ = std::move(journal); }
+  using AgentRecipePersistenceHandler = std::function<QVariantMap(const QString&, const QVariantMap&)>;
+  void setAgentRecipePersistenceHandler(AgentRecipePersistenceHandler handler) {
+    agent_recipe_persistence_handler_ = std::move(handler);
+  }
+  AgentTaskJournal::ResourceAdapter agentTaskResourceAdapter(const QString& task_id);
+  QVariantMap recoverAgentTask(const QString& task_id);
+  QVariantMap runAgentTaskComposition(const QString& task_id, const QVariantMap& request);
+  QVariantMap runAgentTaskNativeCommand(const QString& task_id, const QString& command_id,
+      const QVariantMap& values, const std::function<QVariantMap()>& invoke);
+  QVariantMap finishAgentTask(const QString& task_id, const QString& status, const QString& authored_recipe = {});
+  QVariantMap checkpointAgentTaskRecipe(const QString& task_id, const QString& authored_recipe);
+  QVariantMap agentTaskState() const;
+  QVariantMap revertAgentTask(const QString& task_id, bool check_only = false);
+  void cancelAgentTaskWork(const QString& task_id);
   Q_INVOKABLE bool addPaintLayer();
+  [[nodiscard]] QStringList photoFragmentBrushPresetNames() const;
+  Q_INVOKABLE QVariantMap photoFragmentBrushPreset(const QString& name) const;
+  Q_INVOKABLE bool savePhotoFragmentBrushPreset(const QString& name, const QString& tip_layer_id,
+      const QString& source_preset_name, double rotation_variation, double scale_variation,
+      bool overwrite = true);
+  Q_INVOKABLE bool deletePhotoFragmentBrushPreset(const QString& name);
+  Q_INVOKABLE bool importPhotoFragmentBrushPreset(const QString& path, bool overwrite = false);
+  Q_INVOKABLE bool exportPhotoFragmentBrushPreset(const QString& name, const QString& path);
   Q_INVOKABLE bool beginPhotoPaintStroke(int index, const QVariantMap& settings);
   Q_INVOKABLE void addPhotoPaintPoint(double x, double y, double pressure = 1.0);
   Q_INVOKABLE bool finishPhotoPaintStroke(bool commit = true);
@@ -1765,6 +1870,11 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE bool addSourceLayer(const QString& file_path, const QString& name = {});
   Q_INVOKABLE bool relinkSourceLayer(const QString& layer_id, const QString& file_path);
   Q_INVOKABLE bool addLayerGroup(const QString& name = {});
+  Q_INVOKABLE bool groupPhotoLayers(const QVariantList& indices, const QString& name = {});
+  Q_INVOKABLE bool movePhotoLayerIntoGroup(int index, int group_index);
+  Q_INVOKABLE bool movePhotoLayerOutOfGroup(int index);
+  Q_INVOKABLE bool ungroupPhotoLayer(int index);
+  Q_INVOKABLE bool setPhotoLayerGroupExpanded(int index, bool expanded);
   Q_INVOKABLE bool setPhotoLayerEnabled(int index, bool enabled);
   Q_INVOKABLE bool setPhotoLayerAdjustmentsPreviewBypassed(int index, bool bypassed);
   Q_INVOKABLE bool setPhotoLayerLocked(int index, bool locked);
@@ -1785,10 +1895,27 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE bool setPhotoLayerPosterize(int index, const QString& effect_id, int levels, double amount, bool enabled);
   Q_INVOKABLE bool setPhotoLayerBoxBlur(int index, const QString& effect_id, int radius, double amount, bool enabled);
   Q_INVOKABLE bool setPhotoLayerMotionBlur(int index, const QString& effect_id, double distance, double angle, double amount, bool enabled);
+  Q_INVOKABLE bool setPhotoLayerDraggedShutter(int index, const QString& effect_id,
+      double distance, double angle, double falloff, double highlight_weighting,
+      bool protect_subject, double amount, bool enabled);
   Q_INVOKABLE bool setPhotoLayerUnsharpMask(int index, const QString& effect_id, double sigma, double strength, double threshold, double amount, bool enabled);
+  Q_INVOKABLE bool setPhotoLayerOpticalDiffusion(int index, const QString& effect_id,
+      double radius, double threshold, double knee, double strength, double warmth, double highlight_protection,
+      double amount, bool enabled);
+  Q_INVOKABLE bool setPhotoLayerImperfectPrint(int index, const QString& effect_id,
+      double paper_scale, double paper_texture, double ink_spread, double ink_density,
+      double red_offset_x, double red_offset_y, double blue_offset_x, double blue_offset_y,
+      double seed, double amount, bool enabled);
+  Q_INVOKABLE bool setPhotoLayerEffectParameters(int index, const QString& type,
+      const QString& effect_id, const QVariantMap& parameters, double amount, bool enabled);
+  Q_INVOKABLE QVariantList photoEffectParameterFields(const QString& type) const;
+  Q_INVOKABLE bool setPhotoLayerDisplacementMap(int index, const QString& effect_id, const QString& path);
   Q_INVOKABLE QVariantList availablePhotoEffects() const;
+  Q_INVOKABLE QVariantList availablePhotoEffectLooks() const;
+  Q_INVOKABLE bool applyPhotoLayerEffectLook(int index, const QString& look_id);
   Q_INVOKABLE QStringList availablePhotoTextFonts() const;
   Q_INVOKABLE QStringList availablePhotoTextFaces(const QString& family) const;
+  Q_INVOKABLE QVariantList availablePhotoTextAxes(const QString& family, const QString& face) const;
   Q_INVOKABLE QString photoTextFontWarning(const QString& family) const;
   Q_INVOKABLE bool setPhotoLayerEffectAmount(int index, const QString& effect_id, double amount);
   Q_INVOKABLE bool resetPhotoLayerEffect(int index, const QString& effect_id);
@@ -1819,6 +1946,9 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE QVariantMap photoLayerTypography(int index) const;
   Q_INVOKABLE QVariantMap photoLayerTextLayoutInfo(int index) const;
   Q_INVOKABLE bool setPhotoLayerTypography(int index, const QVariantMap& changes);
+  Q_INVOKABLE bool setPhotoLayersTypography(const QVariantList& indices, const QVariantMap& changes);
+  Q_INVOKABLE bool setPhotoLayerTextPathFromActiveSelection(int index, int contour_index = 0);
+  Q_INVOKABLE bool clearPhotoLayerTextPath(int index);
   Q_INVOKABLE bool setPhotoLayerTextStyle(
       int index,
       const QString& font_family,
@@ -1827,12 +1957,14 @@ class EditorPreviewController final : public QObject {
       const QString& font_weight,
       const QString& alignment);
   Q_INVOKABLE bool setPhotoLayerTextBox(int index, int pixel_width, int pixel_height);
+  Q_INVOKABLE bool resizePhotoLayerTextBox(int index, int x, int y, int pixel_width, int pixel_height);
   Q_INVOKABLE bool isolatePhotoLayer(int index);
   Q_INVOKABLE bool clearPhotoLayerSolo();
   Q_INVOKABLE bool savePhotoLayerVisibilityState(const QString& name = {});
   Q_INVOKABLE bool applyPhotoLayerVisibilityState(int index);
   Q_INVOKABLE bool deletePhotoLayerVisibilityState(int index);
   Q_INVOKABLE bool renamePhotoLayer(int index, const QString& name);
+  Q_INVOKABLE bool movePhotoLayersByPixels(const QVariantList& indices, int delta_x, int delta_y);
   Q_INVOKABLE bool setPhotoLayerTransform(
       int index,
       int x,
@@ -1939,7 +2071,7 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE void clearActivePolygonPoints();
   Q_INVOKABLE bool simplifyActivePolygon(double tolerance = 0.012);
   Q_INVOKABLE bool smoothActivePolygon();
-  Q_INVOKABLE bool closeActiveLassoPath(double tolerance = 0.008);
+  Q_INVOKABLE bool closeActiveLassoPath(double tolerance = -1.0);
   Q_INVOKABLE void startSelectionBrush(bool subtract = false);
   Q_INVOKABLE void startAIMaskRefineBrush(bool subtract = false);
   Q_INVOKABLE void startSelectionEdgeBrush(bool subtract = false);
@@ -1999,6 +2131,8 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE void sampleWhiteBalanceAt(double normalized_x, double normalized_y);
   Q_INVOKABLE void setColorToolSamplingTarget(const QString& target);
   Q_INVOKABLE void sampleColorToolAt(double normalized_x, double normalized_y);
+  Q_INVOKABLE bool selectColorMixerChannelAt(double normalized_x, double normalized_y);
+  Q_INVOKABLE void cancelColorMixerSample();
   Q_INVOKABLE bool autoDetectSkinProtection();
   Q_INVOKABLE void updatePixelInspector(double normalized_x, double normalized_y);
   Q_INVOKABLE void clearPixelInspector();
@@ -2007,6 +2141,10 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE void useAsShotRawWhiteBalance();
 
 signals:
+  void sourceSamplingBusyChanged();
+  void colorMixerSampleCompleted(bool success);
+  void documentEditCommitted();
+  void polygonPathChanged();
   void photoExportChanged();
   void photoPaintStateChanged();
   void photoExportFinished(bool success, bool cancelled, const QString& path, const QString& error);
@@ -2023,6 +2161,7 @@ signals:
   void controlsChanged();
   void maskStateChanged();
   void activeBrushStrokeChanged();
+  void brushStrokeActiveChanged();
   void maskOverlayChanged();
   void compareModeChanged();
   void compareSnapshotChanged();
@@ -2035,6 +2174,7 @@ signals:
   void histogramActivityChanged();
   void historyChanged();
   void clipboardChanged();
+  void photoLayerClipboardOperationFinished(const QString& operation, int count, const QString& error);
   void presetsChanged();
   void presetIntensityChanged();
   void cameraDefaultsChanged();
@@ -2046,12 +2186,17 @@ signals:
   CustomerEditAccess customer_edit_access_;
 
   friend struct EditorPreviewControllerTestAccess;
+  friend struct MaskInteractionPerformanceTestAccess;
+  bool photo_layer_clipboard_busy_ = false;
+  quint64 photo_layer_clipboard_epoch_ = 0;
+  friend struct EditorHistoryStorageTestAccess;
   bool startPhotoExport(const QString& path, std::function<QImage()> producer);
   bool photo_export_busy_ = false;
   QString photo_export_error_;
   QString photo_export_path_;
   std::shared_ptr<PhotoExportControl> photo_export_control_;
   LinkedImageSourceMonitor* linked_source_monitor_ = nullptr;
+  quint64 layer_source_content_revision_ = 0;
 
   struct PendingBrushCommit {
     int mask_index = -1;
@@ -2064,11 +2209,26 @@ signals:
     QString undo_label;
     double brush_spacing = 0.75;
     double feather = 0.0;
+    double hardness = 0.25;
     double auto_mask_tolerance = 0.18;
     bool auto_mask = false;
     bool protect_edges = false;
     qint64 live_preview_elapsed_ms = 0;
     bool live_preview_within_latency_budget = true;
+  };
+
+  struct NativePreviewCommitContext {
+    int generation = 0;
+    bool full_resolution = false;
+    bool overlay_only = false;
+    bool success = false;
+    bool cancelled = false;
+    bool accepted_transaction_feedback = false;
+    quint64 edit_transaction_generation = 0;
+    quint64 layer_source_content_revision = 0;
+    QString source_asset_id;
+    QString source_file_path;
+    int mask_work_revision = 0;
   };
 
   void renderPreview(bool schedule_full_resolution = true, const QString& reason = {});
@@ -2101,6 +2261,7 @@ signals:
       const QSize& raster_size,
       const QRect& tile_rect);
   static void clearPreviewWorkingCachesForTesting();
+  static void clearRenderedPreviewImageCacheForTesting();
   static void clearMaskTileCacheForTesting();
   static bool insertMaskTileForTesting(
       const QString& key,
@@ -2132,6 +2293,8 @@ signals:
   void handleRenderFinished(bool full_resolution);
   void handleOverlayRenderFinished();
   void handleRenderResult(bool full_resolution, const RenderResult& result);
+  [[nodiscard]] bool nativePreviewCommitAllowed(
+      const NativePreviewCommitContext& context) const;
   void publishOverlayRenderResult(const RenderResult& result);
   void recordVisibleOverlayQueueWait(const RenderRequest& request);
   void startOverlayRenderStage(const RenderRequest& request);
@@ -2170,8 +2333,8 @@ signals:
   bool generatedMaskIsStale(const QVariantMap& mask) const;
   [[nodiscard]] QString cachePathForSelection(bool edited, bool full_resolution) const;
   void pushUndoState(const EditState& state, const QString& label = {});
-  [[nodiscard]] QVector<EditState>& undoStackForAsset(const QString& asset_id);
-  [[nodiscard]] QVector<EditState>& redoStackForAsset(const QString& asset_id);
+  [[nodiscard]] QVector<HistoryRevision>& undoStackForAsset(const QString& asset_id);
+  [[nodiscard]] QVector<HistoryRevision>& redoStackForAsset(const QString& asset_id);
   [[nodiscard]] QVector<QString>& undoLabelStackForAsset(const QString& asset_id);
   [[nodiscard]] QVector<QString>& redoLabelStackForAsset(const QString& asset_id);
   void rememberStateForUndo(const QString& label = {});
@@ -2228,7 +2391,8 @@ signals:
       const QVariantList& layers,
       const QString& operation = {},
       bool debounce_render = false,
-      const QString& undo_label = {});
+      const QString& undo_label = {},
+      bool record_undo = true);
   bool applyPhotoLayerMetadataChange(
       const QVariantList& layers,
       const QStringList& changed_keys,
@@ -2253,7 +2417,7 @@ signals:
       double value,
       bool is_minimum);
   void loadPresets();
-  void savePresets() const;
+  bool savePresets(QString* error = nullptr) const;
   void loadCameraDefaults();
   void saveCameraDefaults() const;
   void loadCustomCropPresets();
@@ -2308,7 +2472,8 @@ signals:
       const QVector<int>& instance_ids = {});
   void clearSmartSelectPreviewState();
   void updateActiveBrushLivePreview(const QVector<BrushPreviewPoint>& sampled_points);
-  void dispatchAutoMaskLivePreview();
+  bool setBrushStrokeActive(bool active);
+  void dispatchBrushLivePreview();
   void clearActiveBrushLivePreview();
   void schedulePendingBrushCommit(PendingBrushCommit commit);
   void processNextPendingBrushCommit();
@@ -2326,6 +2491,18 @@ signals:
       int generation,
       const QImage& proof_gamut_warning_mask = QImage());
   void clearDiagnosticOverlayImages();
+  struct DiagnosticOverlayResult final {
+    std::array<QImage, 6> images;
+    quint64 revision = 0;
+    bool readback_failed = false;
+  };
+  void queueDiagnosticOverlayUpdate(
+      const QImage& image, const QImage& proof_gamut_warning_mask,
+      std::shared_ptr<const photo_editor::pipeline::metal::MetalOutputSurface> surface,
+      bool deferred);
+  void startDiagnosticOverlayUpdate();
+  void publishDiagnosticOverlayImages(const DiagnosticOverlayResult& result);
+  void cancelDiagnosticOverlayUpdate();
   [[nodiscard]] QSize activeBrushLivePreviewSize() const;
   bool regenerateActiveInpaintPatchWithQuality(
       const QString& requested_quality_mode,
@@ -2372,13 +2549,32 @@ signals:
   [[nodiscard]] bool channelMatchesSelection(const QColor& color) const;
   [[nodiscard]] QString withDisplayRevision(const QString& source) const;
   bool refreshAlphaMaskImportPreview();
+  void completeRecipePreparation(const EditorRecipeSaveSnapshot& snapshot,
+                                 const PreparedEditorRecipePersistence& prepared,
+                                 qint64 preparation_elapsed_ms);
+  bool recipe_preparation_active_ = false;
+  bool requestSourceSample(double normalized_x, double normalized_y,
+                           std::function<bool(const QImage&, int, int, int)> apply);
+  quint64 source_sample_revision_ = 0;
+  bool source_sample_active_ = false;
+  std::shared_ptr<std::atomic_bool> source_sample_cancellation_;
+  std::function<void()> pending_source_sample_;
   void cancelPendingAssetScopedWork();
   void scheduleThumbnailRefreshQueue(const QString& reason) const;
   void runQueuedThumbnailRefresh();
   void handleThumbnailRefreshQueueFinished();
 
   HistogramScopeSession histogram_scope_session_;
+  void startNativePixelSample();
+  void publishPixelInspector(const QVariantMap& after, double normalized_x, double normalized_y, bool pending = false);
   QVariantMap pixel_inspector_;
+  bool pixel_inspector_requested_ = false;
+  bool native_pixel_sample_active_ = false;
+  bool native_pixel_sample_pending_ = false;
+  quint64 pixel_inspector_sample_revision_ = 0;
+  QPointF pixel_inspector_sample_position_;
+  QFutureWatcher<QVariantMap> native_pixel_sample_watcher_;
+  std::shared_ptr<const photo_editor::pipeline::metal::MetalOutputSurface> pixel_inspector_native_surface_;
   QVariantMap active_luminance_sample_preview_;
   QString alpha_mask_import_path_;
   QVariantMap alpha_mask_import_preview_;
@@ -2405,7 +2601,25 @@ signals:
   QString zone_map_overlay_source_;
   QString diagnostic_overlay_rendered_cache_key_;
   bool diagnostic_overlays_requested_ = false;
+  bool diagnostic_overlay_active_ = false;
+  bool diagnostic_overlay_pending_ = false;
+  bool diagnostic_native_readback_failed_ = false;
+  quint64 diagnostic_overlay_revision_ = 0;
+  QImage diagnostic_overlay_pending_image_;
+  QImage diagnostic_overlay_pending_gamut_mask_;
+  std::shared_ptr<const photo_editor::pipeline::metal::MetalOutputSurface> diagnostic_overlay_pending_surface_;
+  std::shared_ptr<std::atomic_bool> diagnostic_overlay_cancellation_;
+  QFutureWatcher<DiagnosticOverlayResult> diagnostic_overlay_watcher_;
+  QTimer diagnostic_overlay_timer_;
   bool color_tool_mask_preview_enabled_ = false;
+  QFutureWatcher<ColorToolMaskPreviewResult> color_tool_mask_preview_watcher_;
+  QThreadPool color_tool_mask_preview_pool_;
+  QString color_tool_mask_preview_requested_key_;
+  std::shared_ptr<std::atomic_bool> color_tool_mask_preview_cancellation_;
+  std::optional<ColorToolMaskPreviewRequest> pending_color_tool_mask_preview_request_;
+  bool color_tool_mask_preview_active_ = false;
+  [[nodiscard]] QString colorToolMaskPreviewCacheKey(const EditState& state) const;
+  void launchColorToolMaskPreview(ColorToolMaskPreviewRequest request);
   QString reference_preview_source_;
   QString display_reference_preview_source_;
   QString reference_image_path_;
@@ -2466,6 +2680,7 @@ signals:
   QString section_comparison_previous_scope_;
   QString section_comparison_previous_layer_id_;
   QString section_comparison_scope_;
+  std::optional<EditRecipeState> history_preview_state_;
   QString section_comparison_layer_id_;
   QStringList compare_adjustment_groups_;
   QStringList mask_compare_adjustment_groups_;
@@ -2667,10 +2882,10 @@ signals:
   QImage active_brush_live_preview_image_;
   BrushLivePreviewFrame active_brush_live_preview_frame_;
   QFutureWatcher<BrushLivePreviewFrame> auto_mask_live_preview_watcher_;
-  QVector<BrushPreviewPoint> pending_auto_mask_live_points_;
+  QVector<BrushPreviewPoint> pending_brush_live_preview_points_;
   std::shared_ptr<std::atomic<int>> brush_live_preview_generation_ =
       std::make_shared<std::atomic<int>>(0);
-  bool auto_mask_live_preview_running_ = false;
+  bool brush_live_preview_running_ = false;
   int active_brush_live_preview_revision_ = 0;
   QString smart_select_instance_map_key_;
   QByteArray smart_select_instance_map_data_;
@@ -2710,6 +2925,24 @@ signals:
   QString color_tool_sampling_target_;
   using EditHistorySnapshot = StoredEditHistorySnapshot;
   HistoryService history_service_;
+  std::shared_ptr<AgentTaskJournal> agent_task_journal_;
+  QString agent_task_mutation_id_;
+  AgentRecipePersistenceHandler agent_recipe_persistence_handler_;
+  QVariantMap agent_recipe_persistence_context_;
+  bool requestHistoryRevision(const HistoryRevision& revision, std::function<void(const EditState&)> apply);
+  void invalidateHistoryRead();
+  QThreadPool history_restore_pool_;
+  QThreadPool history_format_pool_;
+  std::shared_ptr<std::atomic<quint64>> history_read_token_ = std::make_shared<std::atomic<quint64>>(0);
+  std::shared_ptr<std::atomic<quint64>> history_format_token_ = std::make_shared<std::atomic<quint64>>(0);
+  quint64 history_state_generation_ = 0;
+  int history_requested_index_ = -1;
+  mutable QString history_format_requested_key_;
+  mutable QString history_format_ready_key_;
+  mutable QVariantList history_format_entries_;
+  mutable QHash<QString, QVariantMap> history_format_cache_;
+  mutable bool history_format_busy_ = false;
+
   EditState copied_settings_state_;
   bool has_copied_settings_ = false;
   PresetService preset_service_;
@@ -2718,9 +2951,12 @@ signals:
   void dispatchPhotoPaintWork();
   void completePhotoPaintWork();
   void cancelAllPhotoPaint();
+  void restoreCancelledPhotoPaintPreview(const QImage& image);
+  PhotoFragmentLayerTipCache photo_fragment_layer_tip_cache_;
   std::deque<std::shared_ptr<PhotoPaintSession>> photo_paint_jobs_;
   std::shared_ptr<PhotoPaintSession> photo_paint_input_, photo_paint_running_job_;
   QFutureWatcher<PhotoPaintWorkResult> photo_paint_watcher_;
+  QVariantMap last_photo_layer_stack_performance_;
   QString photo_paint_error_;
   QVariantMap photo_paint_pending_asset_;
   quint64 photo_paint_asset_request_generation_ = 0;
@@ -2739,6 +2975,8 @@ signals:
   QString recipe_save_authority_;
   QString recipe_save_error_;
   int recipe_save_retry_delay_ms_ = 2000;
+  bool catalog_recipe_persistence_enabled_ = true;
+  QString document_owned_asset_id_;
   bool recipe_save_journal_attempted_ = false;
   QTimer system_monitor_profile_timer_;
   QString system_monitor_profile_name_;
@@ -2805,6 +3043,7 @@ signals:
   int edit_transaction_interactive_preview_request_count_ = 0;
   QString edit_transaction_interactive_preview_reason_;
   QFutureWatcher<RenderResult> interactive_render_watcher_;
+  bool interactive_render_result_pending_ = false;
   QFutureWatcher<RenderResult> full_render_watcher_;
   RenderRequest pending_interactive_request_;
   RenderRequest pending_full_request_;

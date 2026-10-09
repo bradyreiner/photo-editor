@@ -84,6 +84,52 @@ mod tests {
     }
 
     #[test]
+    fn large_timeline_upsert_payload_roundtrips_exact_argv_without_catalog_io() {
+        use crate::PersistedTimelineDocument;
+
+        let expected = PersistedTimelineDocument {
+            timeline_id: "timeline-large-payload".into(),
+            asset_id: "timeline:timeline-large-payload".into(),
+            name: "Large timeline".into(),
+            document_path: "/tmp/timeline.json".into(),
+            render_path: "/tmp/timeline.mp4".into(),
+            poster_path: "/tmp/timeline.jpg".into(),
+            duration_seconds: 12.5,
+            document_json: Some(serde_json::json!({
+                "opaqueClipMetadata": format!("quote-\"-slash-\\-α-{}", "payload".repeat(8_192)),
+                "clips": [{"clipId": "clip-1", "source": "media:still"}],
+            })),
+            created_at: "2026-10-06T00:00:00Z".into(),
+            updated_at: "2026-10-06T00:00:01Z".into(),
+        };
+        let payload = serde_json::to_string(&expected).unwrap();
+        assert!(payload.len() > 32 * 1024);
+        let original_arguments = vec![
+            "catalog_timeline_documents".to_owned(),
+            "upsert".to_owned(),
+            payload,
+        ];
+        let envelope = serde_json::to_vec(&serde_json::json!({
+            "schema": SCHEMA,
+            "arguments": &original_arguments[1..],
+        }))
+        .unwrap();
+        let decoded_arguments = decode_helper_arguments(
+            vec![
+                "catalog_timeline_documents".into(),
+                "--stdin-json-v1".into(),
+            ],
+            envelope.as_slice(),
+        )
+        .unwrap();
+
+        assert_eq!(decoded_arguments, original_arguments);
+        let decoded_document: PersistedTimelineDocument =
+            serde_json::from_str(&decoded_arguments[2]).unwrap();
+        assert_eq!(decoded_document, expected);
+    }
+
+    #[test]
     fn malformed_or_wrong_version_payloads_fail_closed() {
         let too_many = serde_json::to_vec(&serde_json::json!({
             "schema": SCHEMA, "arguments": vec!["argument"; 33]

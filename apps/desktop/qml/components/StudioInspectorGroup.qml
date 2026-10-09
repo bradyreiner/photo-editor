@@ -16,8 +16,8 @@ InspectorSection {
     showAccentMarker: false
     uppercaseTitle: false
     titleFontFamily: groupTheme.fontUi
-    titlePixelSize: 13
-    titleWeight: Font.Bold
+    titlePixelSize: groupTheme.typeLabel
+    titleWeight: groupTheme.weightSection
     beforeAfterAvailable: compareGroup.length > 0
     beforeAfterActive: workspace.sectionComparisonActive(compareGroup)
     beforeAfterTooltip: beforeAfterActive
@@ -31,10 +31,14 @@ InspectorSection {
                   : "Reset this panel only."
 
     onVisibleChanged: {
-        if (!visible && beforeAfterActive)
+        if (!visible && workspace.sectionComparisonActive(compareGroup))
             workspace.toggleSectionComparison(compareGroup)
     }
-    onBeforeAfterRequested: workspace.toggleSectionComparison(compareGroup)
-    onBeforeAfterHoldRequested: function(held) { workspace.holdSectionComparison(compareGroup, held) }
+    onBeforeAfterRequested: {
+        workspace.toggleSectionComparison(compareGroup)
+    }
+    onBeforeAfterHoldRequested: function(held) {
+        workspace.holdSectionComparison(compareGroup, held)
+    }
     onResetRequested: workspace.resetPrimaryAdjustmentGroup(resetGroup)
 }

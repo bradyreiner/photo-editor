@@ -25,14 +25,6 @@ constexpr auto kFnvPrime = std::uint64_t{1099511628211ULL};
   return hash;
 }
 
-[[nodiscard]] bool valid_shape(int size, std::size_t table_size) {
-  if (size < 2) return false;
-  const auto edge = static_cast<std::size_t>(size);
-  return edge <= std::numeric_limits<std::size_t>::max() / edge &&
-         edge * edge <= std::numeric_limits<std::size_t>::max() / edge &&
-         table_size == edge * edge * edge;
-}
-
 [[nodiscard]] bool finite_payload(const std::vector<ColorPixel>& table) {
   return std::ranges::all_of(table, [](const ColorPixel& pixel) {
     return std::isfinite(pixel.red) && std::isfinite(pixel.green) &&
@@ -40,14 +32,31 @@ constexpr auto kFnvPrime = std::uint64_t{1099511628211ULL};
   });
 }
 
-[[nodiscard]] bool payload_supported(
-    int size,
-    const std::vector<ColorPixel>& table,
-    std::string_view input_color_space,
-    std::string_view output_color_space) {
-  return valid_shape(size, table.size()) && finite_payload(table) &&
-         resolve_builtin_rgb_color_space(input_color_space).has_value() &&
-         resolve_builtin_rgb_color_space(output_color_space).has_value();
+[[nodiscard]] bool payload_shape_valid(const ColorLut3D& lut) {
+  const auto valid_3d = [&lut] {
+    if (lut.size == 0) return lut.table.empty();
+    if (lut.size < 2 || lut.size > 128) return false;
+    const auto edge = static_cast<std::size_t>(lut.size);
+    return edge <= std::numeric_limits<std::size_t>::max() / edge &&
+           edge * edge <= std::numeric_limits<std::size_t>::max() / edge &&
+           lut.table.size() == edge * edge * edge;
+  }();
+  const auto valid_1d = lut.shaper_size == 0
+                            ? lut.shaper_table.empty()
+                            : lut.shaper_size >= 2 && lut.shaper_size <= 65536 &&
+                                  lut.shaper_table.size() ==
+                                      static_cast<std::size_t>(lut.shaper_size) &&
+                                  std::isfinite(lut.shaper_input_range[0]) &&
+                                  std::isfinite(lut.shaper_input_range[1]) &&
+                                  lut.shaper_input_range[1] > lut.shaper_input_range[0];
+  return (lut.size > 0 || lut.shaper_size > 0) && valid_3d && valid_1d;
+}
+
+[[nodiscard]] bool payload_supported(const ColorLut3D& lut) {
+  return payload_shape_valid(lut) && finite_payload(lut.table) &&
+         finite_payload(lut.shaper_table) &&
+         resolve_builtin_rgb_color_space(lut.input_color_space).has_value() &&
+         resolve_builtin_rgb_color_space(lut.output_color_space).has_value();
 }
 
 [[nodiscard]] std::uint64_t table_identity(const ColorLut3D& lut) {
@@ -59,6 +68,17 @@ constexpr auto kFnvPrime = std::uint64_t{1099511628211ULL};
     hash = hash_append(hash, std::bit_cast<std::uint64_t>(value));
   }
   for (const auto& pixel : lut.table) {
+    hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.red));
+    hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.green));
+    hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.blue));
+    hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.alpha));
+  }
+  hash = hash_append(hash, static_cast<std::uint64_t>(lut.shaper_size));
+  hash = hash_append(
+      hash, std::bit_cast<std::uint64_t>(lut.shaper_input_range[0]));
+  hash = hash_append(
+      hash, std::bit_cast<std::uint64_t>(lut.shaper_input_range[1]));
+  for (const auto& pixel : lut.shaper_table) {
     hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.red));
     hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.green));
     hash = hash_append(hash, std::bit_cast<std::uint32_t>(pixel.blue));
@@ -91,7 +111,10 @@ constexpr auto kFnvPrime = std::uint64_t{1099511628211ULL};
     const std::array<double, 3>& domain_max,
     const std::vector<ColorPixel>& table,
     std::string_view input_color_space,
-    std::string_view output_color_space) {
+    std::string_view output_color_space,
+    const std::vector<ColorPixel>& shaper_table,
+    int shaper_size,
+    const std::array<double, 2>& shaper_input_range) {
   return ColorLut3D{
       .table = table,
       .size = size,
@@ -99,7 +122,10 @@ constexpr auto kFnvPrime = std::uint64_t{1099511628211ULL};
       .domain_max = domain_max,
       .input_color_space = std::string(input_color_space),
       .output_color_space = std::string(output_color_space),
-      .valid = valid_shape(size, table.size()),
+      .valid = true,
+      .shaper_table = shaper_table,
+      .shaper_size = shaper_size,
+      .shaper_input_range = shaper_input_range,
   };
 }
 
@@ -128,9 +154,7 @@ std::vector<CompiledUserLut> compile_user_lut_runtimes(
   const auto append_lut = [&](ColorLut3D lut, double strength) {
     const auto input_space = resolve_builtin_rgb_color_space(lut.input_color_space);
     const auto output_space = resolve_builtin_rgb_color_space(lut.output_color_space);
-    if (!payload_supported(
-            lut.size, lut.table, lut.input_color_space,
-            lut.output_color_space) ||
+    if (!payload_supported(lut) ||
         !input_space.has_value() || !output_space.has_value()) {
       return;
     }
@@ -158,7 +182,8 @@ std::vector<CompiledUserLut> compile_user_lut_runtimes(
         make_user_lut(
             state.lut_size, state.lut_domain_min, state.lut_domain_max,
             state.lut_table, state.lut_input_color_space,
-            state.lut_output_color_space),
+            state.lut_output_color_space, state.lut_shaper_table,
+            state.lut_shaper_size, state.lut_shaper_input_range),
         single_strength);
   }
   for (const auto& adjustment : state.lut_stack) {
@@ -168,16 +193,15 @@ std::vector<CompiledUserLut> compile_user_lut_runtimes(
         make_user_lut(
             adjustment.size, adjustment.domain_min, adjustment.domain_max,
             adjustment.table, adjustment.input_color_space,
-            adjustment.output_color_space),
+            adjustment.output_color_space, adjustment.shaper_table,
+            adjustment.shaper_size, adjustment.shaper_input_range),
         strength);
   }
   return luts;
 }
 
 bool CompiledUserLut::ready() const {
-  return payload_supported(
-             lut.size, lut.table, lut.input_color_space,
-             lut.output_color_space) &&
+  return payload_supported(lut) &&
          std::ranges::all_of(
              working_to_input.values,
              [](double value) { return std::isfinite(value); }) &&
@@ -199,18 +223,22 @@ bool user_lut_state_supports_compiled_execution(
     const ColorAdjustmentState& state) {
   if (state.lut_enabled &&
       std::clamp(state.lut_strength / 100.0, 0.0, 1.0) > 1.0e-6 &&
-      !payload_supported(
-          state.lut_size, state.lut_table, state.lut_input_color_space,
-          state.lut_output_color_space)) {
+      !payload_supported(make_user_lut(
+          state.lut_size, state.lut_domain_min, state.lut_domain_max,
+          state.lut_table, state.lut_input_color_space,
+          state.lut_output_color_space, state.lut_shaper_table,
+          state.lut_shaper_size, state.lut_shaper_input_range))) {
     return false;
   }
   return std::ranges::all_of(
       state.lut_stack, [](const LutAdjustment& lut) {
         const auto active = lut.enabled &&
             std::clamp(lut.strength / 100.0, 0.0, 1.0) > 1.0e-6;
-        return !active || payload_supported(
-                              lut.size, lut.table, lut.input_color_space,
-                              lut.output_color_space);
+        return !active || payload_supported(make_user_lut(
+                              lut.size, lut.domain_min, lut.domain_max,
+                              lut.table, lut.input_color_space,
+                              lut.output_color_space, lut.shaper_table,
+                              lut.shaper_size, lut.shaper_input_range));
       });
 }
 

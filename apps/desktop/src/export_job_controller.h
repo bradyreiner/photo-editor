@@ -9,11 +9,20 @@
 #include <QFutureWatcher>
 #include <QHash>
 #include <QSet>
+#include <QTimer>
+#include <QElapsedTimer>
 #include <functional>
+#include <memory>
+#include <atomic>
+
+class QThreadPool;
 
 #include "job_store.h"
 
 namespace photo_editor::desktop {
+
+struct ExportPreflightRequest;
+struct ExportPreflightCache;
 
 struct ExportHistoryReadResult {
   QVector<PersistentJobRecord> records;
@@ -37,9 +46,25 @@ class ExportJobController final : public QObject {
   Q_PROPERTY(int pendingAdmissionCount READ pendingAdmissionCount NOTIFY admissionChanged)
   Q_PROPERTY(QString admissionError READ admissionError NOTIFY admissionChanged)
   Q_PROPERTY(QString submissionError READ submissionError NOTIFY admissionChanged)
+  Q_PROPERTY(QVariantMap singlePreflight READ singlePreflight NOTIFY preflightChanged)
+  Q_PROPERTY(QVariantMap batchPreflight READ batchPreflight NOTIFY preflightChanged)
+  Q_PROPERTY(bool preflightBusy READ preflightBusy NOTIFY preflightChanged)
+  Q_PROPERTY(bool batchSubmissionBusy READ batchSubmissionBusy NOTIFY batchSubmissionChanged)
 
  public:
   explicit ExportJobController(QObject* parent = nullptr);
+  ~ExportJobController() override;
+  [[nodiscard]] QVariantMap singlePreflight() const { return single_preflight_; }
+  [[nodiscard]] QVariantMap batchPreflight() const { return batch_preflight_; }
+  [[nodiscard]] bool preflightBusy() const { return preflight_busy_; }
+  Q_INVOKABLE void requestPreflight(const QVariantMap& request, bool force = false);
+  Q_INVOKABLE void cancelPreflight();
+  [[nodiscard]] bool batchSubmissionBusy() const { return batch_submission_busy_; }
+  // Accepts validation work; batchSubmissionFinished reports jobs submitted to
+  // the existing durable-admission path. A true return does not mean saved.
+  Q_INVOKABLE bool queueBatchExportAsync(
+      const QVariantList& assets, const QString& preset, const QString& destination_directory,
+      const QString& crop_preset, double crop_x, double crop_y, double crop_width, double crop_height);
   // Shutdown only, after the event loop stops but before QApplication teardown.
   // Controller destruction itself remains nonblocking.
   static void finishPendingAdmissions();
@@ -130,9 +155,34 @@ class ExportJobController final : public QObject {
   void startupRecoveryErrorChanged();
   void admissionChanged();
   void admissionFinished(const QString& job_id, bool confirmed, const QString& error);
+  void preflightChanged();
+  void batchSubmissionChanged();
+  void batchSubmissionFinished(int queued, int requested);
 
  private:
   friend struct ExportJobControllerTestAccess;
+  friend struct ExportPreflightTestAccess;
+  static QThreadPool& preflightThreadPool();
+  void startPreflight();
+  void finishPreflight();
+  QFutureWatcher<QVariantMap> preflight_watcher_;
+  QTimer preflight_timer_;
+  QElapsedTimer preflight_age_;
+  std::shared_ptr<ExportPreflightRequest> active_preflight_;
+  std::shared_ptr<ExportPreflightRequest> pending_preflight_;
+  std::shared_ptr<ExportPreflightCache> preflight_cache_;
+  QVariantMap preflight_input_;
+  QVariantMap single_preflight_;
+  QVariantMap batch_preflight_;
+  quint64 preflight_generation_ = 0;
+  int preflight_source_build_count_ = 0;
+  bool preflight_busy_ = false;
+  std::shared_ptr<std::atomic_bool> batch_submission_cancellation_;
+  bool batch_submission_busy_ = false;
+  int queueBatchExportWithPlan(
+      const QVariantList& assets, const QString& preset, const QString& destination_directory,
+      const QString& crop_preset, double crop_x, double crop_y, double crop_width, double crop_height,
+      const QVariantMap& report);
   struct ExportJob final {
     QString job_id;
     QString asset_id;

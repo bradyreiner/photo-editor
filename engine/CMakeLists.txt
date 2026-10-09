@@ -6,6 +6,8 @@ set(photo_engine_sources
   src/pipeline/color_blur_runtime.cpp
   src/pipeline/photo_effects.cpp
   src/pipeline/photo_effect_codec.cpp
+  src/pipeline/photo_optical_effects.cpp
+  src/pipeline/photo_artistic_effects.cpp
   src/pipeline/color_control_semantics.cpp
   src/pipeline/color_curve_evaluator.cpp
   src/pipeline/color_curve_stage_runtime.cpp
@@ -59,6 +61,7 @@ set(photo_engine_sources
   src/pipeline/color_spatial_runtime.cpp
   src/pipeline/color_spatial_detail_program.cpp
   src/pipeline/color_transform.cpp
+  src/pipeline/video_color_transform.cpp
   src/pipeline/color_working_space_runtime.cpp
   src/pipeline/cube_lut.cpp
   src/pipeline/dcp_profile.cpp

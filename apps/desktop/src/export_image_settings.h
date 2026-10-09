@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QImage>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QString>
 
 #include <initializer_list>
@@ -52,9 +53,17 @@ struct ExportImageSettings final {
   return QStringLiteral("normalized-pixels-no-orientation-tag");
 }
 
+[[nodiscard]] inline QString export_output_sharpening_for_preset(const QString& preset) {
+  const auto match = QRegularExpression(
+      QStringLiteral("(?:^|[|;])\\s*sharpen\\s*=\\s*(off|screen|print)(?:$|[|;])"),
+      QRegularExpression::CaseInsensitiveOption).match(preset.trimmed());
+  return match.hasMatch() ? match.captured(1).toLower() : QStringLiteral("off");
+}
+
 [[nodiscard]] inline ExportImageSettings export_image_settings_for_preset(const QString& preset) {
   const auto normalized = preset.trimmed();
-  const auto lower = normalized.toLower();
+  const auto preset_name = normalized.section(QLatin1Char('|'), 0, 0).trimmed();
+  const auto lower = preset_name.toLower();
   const auto contains_any = [&](std::initializer_list<QString> needles) {
     for (const auto& needle : needles) {
       if (lower.contains(needle)) {
@@ -71,10 +80,18 @@ struct ExportImageSettings final {
       lower.contains(QStringLiteral("16-bit")) ||
       lower.contains(QStringLiteral("16 bit")) ||
       lower.contains(QStringLiteral("16bpc"));
+  auto requested_quality = -1;
+  auto requested_max_edge = -1;
+  const QRegularExpression quality_expression(QStringLiteral("(?:^|[|;])\\s*quality\\s*=\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+  const auto quality_match = quality_expression.match(normalized);
+  if (quality_match.hasMatch()) requested_quality = qBound(1, quality_match.captured(1).toInt(), 100);
+  const QRegularExpression max_edge_expression(QStringLiteral("(?:^|[|;])\\s*max-edge\\s*=\\s*(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+  const auto max_edge_match = max_edge_expression.match(normalized);
+  if (max_edge_match.hasMatch()) requested_max_edge = qBound(1, max_edge_match.captured(1).toInt(), 100000);
 
   if (contains_any({QStringLiteral("pfm")}) ||
-      normalized.compare(QStringLiteral("Scene Linear"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("Scene Linear PFM"), Qt::CaseInsensitive) == 0) {
+      preset_name.compare(QStringLiteral("Scene Linear"), Qt::CaseInsensitive) == 0 ||
+      preset_name.compare(QStringLiteral("Scene Linear PFM"), Qt::CaseInsensitive) == 0) {
     return {
         .max_edge = 0,
         .jpeg_quality = 100,
@@ -145,8 +162,8 @@ struct ExportImageSettings final {
   }
   if (contains_any({QStringLiteral("jpeg"), QStringLiteral("jpg")})) {
     return {
-        .max_edge = 0,
-        .jpeg_quality = 95,
+        .max_edge = requested_max_edge > 0 ? requested_max_edge : 0,
+        .jpeg_quality = requested_quality > 0 ? requested_quality : 95,
         .format_name = QStringLiteral("JPEG"),
         .bit_depth = 8,
         .flatten_alpha = true,
@@ -181,10 +198,10 @@ struct ExportImageSettings final {
         .image_format = bit_depth == 8 ? QImage::Format_RGBA8888 : QImage::Format_RGBA64,
     };
   }
-  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+  if (preset_name.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
     return {
-        .max_edge = 1440,
-        .jpeg_quality = 88,
+        .max_edge = requested_max_edge > 0 ? requested_max_edge : 1440,
+        .jpeg_quality = requested_quality > 0 ? requested_quality : 88,
         .format_name = QStringLiteral("JPEG"),
         .bit_depth = 8,
         .flatten_alpha = true,
@@ -193,10 +210,10 @@ struct ExportImageSettings final {
         .image_format = QImage::Format_ARGB32,
     };
   }
-  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
+  if (preset_name.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
     return {
-        .max_edge = 2048,
-        .jpeg_quality = 92,
+        .max_edge = requested_max_edge > 0 ? requested_max_edge : 2048,
+        .jpeg_quality = requested_quality > 0 ? requested_quality : 92,
         .format_name = QStringLiteral("JPEG"),
         .bit_depth = 8,
         .flatten_alpha = true,
@@ -205,10 +222,10 @@ struct ExportImageSettings final {
         .image_format = QImage::Format_ARGB32,
     };
   }
-  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+  if (preset_name.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
     return {
-        .max_edge = 2560,
-        .jpeg_quality = 94,
+        .max_edge = requested_max_edge > 0 ? requested_max_edge : 2560,
+        .jpeg_quality = requested_quality > 0 ? requested_quality : 94,
         .format_name = QStringLiteral("JPEG"),
         .bit_depth = 8,
         .flatten_alpha = true,
@@ -217,7 +234,7 @@ struct ExportImageSettings final {
         .image_format = QImage::Format_ARGB32,
     };
   }
-  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
+  if (preset_name.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
     return {
         .max_edge = 0,
         .jpeg_quality = 100,

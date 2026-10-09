@@ -72,6 +72,134 @@ namespace {
   return request.cancelled && request.cancelled();
 }
 
+[[nodiscard]] bool has_plan_stage(
+    const RenderPlan& plan,
+    RenderStageKind kind) {
+  return std::ranges::any_of(
+      plan.stages,
+      [kind](const RenderStagePlan& stage) { return stage.kind == kind; });
+}
+
+[[nodiscard]] bool display_referred_text_overlay_is_eligible(
+    const RenderExecutionRequest& request,
+    const ColorAdjustmentState& state,
+    const ColorPlanExecutionOptions& options) {
+  if (state.display_referred_text_layers.empty() ||
+      state.display_referred_text_color_domain != "display-linear" ||
+      state.display_referred_text_eligibility != "eligible-sdr-top-text-suffix" ||
+      state.display_referred_text_policy_version !=
+          "display-referred-text-suffix-v1" ||
+      options.photographic_output_config == nullptr ||
+      !has_plan_stage(request.plan, RenderStageKind::PhotographicOutput) ||
+      has_plan_stage(request.plan, RenderStageKind::Proof)) {
+    return false;
+  }
+  const auto& config = *options.photographic_output_config;
+  if (!photographic_rendering_model_uses_aces2(
+          config.photographic_rendering_model) ||
+      config.render_intent != RenderIntent::Perceptual ||
+      config.soft_proof_enabled) {
+    return false;
+  }
+  const auto preview_target =
+      options.gamut_warning_target == GamutWarningTarget::PreviewDisplay;
+  const auto has_device_stage =
+      has_plan_stage(request.plan, RenderStageKind::DeviceTransform);
+  const auto& target = preview_target ? config.preview_display_target
+                                      : config.export_display_target;
+  const auto& device_profile = preview_target
+      ? config.preview_icc_profile_asset
+      : config.export_icc_profile_asset;
+  const auto photographic_output = std::find_if(
+      request.plan.stages.cbegin(), request.plan.stages.cend(),
+      [](const RenderStagePlan& stage) {
+        return stage.kind == RenderStageKind::PhotographicOutput;
+      });
+  if (photographic_output == request.plan.stages.cend()) return false;
+  const auto photographic_output_index = static_cast<std::size_t>(
+      std::distance(request.plan.stages.cbegin(), photographic_output));
+  if (has_device_stage) {
+    const auto* published_target = options.publish_display_target;
+    const auto geometry_prefix = options.stop_before_photographic_output;
+    const auto* original_display_target = geometry_prefix
+        ? &target
+        : published_target;
+    if (!preview_target || !request.plan.device_icc_profile.has_value() ||
+        request.plan.rendering_target !=
+            DisplayRenderingTarget::ActiveDisplay ||
+        request.plan.purpose != RenderPurpose::SettledPreview ||
+        !device_profile.ready() || original_display_target == nullptr ||
+        original_display_target->eotf != DisplayEotf::Srgb ||
+        original_display_target->mastering_mode != DisplayMasteringMode::Sdr ||
+        original_display_target->color_space.primaries != ColorPrimaries::Srgb ||
+        original_display_target->color_space.transfer_function !=
+            TransferFunction::Srgb ||
+        target.eotf != DisplayEotf::Srgb ||
+        target.mastering_mode != DisplayMasteringMode::Sdr ||
+        photographic_output_index + 2U >= request.plan.stages.size() ||
+        request.plan.stages[photographic_output_index + 1U].kind !=
+            RenderStageKind::DeviceTransform ||
+        request.plan.stages[photographic_output_index + 2U].kind !=
+            RenderStageKind::Publish ||
+        photographic_output_index + 3U != request.plan.stages.size() ||
+        (geometry_prefix &&
+         (published_target != nullptr || options.device_transform != nullptr ||
+          target.color_space.primaries != ColorPrimaries::Srgb ||
+          target.color_space.transfer_function != TransferFunction::Srgb ||
+          config.preview_output_profile.color_space.primaries !=
+              ColorPrimaries::Srgb ||
+          config.preview_output_profile.color_space.transfer_function !=
+              TransferFunction::Srgb)) ||
+        (!geometry_prefix &&
+         (published_target == nullptr || options.device_transform == nullptr ||
+          !options.device_transform->ready() ||
+          target.color_space.primaries != ColorPrimaries::Rec2020 ||
+          target.color_space.transfer_function != TransferFunction::Linear ||
+          config.preview_output_profile.color_space.primaries !=
+              ColorPrimaries::Rec2020 ||
+          config.preview_output_profile.color_space.transfer_function !=
+              TransferFunction::Linear))) {
+      return false;
+    }
+
+    const auto& profile_reference = device_profile.reference;
+    const auto& planned_profile_id =
+        request.plan.device_icc_profile->value;
+    const auto plan_profile_matches =
+        planned_profile_id == profile_reference.asset_id ||
+        planned_profile_id ==
+            "sha256:" + profile_reference.payload_sha256;
+    if (!plan_profile_matches) return false;
+    // During the geometry-prefix pass the plan already proves that the
+    // settled preview will end in this exact DeviceTransform/Publish suffix,
+    // but the transform is deliberately compiled only after geometry. Defer
+    // eligible text now so the suffix applies it once, after ACES2 and before
+    // the same monitor transform.
+    if (geometry_prefix) return true;
+    const auto linear_rec2020_payload =
+        builtin_rgb_icc_profile_payload(make_linear_rec2020_color_space());
+    const auto expected_source_digest =
+        color_payload_sha256(linear_rec2020_payload);
+    const auto& transform_description =
+        options.device_transform->description();
+    return transform_description.source_profile_sha256 ==
+            expected_source_digest &&
+        transform_description.destination_profile_sha256 ==
+            profile_reference.payload_sha256 &&
+        transform_description.target ==
+            "preview-output:aces2-rec2020-interchange" &&
+        !transform_description.device_link &&
+        !transform_description.soft_proofing;
+  }
+
+  return !request.plan.device_icc_profile.has_value() &&
+      options.device_transform == nullptr &&
+      target.eotf == DisplayEotf::Srgb &&
+      target.mastering_mode == DisplayMasteringMode::Sdr &&
+      target.color_space.primaries == ColorPrimaries::Srgb &&
+      device_profile.status == IccProfileAssetStatus::Unconfigured;
+}
+
 [[nodiscard]] bool valid_fusion_evidence(
     const RenderExecutionRequest& request,
     std::size_t stage_index,
@@ -198,9 +326,11 @@ bool RenderSurface::ensure_cpu_pixels(
     return false;
   }
   auto materialized = std::vector<ColorPixel>{};
+  const auto backing_validates_finite =
+      backing->copy_pixels_validates_finite();
   if (!backing->copy_pixels(&materialized, cancellation) ||
       cancellation.cancelled() || materialized.size() != pixel_count ||
-      !finite_pixels(materialized)) {
+      (!backing_validates_finite && !finite_pixels(materialized))) {
     return false;
   }
   pixels = std::move(materialized);
@@ -358,6 +488,9 @@ std::string render_stage_cache_key(
            << request.source_area_height
            << "|input:"
            << (input.has_value() ? input->identity : "none");
+  if (stage.kind == RenderStageKind::Decode) {
+    identity << "|source-revision:" << request.source_revision_identity;
+  }
   const auto descriptor =
       render_stage_output_descriptor(
           request,
@@ -465,6 +598,7 @@ RenderExecutionResult RenderExecutor::execute(
             .fallback_reason = {},
             .output_descriptor = current->descriptor,
             .cache_hit = true,
+            .elapsed_ms = 0,
         };
         result.completed_stages.push_back(completed);
         if (request.stage_observer) {
@@ -479,6 +613,7 @@ RenderExecutionResult RenderExecutor::execute(
       }
     }
 
+    const auto stage_started_at = std::chrono::steady_clock::now();
     auto executed = callback(
         RenderStageInvocation{
             .stage = stage,
@@ -487,6 +622,9 @@ RenderExecutionResult RenderExecutor::execute(
             .expected_output = expected,
         },
         std::move(current));
+    const auto stage_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - stage_started_at)
+                                     .count();
     if (executed.fusion_evidence.has_value() &&
         !valid_fusion_evidence(
             request,
@@ -497,15 +635,19 @@ RenderExecutionResult RenderExecutor::execute(
       result.failure_stage = stage_name;
       result.failure_reason =
           "backend fusion requires a passed unfused reference and a contiguous logical-stage manifest";
+      result.in_flight_stage_elapsed_ms = stage_elapsed_ms;
       return result;
     }
     if (!executed.output.has_value()) {
-      result.status = RenderExecutionStatus::StageFailed;
+      result.status = cancelled(request)
+                          ? RenderExecutionStatus::Cancelled
+                          : RenderExecutionStatus::StageFailed;
       result.failure_stage = stage_name;
       result.failure_reason =
           executed.failure_reason.empty()
               ? "stage did not produce an output"
               : executed.failure_reason;
+      result.in_flight_stage_elapsed_ms = stage_elapsed_ms;
       return result;
     }
     const auto covered_stage_count =
@@ -522,11 +664,15 @@ RenderExecutionResult RenderExecutor::execute(
       result.failure_stage = stage_name;
       result.failure_reason =
           "stage output violates its declared pixel contract";
+      result.in_flight_stage_elapsed_ms = stage_elapsed_ms;
       return result;
     }
     current = std::move(executed.output);
     if (cacheable(stage.kind) &&
         !request.bypass_cache &&
+        !request.skip_cache_writes &&
+        (!request.cache_write_stage_index_exclusive_limit.has_value() ||
+         index < *request.cache_write_stage_index_exclusive_limit) &&
         !executed.fusion_evidence.has_value()) {
       insert_cached(cache_key, *current);
     }
@@ -546,6 +692,7 @@ RenderExecutionResult RenderExecutor::execute(
           .output_descriptor = render_stage_output_descriptor(request, completed_kind),
           .fusion_evidence = fusion_evidence,
           .cache_hit = false,
+          .elapsed_ms = stage_elapsed_ms,
       };
       result.completed_stages.push_back(completed);
       if (request.stage_observer) {
@@ -604,6 +751,31 @@ RenderExecutionResult execute_color_plan(
     invalid.failure_reason =
         "canonical plan and photographic output transition look differ";
     return invalid;
+  }
+  const auto defer_display_referred_text =
+      display_referred_text_overlay_is_eligible(request, state, options);
+  if (defer_display_referred_text) {
+    // The Layers stage has different pixels when plain text is deferred to the
+    // display-linear suffix. Keep those results in a distinct cache namespace.
+    request.backend_version += ":display-referred-text-suffix-v2";
+  }
+  if (telemetry != nullptr &&
+      !state.display_referred_text_layers.empty()) {
+    telemetry->display_referred_text_color_domain =
+        state.display_referred_text_color_domain;
+    telemetry->display_referred_text_eligibility = defer_display_referred_text
+        ? state.display_referred_text_eligibility
+        : "legacy-working-scene";
+    telemetry->display_referred_text_eligibility_reason =
+        defer_display_referred_text
+            ? "deferred-to-photographic-output"
+            : "canonical-plan-requires-working-scene-composition";
+    telemetry->display_referred_text_policy_version =
+        state.display_referred_text_policy_version;
+    telemetry->display_referred_text_layer_count =
+        static_cast<std::int64_t>(
+            state.display_referred_text_layers.size());
+    telemetry->display_referred_text_applied_layer_count = 0;
   }
   const auto normalize_present =
       std::ranges::any_of(
@@ -672,7 +844,8 @@ RenderExecutionResult execute_color_plan(
   auto fused_publish_descriptor = RenderSurfaceDescriptor{};
   auto fused_working_stage_index = std::optional<std::size_t>{};
   auto fused_geometry_descriptor = RenderSurfaceDescriptor{};
-  if (options.working_adjustments_geometry_fusion) {
+  if (options.working_adjustments_geometry_fusion &&
+      !defer_display_referred_text) {
     constexpr auto kWorkingStageOrder = std::array{
         RenderStageKind::SceneAdjustments,
         RenderStageKind::Tone,
@@ -721,7 +894,8 @@ RenderExecutionResult execute_color_plan(
       }
     }
   }
-  if (options.photographic_output_publish_fusion) {
+  if (options.photographic_output_publish_fusion &&
+      !defer_display_referred_text) {
     const auto photographic = std::ranges::find_if(
         request.plan.stages,
         [](const RenderStagePlan& stage) {
@@ -741,7 +915,8 @@ RenderExecutionResult execute_color_plan(
   }
   auto fused_device_stage_index = std::optional<std::size_t>{};
   auto fused_device_publish_descriptor = RenderSurfaceDescriptor{};
-  if (options.photographic_output_device_publish_fusion) {
+  if (options.photographic_output_device_publish_fusion &&
+      !defer_display_referred_text) {
     const auto photographic = std::ranges::find_if(
         request.plan.stages,
         [](const RenderStagePlan& stage) {
@@ -813,6 +988,8 @@ RenderExecutionResult execute_color_plan(
                                     : "color plan surface could not materialize CPU pixels",
           };
         }
+        const auto input_finite_validated =
+            input->cpu_pixels_validated;
         auto local_telemetry =
             ColorAdjustmentTelemetry{};
         auto* stage_telemetry =
@@ -844,7 +1021,8 @@ RenderExecutionResult execute_color_plan(
                 state,
                 &prefix_context,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::CameraCharacterization:
             if (!normalize_present &&
@@ -857,7 +1035,8 @@ RenderExecutionResult execute_color_plan(
                     state,
                     &prefix_context,
                     cancellation,
-                    stage_telemetry)) {
+                    stage_telemetry,
+                    input_finite_validated)) {
               break;
             }
             executed =
@@ -870,7 +1049,8 @@ RenderExecutionResult execute_color_plan(
                     state,
                     prefix_context,
                     cancellation,
-                    stage_telemetry);
+                    stage_telemetry,
+                    input_finite_validated);
             break;
           case RenderStageKind::SceneAdjustments:
             executed = apply_color_scene_adjustments_stage(
@@ -881,7 +1061,8 @@ RenderExecutionResult execute_color_plan(
                     invocation.expected_output.height),
                 state,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::Tone:
             executed = apply_color_tone_stage(
@@ -892,7 +1073,8 @@ RenderExecutionResult execute_color_plan(
                     invocation.expected_output.height),
                 state,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::Curves:
             executed = apply_color_curves_stage(
@@ -903,7 +1085,8 @@ RenderExecutionResult execute_color_plan(
                     invocation.expected_output.height),
                 state,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::Look:
             executed = apply_color_look_stage(
@@ -914,7 +1097,8 @@ RenderExecutionResult execute_color_plan(
                     invocation.expected_output.height),
                 state,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::Layers:
             executed = apply_color_layers_stage(
@@ -926,7 +1110,9 @@ RenderExecutionResult execute_color_plan(
                 state,
                 options.removal_quality,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated,
+                !defer_display_referred_text);
             break;
           case RenderStageKind::Detail: {
             const auto dispatches_before =
@@ -941,7 +1127,8 @@ RenderExecutionResult execute_color_plan(
                 state,
                 options.removal_quality,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             if (stage_telemetry
                     ->gpu_kernel_dispatch_count >
                 dispatches_before) {
@@ -958,7 +1145,8 @@ RenderExecutionResult execute_color_plan(
                     invocation.expected_output.height),
                 state,
                 cancellation,
-                stage_telemetry);
+                stage_telemetry,
+                input_finite_validated);
             break;
           case RenderStageKind::PhotographicOutput:
             if (options.photographic_output_config ==
@@ -968,7 +1156,8 @@ RenderExecutionResult execute_color_plan(
               break;
             }
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
-            if (options.allow_metal_photographic_output && !cancellation.cancelled()) {
+            if (options.allow_metal_photographic_output &&
+                !defer_display_referred_text && !cancellation.cancelled()) {
               const auto timer = std::chrono::steady_clock::now();
               const auto application = compile_aces2_output_lut_application(
                   *options.photographic_output_config,
@@ -1010,7 +1199,9 @@ RenderExecutionResult execute_color_plan(
                     options.gamut_warning_target,
                     options.output_lut_quality,
                     cancellation,
-                    stage_telemetry);
+                    stage_telemetry,
+                    state.display_referred_text_layers,
+                    defer_display_referred_text);
             break;
           case RenderStageKind::Proof: {
             if (options.proof_transform == nullptr ||

@@ -11,6 +11,15 @@ namespace photo_editor::desktop {
 
 struct RenderBackendTelemetry;
 
+[[nodiscard]] QImage render_editable_base_pixels(
+    const QString& source_path, EditRecipeState state, QString* error = nullptr);
+
+[[nodiscard]] QImage render_photo_layer_snapshot(
+    const QImage& source_image,
+    EditRecipeState state,
+    const QString& layer_id,
+    QString* error = nullptr);
+
 [[nodiscard]] QImage render_flattened_output_file(
     const QString& source_asset_id,
     const QString& source_path,

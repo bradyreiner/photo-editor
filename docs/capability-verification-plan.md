@@ -256,6 +256,51 @@ A capability is done only when all applicable boxes are true:
 
 ## Immediate Audit Work
 
+### Creative Tools Delivery Status — 2026-09-25
+
+The detailed scope, numerical acceptance targets, shared gates, and evidence
+requirements live in [creative tools plan](creative-tools-plan.md). Canonical
+qualification status: **0/9 feature families qualified**. F1 Optical Diffusion,
+F2 Imperfect Print, F3 Dragged Shutter, T1 Variable-Width Typography, B1 Dry
+Ink/Graphite, B2 Light Painting, T2 Contour Typography, and T3 Material Lettering
+have implementation receipts but remain in progress because corpus review and shared native, output,
+agent, performance, stability, and preset gates are incomplete. B3 Photo Fragments
+has native/agent alpha-preserving stamps, a versioned standalone PNG tip store, and
+portable `.looksybrush` import/export. Focused offscreen tests cover source-layer
+removal, transfer to a separate app-data directory, exact fresh-process PNG reload,
+recipe round-trip, and undo; a full app close/reopen editing walkthrough, photographic,
+backend, performance, and model-driven agent qualification remain open. Foundation
+ordering evidence now includes a 48-case top-first adjustment matrix plus a locked
+agent-target rejection that leaves state unchanged, and a 100-operation alternating
+typography/transform history sequence with exact undo/redo recipe and pixel restoration;
+native reliability and the other shared gates remain open. The production QML brush/click-away/reselect/lasso route
+passed three fresh-process 100-cycle stress runs with a stub segmentation provider;
+the three required native sessions and real segmentation validation remain open. T2 has native
+on-canvas baseline handles, secondary contour/hole visualization, and sampled
+analytic circle/ellipse deviation measurements below 0.5 source pixel; photographic
+review and shared gates remain open before feature-specific acceptance is complete.
+The visual qualification contract is now executable through
+[the review validator](../scripts/perf/validate-creative-tools-review.py), with
+[packet instructions](creative-tools-visual-review.md). Current creative corpus
+coverage is now **12/12 hash-verified photos** ([corpus receipt](evidence/creative-tools/visual-review-corpus/README.md)); completed human review remains **0/216 cells**,
+and family qualification remains **0/9**; validator tests do not count as visual
+review evidence. A fresh focused CPU regression run passed 3/3 for render parity,
+spatial effects, and paint material behavior; see the [shared receipt](evidence/creative-tools/shared-render-parity/README.md).
+Production agent runs are **18/18**: A1–A6 each pass 3/3. Photographic taste
+review remains open; qualified families are **0/9**, qualified presets are
+**0/18**, and finished compositions are **0/6**. See the
+[agent run receipts](evidence/creative-tools/agent-live-workflow/README.md).
+Current receipts: [F1](evidence/creative-tools/optical-diffusion/README.md),
+[F2](evidence/creative-tools/imperfect-print/README.md),
+[F3](evidence/creative-tools/dragged-shutter/README.md),
+[T1](evidence/creative-tools/variable-typography/README.md),
+[B1](evidence/creative-tools/dry-ink-graphite/README.md),
+[B2](evidence/creative-tools/light-painting/README.md),
+[T2](evidence/creative-tools/contour-typography/README.md),
+[T3](evidence/creative-tools/material-lettering/README.md), and
+[B3](evidence/creative-tools/photo-fragments/README.md).
+Do not count a vertical slice as a qualified capability.
+
 1. Generate a capability matrix from the QML controls, controller properties,
    C++ render fields, Rust catalog/job APIs, and existing docs.
 2. Mark every row as `complete`, `partial`, `placeholder`, `broken`, or

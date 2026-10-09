@@ -22,6 +22,8 @@ namespace photo_editor::desktop {
       return QStringLiteral("Linear ProPhoto RGB");
     case ColorPrimaries::Unknown:
     case ColorPrimaries::AdobeRgb:
+    case ColorPrimaries::SonySGamut3:
+    case ColorPrimaries::SonySGamut3Cine:
     case ColorPrimaries::AcesAp0:
     case ColorPrimaries::AcesAp1:
       return fallback;
@@ -46,6 +48,8 @@ namespace photo_editor::desktop {
       return QStringLiteral("ProPhoto RGB");
     case ColorPrimaries::Unknown:
     case ColorPrimaries::AdobeRgb:
+    case ColorPrimaries::SonySGamut3:
+    case ColorPrimaries::SonySGamut3Cine:
     case ColorPrimaries::AcesAp0:
     case ColorPrimaries::AcesAp1:
       return fallback;

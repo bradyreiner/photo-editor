@@ -27,7 +27,7 @@ Item {
 
     Theme { id: theme }
 
-    implicitHeight: visible ? 34 : 0
+    implicitHeight: visible ? theme.controlHeightTall : 0
     Layout.preferredHeight: implicitHeight
     Layout.fillWidth: true
     Accessible.name: title
@@ -41,15 +41,15 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 16
-        anchors.rightMargin: 14
-        spacing: 9
+        anchors.leftMargin: theme.space12
+        anchors.rightMargin: theme.space10
+        spacing: theme.gapDense
 
         AppIcon {
-            Layout.preferredWidth: 13
-            Layout.preferredHeight: 13
-            name: root.statusIcon.length > 0 ? root.statusIcon : root.failed ? "info" : "clock"
-            color: root.failed ? theme.error : root.statusIcon === "check" ? theme.success : theme.textMuted
+            Layout.preferredWidth: theme.scaled(13)
+            Layout.preferredHeight: theme.scaled(13)
+            name: root.statusIcon.length > 0 ? root.statusIcon : root.failed ? "error" : root.progressValue >= 1 ? "check" : "clock"
+            color: root.failed ? theme.error : (root.statusIcon === "check" || root.progressValue >= 1) ? theme.success : theme.textMuted
         }
 
         Text {
@@ -57,7 +57,7 @@ Item {
             text: root.title
             color: root.failed ? theme.error : theme.textMain
             font.family: theme.fontUi
-            font.pixelSize: 11
+            font.pixelSize: theme.typeLabel
             font.weight: Font.DemiBold
             elide: Text.ElideRight
             maximumLineCount: 1
@@ -76,7 +76,7 @@ Item {
             text: root.detail
             color: theme.textMuted
             font.family: theme.fontUi
-            font.pixelSize: 10
+            font.pixelSize: theme.typeCaption
             elide: Text.ElideRight
             maximumLineCount: 1
             verticalAlignment: Text.AlignVCenter
@@ -86,6 +86,7 @@ Item {
             objectName: "activityCancelButton"
             visible: root.cancelable || root.retryable || root.actionText.length > 0
             text: root.actionText.length > 0 ? root.actionText : root.retryable ? "Retry" : "Cancel"
+            iconName: /^retry\b/i.test(text) ? "retry" : root.actionText.length === 0 ? "close" : ""
             compact: true
             embedded: true
             accent: root.failed ? theme.error : root.accent

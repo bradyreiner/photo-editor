@@ -16,6 +16,8 @@ set(photo_editor_desktop_sources
   src/agent_edit_style.cpp
   src/agent_image_validation.cpp
   src/agent_local_model.cpp
+  src/agent_session_controller.h
+  src/agent_session_controller.cpp
   src/managed_agent_runtime.h
   src/managed_agent_runtime.cpp
   src/gaussian_scene_controller.h
@@ -43,6 +45,10 @@ set(photo_editor_desktop_sources
   src/brush_preview_compositor.cpp
   src/carousel_document_controller.cpp
   src/catalog_asset_model.cpp
+  src/library_workflow_controller.h
+  src/library_workflow_controller.cpp
+  src/library_original_image_provider.cpp
+  src/catalog_duplicate_analysis.cpp
   src/visual_search_controller.h
   src/visual_search_controller.cpp
   src/visual_search_index.cpp
@@ -89,6 +95,19 @@ set(photo_editor_desktop_sources
   src/desktop_recipe_persistence_service.cpp
   src/desktop_pipeline_state_compiler.h
   src/desktop_pipeline_state_compiler.cpp
+  src/timeline_video_grade_runtime.h
+  src/timeline_video_grade_runtime.cpp
+  src/timeline_motion_runtime.h
+  src/timeline_scene_runtime.h
+  src/timeline_scene_runtime.cpp
+  src/timeline_surface_runtime.h
+  src/timeline_surface_runtime.cpp
+  src/timeline_motion_runtime_common.cpp
+  src/timeline_motion_runtime_stub.cpp
+  src/timeline_foreground_matte.h
+  src/timeline_foreground_matte.cpp
+  src/timeline_sam2_runtime.h
+  src/timeline_sam2_runtime.cpp
   src/editor_rendering_migration.inc
   src/editor_preview_controller.cpp
   src/editor_recipe_save_journal.cpp
@@ -149,6 +168,9 @@ set(photo_editor_desktop_sources
   src/localized_object_refinement.h
   src/localized_object_refinement.cpp
   src/history_service.h
+  src/history_revision.cpp
+  src/history_payload_store.cpp
+  src/history_state_record.cpp
   src/histogram_scope_service.h
   src/histogram_scope_service.cpp
   src/layer_session.h
@@ -254,6 +276,8 @@ if(APPLE)
   list(APPEND photo_editor_desktop_sources src/raw_image_decoder.mm)
   list(REMOVE_ITEM photo_editor_desktop_sources src/vision_segmentation_stub.cpp)
   list(APPEND photo_editor_desktop_sources src/vision_segmentation.mm)
+  list(REMOVE_ITEM photo_editor_desktop_sources src/timeline_motion_runtime_stub.cpp)
+  list(APPEND photo_editor_desktop_sources src/timeline_motion_runtime.mm)
 
   set(PHOTO_EDITOR_MACOS_BUNDLE_IDENTIFIER "${FRAMEHOUSE_MACOS_BUNDLE_IDENTIFIER}")
   set(PHOTO_EDITOR_MACOS_SPARKLE_PLIST_KEYS "")
@@ -327,6 +351,24 @@ qt_add_executable(photo_editor_app
   ${photo_editor_desktop_sources}
 )
 
+set_source_files_properties("${PROJECT_SOURCE_DIR}/scripts/timeline-sam2-worker.py"
+  PROPERTIES QT_RESOURCE_ALIAS "timeline-sam2-worker.py")
+qt_add_resources(
+  photo_editor_app
+  "timeline_sam2_worker"
+  PREFIX "/photo-editor/runtime"
+  FILES "${PROJECT_SOURCE_DIR}/scripts/timeline-sam2-worker.py")
+
+set_source_files_properties("${PROJECT_SOURCE_DIR}/scripts/timeline_surface_worker.py"
+  PROPERTIES QT_RESOURCE_ALIAS "timeline-surface-worker.py")
+qt_add_resources(photo_editor_app "timeline_surface_worker" PREFIX "/photo-editor/runtime"
+  FILES "${PROJECT_SOURCE_DIR}/scripts/timeline_surface_worker.py")
+
+include(${PROJECT_SOURCE_DIR}/cmake/CreativeFonts.cmake)
+photo_editor_add_creative_fonts(photo_editor_app)
+include(${PROJECT_SOURCE_DIR}/cmake/PresetPreview.cmake)
+photo_editor_add_preset_preview(photo_editor_app)
+
 if(APPLE)
   set_source_files_properties(
     assets/macos/Looksy.icns
@@ -357,7 +399,37 @@ qt_add_resources(
   PREFIX "/photo-editor/agent"
   FILES "${photo_editor_agent_sprite_sheet}")
 
+set(photo_editor_agent_screen "${CMAKE_CURRENT_SOURCE_DIR}/assets/looksy-agent-screen-v2.png")
+set_source_files_properties(
+  "${photo_editor_agent_screen}"
+  PROPERTIES QT_RESOURCE_ALIAS looksy-agent-screen-v2.png)
+qt_add_resources(
+  photo_editor_app
+  "looksy_agent_screen"
+  PREFIX "/photo-editor/agent"
+  FILES "${photo_editor_agent_screen}")
+
+set(photo_editor_character_art
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/agent-phosphor/compact-character-parts-v1.png"
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/agent-phosphor/compact-crt-bezel-v1.png")
+foreach(character_asset IN LISTS photo_editor_character_art)
+  get_filename_component(character_filename "${character_asset}" NAME)
+  set_source_files_properties("${character_asset}" PROPERTIES QT_RESOURCE_ALIAS "${character_filename}")
+endforeach()
+qt_add_resources(photo_editor_app "looksy_compact_character"
+  PREFIX "/photo-editor/agent" FILES ${photo_editor_character_art})
+
 set(photo_editor_rgb_orb "${CMAKE_CURRENT_SOURCE_DIR}/assets/looksy-rgb-orb.png")
+set(photo_editor_loading_scenes
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/loading-scenes/library-scene-v2.png"
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/loading-scenes/timeline-scene-v2.png"
+  "${CMAKE_CURRENT_SOURCE_DIR}/assets/loading-scenes/startup-scene-v2.png")
+foreach(scene_asset IN LISTS photo_editor_loading_scenes)
+  get_filename_component(scene_filename "${scene_asset}" NAME)
+  set_source_files_properties("${scene_asset}" PROPERTIES QT_RESOURCE_ALIAS "${scene_filename}")
+endforeach()
+qt_add_resources(photo_editor_app "looksy_loading_scenes"
+  PREFIX "/photo-editor/loading" FILES ${photo_editor_loading_scenes})
 set(photo_editor_brand_logo_dark "${CMAKE_CURRENT_SOURCE_DIR}/assets/brand/looksy-logo-dark.png")
 set(photo_editor_brand_logo_light "${CMAKE_CURRENT_SOURCE_DIR}/assets/brand/looksy-logo-light.png")
 set(photo_editor_brand_wordmark_dark "${CMAKE_CURRENT_SOURCE_DIR}/assets/brand/looksy-wordmark-dark.png")
@@ -437,12 +509,18 @@ qt_add_qml_module(photo_editor_app
     qml/components/AgentToolCallRow.qml
   qml/components/AgentWalkthroughDialog.qml
   qml/components/LooksyAgentCharacter.qml
+  qml/components/CrtSignalSurface.qml
     qml/components/LooksyLight.qml
     qml/components/AgentConversationView.qml
+    qml/components/AgentSessionTerminal.qml
+    qml/components/AgentTerminalScreen.qml
+    qml/components/AgentFailureDetails.qml
     qml/components/AgentWorkspaceOverlay.qml
+    qml/components/AgentWorkspaceTouchResolver.qml
     qml/components/ActivityStatusBar.qml
     qml/components/AppToolTip.qml
     qml/components/AppIcon.qml
+    qml/components/MediaTypeIcon.qml
     qml/components/AppMenu.qml
     qml/components/AppMenuItem.qml
     qml/components/AppPreferencesDialog.qml
@@ -479,6 +557,13 @@ qt_add_qml_module(photo_editor_app
     qml/components/FirstRunGuideDialog.qml
     qml/components/GalleryAssetCard.qml
     qml/components/GalleryPickerDialog.qml
+    qml/components/CanvasPresets.js
+    qml/components/NewCanvasDialog.qml
+    qml/components/SavedBoardsLibrary.qml
+    qml/components/SavedTimelinesLibrary.qml
+    qml/components/LibraryNavigationPanel.qml
+    qml/components/LibraryMetadataPanel.qml
+    qml/components/LibraryDeliveryPanel.qml
     qml/components/GlassSurface.qml
     qml/components/HistogramDisplay.qml
     qml/components/HorizonStraightenOverlay.qml
@@ -490,7 +575,15 @@ qt_add_qml_module(photo_editor_app
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
     qml/components/InlineActivityIndicator.qml
+    qml/components/OpticalActivityIndicator.qml
     qml/components/KeyboardShortcutsDialog.qml
+    qml/components/UiPrimitivesPage.qml
+    qml/components/UiPrimitivesCommands.qml
+    qml/components/UiPrimitivesInputs.qml
+    qml/components/UiPrimitivesFeedback.qml
+    qml/components/UiPrimitivesOpticalDetails.qml
+    qml/components/UiPrimitiveCatalog.js
+    qml/components/LayerActionsMenu.qml
     qml/components/LayerRowActionZone.qml
     qml/components/LayerRow.qml
     qml/components/LayerRowChrome.qml
@@ -503,6 +596,8 @@ qt_add_qml_module(photo_editor_app
     qml/components/MiniButton.qml
     qml/components/MetricCard.qml
     qml/components/ProgressStrip.qml
+    qml/components/AdditiveLightWaves.qml
+    qml/components/LooksyLoadingScene.qml
     qml/components/PopupSurface.qml
     qml/components/PopupMenuRow.qml
     qml/components/PreferenceNavRow.qml
@@ -520,6 +615,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/StudioChannelPadControl.qml
     qml/components/StudioCollapsibleGroup.qml
     qml/components/StudioEmptyStateCard.qml
+    qml/components/StartupLoadingPopup.qml
     qml/components/StudioDetailTextureControl.qml
     qml/components/StudioDiagnosticOverlayStack.qml
     qml/components/StudioGradingMacroControl.qml
@@ -540,6 +636,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/StudioSidebarRow.qml
     qml/components/StudioSectionTitle.qml
     qml/components/StudioPanel.qml
+    qml/components/ModularToolPanel.qml
     qml/components/StudioPixelGridOverlay.qml
     qml/components/StudioTinyInput.qml
     qml/components/VisualSearchPanel.qml
@@ -561,6 +658,15 @@ qt_add_qml_module(photo_editor_app
     qml/components/Theme.qml
     qml/components/CompletionCaustic.qml
     qml/components/TimelineEffectsPanel.qml
+    qml/components/TimelineTrackingPanel.qml
+    qml/components/TimelineScenePointOverlay.qml
+    qml/components/TimelineSurfaceCorrectionOverlay.qml
+    qml/components/TimelineRotoscopeCorrectionOverlay.qml
+    qml/components/TimelineSceneProjectionEffect.qml
+    qml/components/TimelineKeyframeParameterPicker.qml
+    qml/components/TimelineEffectMaskOverlay.qml
+    qml/components/TimelineColorMaskEffect.qml
+    qml/components/TimelinePerspectiveEffect.qml
     qml/components/TimelineDifferenceEffect.qml
     qml/components/TimelineClipContent.qml
     qml/components/TimelineEffectLibraryRow.qml
@@ -584,11 +690,14 @@ qt_add_qml_module(photo_editor_app
     qml/components/PhotoEffectStack.qml
     qml/components/PhotoSpatialEffectControls.qml
     qml/components/PhotoTypographyPanel.qml
+    qml/components/PhotoTextContentEditor.qml
+    qml/components/PhotoFontPicker.qml
     qml/components/PhotoTextPerspectivePanel.qml
     qml/components/PhotoTextOverlay.qml
     qml/components/PhotoPaintOverlay.qml
     qml/components/PhotoShapeCreateOverlay.qml
     qml/components/PhotoShapePanel.qml
+    qml/components/ShapeFillControls.qml
     qml/components/PhotoTextCreateOverlay.qml
     qml/components/ScenePhotoEditHandoff.qml
     qml/components/ToneCurveChannelButton.qml
@@ -598,14 +707,48 @@ qt_add_qml_module(photo_editor_app
     qml/components/ToneCurvePresetButton.qml
     qml/components/ToneTextArea.qml
     qml/components/ToneTextField.qml
+    qml/components/ToneSpinBox.qml
+    qml/components/ToneCheckBox.qml
     qml/components/ToolOptionToggle.qml
     qml/components/ToolCommandBar.qml
     qml/components/ToolValueSlider.qml
+    qml/components/ToolVerticalSlider.qml
     qml/components/ToolHud.qml
     qml/components/ToolRail.qml
     qml/components/ToolButton.qml
     qml/components/TransformOverlay.qml
     qml/workspaces/CarouselView.qml
+    qml/workspaces/carousel/CarouselVariantComparisonDialogContent.qml
+    qml/workspaces/carousel/CarouselLayoutRecipeDialogContent.qml
+    qml/workspaces/carousel/CarouselClipboardPasteDialogContent.qml
+    qml/workspaces/carousel/CarouselRepeatedElementLinkDialogContent.qml
+    qml/workspaces/carousel/CarouselCommandPaletteContent.qml
+    qml/workspaces/carousel/CarouselPreflightIgnoreDialogContent.qml
+    qml/workspaces/carousel/CarouselBrandApplicationDialogContent.qml
+    qml/workspaces/carousel/CarouselBrandLintDialogContent.qml
+    qml/workspaces/carousel/CarouselBrandKitEditorDialogContent.qml
+    qml/workspaces/carousel/CarouselReadingOrderDialogContent.qml
+    qml/workspaces/carousel/CarouselDocumentStructureDialogContent.qml
+    qml/workspaces/carousel/CarouselBoardRangeCommandDialogContent.qml
+    qml/workspaces/carousel/CarouselNeighborComparisonDialogContent.qml
+    qml/workspaces/carousel/CarouselContinuityPreviewDialogContent.qml
+    qml/workspaces/carousel/CarouselStatusNoticesDialogContent.qml
+    qml/workspaces/carousel/CarouselRecoveryDialogContent.qml
+    qml/workspaces/carousel/CarouselRelinkDialogContent.qml
+    qml/workspaces/carousel/CarouselCopyProofDialogContent.qml
+    qml/workspaces/carousel/CarouselFontBrowserDialogContent.qml
+    qml/workspaces/carousel/CarouselFontRecoveryDialogContent.qml
+    qml/workspaces/carousel/CarouselExportSheetContent.qml
+    qml/workspaces/carousel/CarouselCutoutRefineDialogContent.qml
+    qml/workspaces/carousel/CarouselTemplatePackUpdateDialogContent.qml
+    qml/workspaces/carousel/CarouselSequenceTemplateDialogContent.qml
+    qml/workspaces/carousel/CarouselStoryboardDialogContent.qml
+    qml/workspaces/carousel/CarouselRepeatGridDialogContent.qml
+    qml/workspaces/carousel/CarouselSelectionBatchDialogContent.qml
+    qml/workspaces/carousel/CarouselMediaUsageDialogContent.qml
+    qml/workspaces/carousel/CarouselVideoPreviewDialogContent.qml
+    qml/workspaces/carousel/CarouselMediaAutofillDialogContent.qml
+    qml/workspaces/carousel/CarouselDesignPackageImportDialogContent.qml
     qml/workspaces/ExportView.qml
     qml/workspaces/ExportWorkspaceHost.qml
     qml/workspaces/ImportView.qml
@@ -618,8 +761,16 @@ qt_add_qml_module(photo_editor_app
     qml/workspaces/SequenceWorkspace.qml
     qml/workspaces/SharedMaskOverlay.qml
     qml/workspaces/StudioWorkspace.qml
+    qml/workspaces/LibraryCullView.qml
+    qml/workspaces/TimelineSetupPage.qml
     qml/workspaces/TimelineView.qml
 )
+
+qt_add_shaders(photo_editor_app "character_crt_shaders"
+  BATCHABLE
+  PREFIX "/photo-editor/shaders"
+  BASE "shaders"
+  FILES shaders/agent_crt.vert shaders/agent_crt.frag)
 
 qt_add_shaders(photo_editor_app "carousel_color_vision_shaders"
   BATCHABLE
@@ -628,6 +779,30 @@ qt_add_shaders(photo_editor_app "carousel_color_vision_shaders"
   FILES
     shaders/carousel_color_vision.vert
     shaders/carousel_color_vision.frag
+)
+
+qt_add_shaders(photo_editor_app "timeline_perspective_shaders"
+  BATCHABLE
+  PREFIX "/photo-editor/shaders"
+  BASE "shaders"
+  FILES
+    shaders/timeline_perspective.vert
+    shaders/timeline_perspective.frag
+)
+
+qt_add_shaders(photo_editor_app "timeline_scene_projection_shaders"
+  BATCHABLE
+  PREFIX "/photo-editor/shaders"
+  BASE "shaders"
+  FILES shaders/timeline_scene_projection.vert shaders/timeline_scene_projection.frag)
+
+qt_add_shaders(photo_editor_app "timeline_effect_mask_shaders"
+  BATCHABLE
+  PREFIX "/photo-editor/shaders"
+  BASE "shaders"
+  FILES
+    shaders/timeline_effect_mask.vert
+    shaders/timeline_effect_mask.frag
 )
 
 target_include_directories(photo_editor_app PRIVATE src)
@@ -817,6 +992,7 @@ if(APPLE)
   endif()
   set_source_files_properties(src/raw_image_decoder.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   set_source_files_properties(src/vision_segmentation.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(src/timeline_motion_runtime.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   set_source_files_properties(
     src/timeline_document_controller.cpp
     PROPERTIES

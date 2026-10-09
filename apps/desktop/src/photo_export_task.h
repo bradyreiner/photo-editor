@@ -70,6 +70,7 @@ struct PhotoExportResult final {
     if (!output.open(QIODevice::WriteOnly)) return fail(output.errorString());
     QImageWriter writer(&output, format);
     if (format == "jpg") writer.setQuality(95);
+    else if (format == "png") writer.setCompression(kPngExportCompression);
     if (!writer.write(image)) {
       output.cancelWriting();
       return fail(writer.errorString());

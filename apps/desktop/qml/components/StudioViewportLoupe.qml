@@ -59,7 +59,7 @@ Rectangle {
            (loupeView.loupeX - loupeView.previewAnchorX) * loupeView.loupeZoom
         y: loupeView.height / 2 -
            (loupeView.loupeY - loupeView.previewAnchorY) * loupeView.loupeZoom
-        source: loupeView.previewSource
+        source: visible ? loupeView.previewSource : ""
         fillMode: loupeView.previewFillMode
         asynchronous: true
         cache: false

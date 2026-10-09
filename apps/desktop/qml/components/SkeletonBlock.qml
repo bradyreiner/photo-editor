@@ -30,17 +30,14 @@ Rectangle {
             GradientStop { position: 1.0; color: "transparent" }
         }
 
-        SequentialAnimation on x {
+        XAnimator on x {
             running: root.animate
             loops: Animation.Infinite
-            PauseAnimation { duration: root.phaseDelay }
-            NumberAnimation {
-                from: -shimmer.width
-                to: root.width
-                duration: 1250
-                easing.type: Easing.InOutSine
-            }
-            PauseAnimation { duration: 320 }
+            // Keep the scene graph clock running through the off-screen rest.
+            // PauseAnimation would hand scheduling back to the blocked GUI.
+            from: -shimmer.width - root.phaseDelay / 1250 * (root.width + shimmer.width)
+            to: root.width + 320 / 1250 * (root.width + shimmer.width)
+            duration: 1250 + root.phaseDelay + 320
         }
     }
 }

@@ -24,24 +24,18 @@ Item {
     Accessible.role: Accessible.Graphic
     Accessible.name: "Looksy RGB light, " + mode
 
-    Timer {
-        interval: 32
-        repeat: true
-        running: root.motionEnabled && (root.talking || root.mode === "processing" || root.mode === "thinking")
-        onTriggered: root.frame = (root.frame + 1) % 360
-    }
-
     LooksyMark {
         id: mark
         anchors.centerIn: parent
         width: Math.min(parent.width, parent.height) * 0.64
         height: width
         framed: false
-        scale: root.motionEnabled && (root.talking || root.mode === "processing" || root.mode === "thinking")
-               ? 1 + Math.sin(root.frame * 0.09) * 0.025 : 1
-
-        Behavior on scale {
-            NumberAnimation { duration: theme.durationMedium; easing.type: Easing.InOutSine }
+        scale: 1
+        SequentialAnimation on scale {
+            running: root.motionEnabled && (root.talking || root.mode === "processing" || root.mode === "thinking")
+            loops: Animation.Infinite
+            ScaleAnimator { from: 1; to: 1.025; duration: 560; easing.type: Easing.InOutSine }
+            ScaleAnimator { from: 1.025; to: 1; duration: 560; easing.type: Easing.InOutSine }
         }
     }
 }

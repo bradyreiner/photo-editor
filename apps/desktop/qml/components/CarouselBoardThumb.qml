@@ -17,7 +17,7 @@ Rectangle {
     readonly property string boardRoleLabel: boardRole === "cta" ? "CTA"
                                                      : boardRole.charAt(0).toUpperCase() + boardRole.slice(1)
     readonly property string previewSource: String(modelData.previewSource || "")
-    readonly property string carouselBoardThumbContract: "carousel-board-thumb:v1|preview:true|selection:true|keyboard:true|double-click:true|readable-text:true|no-elide:true"
+    readonly property string carouselBoardThumbContract: "carousel-board-thumb:v2|preview:true|selection:true|active-edit-target:explicit|keyboard:true|double-click:true|readable-text:true|no-elide:true"
     readonly property string carouselBoardThumbPowerContract: "carousel-board-thumb-power:v1|preview:dominant|duplicate:visible-on-hover|selection:clear|label:fallback-board-number"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-wrap:true|tooltip-full:true|accessibility-full:true"
     readonly property string mediaSurfaceContract: "media-surface:v1|board-thumbnail:stable|preview-dominant:true|selection:single-border|badge-corner:bottom|chrome:quiet"
@@ -56,7 +56,8 @@ Rectangle {
     activeFocusOnTab: true
     Accessible.name: "Board " + slideNumber + ", " + boardRoleLabel
                      + (boardName.length > 0 ? ", " + boardName : "")
-    Accessible.description: (selected ? "Selected carousel board. " : "Carousel board. ") +
+    Accessible.description: (activeBoard ? "Current editing target. " :
+                             selected ? "Selected carousel board. " : "Carousel board. ") +
                             "Control Shift Left or Right reorders this board without dragging."
     Accessible.role: Accessible.Button
     Accessible.checked: selected
@@ -111,6 +112,8 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 40
             Layout.preferredHeight: 84
             radius: theme.radius6
             color: String(root.modelData.backgroundColor || "#fbf7f1")
@@ -188,6 +191,7 @@ Rectangle {
 
         Label {
             id: boardLabel
+            objectName: "carouselBoardThumbLabel"
             Layout.fillWidth: true
             text: root.boardName.length > 0 ? root.boardName
                                             : root.slideLabel.length > 0 ? root.slideLabel
@@ -199,6 +203,29 @@ Rectangle {
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
             elide: Text.ElideNone
+        }
+    }
+
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.margins: 7
+        width: 48
+        height: 16
+        radius: 3
+        visible: root.activeBoard
+        z: 9
+        color: theme.accentWarm400
+        border.width: 1
+        border.color: theme.alpha(theme.ink950, 0.32)
+
+        Label {
+            anchors.centerIn: parent
+            text: "EDITING"
+            color: theme.ink950
+            font.family: theme.fontMono
+            font.pixelSize: 7
+            font.weight: Font.Bold
         }
     }
 

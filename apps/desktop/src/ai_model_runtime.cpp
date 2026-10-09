@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QColorSpace>
 #include <QCoreApplication>
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -23,6 +24,8 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -44,8 +47,19 @@ constexpr bool kOnnxRuntimeLinked = true;
 #else
 constexpr bool kOnnxRuntimeLinked = false;
 #endif
-constexpr bool kSamRuntimeImplemented = false;
+constexpr bool kSamRuntimeImplemented = kOnnxRuntimeLinked;
 constexpr bool kLamaRuntimeImplemented = kOnnxRuntimeLinked;
+constexpr auto kInpaintModelRelativePath = "inpaint/lama.onnx";
+constexpr auto kInpaintModelContract = "opencv-lama-image-mask-nchw-float32-512-v1";
+constexpr auto kSam2EncoderRelativePath = "selection/sam2_hiera_tiny_image_encoder.onnx";
+constexpr auto kSam2EncoderContract = "sam2-hiera-tiny-image-encoder-fp32-1024-v1";
+constexpr auto kSam2DecoderRelativePath = "selection/sam2_hiera_tiny_image_decoder.onnx";
+constexpr auto kSam2DecoderContract = "sam2-hiera-tiny-image-decoder-fp32-1024-v1";
+// Keep soft SAM2 edges while preserving explicit prompt polarity at alpha 96.
+[[maybe_unused]] constexpr auto kSam2MaskAlphaLogitScale = 0.40F;
+[[maybe_unused]] constexpr auto kSam2MaximumMaskAlphaLogitScale = 2.0F;
+[[maybe_unused]] constexpr auto kSam2PositivePromptAlphaLogitThreshold = -0.50F;
+[[maybe_unused]] constexpr auto kSam2NegativePromptAlphaLogitThreshold = -0.60F;
 [[maybe_unused]] constexpr auto kHighTextureExemplarResidualMean = 6.0;
 
 QString default_model_root() {
@@ -65,12 +79,8 @@ QString default_model_root() {
   return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("models"));
 }
 
-bool model_file_exists(const QString& root, const QString& relative_path) {
-  return QFileInfo::exists(QDir(root).filePath(relative_path));
-}
-
 QString inpaint_model_path(const QString& root) {
-  return QDir(root).filePath(QStringLiteral("inpaint/lama.onnx"));
+  return QDir(root).filePath(QString::fromLatin1(kInpaintModelRelativePath));
 }
 
 AiModelBundleVerification invalid_model_bundle(
@@ -176,9 +186,17 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
   QSet<QString> artifact_paths;
   auto verified_artifact_count = 0;
   auto verified_inpaint_count = 0;
+  auto verified_sam2_encoder_count = 0;
+  auto verified_sam2_decoder_count = 0;
   QString verified_inpaint_path;
   QString verified_inpaint_sha256;
   qint64 verified_inpaint_bytes = 0;
+  QString verified_sam2_encoder_path;
+  QString verified_sam2_encoder_sha256;
+  qint64 verified_sam2_encoder_bytes = 0;
+  QString verified_sam2_decoder_path;
+  QString verified_sam2_decoder_sha256;
+  qint64 verified_sam2_decoder_bytes = 0;
   const auto artifacts = artifacts_value.toArray();
   for (auto index = 0; index < artifacts.size(); ++index) {
     if (!artifacts.at(index).isObject()) {
@@ -212,15 +230,7 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
       return invalid_model_bundle(
           normalized_root, manifest_path, true,
           QStringLiteral("artifact_role_invalid"),
-          QStringLiteral("Model artifact %1 has an unsupported role.").arg(index));
-    }
-    if (contract.isEmpty() ||
-        (role == QStringLiteral("inpaint") &&
-         contract != QStringLiteral("opencv-lama-image-mask-nchw-float32-512-v1"))) {
-      return invalid_model_bundle(
-          normalized_root, manifest_path, true,
-          QStringLiteral("artifact_contract_invalid"),
-          QStringLiteral("Model artifact %1 has an unsupported tensor contract.").arg(index));
+              QStringLiteral("Model artifact %1 has an unsupported role.").arg(index));
     }
     relative_path.replace(QLatin1Char('\\'), QLatin1Char('/'));
     const auto path_parts = relative_path.split(QLatin1Char('/'), Qt::KeepEmptyParts);
@@ -231,6 +241,27 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
           QStringLiteral("artifact_path_invalid"),
           QStringLiteral("Model artifact %1 path must be unique and stay inside the bundle.")
               .arg(index));
+    }
+    const auto is_supported_inpaint_artifact =
+        role == QStringLiteral("inpaint") &&
+        contract == QString::fromLatin1(kInpaintModelContract) &&
+        relative_path == QString::fromLatin1(kInpaintModelRelativePath);
+    const auto is_supported_sam2_encoder =
+        role == QStringLiteral("selection") &&
+        contract == QString::fromLatin1(kSam2EncoderContract) &&
+        relative_path == QString::fromLatin1(kSam2EncoderRelativePath);
+    const auto is_supported_sam2_decoder =
+        role == QStringLiteral("selection") &&
+        contract == QString::fromLatin1(kSam2DecoderContract) &&
+        relative_path == QString::fromLatin1(kSam2DecoderRelativePath);
+    if (contract.isEmpty() ||
+        (role == QStringLiteral("inpaint") && !is_supported_inpaint_artifact) ||
+        (role == QStringLiteral("selection") &&
+         !is_supported_sam2_encoder && !is_supported_sam2_decoder)) {
+      return invalid_model_bundle(
+          normalized_root, manifest_path, true,
+          QStringLiteral("artifact_contract_invalid"),
+          QStringLiteral("Model artifact %1 has an unsupported tensor contract.").arg(index));
     }
     artifact_paths.insert(relative_path);
     const auto artifact_path = QDir(normalized_root).filePath(relative_path);
@@ -301,12 +332,21 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
               .arg(index));
     }
     ++verified_artifact_count;
-    if (role == QStringLiteral("inpaint") &&
-        relative_path == QStringLiteral("inpaint/lama.onnx")) {
+    if (is_supported_inpaint_artifact) {
       ++verified_inpaint_count;
       verified_inpaint_path = canonical_artifact_path;
       verified_inpaint_sha256 = actual_sha256;
       verified_inpaint_bytes = artifact_info.size();
+    } else if (is_supported_sam2_encoder) {
+      ++verified_sam2_encoder_count;
+      verified_sam2_encoder_path = canonical_artifact_path;
+      verified_sam2_encoder_sha256 = actual_sha256;
+      verified_sam2_encoder_bytes = artifact_info.size();
+    } else if (is_supported_sam2_decoder) {
+      ++verified_sam2_decoder_count;
+      verified_sam2_decoder_path = canonical_artifact_path;
+      verified_sam2_decoder_sha256 = actual_sha256;
+      verified_sam2_decoder_bytes = artifact_info.size();
     }
   }
   if (verified_inpaint_count != 1) {
@@ -314,6 +354,13 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
         normalized_root, manifest_path, true,
         QStringLiteral("inpaint_artifact_missing"),
         QStringLiteral("The bundle must contain exactly one verified inpaint/lama.onnx artifact."));
+  }
+  if (verified_sam2_encoder_count != verified_sam2_decoder_count ||
+      verified_sam2_encoder_count > 1 || verified_sam2_decoder_count > 1) {
+    return invalid_model_bundle(
+        normalized_root, manifest_path, true,
+        QStringLiteral("selection_artifact_pair_incomplete"),
+        QStringLiteral("SAM2 selection requires exactly one verified image encoder and image decoder."));
   }
 
   AiModelBundleVerification result;
@@ -325,6 +372,13 @@ AiModelBundleVerification verify_model_bundle_impl(const QString& model_root) {
   result.inpaint_model_path = verified_inpaint_path;
   result.inpaint_sha256 = verified_inpaint_sha256;
   result.inpaint_bytes = verified_inpaint_bytes;
+  result.smart_selection_artifacts_verified = verified_sam2_encoder_count == 1;
+  result.smart_selection_encoder_path = verified_sam2_encoder_path;
+  result.smart_selection_encoder_sha256 = verified_sam2_encoder_sha256;
+  result.smart_selection_encoder_bytes = verified_sam2_encoder_bytes;
+  result.smart_selection_decoder_path = verified_sam2_decoder_path;
+  result.smart_selection_decoder_sha256 = verified_sam2_decoder_sha256;
+  result.smart_selection_decoder_bytes = verified_sam2_decoder_bytes;
   result.artifact_count = verified_artifact_count;
   return result;
 }
@@ -337,6 +391,10 @@ AiModelBundleVerification verified_model_bundle_for_runtime(
     qint64 manifest_modified_ms = -1;
     qint64 inpaint_bytes = -1;
     qint64 inpaint_modified_ms = -1;
+    qint64 selection_encoder_bytes = -1;
+    qint64 selection_encoder_modified_ms = -1;
+    qint64 selection_decoder_bytes = -1;
+    qint64 selection_decoder_modified_ms = -1;
     AiModelBundleVerification verification;
   };
   static std::mutex cache_mutex;
@@ -346,16 +404,28 @@ AiModelBundleVerification verified_model_bundle_for_runtime(
   const QFileInfo manifest_info(
       QDir(absolute_root).filePath(QStringLiteral("manifest.json")));
   const QFileInfo inpaint_info(inpaint_model_path(absolute_root));
+  const QFileInfo selection_encoder_info(
+      QDir(absolute_root).filePath(QString::fromLatin1(kSam2EncoderRelativePath)));
+  const QFileInfo selection_decoder_info(
+      QDir(absolute_root).filePath(QString::fromLatin1(kSam2DecoderRelativePath)));
   const auto manifest_modified_ms =
       manifest_info.lastModified().toMSecsSinceEpoch();
   const auto inpaint_modified_ms =
       inpaint_info.lastModified().toMSecsSinceEpoch();
+  const auto selection_encoder_modified_ms =
+      selection_encoder_info.lastModified().toMSecsSinceEpoch();
+  const auto selection_decoder_modified_ms =
+      selection_decoder_info.lastModified().toMSecsSinceEpoch();
   std::lock_guard<std::mutex> lock(cache_mutex);
   if (cache.root == absolute_root &&
       cache.manifest_bytes == manifest_info.size() &&
       cache.manifest_modified_ms == manifest_modified_ms &&
       cache.inpaint_bytes == inpaint_info.size() &&
-      cache.inpaint_modified_ms == inpaint_modified_ms) {
+      cache.inpaint_modified_ms == inpaint_modified_ms &&
+      cache.selection_encoder_bytes == selection_encoder_info.size() &&
+      cache.selection_encoder_modified_ms == selection_encoder_modified_ms &&
+      cache.selection_decoder_bytes == selection_decoder_info.size() &&
+      cache.selection_decoder_modified_ms == selection_decoder_modified_ms) {
     return cache.verification;
   }
   cache.root = absolute_root;
@@ -363,6 +433,10 @@ AiModelBundleVerification verified_model_bundle_for_runtime(
   cache.manifest_modified_ms = manifest_modified_ms;
   cache.inpaint_bytes = inpaint_info.size();
   cache.inpaint_modified_ms = inpaint_modified_ms;
+  cache.selection_encoder_bytes = selection_encoder_info.size();
+  cache.selection_encoder_modified_ms = selection_encoder_modified_ms;
+  cache.selection_decoder_bytes = selection_decoder_info.size();
+  cache.selection_decoder_modified_ms = selection_decoder_modified_ms;
   cache.verification = verify_model_bundle_impl(absolute_root);
   return cache.verification;
 }
@@ -1353,6 +1427,377 @@ NamedOrtValue ort_value_name(
 
 class OnnxAiRuntime final {
  public:
+  [[nodiscard]] SegmentationResult runSmartSelect(
+      const QImage& source_image,
+      const QVector<SmartSelectPrompt>& prompts,
+      const SegmentationResult* previous_mask) {
+    SegmentationResult result;
+    if (source_image.isNull() || source_image.width() <= 0 || source_image.height() <= 0) {
+      result.error_message = QStringLiteral("Smart Select requires a valid source image.");
+      return result;
+    }
+    if (prompts.isEmpty() || prompts.size() > 64) {
+      result.error_message = QStringLiteral("Smart Select requires between one and 64 prompt points.");
+      return result;
+    }
+
+    auto has_positive_prompt = false;
+    for (const auto& prompt : prompts) {
+      if (!std::isfinite(prompt.x) || !std::isfinite(prompt.y) ||
+          prompt.x < 0.0 || prompt.x > 1.0 || prompt.y < 0.0 || prompt.y > 1.0) {
+        result.error_message = QStringLiteral("Smart Select prompt coordinates must be normalized image positions.");
+        return result;
+      }
+      has_positive_prompt = has_positive_prompt || !prompt.negative;
+      if (!prompt.box.isNull() &&
+          (!prompt.box.isValid() || !std::isfinite(prompt.box.left()) ||
+           !std::isfinite(prompt.box.top()) || !std::isfinite(prompt.box.right()) ||
+           !std::isfinite(prompt.box.bottom()) || prompt.box.left() < 0.0 ||
+           prompt.box.top() < 0.0 || prompt.box.right() > 1.0 ||
+           prompt.box.bottom() > 1.0 || prompt.negative)) {
+        result.error_message = QStringLiteral("Smart Select boxes must have valid normalized bounds.");
+        return result;
+      }
+    }
+    if (!has_positive_prompt) {
+      result.error_message = QStringLiteral("Smart Select requires at least one positive point.");
+      return result;
+    }
+
+    const auto bundle = verify_model_bundle_impl(default_model_root());
+    if (!bundle.ok || !bundle.smart_selection_artifacts_verified) {
+      result.error_message = bundle.error_message.isEmpty()
+          ? QStringLiteral("SAM2 model bundle failed integrity verification.")
+          : bundle.error_message;
+      return result;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!ensureSamSessions(bundle, &result.error_message)) return result;
+    try {
+      constexpr auto model_size = 1024;
+      constexpr auto model_mask_size = 256;
+      auto color_managed_source = source_image;
+      if (!color_managed_source.colorSpace().isValid()) {
+        color_managed_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+      }
+      const auto image = color_managed_source.convertedToColorSpace(
+          QColorSpace(QColorSpace::SRgb), QImage::Format_RGB888);
+      const auto scale = static_cast<double>(model_size) /
+                         static_cast<double>(std::max(image.width(), image.height()));
+      const auto resized_width = std::clamp(
+          qRound(static_cast<double>(image.width()) * scale), 1, model_size);
+      const auto resized_height = std::clamp(
+          qRound(static_cast<double>(image.height()) * scale), 1, model_size);
+      const auto resized = image.scaled(
+          QSize(resized_width, resized_height), Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                               .convertToFormat(QImage::Format_RGB888);
+
+      QCryptographicHash image_hasher(QCryptographicHash::Sha256);
+      const auto dimensions = QByteArray::number(image.width()) + 'x' + QByteArray::number(image.height());
+      image_hasher.addData(dimensions);
+      for (int y = 0; y < image.height(); ++y) {
+        image_hasher.addData(QByteArrayView(
+            reinterpret_cast<const char*>(image.constScanLine(y)), image.width() * 3));
+      }
+      const auto image_key = image_hasher.result();
+      if (sam_image_key_ != image_key || sam_encoder_features_.empty()) {
+        std::vector<float> input(static_cast<std::size_t>(3 * model_size * model_size), 0.0F);
+        constexpr std::array<float, 3> means{0.485F, 0.456F, 0.406F};
+        constexpr std::array<float, 3> standard_deviations{0.229F, 0.224F, 0.225F};
+        const auto plane_size = static_cast<std::size_t>(model_size * model_size);
+        for (int y = 0; y < resized_height; ++y) {
+          const auto* scanline = resized.constScanLine(y);
+          for (int x = 0; x < resized_width; ++x) {
+            const auto input_index = static_cast<std::size_t>(y * model_size + x);
+            for (int channel = 0; channel < 3; ++channel) {
+              const auto value = static_cast<float>(scanline[x * 3 + channel]) / 255.0F;
+              input[static_cast<std::size_t>(channel) * plane_size + input_index] =
+                  (value - means[static_cast<std::size_t>(channel)]) /
+                  standard_deviations[static_cast<std::size_t>(channel)];
+            }
+          }
+        }
+
+        const std::array<int64_t, 4> image_shape{1, 3, model_size, model_size};
+        auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        auto input_tensor = Ort::Value::CreateTensor<float>(
+            memory_info, input.data(), input.size(), image_shape.data(), image_shape.size());
+        const std::array<const char*, 1> input_names{"image"};
+        const std::array<const char*, 3> output_names{
+            "image_embed", "high_res_feats_0", "high_res_feats_1"};
+        auto output_values = sam_encoder_session_->Run(
+            Ort::RunOptions{nullptr}, input_names.data(), &input_tensor, 1,
+            output_names.data(), output_names.size());
+        if (output_values.size() != output_names.size()) {
+          result.error_message = QStringLiteral("SAM2 image encoder returned an incomplete feature set.");
+          return result;
+        }
+        sam_encoder_features_.clear();
+        sam_encoder_features_.reserve(output_values.size());
+        for (auto& value : output_values) {
+          if (!value.IsTensor() || value.GetTensorTypeAndShapeInfo().GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+            result.error_message = QStringLiteral("SAM2 image encoder returned a non-float feature tensor.");
+            sam_encoder_features_.clear();
+            return result;
+          }
+          const auto info = value.GetTensorTypeAndShapeInfo();
+          const auto* data = value.GetTensorData<float>();
+          const auto count = static_cast<std::size_t>(info.GetElementCount());
+          if (data == nullptr || count == 0) {
+            result.error_message = QStringLiteral("SAM2 image encoder returned an empty feature tensor.");
+            sam_encoder_features_.clear();
+            return result;
+          }
+          sam_encoder_features_.emplace_back(data, data + count);
+        }
+        sam_image_key_ = image_key;
+      }
+
+      std::vector<float> point_coordinates;
+      std::vector<float> point_labels;
+      point_coordinates.reserve(static_cast<std::size_t>(prompts.size() * 2));
+      point_labels.reserve(static_cast<std::size_t>(prompts.size()));
+      const auto append_prompt = [&](double x, double y, float label) {
+        const auto source_x = std::clamp(x * image.width(), 0.0, static_cast<double>(image.width() - 1));
+        const auto source_y = std::clamp(y * image.height(), 0.0, static_cast<double>(image.height() - 1));
+        point_coordinates.push_back(static_cast<float>(source_x * resized_width / image.width()));
+        point_coordinates.push_back(static_cast<float>(source_y * resized_height / image.height()));
+        point_labels.push_back(label);
+      };
+      for (const auto& prompt : prompts) {
+        if (prompt.box.isValid()) {
+          // SAM's trained corner embeddings use labels 2 and 3.
+          append_prompt(prompt.box.left(), prompt.box.top(), 2.0F);
+          append_prompt(prompt.box.right(), prompt.box.bottom(), 3.0F);
+        } else {
+          append_prompt(prompt.x, prompt.y, prompt.negative ? 0.0F : 1.0F);
+        }
+      }
+      const auto prompt_count = static_cast<int64_t>(point_labels.size());
+      const std::array<int64_t, 3> coordinates_shape{1, prompt_count, 2};
+      const std::array<int64_t, 2> labels_shape{1, prompt_count};
+      const std::array<int64_t, 4> mask_shape{1, 1, model_mask_size, model_mask_size};
+      const std::array<int64_t, 1> flag_shape{1};
+      std::vector<float> mask_input(static_cast<std::size_t>(model_mask_size * model_mask_size), 0.0F);
+      std::array<float, 1> has_mask_input{0.0F};
+      if (previous_mask != nullptr && previous_mask->success &&
+          previous_mask->width > 0 && previous_mask->height > 0 &&
+          previous_mask->mask_data.size() == previous_mask->width * previous_mask->height) {
+        const auto refinement_logit_bytes =
+            static_cast<qsizetype>(model_mask_size * model_mask_size) *
+            static_cast<qsizetype>(sizeof(float));
+        const auto has_exact_refinement_logits =
+            previous_mask->width == image.width() &&
+            previous_mask->height == image.height() &&
+            previous_mask->refinement_logits_width == model_mask_size &&
+            previous_mask->refinement_logits_height == model_mask_size &&
+            previous_mask->refinement_logits.size() == refinement_logit_bytes;
+        if (has_exact_refinement_logits) {
+          std::memcpy(
+              mask_input.data(),
+              previous_mask->refinement_logits.constData(),
+              static_cast<std::size_t>(refinement_logit_bytes));
+          has_mask_input[0] = 1.0F;
+        } else {
+          QImage previous_alpha(
+              reinterpret_cast<const uchar*>(previous_mask->mask_data.constData()),
+              previous_mask->width,
+              previous_mask->height,
+              previous_mask->width,
+              QImage::Format_Grayscale8);
+          const auto decoder_mask_width = std::clamp(
+              qRound(static_cast<double>(resized_width) * model_mask_size / model_size),
+              1,
+              model_mask_size);
+          const auto decoder_mask_height = std::clamp(
+              qRound(static_cast<double>(resized_height) * model_mask_size / model_size),
+              1,
+              model_mask_size);
+          const auto scaled_previous_alpha = previous_alpha.copy().scaled(
+              QSize(decoder_mask_width, decoder_mask_height),
+              Qt::IgnoreAspectRatio,
+              Qt::SmoothTransformation);
+          constexpr auto kMaskLogitScale = 1.5;
+          constexpr auto kMaskProbabilityFloor = 1.0 / 255.0;
+          for (int y = 0; y < decoder_mask_height; ++y) {
+            const auto* row = scaled_previous_alpha.constScanLine(y);
+            for (int x = 0; x < decoder_mask_width; ++x) {
+              const auto probability = std::clamp(
+                  static_cast<double>(row[x]) / 255.0,
+                  kMaskProbabilityFloor,
+                  1.0 - kMaskProbabilityFloor);
+              const auto index = static_cast<std::size_t>(y * model_mask_size + x);
+              mask_input[index] = static_cast<float>(
+                  std::log(probability / (1.0 - probability)) / kMaskLogitScale);
+            }
+          }
+          for (int y = 0; y < model_mask_size; ++y) {
+            for (int x = 0; x < model_mask_size; ++x) {
+              if (x >= decoder_mask_width || y >= decoder_mask_height) {
+                mask_input[static_cast<std::size_t>(y * model_mask_size + x)] = -32.0F;
+              }
+            }
+          }
+          has_mask_input[0] = 1.0F;
+        }
+      }
+      auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+      std::vector<Ort::Value> decoder_inputs;
+      decoder_inputs.reserve(7);
+      const auto add_feature = [&](std::size_t index, std::array<int64_t, 4> shape) {
+        decoder_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+            memory_info, sam_encoder_features_.at(index).data(), sam_encoder_features_.at(index).size(),
+            shape.data(), shape.size()));
+      };
+      add_feature(0, {1, 256, 64, 64});
+      add_feature(1, {1, 32, 256, 256});
+      add_feature(2, {1, 64, 128, 128});
+      decoder_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+          memory_info, point_coordinates.data(), point_coordinates.size(), coordinates_shape.data(), coordinates_shape.size()));
+      decoder_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+          memory_info, point_labels.data(), point_labels.size(), labels_shape.data(), labels_shape.size()));
+      decoder_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+          memory_info, mask_input.data(), mask_input.size(), mask_shape.data(), mask_shape.size()));
+      decoder_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+          memory_info, has_mask_input.data(), has_mask_input.size(), flag_shape.data(), flag_shape.size()));
+      const std::array<const char*, 7> decoder_input_names{
+          "image_embed", "high_res_feats_0", "high_res_feats_1", "point_coords",
+          "point_labels", "mask_input", "has_mask_input"};
+      const std::array<const char*, 2> decoder_output_names{"masks", "iou_predictions"};
+      auto decoder_outputs = sam_decoder_session_->Run(
+          Ort::RunOptions{nullptr}, decoder_input_names.data(), decoder_inputs.data(), decoder_inputs.size(),
+          decoder_output_names.data(), decoder_output_names.size());
+      if (decoder_outputs.size() != decoder_output_names.size() ||
+          !decoder_outputs[0].IsTensor() || !decoder_outputs[1].IsTensor()) {
+        result.error_message = QStringLiteral("SAM2 prompt decoder returned invalid outputs.");
+        return result;
+      }
+      const auto mask_info = decoder_outputs[0].GetTensorTypeAndShapeInfo();
+      const auto score_info = decoder_outputs[1].GetTensorTypeAndShapeInfo();
+      const auto mask_shape_out = mask_info.GetShape();
+      const auto score_shape_out = score_info.GetShape();
+      if (mask_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+          score_info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+          mask_shape_out.size() != 4 || score_shape_out.size() != 2 ||
+          mask_shape_out[0] != 1 || mask_shape_out[1] < 1 ||
+          mask_shape_out[2] != model_mask_size || mask_shape_out[3] != model_mask_size ||
+          score_shape_out[0] != 1 || score_shape_out[1] < mask_shape_out[1]) {
+        result.error_message = QStringLiteral("SAM2 prompt decoder output tensor contract did not match the pinned model.");
+        return result;
+      }
+
+      const auto* masks = decoder_outputs[0].GetTensorData<float>();
+      const auto* scores = decoder_outputs[1].GetTensorData<float>();
+      if (masks == nullptr || scores == nullptr) {
+        result.error_message = QStringLiteral("SAM2 prompt decoder returned empty output data.");
+        return result;
+      }
+      const auto candidate_count = static_cast<int>(mask_shape_out[1]);
+      const auto plane_size = static_cast<std::size_t>(model_mask_size * model_mask_size);
+      constexpr auto prompt_logit_threshold = -0.34F;
+      const auto sample_candidate_logit = [&](int candidate, const SmartSelectPrompt& prompt) {
+        const auto resized_x = std::clamp(prompt.x * resized_width, 0.0, static_cast<double>(resized_width - 1));
+        const auto resized_y = std::clamp(prompt.y * resized_height, 0.0, static_cast<double>(resized_height - 1));
+        const auto model_x = (resized_x + 0.5) * model_mask_size / model_size - 0.5;
+        const auto model_y = (resized_y + 0.5) * model_mask_size / model_size - 0.5;
+        const auto x0 = std::clamp(static_cast<int>(std::floor(model_x)), 0, model_mask_size - 1);
+        const auto x1 = std::min(x0 + 1, model_mask_size - 1);
+        const auto y0 = std::clamp(static_cast<int>(std::floor(model_y)), 0, model_mask_size - 1);
+        const auto y1 = std::min(y0 + 1, model_mask_size - 1);
+        const auto fx = static_cast<float>(std::clamp(model_x - std::floor(model_x), 0.0, 1.0));
+        const auto fy = static_cast<float>(std::clamp(model_y - std::floor(model_y), 0.0, 1.0));
+        const auto* logits = masks + static_cast<std::size_t>(candidate) * plane_size;
+        const auto a = logits[static_cast<std::size_t>(y0 * model_mask_size + x0)] * (1.0F - fx) +
+                       logits[static_cast<std::size_t>(y0 * model_mask_size + x1)] * fx;
+        const auto b = logits[static_cast<std::size_t>(y1 * model_mask_size + x0)] * (1.0F - fx) +
+                       logits[static_cast<std::size_t>(y1 * model_mask_size + x1)] * fx;
+        return a * (1.0F - fy) + b * fy;
+      };
+      auto best_candidate = -1;
+      auto best_score = -std::numeric_limits<float>::infinity();
+      auto best_mask_alpha_logit_scale = kSam2MaskAlphaLogitScale;
+      for (int candidate = 0; candidate < candidate_count; ++candidate) {
+        auto honors_all_prompts = true;
+        auto candidate_mask_alpha_logit_scale = kSam2MaskAlphaLogitScale;
+        auto maximum_candidate_mask_alpha_logit_scale =
+            kSam2MaximumMaskAlphaLogitScale;
+        for (const auto& prompt : prompts) {
+          if (prompt.box.isValid()) continue;
+          const auto logit = sample_candidate_logit(candidate, prompt);
+          honors_all_prompts = honors_all_prompts &&
+              (prompt.negative ? logit < prompt_logit_threshold
+                               : logit >= prompt_logit_threshold);
+          if (prompt.negative && logit < 0.0F) {
+            candidate_mask_alpha_logit_scale = std::max(
+                candidate_mask_alpha_logit_scale,
+                kSam2NegativePromptAlphaLogitThreshold / logit + 0.01F);
+          } else if (!prompt.negative && logit < 0.0F) {
+            maximum_candidate_mask_alpha_logit_scale = std::min(
+                maximum_candidate_mask_alpha_logit_scale,
+                kSam2PositivePromptAlphaLogitThreshold / logit);
+          }
+        }
+        honors_all_prompts = honors_all_prompts &&
+            candidate_mask_alpha_logit_scale <= maximum_candidate_mask_alpha_logit_scale;
+        if (honors_all_prompts && scores[candidate] > best_score) {
+          best_candidate = candidate;
+          best_score = scores[candidate];
+          best_mask_alpha_logit_scale = candidate_mask_alpha_logit_scale;
+        }
+      }
+      if (best_candidate < 0) {
+        result.error_message = QStringLiteral(
+            "SAM2 found no mask candidate that honors all positive and negative points. "
+            "Adjust the prompts or refine the mask manually.");
+        return result;
+      }
+      const auto* logits = masks + static_cast<std::size_t>(best_candidate) * plane_size;
+      result.refinement_logits.resize(static_cast<qsizetype>(plane_size * sizeof(float)));
+      std::memcpy(
+          result.refinement_logits.data(),
+          logits,
+          plane_size * sizeof(float));
+      result.refinement_logits_width = model_mask_size;
+      result.refinement_logits_height = model_mask_size;
+      result.width = image.width();
+      result.height = image.height();
+      result.mask_data.resize(result.width * result.height);
+      for (int y = 0; y < result.height; ++y) {
+        auto* output = result.mask_data.data() + y * result.width;
+        const auto resized_y = (static_cast<double>(y) + 0.5) * resized_height / result.height - 0.5;
+        const auto model_y = (resized_y + 0.5) * model_mask_size / model_size - 0.5;
+        const auto y0 = std::clamp(static_cast<int>(std::floor(model_y)), 0, model_mask_size - 1);
+        const auto y1 = std::min(y0 + 1, model_mask_size - 1);
+        const auto fy = std::clamp(model_y - std::floor(model_y), 0.0, 1.0);
+        for (int x = 0; x < result.width; ++x) {
+          const auto resized_x = (static_cast<double>(x) + 0.5) * resized_width / result.width - 0.5;
+          const auto model_x = (resized_x + 0.5) * model_mask_size / model_size - 0.5;
+          const auto x0 = std::clamp(static_cast<int>(std::floor(model_x)), 0, model_mask_size - 1);
+          const auto x1 = std::min(x0 + 1, model_mask_size - 1);
+          const auto fx = std::clamp(model_x - std::floor(model_x), 0.0, 1.0);
+          const auto a = logits[static_cast<std::size_t>(y0 * model_mask_size + x0)] * static_cast<float>(1.0 - fx) +
+                         logits[static_cast<std::size_t>(y0 * model_mask_size + x1)] * static_cast<float>(fx);
+          const auto b = logits[static_cast<std::size_t>(y1 * model_mask_size + x0)] * static_cast<float>(1.0 - fx) +
+                         logits[static_cast<std::size_t>(y1 * model_mask_size + x1)] * static_cast<float>(fx);
+          const auto logit = a * static_cast<float>(1.0 - fy) + b * static_cast<float>(fy);
+          const auto probability =
+              1.0F / (1.0F + std::exp(-std::clamp(
+                  logit * best_mask_alpha_logit_scale, -16.0F, 16.0F)));
+          const auto alpha = std::clamp(qRound(probability * 255.0F), 0, 255);
+          output[x] = static_cast<char>(alpha);
+        }
+      }
+      result.success = true;
+      return result;
+    } catch (const Ort::Exception& exception) {
+      result.error_message = QStringLiteral("SAM2 ONNX inference failed: %1").arg(QString::fromUtf8(exception.what()));
+    } catch (const std::exception& exception) {
+      result.error_message = QStringLiteral("SAM2 ONNX inference failed: %1").arg(QString::fromUtf8(exception.what()));
+    }
+    return result;
+  }
+
   [[nodiscard]] AiInpaintResult runInpaint(const AiInpaintRequest& request) {
     AiInpaintResult result;
     if (!valid_inpaint_mask(request)) {
@@ -1399,6 +1844,47 @@ class OnnxAiRuntime final {
   }
 
  private:
+  [[nodiscard]] bool ensureSamSessions(
+      const AiModelBundleVerification& bundle,
+      QString* error_message) {
+    if (sam_encoder_session_ && sam_decoder_session_ &&
+        sam_encoder_model_path_ == bundle.smart_selection_encoder_path &&
+        sam_encoder_model_sha256_ == bundle.smart_selection_encoder_sha256 &&
+        sam_decoder_model_path_ == bundle.smart_selection_decoder_path &&
+        sam_decoder_model_sha256_ == bundle.smart_selection_decoder_sha256) {
+      return true;
+    }
+    try {
+      if (!env_) env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_ERROR, "photo_editor_ai");
+      Ort::SessionOptions options;
+      options.SetIntraOpNumThreads(6);
+      options.SetInterOpNumThreads(1);
+      options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+      auto encoder = std::make_unique<Ort::Session>(
+          *env_, bundle.smart_selection_encoder_path.toUtf8().constData(), options);
+      auto decoder = std::make_unique<Ort::Session>(
+          *env_, bundle.smart_selection_decoder_path.toUtf8().constData(), options);
+      sam_encoder_session_ = std::move(encoder);
+      sam_decoder_session_ = std::move(decoder);
+      sam_encoder_model_path_ = bundle.smart_selection_encoder_path;
+      sam_encoder_model_sha256_ = bundle.smart_selection_encoder_sha256;
+      sam_decoder_model_path_ = bundle.smart_selection_decoder_path;
+      sam_decoder_model_sha256_ = bundle.smart_selection_decoder_sha256;
+      sam_encoder_features_.clear();
+      sam_image_key_.clear();
+      return true;
+    } catch (const Ort::Exception& exception) {
+      if (error_message) *error_message = QStringLiteral("Unable to load SAM2 ONNX sessions: %1").arg(QString::fromUtf8(exception.what()));
+    } catch (const std::exception& exception) {
+      if (error_message) *error_message = QStringLiteral("Unable to load SAM2 ONNX sessions: %1").arg(QString::fromUtf8(exception.what()));
+    }
+    sam_encoder_session_.reset();
+    sam_decoder_session_.reset();
+    sam_encoder_features_.clear();
+    sam_image_key_.clear();
+    return false;
+  }
+
   [[nodiscard]] bool ensureInpaintSession(
       const QString& model_path,
       const QString& model_sha256,
@@ -1699,6 +2185,14 @@ class OnnxAiRuntime final {
 
   std::mutex mutex_;
   std::unique_ptr<Ort::Env> env_;
+  std::unique_ptr<Ort::Session> sam_encoder_session_;
+  std::unique_ptr<Ort::Session> sam_decoder_session_;
+  QString sam_encoder_model_path_;
+  QString sam_encoder_model_sha256_;
+  QString sam_decoder_model_path_;
+  QString sam_decoder_model_sha256_;
+  QByteArray sam_image_key_;
+  std::vector<std::vector<float>> sam_encoder_features_;
   std::unique_ptr<Ort::Session> inpaint_session_;
   QString inpaint_model_path_;
   QString inpaint_model_sha256_;
@@ -1760,13 +2254,12 @@ AiModelRuntimeStatus ai_model_runtime_status() {
   const auto manifest_available = bundle.manifest_available;
   status.bundle_verified = bundle.ok;
   status.inpaint_artifact_verified = bundle.inpaint_artifact_verified;
+  status.smart_selection_artifacts_verified =
+      bundle.smart_selection_artifacts_verified;
   status.bundle_verification_error_code = bundle.error_code;
   status.bundle_verification_error = bundle.error_message;
   const auto smart_selection_files_available =
-      bundle.ok &&
-      model_file_exists(
-          status.model_root,
-          QStringLiteral("selection/sam2.1_hiera_tiny.onnx"));
+      bundle.ok && bundle.smart_selection_artifacts_verified;
   const auto inpaint_files_available =
       bundle.ok && bundle.inpaint_artifact_verified;
   status.smart_selection_available =
@@ -1811,10 +2304,11 @@ AiModelRuntimeStatus ai_model_runtime_status() {
                          .arg(bundle.error_code.isEmpty()
                                   ? QStringLiteral("invalid bundle")
                                   : bundle.error_code);
+  } else if (smart_selection_files_available && !kSamRuntimeImplemented) {
+    status.summary = QStringLiteral(
+        "Bundled SAM2 image encoder and decoder are verified, but SAM ONNX inference is not implemented in this build.");
   } else if (inpaint_files_available && !kLamaRuntimeImplemented) {
     status.summary = QStringLiteral("Bundled LaMa inpaint model found, but ONNX Runtime is not linked in this build; retouch uses Local CPU Fill.");
-  } else if (smart_selection_files_available && !kSamRuntimeImplemented) {
-    status.summary = QStringLiteral("Bundled smart-selection model found, but SAM ONNX inference is not implemented in this build.");
   } else if (manifest_available) {
     status.summary = QStringLiteral("Bundled model manifest found, but required SAM/LaMa model files are incomplete; retouch uses Local CPU Fill.");
   } else {
@@ -1833,15 +2327,21 @@ void shutdown_ai_model_runtime() {
 
 SegmentationResult generate_ai_smart_selection_mask(
     const QImage& source_image,
-    const QVector<SmartSelectPrompt>& prompts) {
+    const QVector<SmartSelectPrompt>& prompts,
+    const SegmentationResult* previous_mask) {
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_AI_MODELS")) {
     return generate_smart_select_mask(source_image, prompts);
   }
 
+#if defined(PHOTO_EDITOR_HAS_ONNXRUNTIME) && PHOTO_EDITOR_HAS_ONNXRUNTIME
+  return onnx_ai_runtime().runSmartSelect(source_image, prompts, previous_mask);
+#else
+  static_cast<void>(previous_mask);
   SegmentationResult result;
   result.error_message =
       QStringLiteral("SAM smart-selection runtime is not linked in this build.");
   return result;
+#endif
 }
 
 AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request) {

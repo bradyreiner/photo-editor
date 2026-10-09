@@ -271,9 +271,9 @@ inline int run_workspace_switch_proof(QQuickWindow* window,
       popup->setProperty("page", 1);
       focus->setProperty("text", QString::number(distance, 'g', 9));
       lens_ok = QMetaObject::invokeMethod(focus, "textEdited") && QMetaObject::invokeMethod(focus, "editingFinished");
+      popup->setProperty("page", 2);
       aperture->setProperty("value", distance * 0.025F);
       lens_ok = QMetaObject::invokeMethod(aperture, "moved") && lens_ok;
-      popup->setProperty("page", 2);
       shape->setProperty("currentIndex", 2);
       lens_ok = QMetaObject::invokeMethod(shape, "activated", Q_ARG(int, 2)) && lens_ok;
       quality->setProperty("currentIndex", 0);

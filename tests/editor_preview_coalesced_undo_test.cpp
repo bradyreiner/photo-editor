@@ -93,7 +93,7 @@ struct EditorPreviewControllerTestAccess {
     if (controller.setSectionComparison(QStringLiteral("invalid")) ||
         controller.setSectionComparison(QStringLiteral("white-balance"), 99)) { std::cerr << "section comparison assertion at line " << __LINE__ << '\n'; return false; }
 
-    if (!controller.addAdjustmentLayer(QStringLiteral("Compared layer"))) { std::cerr << "section comparison assertion at line " << __LINE__ << '\n'; return false; }
+    if (!controller.createAdjustmentLayerFromCurrentGlobalEdits(QStringLiteral("Compared layer"))) { std::cerr << "section comparison assertion at line " << __LINE__ << '\n'; return false; }
     controller.setTemperature(-5);
     controller.setExposure(0.25);
     const auto layer_id = controller.photoLayers().front().toMap().value(QStringLiteral("id")).toString();
@@ -141,7 +141,7 @@ struct EditorPreviewControllerTestAccess {
       if (controller.exposure() != 0) { std::cerr << "undo failed\n"; return false; }
       controller.redo();
       if (std::abs(controller.exposure() - ev) > 1e-8) return false;
-      if (!controller.addAdjustmentLayer(QStringLiteral("Local exposure"))) { std::cerr << "add layer failed\n"; return false; }
+      if (!controller.createAdjustmentLayerFromCurrentGlobalEdits(QStringLiteral("Local exposure"))) { std::cerr << "add layer failed\n"; return false; }
       // Creating an adjustment layer moves existing global edits into it.
       // Exercise a real change on that layer, then restore the global exposure.
       controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0);
@@ -473,7 +473,7 @@ int main(int argc, char** argv) {
   const auto style_before_alignment = text_controller.photoLayerTypography(0);
   const auto row_before_alignment = text_controller.photoLayers().at(0).toMap();
   if (!text_controller.setPhotoLayerTextStyle(0, row_before_alignment.value("fontFamily").toString(),
-      row_before_alignment.value("fontSize").toInt(), row_before_alignment.value("textColor").toString(),
+      row_before_alignment.value("fontSize").toDouble(), row_before_alignment.value("textColor").toString(),
       row_before_alignment.value("fontWeight").toString(), QStringLiteral("right")) ||
       text_controller.photoLayerTypography(0) != style_before_alignment)
     return fail("Alignment changes must preserve precise versioned typography metrics");

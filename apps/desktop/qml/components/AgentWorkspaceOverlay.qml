@@ -77,6 +77,42 @@ Item {
     property int eventSerial: 0
     property bool traveling: false
     property bool speaking: false
+    property var targetResolver: null
+    property real robotX: 80
+    property real robotY: 120
+    property real travelToX: 80
+    property real travelToY: 120
+    property int travelDuration: 600
+    property string locomotion: "idle"
+    property var surfaceRoute: []
+    property string activeParameterKey: ""
+    property real travelFromX: 80
+    property real travelFromY: 120
+    property real routeProgress: 0
+    property real jumpHeight: 0
+    property real toolDeployProgress: 0
+    property string deployedTool: "none"
+    property bool placedOnSurface: false
+    property real reachProgress: 0
+    property real scanAngle: 0
+    property bool touchingControl: false
+    property var currentTouchTarget: ({})
+    property var motionTargets: []
+    property var motionEvent: ({})
+    readonly property bool reachLeft: Number(root.currentTouchTarget.x || width / 2) < agentStage.width
+    property string lastMotionEventKey: ""
+    property string characterAsideText: ""
+    property var characterAsideKeys: []
+    property bool dismissed: false
+    AgentFailureDetails { id: failureDetails }
+    function showFailureDetails(opener) {
+        failureDetails.openFor(root.hasController ? root.agentEditController.lastRunReport : ({}),
+                               root.explanation(), opener)
+    }
+    property var returnFocusItem: null
+    readonly property bool compactStatus: (root.running && !root.awaitingInput) ||
+                                         (root.runFailed && !root.spatialTargetMode &&
+                                          String(root.visualCritique().contract || "").length === 0)
     property bool correctionOpen: false
     property string correctionText: ""
     property string correctionError: ""
@@ -114,6 +150,7 @@ Item {
 
     signal assetRequested(string assetId)
     signal reopenRequested()
+    signal dismissedRequested()
     signal draftCommitted(var report)
     signal findingRequested(var finding)
     signal spatialTargetModeRequested(bool enabled)
@@ -194,6 +231,65 @@ Item {
 
     Theme { id: theme }
 
+    function dismiss() {
+        root.dismissed = true
+        robotTravel.stop()
+        robotReach.stop()
+        root.traveling = false
+        root.touchingControl = false
+        root.reachProgress = 0
+        root.toolDeployProgress = 0
+        root.locomotion = "idle"
+        if (root.spatialTargetMode)
+            root.cancelSpatialCorrection()
+        root.dismissedRequested()
+        if (root.returnFocusItem && root.returnFocusItem.visible)
+            root.returnFocusItem.forceActiveFocus(Qt.OtherFocusReason)
+    }
+
+    function restore() {
+        if (root.Window.window && root.Window.window.activeFocusItem !== root)
+            root.returnFocusItem = root.Window.window.activeFocusItem
+        root.dismissed = false
+        root.forceActiveFocus(Qt.OtherFocusReason)
+        root.startEventMotion()
+    }
+
+    Keys.onEscapePressed: function(event) { root.dismiss(); event.accepted = true }
+
+    Shortcut {
+        sequence: "Escape"
+        enabled: root.visible && !root.dismissed && !failureDetails.visible
+        onActivated: root.dismiss()
+    }
+
+    onRunningChanged: {
+        root.characterAsideText = ""
+        characterAsideTimer.stop()
+        if (root.running) {
+            root.characterAsideKeys = []
+            robotTravel.stop()
+            robotReach.stop()
+            root.motionTargets = []
+            root.lastMotionEventKey = ""
+            root.dismissed = false
+            root.returnFocusItem = root.visible && root.Window.window ? root.Window.window.activeFocusItem : null
+        }
+    }
+    onRunFailedChanged: {
+        if (root.runFailed) {
+            root.characterAsideText = ""
+            robotTravel.stop()
+            robotReach.stop()
+            root.motionTargets = []
+            root.traveling = false
+            root.reachProgress = 0
+            root.toolDeployProgress = 0
+            root.locomotion = "idle"
+            root.touchingControl = false
+        }
+    }
+
     onDraftReadyChanged: {
         if (!root.draftReady && !root.running) {
             root.correctionOpen = false
@@ -210,6 +306,7 @@ Item {
     }
 
     onAwaitingInputChanged: {
+        if (root.awaitingInput) root.characterAsideText = ""
         if (!root.awaitingInput) {
             root.pendingAnswerText = ""
             root.pendingAnswerError = ""
@@ -391,12 +488,12 @@ Item {
             radius: 9
             color: bubbleButton.primary
                    ? (bubbleButton.down ? Qt.darker(theme.primaryAccent, 1.08) : theme.primaryAccent)
-                   : (bubbleButton.hovered ? theme.alpha(theme.brandInk, 0.13)
-                                           : theme.alpha(theme.brandInk, 0.075))
+                   : (bubbleButton.hovered ? theme.alpha(theme.textStrong, 0.13)
+                                           : theme.alpha(theme.textStrong, 0.075))
         }
         contentItem: Label {
             text: bubbleButton.text
-            color: bubbleButton.primary ? theme.brandPaper : theme.brandInk
+            color: bubbleButton.primary ? theme.brandPaper : theme.textStrong
             font.family: theme.fontUi
             font.pixelSize: 11
             font.weight: Font.DemiBold
@@ -418,7 +515,7 @@ Item {
             color: ledgerButton.accent
                    ? theme.alpha(theme.primaryAccent, ledgerButton.hovered ? 0.22 : 0.16)
                    : ledgerButton.hovered ? theme.alpha(theme.primaryAccent, 0.16)
-                                          : theme.alpha(theme.brandInk, 0.065)
+                                          : theme.alpha(theme.textStrong, 0.065)
             border.width: 1
             border.color: theme.alpha(theme.primaryAccent,
                                       ledgerButton.accent ? 0.46 : 0.18)
@@ -456,31 +553,255 @@ Item {
     }
 
     function refreshActiveEvent() {
-        const previousAnchor = root.uiAnchor
         root.activeEvent = root.latestEvent()
         root.eventSerial += 1
         const evidence = root.activeEvent.evidence || ({})
         const assetId = String(evidence.assetId || "")
         if (assetId.length > 0)
             root.assetRequested(assetId)
-        const nextAnchor = root.uiAnchor
-        if (!root.reducedMotion && previousAnchor !== nextAnchor) {
-            root.speaking = false
-            root.traveling = true
-            travelArrival.restart()
-        } else {
-            root.traveling = false
-            root.finishArrival()
+        const key = [root.activeEvent.stage, root.activeEvent.status, root.activeEvent.atUtc,
+                     root.activeEvent.elapsedMsSinceRunStart, root.uiAnchor,
+                     (evidence.adjustmentKeys || []).join(",")].join("|")
+        if (key !== root.lastMotionEventKey) {
+            root.lastMotionEventKey = key
+            const event = root.activeEvent
+            Qt.callLater(function() { root.queueEventMotion(event) })
         }
+    }
+
+    function startEventMotion() {
+        if (!root.visible || root.dismissed) return
+        robotTravel.stop()
+        robotReach.stop()
+        root.reachProgress = 0
+        root.toolDeployProgress = 0
+        root.locomotion = "idle"
+        root.touchingControl = false
+        root.motionTargets = []
+        root.surfaceRoute = []
+        root.toolDeployProgress = 0
+        if (!root.placedOnSurface) {
+            root.robotX = Math.max(8, root.width * 0.35)
+            root.robotY = root.height - 8 - roamingCharacter.feetBaseline
+            root.placedOnSurface = true
+        }
+        root.queueEventMotion(root.activeEvent)
+    }
+
+    function eventMotionKeys(event) {
+        const current = event || ({})
+        const evidence = current.evidence || ({})
+        const stage = String(current.stage || "").trim().toLowerCase()
+        const operation = String(evidence.operation || "").trim().toLowerCase()
+        // A render/preview/proof reports on pixels already produced. It must
+        // not send the character back to adjustment sliders as if it were
+        // changing them again.
+        if (["render", "preview", "validate", "proof", "model-review"].indexOf(stage) >= 0 ||
+                operation.indexOf("render") >= 0 || operation.indexOf("proof") >= 0)
+            return []
+        const keys = evidence.adjustmentKeys || []
+        if (typeof root.targetResolver !== "function")
+            return keys.slice(0, 6)
+        const visibleKeys = []
+        for (let index = 0; index < keys.length; ++index) {
+            const key = String(keys[index] || "").trim()
+            if (key.length === 0) continue
+            const target = root.targetResolver(event, key)
+            if (!target || !target.interactive || String(target.controlName || "").length === 0)
+                continue
+            visibleKeys.push(key)
+            if (visibleKeys.length >= 6) break
+        }
+        return visibleKeys
+    }
+
+    function eventMotionTool(event, key) {
+        const current = event || ({})
+        const evidence = current.evidence || ({})
+        const operation = String(evidence.operation || "").trim().toLowerCase()
+        const toolName = String(evidence.toolName || "").trim().toLowerCase()
+        const stage = String(current.stage || "").trim().toLowerCase()
+        const explicitTool = String(current.characterTool || "").trim().toLowerCase()
+        const combined = operation + " " + toolName
+        if (["render", "preview", "validate", "proof", "model-review"].indexOf(stage) >= 0 ||
+                operation.indexOf("render") >= 0 || operation.indexOf("proof") >= 0)
+            return "loupe"
+        if (combined.indexOf("text") >= 0 || combined.indexOf("typography") >= 0)
+            return "type"
+        if (combined.indexOf("mask") >= 0 || combined.indexOf("selection") >= 0 ||
+                combined.indexOf("lasso") >= 0 || combined.indexOf("brush") >= 0 ||
+                operation === "paint" || operation.indexOf("select_") === 0)
+            return "brush"
+        if (operation === "inspect")
+            return "loupe"
+        if (["loupe", "sampler", "type", "brush", "none"].indexOf(explicitTool) >= 0)
+            return explicitTool
+        if (String(key || "").length > 0 || current.uiAnchor === "inspector")
+            return "tone-key"
+        return "loupe"
+    }
+
+    function queueEventMotion(event) {
+        if (!root.visible || root.dismissed) return
+        const keys = root.eventMotionKeys(event)
+        const targets = (keys.length > 0 ? keys : [""]).map(function(key) {
+            return {event: event, key: key}
+        })
+        root.motionTargets = root.motionTargets.concat(targets).slice(-8)
+        if (!robotTravel.running && !robotReach.running) root.visitNextTarget()
+    }
+
+    function visitNextTarget() {
+        if (root.motionTargets.length === 0 || root.dismissed || !root.visible) return
+        const step = root.motionTargets[0]
+        const key = step.key
+        root.activeParameterKey = key
+        root.motionEvent = step.event
+        root.motionTargets = root.motionTargets.slice(1)
+        const resolved = typeof root.targetResolver === "function"
+                         ? root.targetResolver(root.motionEvent, key) : null
+        if (!resolved && key.length > 0) {
+            root.visitNextTarget()
+            return
+        }
+        root.currentTouchTarget = resolved || ({x: root.agentTargetX, y: root.agentTargetY,
+                                               label: root.uiAnchor, interactive: false})
+        root.deployedTool = root.eventMotionTool(root.motionEvent, key)
+        root.toolDeployProgress = 0
+        root.buildSurfaceRoute()
+        root.speaking = false
+        root.followSurfaceRoute()
+    }
+
+    function buildSurfaceRoute() {
+        const target = root.currentTouchTarget
+        const surface = target.surfaceRect || ({x: 8, y: root.height - 8, width: root.width - 16})
+        const desiredX = Number(target.x) - agentStage.width * (root.reachLeft ? 0.1457 : 0.8543)
+        const leftLimit = Math.max(0, Number(surface.x) - agentStage.width * 0.27)
+        const rightLimit = Math.min(root.width - agentStage.width, Number(surface.x) + Number(surface.width) - agentStage.width * 0.79)
+        const destinationX = Math.max(leftLimit, Math.min(Math.max(leftLimit, rightLimit), desiredX))
+        const destinationY = Number(surface.y) - roamingCharacter.feetBaseline
+        const panel = target.panelRect || surface
+        const edgeX = Math.max(4, Math.min(root.width - agentStage.width - 4,
+            root.reachLeft ? Number(panel.x) + Number(panel.width) + agentStage.width * 0.03
+                           : Number(panel.x) - agentStage.width * 1.03))
+        const floorY = root.height - 8 - roamingCharacter.feetBaseline
+        const route = []
+        // Walk along the window sill, then grip the real panel edge and climb.
+        // Nearby controls share the same edge, avoiding a return to the floor.
+        if (Math.abs(root.robotX - edgeX) > agentStage.width * 2) {
+            if (Math.abs(root.robotY - floorY) > 12)
+                route.push({x: root.robotX, y: floorY, kind: "jump"})
+            route.push({x: edgeX, y: floorY, kind: "walk"})
+        } else if (Math.abs(root.robotX - edgeX) > 4) {
+            route.push({x: edgeX, y: root.robotY, kind: "jump"})
+        }
+        if (Math.abs(root.robotY - destinationY) > 4)
+            route.push({x: edgeX, y: destinationY, kind: "climb"})
+        route.push({x: destinationX, y: destinationY, kind: "jump"})
+        root.surfaceRoute = route
+    }
+
+    function followSurfaceRoute() {
+        if (root.surfaceRoute.length === 0) { root.arriveAtControl(); return }
+        const step = root.surfaceRoute[0]
+        root.surfaceRoute = root.surfaceRoute.slice(1)
+        root.travelFromX = root.robotX
+        root.travelFromY = root.robotY
+        root.travelToX = Number(step.x)
+        root.travelToY = Number(step.y)
+        root.locomotion = String(step.kind)
+        root.jumpHeight = step.kind === "jump" ? Math.min(36, Math.abs(root.travelToX - root.robotX) * 0.2 + 14) : 0
+        const distance = Math.hypot(root.travelToX - root.robotX, root.travelToY - root.robotY)
+        root.travelDuration = Math.round(Math.max(260, Math.min(1250, distance * (step.kind === "climb" ? 1.8 : 1.1))))
+        root.routeProgress = 0
+        if (root.reducedMotion) {
+            root.robotX = root.travelToX; root.robotY = root.travelToY
+            root.followSurfaceRoute()
+        } else {
+            root.traveling = true
+            robotTravel.restart()
+        }
+    }
+
+    onRouteProgressChanged: {
+        root.robotX = root.travelFromX + (root.travelToX - root.travelFromX) * root.routeProgress
+        root.robotY = root.travelFromY + (root.travelToY - root.travelFromY) * root.routeProgress
+                    - Math.sin(Math.PI * root.routeProgress) * root.jumpHeight
+    }
+
+    function arriveAtControl() {
+        root.traveling = false
+        root.locomotion = "idle"
+        root.finishArrival()
+        if (!root.reducedMotion && !root.runFailed && (root.running || root.draftReady) && Boolean(root.currentTouchTarget.interactive))
+            robotReach.restart()
+        else if (root.motionTargets.length > 0)
+            Qt.callLater(function() { root.visitNextTarget() })
+    }
+
+    function refreshSurfaceGeometry() {
+        if (typeof root.targetResolver !== "function" || root.dismissed || !root.visible || root.traveling) return
+        const updated = root.targetResolver(root.motionEvent, root.activeParameterKey)
+        if (!updated) {
+            robotReach.stop()
+            root.touchingControl = false
+            root.toolDeployProgress = 0
+            root.reachProgress = 0
+            root.locomotion = "idle"
+            return
+        }
+        const previous = root.currentTouchTarget
+        if (Math.abs(Number(updated.x) - Number(previous.x)) < 0.5 &&
+                Math.abs(Number(updated.y) - Number(previous.y)) < 0.5 &&
+                Math.abs(Number((updated.surfaceRect || ({})).y) - Number((previous.surfaceRect || ({})).y)) < 0.5) return
+        robotReach.stop()
+        root.touchingControl = false
+        root.toolDeployProgress = 0
+        root.reachProgress = 0
+        root.locomotion = "idle"
+        root.currentTouchTarget = updated
+        root.buildSurfaceRoute()
+        if (root.reducedMotion) {
+            // A resized control still needs a fresh mapped anchor. Reposition
+            // the character in one quiet snap without replaying the route.
+            const route = root.surfaceRoute
+            if (route.length > 0) {
+                const destination = route[route.length - 1]
+                root.robotX = Number(destination.x)
+                root.robotY = Number(destination.y)
+                root.travelToX = root.robotX
+                root.travelToY = root.robotY
+                root.travelFromX = root.robotX
+                root.travelFromY = root.robotY
+            }
+            root.surfaceRoute = []
+            root.traveling = false
+            root.jumpHeight = 0
+            root.routeProgress = 0
+            return
+        }
+        root.followSurfaceRoute()
     }
 
     function finishArrival() {
         root.speaking = true
         speechTimer.restart()
         speechArrival.restart()
-        const mode = root.assistantLightMode()
-        if (mode === "adjust" || mode === "point")
-            touchPulse.restart()
+        root.offerCharacterAside()
+    }
+
+    function offerCharacterAside() {
+        if (!root.running || root.runFailed || root.awaitingInput || !root.currentTouchTarget.interactive) return
+        const operation = String((root.motionEvent.evidence || ({})).operation || "")
+        const key = String(root.motionEvent.stage || root.motionEvent.uiAnchor || "") + "|" + operation
+        if (root.characterAsideKeys.indexOf(key) >= 0 || root.characterAsideKeys.length >= 3) return
+        root.characterAsideKeys = root.characterAsideKeys.concat([key])
+        root.characterAsideText = root.deployedTool === "type" ? "Putting the words in their place."
+                                : root.deployedTool === "brush" ? "Measure twice. Mask once."
+                                : root.deployedTool === "tone-key" ? "Just a quarter turn."
+                                : "A closer look. Occupational habit."
+        characterAsideTimer.restart()
     }
 
     function headline() {
@@ -590,13 +911,7 @@ Item {
         const elapsed = Math.max(0, root.localPlanningElapsedSeconds)
         const minutes = Math.floor(elapsed / 60)
         const seconds = String(elapsed % 60).padStart(2, "0")
-        const phase = elapsed < 15
-                      ? "STARTING"
-                      : elapsed < 60
-                        ? "READING PHOTO"
-                        : elapsed < 90
-                          ? "BUILDING PLAN"
-                          : "DEEP REVIEW"
+        const phase = "WAITING FOR MODEL"
         const countdown = root.fastDraftDeepTargetCountdownText()
         const previewReceipt = root.progressivePreviewVisible
                                ? (root.keepValidatedFastAvailable
@@ -1395,6 +1710,10 @@ Item {
     function assistantLightMode() {
         if (root.traveling)
             return "walk"
+        if (root.reachProgress > 0)
+            return "adjust"
+        if (root.runFailed)
+            return "warning"
         if (root.awaitingInput)
             return "warning"
         if (root.draftReady)
@@ -1423,22 +1742,16 @@ Item {
     Component.onCompleted: refreshActiveEvent()
 
     Timer {
-        id: travelArrival
-        interval: 470
-        repeat: false
-        onTriggered: {
-            root.traveling = false
-            root.finishArrival()
-        }
-    }
-
-    Timer {
         id: speechTimer
         interval: Math.min(3600, 1200 + (root.headline().length + root.explanation().length) * 20)
         repeat: false
         onTriggered: root.speaking = false
     }
-
+    Timer {
+        id: characterAsideTimer
+        interval: 3400
+        onTriggered: root.characterAsideText = ""
+    }
     Timer {
         id: localPlanningHeartbeat
         interval: 1000
@@ -1474,9 +1787,8 @@ Item {
 
     SequentialAnimation {
         id: speechArrival
-        NumberAnimation {
+        OpacityAnimator {
             target: speechBubble
-            property: "opacity"
             from: 0.35
             to: 1
             duration: root.reducedMotion ? 0 : 190
@@ -1484,66 +1796,317 @@ Item {
         }
     }
 
+    NumberAnimation {
+        id: robotTravel
+        target: root
+        property: "routeProgress"
+        from: 0
+        to: 1
+        duration: root.travelDuration
+        easing.type: root.locomotion === "climb" ? Easing.Linear : Easing.InOutSine
+        onFinished: root.followSurfaceRoute()
+    }
     SequentialAnimation {
-        id: touchPulse
-        loops: 2
+        id: robotReach
+        objectName: "agentWorkspaceReachAnimation"
+        NumberAnimation { target: root; property: "reachProgress"; to: 0.3; duration: 120; easing.type: Easing.OutCubic }
         ParallelAnimation {
-            NumberAnimation { target: touchIndicator; property: "scale"; from: 0.6; to: 1.5; duration: root.reducedMotion ? 0 : 320; easing.type: Easing.OutCubic }
-            NumberAnimation { target: touchIndicator; property: "opacity"; from: 0.78; to: 0; duration: root.reducedMotion ? 0 : 320 }
+            NumberAnimation { target: root; property: "toolDeployProgress"; to: 1; duration: 260; easing.type: Easing.OutCubic }
+            NumberAnimation { target: root; property: "reachProgress"; to: 1; duration: 260; easing.type: Easing.OutCubic }
+        }
+        PropertyAction { target: root; property: "touchingControl"; value: true }
+        PauseAnimation { duration: 480 }
+        PropertyAction { target: root; property: "touchingControl"; value: false }
+        NumberAnimation { target: root; property: "toolDeployProgress"; to: 0; duration: 180; easing.type: Easing.InCubic }
+        NumberAnimation { target: root; property: "reachProgress"; to: 0; duration: 180; easing.type: Easing.InOutCubic }
+        onFinished: root.visitNextTarget()
+    }
+    Timer {
+        interval: 120
+        repeat: true
+        running: root.visible && !root.dismissed && (root.running || root.draftReady)
+        onTriggered: root.refreshSurfaceGeometry()
+    }
+    Timer {
+        interval: 2100
+        repeat: true
+        running: root.visible && !root.dismissed && !root.reducedMotion && root.localModelPlanningActive
+        onTriggered: root.scanAngle = root.scanAngle > 0 ? -6 : 6
+    }
+    onVisibleChanged: {
+        if (visible) Qt.callLater(function() { root.startEventMotion() })
+        else {
+            robotTravel.stop()
+            robotReach.stop()
+            root.traveling = false
+            root.reachProgress = 0
+            root.toolDeployProgress = 0
+            root.locomotion = "idle"
+            root.touchingControl = false
+        }
+    }
+    onReducedMotionChanged: {
+        if (root.reducedMotion) {
+            robotTravel.stop()
+            robotReach.stop()
+            root.traveling = false
+            root.reachProgress = 0
+            root.toolDeployProgress = 0
+            root.locomotion = "idle"
+            root.touchingControl = false
+            root.robotX = root.travelToX
+            root.robotY = root.travelToY
+            root.scanAngle = 0
+        }
+    }
+    Rectangle {
+        objectName: "agentWorkspaceControlContact"
+        visible: !root.dismissed && Boolean(root.currentTouchTarget.interactive) && root.reachProgress > 0.9
+        x: Number(root.currentTouchTarget.x || 0) - width / 2
+        y: Number(root.currentTouchTarget.y || 0) - height / 2
+        width: root.touchingControl ? 30 : 22
+        height: width
+        radius: width / 2
+        color: "transparent"
+        border.width: 2
+        border.color: "#eec58a"
+        Behavior on width { NumberAnimation { duration: root.reducedMotion ? 0 : 120 } }
+        Label {
+            x: 34
+            y: 2
+            text: String(root.currentTouchTarget.label || "")
+            color: "#eec58a"
+            font.family: theme.fontMono
+            font.pixelSize: 10
+            style: Text.Outline
+            styleColor: "#111315"
         }
     }
 
     Item {
-        id: agentStage
-        width: 152
-        height: 112
-        x: Math.min(root.width - width - 16, root.agentTargetX)
-        y: Math.min(root.height - height - 16, root.agentTargetY)
-
-        Behavior on x {
-            NumberAnimation { duration: root.reducedMotion ? 0 : 420; easing.type: Easing.InOutCubic }
-        }
-        Behavior on y {
-            NumberAnimation { duration: root.reducedMotion ? 0 : 420; easing.type: Easing.InOutCubic }
-        }
-
-        Rectangle {
-            id: touchIndicator
+        objectName: "agentWorkspaceActivityCaption"
+        visible: !root.dismissed && root.compactStatus
+        width: Math.min(460, root.width - root.inspectorWidth - 32)
+        height: activityCaption.implicitHeight
+        x: Math.max(16, root.width - root.inspectorWidth - width - 16)
+        y: root.height - root.filmstripHeight - height - 16
+        ColumnLayout {
+            id: activityCaption
+            anchors.left: parent.left
             anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: 24
-            height: 24
-            radius: 12
-            color: "transparent"
-            border.width: 2
-            border.color: theme.primaryAccent
-            opacity: 0
+            spacing: 6
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: (root.runFailed ? "STOPPED / " : "AGENT / ") + root.assetLabel() +
+                          (root.localModelPlanningActive ? " / " + root.localPlanningElapsedSeconds + "s" : "")
+                    color: "#eec58a"
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    style: Text.Outline
+                    styleColor: "#111315"
+                }
+                ActionButton {
+                    objectName: "agentWorkspaceStatusCloseButton"
+                    text: "Close"
+                    compact: true
+                    tone: "quiet"
+                    accessibleName: "Hide the roaming robot and its status"
+                    onClicked: root.dismiss()
+                }
+                ActionButton {
+                    objectName: "agentWorkspaceStatusStopButton"
+                    visible: root.running
+                    text: "Stop"
+                    compact: true
+                    onClicked: root.agentEditController.cancelRun("user_cancelled")
+                }
+            }
+            Button {
+                id: statusDetail
+                objectName: "agentWorkspaceStatusDetail"
+                Layout.fillWidth: true
+                implicitHeight: Math.max(24, contentItem.implicitHeight)
+                background: Rectangle { color: "transparent" }
+                text: root.runFailed ? root.explanation() : String(root.activeEvent.detail || root.headline())
+                padding: 0
+                focusPolicy: root.runFailed ? Qt.StrongFocus : Qt.NoFocus
+                onClicked: if (root.runFailed) root.showFailureDetails(this)
+                Accessible.name: root.runFailed ? "Show failure details: " + text : text
+                HoverHandler { cursorShape: root.runFailed ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                contentItem: Label {
+                    text: statusDetail.text
+                    color: "#e4e0da"
+                    font.family: theme.fontMono
+                    font.pixelSize: 11
+                    maximumLineCount: 2
+                    wrapMode: Text.WordWrap
+                    elide: Text.ElideRight
+                    style: Text.Outline
+                    styleColor: "#111315"
+                }
+            }
+            Label {
+                objectName: "agentWorkspaceModelOutput"
+                Layout.fillWidth: true
+                text: {
+                    const events = root.eventList()
+                    for (let i = events.length - 1; i >= 0; --i) {
+                        const evidence = events[i].evidence || ({})
+                        if (evidence.modelOutputAvailable && evidence.modelOutput)
+                            return "MODEL > " + String(evidence.modelOutput)
+                    }
+                    return ""
+                }
+                visible: text.length > 0
+                color: "#eec58a"
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                maximumLineCount: 2
+                wrapMode: Text.WordWrap
+                elide: Text.ElideRight
+                style: Text.Outline
+                styleColor: "#111315"
+            }
+            Rectangle {
+                visible: root.running
+                Layout.preferredWidth: 160
+                Layout.preferredHeight: 3
+                color: "#35383b"
+                clip: true
+                Rectangle {
+                    id: activitySweep
+                    objectName: "agentWorkspaceActivitySweep"
+                    width: 46
+                    height: parent.height
+                    color: "#eec58a"
+                    SequentialAnimation on x {
+                        running: root.visible && !root.dismissed && root.running && !root.reducedMotion
+                        loops: Animation.Infinite
+                        XAnimator { from: -46; to: 160; duration: 1400 }
+                    }
+                }
+            }
+            Label {
+                objectName: "agentWorkspaceCharacterAside"
+                Layout.fillWidth: true
+                visible: root.characterAsideText.length > 0 && !root.runFailed && !root.awaitingInput
+                text: root.characterAsideText
+                color: "#9bcbd1"
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                style: Text.Outline
+                styleColor: "#111315"
+                Accessible.description: "Character aside, separate from model output."
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton {
+                    visible: root.keepValidatedFastAvailable
+                    text: "Use proved draft"
+                    compact: true
+                    onClicked: root.agentEditController.keepValidatedFastDraft()
+                }
+                ActionButton {
+                    objectName: "agentWorkspaceStatusRetryButton"
+                    visible: root.runFailed
+                    text: "Retry"
+                    iconName: "retry"
+                    compact: true
+                    onClicked: { root.dismiss(); root.reopenRequested() }
+                }
+                ActionButton {
+                    objectName: "agentWorkspaceFailureDetailsButton"
+                    visible: root.runFailed
+                    text: "Details"
+                    compact: true
+                    onClicked: root.showFailureDetails(this)
+                }
+                ActionButton {
+                    objectName: "agentWorkspaceUseFastModelButton"
+                    visible: root.runFailed && root.hasController &&
+                             (root.agentEditController.availableModels || []).some(function(model) { return model.model === "qwen3.6:35b" })
+                    text: "Use Qwen 35B"
+                    compact: true
+                    onClicked: {
+                        const model = root.agentEditController.availableModels.find(function(entry) { return entry.model === "qwen3.6:35b" && entry.runtime === "external" })
+                        if (!model) return
+                        root.agentEditController.selectedModelId = model.id
+                        root.agentEditController.probeSelectedModelAsync(true)
+                        root.dismiss()
+                        root.reopenRequested()
+                    }
+                }
+            }
         }
+    }
+
+    ActionButton {
+        objectName: "agentWorkspaceRestoreButton"
+        visible: root.dismissed
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: root.inspectorWidth + 16
+        anchors.bottomMargin: root.filmstripHeight + 16
+        text: root.running ? "Agent working · show" : "Show agent"
+        compact: true
+        onClicked: root.restore()
+    }
+
+    Item {
+        id: agentStage
+        objectName: "agentWorkspaceRoamingRobot"
+        visible: !root.dismissed
+        width: Math.max(48, Math.min(128, Number((root.currentTouchTarget.surfaceRect || ({})).y || root.height - 8) / 1.25,
+                                    Number((root.currentTouchTarget.surfaceRect || ({})).width || root.width) / 0.55,
+                                    Number(root.currentTouchTarget.x || root.width / 2) / 0.54))
+        height: width * 1.15
+        x: root.robotX
+        y: root.robotY
+
 
         LooksyAgentCharacter {
+            id: roamingCharacter
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: 132
-            height: 102
+            objectName: "agentWorkspaceRoamingCharacter"
+            width: parent.width
+            height: parent.height
+            articulated: true
+            grounded: true
+            locomotion: root.locomotion
+            toolDeployProgress: root.toolDeployProgress
+            toolContactOffset: Number(root.currentTouchTarget.y || 0) - Number((root.currentTouchTarget.surfaceRect || ({})).y || root.height - 8)
+            toolContactOffsetX: Number(root.currentTouchTarget.x || 0) - root.robotX - handContactPoint.x
+            toolWorking: root.touchingControl
+            faceLeft: root.reachLeft
+            reachProgress: root.reachProgress
+            lookAngle: root.traveling ? 4 : root.localModelPlanningActive ? root.scanAngle : 0
             mode: root.assistantLightMode()
-            tool: root.assistantLightTool()
+            tool: root.deployedTool
             talking: root.speaking && !root.traveling
             celebrating: root.draftReady
+            animated: !root.reducedMotion
             accentColor: theme.primaryAccent
         }
 
         Rectangle {
+            visible: root.locomotion !== "climb" && root.locomotion !== "jump"
             width: 44
             height: 5
             radius: 3
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
+            anchors.bottomMargin: agentStage.height * 0.091
             color: theme.alpha(theme.brandInk, 0.28)
         }
     }
 
     Rectangle {
         id: speechBubble
+        visible: !root.dismissed && !root.compactStatus
         objectName: "agentWorkspaceSpeechBubble"
         width: Math.min(430, Math.max(300, root.width * 0.31))
         height: bubbleContent.implicitHeight + 34
@@ -1553,12 +2116,13 @@ Item {
                                 : agentStage.x + agentStage.width + 14))
         y: Math.max(18, Math.min(root.height - height - root.filmstripHeight - 12,
                                 agentStage.y - height * 0.48))
-        radius: 20
-        color: theme.alpha(theme.brandPaper, 0.97)
-        border.width: 0
+        radius: 12
+        color: "#f211181b"
+        border.width: 1
+        border.color: "#485b60"
 
-        Behavior on x { NumberAnimation { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
-        Behavior on y { NumberAnimation { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
+        Behavior on x { XAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
+        Behavior on y { YAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
 
         ColumnLayout {
             id: bubbleContent
@@ -1573,7 +2137,7 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     text: root.assetLabel()
-                    color: theme.alpha(theme.brandInk, 0.52)
+                    color: theme.alpha(theme.textStrong, 0.52)
                     font.family: theme.fontMono
                     font.pixelSize: 9
                     font.letterSpacing: 1.0
@@ -1586,10 +2150,18 @@ Item {
                     radius: 4
                     color: theme.primaryAccent
                     SequentialAnimation on opacity {
+                        running: root.running && root.visible && !root.dismissed && !root.reducedMotion
                         loops: Animation.Infinite
-                        NumberAnimation { from: 1; to: 0.32; duration: 520 }
-                        NumberAnimation { from: 0.32; to: 1; duration: 520 }
+                        OpacityAnimator { from: 1; to: 0.32; duration: 520 }
+                        OpacityAnimator { from: 0.32; to: 1; duration: 520 }
                     }
+                }
+                BubbleButton {
+                    objectName: "agentWorkspaceCloseButton"
+                    text: "Close"
+                    Accessible.name: "Close agent popup"
+                    Accessible.description: "Return to editing; closing does not discard a draft or stop an active run. Escape also closes."
+                    onClicked: root.dismiss()
                 }
             }
 
@@ -1670,7 +2242,7 @@ Item {
                         Label {
                             objectName: "agentWorkspaceNorthStarDraftBoundary"
                             text: "USED IN PLAN · CURRENT REQUEST LED"
-                            color: theme.alpha(theme.brandInk, 0.44)
+                            color: theme.alpha(theme.textStrong, 0.44)
                             font.family: theme.fontMono
                             font.pixelSize: 7
                             font.weight: Font.DemiBold
@@ -1681,7 +2253,7 @@ Item {
                         objectName: "agentWorkspaceNorthStarDraftBrief"
                         Layout.fillWidth: true
                         text: String(northStarDraftReceiptCard.receipt.brief || "")
-                        color: theme.alpha(theme.brandInk, 0.76)
+                        color: theme.alpha(theme.textStrong, 0.76)
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         font.weight: Font.DemiBold
@@ -1700,7 +2272,7 @@ Item {
                             objectName: "agentWorkspaceNorthStarDraftProof"
                             Layout.fillWidth: true
                             text: root.projectNorthStarProofText()
-                            color: theme.alpha(theme.brandInk, 0.48)
+                            color: theme.alpha(theme.textStrong, 0.48)
                             font.family: theme.fontMono
                             font.pixelSize: 7
                             wrapMode: Text.WordWrap
@@ -1724,7 +2296,7 @@ Item {
                 visible: root.tasteMirrorOpen
                 implicitHeight: tasteMirrorColumn.implicitHeight + 20
                 radius: 13
-                color: theme.alpha(theme.brandInk, 0.052)
+                color: theme.alpha(theme.textStrong, 0.052)
                 border.width: 1
                 border.color: theme.alpha(theme.primaryAccent, 0.25)
 
@@ -1740,7 +2312,7 @@ Item {
                             objectName: "agentWorkspaceTasteName"
                             Layout.fillWidth: true
                             text: root.tasteNameText()
-                            color: theme.brandInk
+                            color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 12
                             font.weight: Font.DemiBold
@@ -1771,28 +2343,28 @@ Item {
                         visible: root.tasteRenameOpen
                         spacing: 7
 
-                        TextField {
+                        ToneTextField {
                             objectName: "agentWorkspaceTasteRenameEditor"
+                            accessibleLabel: "Project look name"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 30
                             text: root.tasteRenameText
                             placeholderText: "Name this project look"
                             selectByMouse: true
                             maximumLength: 80
-                            color: theme.brandInk
+                            color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 10
                             onTextEdited: root.tasteRenameText = text
                             onAccepted: root.saveTasteName()
                             background: Rectangle {
                                 radius: 8
-                                color: theme.alpha(theme.brandPaper, 0.78)
+                                color: theme.alpha(theme.ink800, 0.9)
                                 border.width: 1
                                 border.color: parent.activeFocus
                                               ? theme.primaryAccent
-                                              : theme.alpha(theme.brandInk, 0.12)
+                                              : theme.alpha(theme.textStrong, 0.12)
                             }
-                            Accessible.name: "Project look name"
                         }
 
                         BubbleButton {
@@ -1807,7 +2379,7 @@ Item {
                     Label {
                         Layout.fillWidth: true
                         text: "What I'm learning from your approved choices"
-                        color: theme.alpha(theme.brandInk, 0.48)
+                        color: theme.alpha(theme.textStrong, 0.48)
                         font.family: theme.fontMono
                         font.pixelSize: 8
                         font.weight: Font.DemiBold
@@ -1817,7 +2389,7 @@ Item {
                         objectName: "agentWorkspaceTasteSummary"
                         Layout.fillWidth: true
                         text: root.tasteSummaryText()
-                        color: theme.alpha(theme.brandInk, 0.68)
+                        color: theme.alpha(theme.textStrong, 0.68)
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         lineHeight: 1.15
@@ -1866,7 +2438,7 @@ Item {
                                 Label {
                                     objectName: "agentWorkspaceTwoSpeedTasteAuthority"
                                     text: "CURRENT REQUEST WINS · NO AUTO SELECT"
-                                    color: theme.alpha(theme.brandInk, 0.44)
+                                    color: theme.alpha(theme.textStrong, 0.44)
                                     font.family: theme.fontMono
                                     font.pixelSize: 7
                                     font.weight: Font.Bold
@@ -1877,7 +2449,7 @@ Item {
                                 objectName: "agentWorkspaceTwoSpeedTasteHeadline"
                                 Layout.fillWidth: true
                                 text: root.twoSpeedTasteHeadline()
-                                color: theme.brandInk
+                                color: theme.textStrong
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
                                 font.weight: Font.DemiBold
@@ -1890,7 +2462,7 @@ Item {
                                       " First Look · " +
                                       Number(twoSpeedTasteCard.preference.deepReviewCount || 0) +
                                       " Deep Review · learned after confirmed commits only"
-                                color: theme.alpha(theme.brandInk, 0.54)
+                                color: theme.alpha(theme.textStrong, 0.54)
                                 font.family: theme.fontMono
                                 font.pixelSize: 8
                                 wrapMode: Text.WordWrap
@@ -1902,7 +2474,7 @@ Item {
                                 Label {
                                     Layout.fillWidth: true
                                     text: String(twoSpeedTasteCard.preference.planningGuidance || "")
-                                    color: theme.alpha(theme.brandInk, 0.6)
+                                    color: theme.alpha(theme.textStrong, 0.6)
                                     font.family: theme.fontUi
                                     font.pixelSize: 9
                                     lineHeight: 1.12
@@ -1935,9 +2507,9 @@ Item {
                         visible: root.assignmentReflectionAvailable()
                         implicitHeight: assignmentReflectionColumn.implicitHeight + 18
                         radius: 10
-                        color: theme.alpha(theme.brandInk, 0.035)
+                        color: theme.alpha(theme.textStrong, 0.035)
                         border.width: 1
-                        border.color: theme.alpha(theme.brandInk, 0.16)
+                        border.color: theme.alpha(theme.textStrong, 0.16)
 
                         ColumnLayout {
                             id: assignmentReflectionColumn
@@ -1962,7 +2534,7 @@ Item {
                                 Label {
                                     objectName: "agentWorkspaceAssignmentReflectionBoundary"
                                     text: "NOTHING REMEMBERED YET"
-                                    color: theme.alpha(theme.brandInk, 0.44)
+                                    color: theme.alpha(theme.textStrong, 0.44)
                                     font.family: theme.fontMono
                                     font.pixelSize: 7
                                     font.weight: Font.Bold
@@ -1973,7 +2545,7 @@ Item {
                                 objectName: "agentWorkspaceAssignmentReflectionHeadline"
                                 Layout.fillWidth: true
                                 text: String(assignmentReflectionCard.reflection.headline || "")
-                                color: theme.brandInk
+                                color: theme.textStrong
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
                                 font.weight: Font.DemiBold
@@ -1989,7 +2561,7 @@ Item {
                                         return ""
                                     return String(observations[0].detail || "")
                                 }
-                                color: theme.alpha(theme.brandInk, 0.56)
+                                color: theme.alpha(theme.textStrong, 0.56)
                                 font.family: theme.fontUi
                                 font.pixelSize: 9
                                 lineHeight: 1.12
@@ -2004,7 +2576,7 @@ Item {
                                 Label {
                                     Layout.fillWidth: true
                                     text: "Review the wording first · current request still wins"
-                                    color: theme.alpha(theme.brandInk, 0.42)
+                                    color: theme.alpha(theme.textStrong, 0.42)
                                     font.family: theme.fontMono
                                     font.pixelSize: 7
                                     wrapMode: Text.WordWrap
@@ -2060,7 +2632,7 @@ Item {
 
                                 Label {
                                     text: "FUTURE DRAFTS · CURRENT REQUEST WINS"
-                                    color: theme.alpha(theme.brandInk, 0.42)
+                                    color: theme.alpha(theme.textStrong, 0.42)
                                     font.family: theme.fontMono
                                     font.pixelSize: 7
                                     font.weight: Font.DemiBold
@@ -2075,8 +2647,8 @@ Item {
                                       ? String(root.projectNorthStar().brief || "")
                                       : "Give this assignment one enduring promise—what every future draft should protect or feel like."
                                 color: root.projectNorthStarAvailable()
-                                       ? theme.alpha(theme.brandInk, 0.72)
-                                       : theme.alpha(theme.brandInk, 0.44)
+                                       ? theme.alpha(theme.textStrong, 0.72)
+                                       : theme.alpha(theme.textStrong, 0.44)
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
                                 lineHeight: 1.16
@@ -2087,8 +2659,9 @@ Item {
                                 Accessible.description: text
                             }
 
-                            TextArea {
+                            ToneTextArea {
                                 objectName: "agentWorkspaceNorthStarEditor"
+                                accessibleLabel: "Edit Project North Star"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: root.northStarEditOpen ? 62 : 0
                                 visible: root.northStarEditOpen
@@ -2096,7 +2669,7 @@ Item {
                                 placeholderText: "Keep this wedding intimate and documentary. Protect skin, highlights, and unposed moments."
                                 wrapMode: TextEdit.Wrap
                                 selectByMouse: true
-                                color: theme.brandInk
+                                color: theme.textStrong
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
                                 onTextChanged: {
@@ -2108,13 +2681,12 @@ Item {
                                 }
                                 background: Rectangle {
                                     radius: 8
-                                    color: theme.alpha(theme.brandPaper, 0.82)
+                                    color: theme.alpha(theme.ink800, 0.9)
                                     border.width: 1
                                     border.color: parent.activeFocus
                                                   ? theme.primaryAccent
-                                                  : theme.alpha(theme.brandInk, 0.12)
+                                                  : theme.alpha(theme.textStrong, 0.12)
                                 }
-                                Accessible.name: "Edit Project North Star"
                             }
 
                             RowLayout {
@@ -2126,7 +2698,7 @@ Item {
                                     text: root.northStarEditOpen
                                           ? root.northStarDraftText.trim().length + " / 360"
                                           : "Project-local qualitative guidance · no automatic recipe or culling authority"
-                                    color: theme.alpha(theme.brandInk, 0.42)
+                                    color: theme.alpha(theme.textStrong, 0.42)
                                     font.family: theme.fontMono
                                     font.pixelSize: 7
                                     wrapMode: Text.WordWrap
@@ -2184,9 +2756,9 @@ Item {
                         Layout.fillWidth: true
                         implicitHeight: calibrationReviewColumn.implicitHeight + 18
                         radius: 10
-                        color: theme.alpha(theme.brandPaper, 0.66)
+                        color: theme.alpha(theme.ink800, 0.9)
                         border.width: 1
-                        border.color: theme.alpha(theme.brandInk, 0.09)
+                        border.color: theme.alpha(theme.textStrong, 0.09)
 
                         ColumnLayout {
                             id: calibrationReviewColumn
@@ -2199,7 +2771,7 @@ Item {
 
                                 Label {
                                     text: "PHOTOGRAPHER CALIBRATION"
-                                    color: theme.alpha(theme.brandInk, 0.5)
+                                    color: theme.alpha(theme.textStrong, 0.5)
                                     font.family: theme.fontMono
                                     font.pixelSize: 8
                                     font.weight: Font.Bold
@@ -2224,7 +2796,7 @@ Item {
                                       ? String(root.photographerCalibration().summary ||
                                                "Blind photographer evidence is active.")
                                       : "Review the signed before/after proofs without seeing the machine verdict, then bring the resulting taste profile back to this project."
-                                color: theme.alpha(theme.brandInk, 0.62)
+                                color: theme.alpha(theme.textStrong, 0.62)
                                 font.family: theme.fontUi
                                 font.pixelSize: 9
                                 lineHeight: 1.12
@@ -2273,7 +2845,7 @@ Item {
                                         Label {
                                             text: "SIGNED LESSON · 1 OF " +
                                                   Number(calibrationReviewCard.calibrationCoach.lessonCount || 0)
-                                            color: theme.alpha(theme.brandInk, 0.38)
+                                            color: theme.alpha(theme.textStrong, 0.38)
                                             font.family: theme.fontMono
                                             font.pixelSize: 7
                                             font.weight: Font.DemiBold
@@ -2284,7 +2856,7 @@ Item {
                                         objectName: "agentWorkspaceCalibrationCoachHeadline"
                                         Layout.fillWidth: true
                                         text: String(calibrationCoachCard.lesson.headline || "")
-                                        color: theme.alpha(theme.brandInk, 0.78)
+                                        color: theme.alpha(theme.textStrong, 0.78)
                                         font.family: theme.fontUi
                                         font.pixelSize: 9
                                         font.weight: Font.DemiBold
@@ -2295,7 +2867,7 @@ Item {
                                         objectName: "agentWorkspaceCalibrationCoachExplanation"
                                         Layout.fillWidth: true
                                         text: String(calibrationCoachCard.lesson.explanation || "")
-                                        color: theme.alpha(theme.brandInk, 0.58)
+                                        color: theme.alpha(theme.textStrong, 0.58)
                                         font.family: theme.fontUi
                                         font.pixelSize: 8
                                         maximumLineCount: 2
@@ -2362,7 +2934,7 @@ Item {
                                                   " BLIND CASE" +
                                                   (Number(tastePassportPreviewCard.preview.caseCount || 0) === 1
                                                    ? "" : "S")
-                                            color: theme.alpha(theme.brandInk, 0.42)
+                                            color: theme.alpha(theme.textStrong, 0.42)
                                             font.family: theme.fontMono
                                             font.pixelSize: 7
                                             font.weight: Font.DemiBold
@@ -2374,7 +2946,7 @@ Item {
                                         Layout.fillWidth: true
                                         text: String(tastePassportPreviewCard.preview.summary ||
                                                      "Verified photographer calibration is ready to review.")
-                                        color: theme.alpha(theme.brandInk, 0.7)
+                                        color: theme.alpha(theme.textStrong, 0.7)
                                         font.family: theme.fontUi
                                         font.pixelSize: 9
                                         maximumLineCount: 2
@@ -2525,7 +3097,7 @@ Item {
                                     text: Boolean(root.photographerCalibration().importedFromTastePassport)
                                           ? "Passport provenance verified · active project only"
                                           : "Advanced: import a signed calibration profile"
-                                    color: theme.alpha(theme.brandInk, 0.42)
+                                    color: theme.alpha(theme.textStrong, 0.42)
                                     font.family: theme.fontUi
                                     font.pixelSize: 8
                                 }
@@ -2543,7 +3115,7 @@ Item {
                                 objectName: "agentWorkspaceCalibrationReviewBoundary"
                                 Layout.fillWidth: true
                                 text: "PACKET VERIFIED BEFORE OPEN · VERIFIED PACKET KEPT FOR THIS SESSION · RATINGS VERIFIED BEFORE APPLY · MACHINE VERDICT HIDDEN · AGENT CANNOT RATE"
-                                color: theme.alpha(theme.brandInk, 0.4)
+                                color: theme.alpha(theme.textStrong, 0.4)
                                 font.family: theme.fontMono
                                 font.pixelSize: 7
                                 font.weight: Font.DemiBold
@@ -2567,9 +3139,9 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: tasteEvidenceRow.implicitHeight + 10
                             radius: 8
-                            color: theme.alpha(theme.brandPaper, 0.64)
+                            color: theme.alpha(theme.ink800, 0.9)
                             border.width: 1
-                            border.color: theme.alpha(theme.brandInk, 0.07)
+                            border.color: theme.alpha(theme.textStrong, 0.07)
 
                             RowLayout {
                                 id: tasteEvidenceRow
@@ -2583,9 +3155,9 @@ Item {
                                     Layout.preferredHeight: 52
                                     radius: 7
                                     clip: true
-                                    color: theme.alpha(theme.brandInk, 0.08)
+                                    color: theme.alpha(theme.textStrong, 0.08)
                                     border.width: 1
-                                    border.color: theme.alpha(theme.brandInk, 0.08)
+                                    border.color: theme.alpha(theme.textStrong, 0.08)
 
                                     Image {
                                         objectName: "agentWorkspaceTasteEvidenceThumbnail"
@@ -2604,7 +3176,7 @@ Item {
                                                      tasteEvidenceDelegate.modelData).length === 0
                                         text: String(tasteEvidenceDelegate.modelData.kind || "") ===
                                               "rejected-draft" ? "AVOID" : "TASTE"
-                                        color: theme.alpha(theme.brandInk, 0.4)
+                                        color: theme.alpha(theme.textStrong, 0.4)
                                         font.family: theme.fontMono
                                         font.pixelSize: 7
                                         font.weight: Font.Bold
@@ -2617,7 +3189,7 @@ Item {
                                     Label {
                                         Layout.fillWidth: true
                                         text: String(tasteEvidenceDelegate.modelData.title || "Learned choice")
-                                        color: theme.brandInk
+                                        color: theme.textStrong
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
                                         font.weight: Font.DemiBold
@@ -2626,7 +3198,7 @@ Item {
                                     Label {
                                         Layout.fillWidth: true
                                         text: String(tasteEvidenceDelegate.modelData.summary || "")
-                                        color: theme.alpha(theme.brandInk, 0.58)
+                                        color: theme.alpha(theme.textStrong, 0.58)
                                         font.family: theme.fontUi
                                         font.pixelSize: 9
                                         maximumLineCount: 2
@@ -2636,7 +3208,7 @@ Item {
                                     Label {
                                         Layout.fillWidth: true
                                         text: String(tasteEvidenceDelegate.modelData.detail || "")
-                                        color: theme.alpha(theme.brandInk, 0.42)
+                                        color: theme.alpha(theme.textStrong, 0.42)
                                         font.family: theme.fontMono
                                         font.pixelSize: 8
                                         elide: Text.ElideRight
@@ -2666,7 +3238,7 @@ Item {
                         text: "+ " + (root.tasteEvidence().length - 4) +
                               " older item" + (root.tasteEvidence().length - 4 === 1 ? "" : "s") +
                               " in the local memory vault"
-                        color: theme.alpha(theme.brandInk, 0.44)
+                        color: theme.alpha(theme.textStrong, 0.44)
                         font.family: theme.fontMono
                         font.pixelSize: 8
                     }
@@ -2686,7 +3258,7 @@ Item {
                         objectName: "agentWorkspaceTastePrivacy"
                         Layout.fillWidth: true
                         text: "LOCAL MEMORY · CALIBRATION IS SIGNED SUMMARY DATA · THUMBNAILS RESOLVE FROM CATALOG IDS · NO IMAGE BYTES · NO SOURCE PATHS · EDITS UNCHANGED WHEN FORGOTTEN"
-                        color: theme.alpha(theme.brandInk, 0.42)
+                        color: theme.alpha(theme.textStrong, 0.42)
                         font.family: theme.fontMono
                         font.pixelSize: 7
                         font.weight: Font.DemiBold
@@ -2701,7 +3273,7 @@ Item {
                 objectName: "agentWorkspaceHeadline"
                 Layout.fillWidth: true
                 text: root.headline()
-                color: theme.brandInk
+                color: theme.textStrong
                 font.family: theme.fontDisplay
                 font.pixelSize: 19
                 font.weight: Font.DemiBold
@@ -2712,7 +3284,7 @@ Item {
                 objectName: "agentWorkspaceExplanation"
                 Layout.fillWidth: true
                 text: root.explanation()
-                color: theme.alpha(theme.brandInk, 0.66)
+                color: theme.alpha(theme.textStrong, 0.66)
                 font.family: theme.fontUi
                 font.pixelSize: 12
                 lineHeight: 1.18
@@ -2759,7 +3331,7 @@ Item {
                                    ? "FIRST LOOK"
                                    : "DEEP REVIEW") +
                                   " · COMMIT SEPARATE"
-                            color: theme.alpha(theme.brandInk, 0.52)
+                            color: theme.alpha(theme.textStrong, 0.52)
                             font.family: theme.fontMono
                             font.pixelSize: 7
                             font.weight: Font.Bold
@@ -2769,7 +3341,7 @@ Item {
                     Label {
                         Layout.fillWidth: true
                         text: "Deep review refined the first look. Keep either one."
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -2779,7 +3351,7 @@ Item {
                     Label {
                         Layout.fillWidth: true
                         text: "Both passed image proof. Discard still restores the exact pre-agent edit."
-                        color: theme.alpha(theme.brandInk, 0.64)
+                        color: theme.alpha(theme.textStrong, 0.64)
                         font.family: theme.fontUi
                         font.pixelSize: 9
                         wrapMode: Text.WordWrap
@@ -2820,7 +3392,7 @@ Item {
                          String(root.editStrategy().primaryPath || "").length > 0
                 implicitHeight: editStrategyColumn.implicitHeight + 18
                 radius: 12
-                color: theme.alpha(theme.brandInk, 0.052)
+                color: theme.alpha(theme.textStrong, 0.052)
                 border.width: 1
                 border.color: theme.alpha(theme.primaryAccent, 0.24)
 
@@ -2834,7 +3406,7 @@ Item {
                         Layout.fillWidth: true
                         Label {
                             text: "EDIT APPROACH"
-                            color: theme.alpha(theme.brandInk, 0.5)
+                            color: theme.alpha(theme.textStrong, 0.5)
                             font.family: theme.fontMono
                             font.pixelSize: 8
                             font.weight: Font.Bold
@@ -2855,7 +3427,7 @@ Item {
                         objectName: "agentWorkspaceEditStrategyLabel"
                         Layout.fillWidth: true
                         text: String(root.editStrategy().label || "")
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -2865,7 +3437,7 @@ Item {
                         objectName: "agentWorkspaceEditStrategyReason"
                         Layout.fillWidth: true
                         text: String(root.editStrategy().reason || "")
-                        color: theme.alpha(theme.brandInk, 0.65)
+                        color: theme.alpha(theme.textStrong, 0.65)
                         font.family: theme.fontUi
                         font.pixelSize: 9
                         lineHeight: 1.12
@@ -2881,7 +3453,7 @@ Item {
                         Layout.fillWidth: true
                         visible: text.length > 0
                         text: root.editStrategyPreservedText()
-                        color: theme.alpha(theme.brandInk, 0.44)
+                        color: theme.alpha(theme.textStrong, 0.44)
                         font.family: theme.fontMono
                         font.pixelSize: 7
                         font.weight: Font.DemiBold
@@ -2895,7 +3467,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.draftReady && text.length > 0
                 text: root.trustReceiptText()
-                color: theme.alpha(theme.brandInk, 0.56)
+                color: theme.alpha(theme.textStrong, 0.56)
                 font.family: theme.fontMono
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
@@ -2938,7 +3510,7 @@ Item {
                         Layout.fillWidth: true
                         text: String(tasteCheckCard.tasteCheck.headline ||
                                      "I’m less certain about this direction.")
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -2949,7 +3521,7 @@ Item {
                         objectName: "agentWorkspacePhotographerTasteCheckExplanation"
                         Layout.fillWidth: true
                         text: String(tasteCheckCard.tasteCheck.explanation || "")
-                        color: theme.alpha(theme.brandInk, 0.62)
+                        color: theme.alpha(theme.textStrong, 0.62)
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         lineHeight: 1.14
@@ -2973,7 +3545,7 @@ Item {
                             text: root.tasteCheckMessage.length > 0
                                   ? root.tasteCheckMessage
                                   : "2 REAL RENDERS · LEARNED ONLY AFTER CHOICE + COMMIT"
-                            color: theme.alpha(theme.brandInk, 0.46)
+                            color: theme.alpha(theme.textStrong, 0.46)
                             font.family: theme.fontMono
                             font.pixelSize: 7
                             font.weight: Font.DemiBold
@@ -3022,7 +3594,7 @@ Item {
                         text: String(pointResolutionCard.pointResolution.resolutionMode || "") === "content-snap"
                               ? "CONTENT BOUNDARY FOUND · CLICK INCLUDED · OUTSIDE PROTECTED"
                               : "VISIBLE FEATHERED BOUNDARY · NO OBJECT CLAIM · OUTSIDE PROTECTED"
-                        color: theme.alpha(theme.brandInk, 0.56)
+                        color: theme.alpha(theme.textStrong, 0.56)
                         font.family: theme.fontMono
                         font.pixelSize: 7
                         font.weight: Font.DemiBold
@@ -3083,7 +3655,7 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             text: "Your edit"
-                            color: theme.brandInk
+                            color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
@@ -3101,7 +3673,7 @@ Item {
 
                     Label {
                         text: "WHAT I SAW"
-                        color: theme.alpha(theme.brandInk, 0.42)
+                        color: theme.alpha(theme.textStrong, 0.42)
                         font.family: theme.fontMono
                         font.pixelSize: 8
                         font.letterSpacing: 0.8
@@ -3120,7 +3692,7 @@ Item {
                             color: root.activeFindingMaskId === String(modelData.maskId || "")
                                    ? theme.alpha(theme.primaryAccent, 0.12)
                                    : findingHitArea.containsMouse
-                                     ? theme.alpha(theme.brandInk, 0.055)
+                                     ? theme.alpha(theme.textStrong, 0.055)
                                      : "transparent"
                             Accessible.role: Accessible.Button
                             Accessible.name: String(modelData.observation || "Visual finding")
@@ -3141,12 +3713,12 @@ Item {
                                     radius: 3
                                     color: String(findingDelegate.modelData.severity || "low") === "high"
                                            ? theme.primaryAccent
-                                           : theme.alpha(theme.brandInk, 0.42)
+                                           : theme.alpha(theme.textStrong, 0.42)
                                 }
                                 Label {
                                     Layout.fillWidth: true
                                     text: String(findingDelegate.modelData.observation || "")
-                                    color: theme.alpha(theme.brandInk, 0.72)
+                                    color: theme.alpha(theme.textStrong, 0.72)
                                     font.family: theme.fontUi
                                     font.pixelSize: 10
                                     wrapMode: Text.WordWrap
@@ -3161,7 +3733,7 @@ Item {
                                               ? " · Revised" : " · Show") : "")
                                     color: String(findingDelegate.modelData.maskId || "").length > 0
                                            ? theme.primaryAccent
-                                           : theme.alpha(theme.brandInk, 0.46)
+                                           : theme.alpha(theme.textStrong, 0.46)
                                     font.family: theme.fontMono
                                     font.pixelSize: 8
                                     font.weight: Font.DemiBold
@@ -3182,13 +3754,13 @@ Item {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 1
-                        color: theme.alpha(theme.brandInk, 0.09)
+                        color: theme.alpha(theme.textStrong, 0.09)
                     }
 
                     Label {
                         visible: root.localizedActions().length > 0
                         text: "WHAT I'LL CHANGE"
-                        color: theme.alpha(theme.brandInk, 0.42)
+                        color: theme.alpha(theme.textStrong, 0.42)
                         font.family: theme.fontMono
                         font.pixelSize: 8
                         font.letterSpacing: 0.8
@@ -3204,9 +3776,9 @@ Item {
                             Layout.fillWidth: true
                             Layout.preferredHeight: intentActionRow.implicitHeight + 10
                             radius: 8
-                            color: theme.alpha(theme.brandPaper, 0.68)
+                            color: theme.alpha(theme.ink800, 0.9)
                             border.width: 1
-                            border.color: theme.alpha(theme.brandInk, 0.08)
+                            border.color: theme.alpha(theme.textStrong, 0.08)
 
                             RowLayout {
                                 id: intentActionRow
@@ -3223,7 +3795,7 @@ Item {
                                         text: root.findingTargetLabel(
                                                   intentActionDelegate.modelData.target,
                                                   intentActionDelegate.modelData.targetLabel)
-                                        color: theme.brandInk
+                                        color: theme.textStrong
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
                                         font.weight: Font.DemiBold
@@ -3233,7 +3805,7 @@ Item {
                                         objectName: "agentWorkspaceIntentActionSummary"
                                         Layout.fillWidth: true
                                         text: root.localizedActionSummary(intentActionDelegate.modelData)
-                                        color: theme.alpha(theme.brandInk, 0.54)
+                                        color: theme.alpha(theme.textStrong, 0.54)
                                         font.family: theme.fontMono
                                         font.pixelSize: 8
                                         elide: Text.ElideRight
@@ -3286,7 +3858,7 @@ Item {
                         Layout.fillWidth: true
                         visible: root.protectedIntentLabels().length > 0
                         text: "PROTECTING · " + root.protectedIntentLabels().join(" · ")
-                        color: theme.alpha(theme.brandInk, 0.48)
+                        color: theme.alpha(theme.textStrong, 0.48)
                         font.family: theme.fontMono
                         font.pixelSize: 8
                         font.weight: Font.DemiBold
@@ -3320,7 +3892,7 @@ Item {
                         Layout.fillWidth: true
                         text: String(root.visualCritique().finding ||
                                      "The proof found a visible cleanup problem.")
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -3331,7 +3903,7 @@ Item {
                         objectName: "agentWorkspaceVisualCritiqueEvidence"
                         Layout.fillWidth: true
                         text: String(root.visualCritique().evidenceSummary || "")
-                        color: theme.alpha(theme.brandInk, 0.62)
+                        color: theme.alpha(theme.textStrong, 0.62)
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         wrapMode: Text.WordWrap
@@ -3358,7 +3930,7 @@ Item {
                 visible: root.draftReady && root.correctionOpen
                 implicitHeight: correctionColumn.implicitHeight + 22
                 radius: 13
-                color: theme.alpha(theme.brandInk, 0.055)
+                color: theme.alpha(theme.textStrong, 0.055)
                 border.width: 1
                 border.color: theme.alpha(theme.primaryAccent, 0.32)
 
@@ -3373,7 +3945,7 @@ Item {
                         text: root.activeFindingMaskId.length > 0 || root.spatialTargetChosen
                               ? "What should change here?"
                               : "What should I change?"
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -3395,9 +3967,10 @@ Item {
                         elide: Text.ElideRight
                     }
 
-                    TextArea {
+                    ToneTextArea {
                         id: correctionEditor
                         objectName: "agentWorkspaceCorrectionEditor"
+                        accessibleLabel: "Edit the suggested correction"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 66
                         text: root.correctionText
@@ -3406,13 +3979,13 @@ Item {
                                          ? "Less on this, cooler, move left, or keep it unchanged…"
                                          : "Less warm, protect the skin, and keep the crop looser…"
                         wrapMode: TextEdit.WordWrap
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         onTextChanged: root.correctionText = text
                         background: Rectangle {
                             radius: 9
-                            color: theme.alpha(theme.brandPaper, 0.82)
+                            color: theme.alpha(theme.ink800, 0.9)
                             border.width: correctionEditor.activeFocus ? 1 : 0
                             border.color: theme.primaryAccent
                         }
@@ -3473,28 +4046,29 @@ Item {
                         objectName: "agentWorkspaceClarificationPrompt"
                         Layout.fillWidth: true
                         text: root.pendingQuestionText()
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
                         wrapMode: Text.WordWrap
                     }
 
-                    TextArea {
+                    ToneTextArea {
                         id: pendingAnswerEditor
                         objectName: "agentWorkspaceClarificationEditor"
+                        accessibleLabel: "Answer the clarification question"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 60
                         text: root.pendingAnswerText
                         placeholderText: "Answer in your own words…"
                         wrapMode: TextEdit.WordWrap
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         onTextChanged: root.pendingAnswerText = text
                         background: Rectangle {
                             radius: 9
-                            color: theme.alpha(theme.brandPaper, 0.84)
+                            color: theme.alpha(theme.ink800, 0.9)
                             border.width: pendingAnswerEditor.activeFocus ? 1 : 0
                             border.color: theme.primaryAccent
                         }
@@ -3548,7 +4122,7 @@ Item {
                         objectName: "agentWorkspaceSelectionConfirmationPrompt"
                         Layout.fillWidth: true
                         text: "Which " + String(root.selectionConfirmation.targetLabel || "object") + "?"
-                        color: theme.brandInk
+                        color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
@@ -3558,7 +4132,7 @@ Item {
                     Label {
                         Layout.fillWidth: true
                         text: "The numbered outlines are candidates. Nothing is edited until you choose."
-                        color: theme.alpha(theme.brandInk, 0.58)
+                        color: theme.alpha(theme.textStrong, 0.58)
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         wrapMode: Text.WordWrap
@@ -3700,7 +4274,7 @@ Item {
 
     Rectangle {
         objectName: "agentWorkspaceLocalPlanningHeartbeat"
-        visible: root.localModelPlanningActive
+        visible: root.localModelPlanningActive && !root.dismissed && !root.compactStatus
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.filmstripHeight +
@@ -3729,8 +4303,8 @@ Item {
                 SequentialAnimation on opacity {
                     running: root.localModelPlanningActive && !root.reducedMotion
                     loops: Animation.Infinite
-                    NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutSine }
-                    NumberAnimation { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
+                    OpacityAnimator { to: 0.35; duration: 700; easing.type: Easing.InOutSine }
+                    OpacityAnimator { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
                 }
             }
 
@@ -3749,7 +4323,7 @@ Item {
     }
 
     Rectangle {
-        visible: root.running && root.targetAssetIds.length > 1
+        visible: root.running && root.targetAssetIds.length > 1 && !root.dismissed
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: root.filmstripHeight + 12

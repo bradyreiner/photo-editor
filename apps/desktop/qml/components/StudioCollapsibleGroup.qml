@@ -26,18 +26,18 @@ ColumnLayout {
     Theme { id: theme }
 
     Layout.fillWidth: true
-    spacing: theme.space4
+    spacing: theme.gapDense
 
     Rectangle {
         visible: group.headerVisible
         Layout.fillWidth: true
-        Layout.preferredHeight: 32
+        Layout.preferredHeight: theme.controlHeightDense
         color: headerMouse.containsMouse ? theme.editorControlHover : "transparent"
         border.width: theme.chromeBorderWidth
         border.color: headerMouse.containsMouse
                       ? theme.alpha(theme.accentWarm400, 0.30)
                       : "transparent"
-        radius: 4
+        radius: theme.radiusPanel
 
         Rectangle {
             anchors.left: parent.left
@@ -58,9 +58,9 @@ ColumnLayout {
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: theme.space4
+            anchors.leftMargin: theme.space8
+            anchors.rightMargin: theme.space8
+            spacing: theme.space6
 
             AppIcon {
                 name: "chevron-right"
@@ -75,19 +75,19 @@ ColumnLayout {
                 text: group.title
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
-                font.weight: Font.Bold
+                font.pixelSize: theme.typeLabel
+                font.weight: theme.weightSection
                 font.letterSpacing: 0
                 fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 8
+                minimumPixelSize: theme.typeCaption
                 elide: Text.ElideNone
             }
 
             ActionButton {
                 objectName: group.compareObjectName
                 visible: group.compareVisible
-                Layout.preferredWidth: 26
-                Layout.preferredHeight: 26
+                Layout.preferredWidth: theme.controlHeightDense
+                Layout.preferredHeight: theme.controlHeightDense
                 showText: false
                 iconName: "compare"
                 compact: true
@@ -133,7 +133,7 @@ ColumnLayout {
     ColumnLayout {
         id: body
         Layout.fillWidth: true
-        spacing: 4
+        spacing: theme.space4
         visible: group.expanded
     }
 }

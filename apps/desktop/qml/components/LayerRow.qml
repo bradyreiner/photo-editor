@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -41,9 +43,11 @@ Rectangle {
     property bool changed: false
     property bool compact: false
     property bool showLockBadge: false
-    property bool showLockButton: true
+    // Keep the row's always-visible controls to the two common actions. Lock,
+    // mask state, and opacity can be opted into by focused property views.
+    property bool showLockButton: false
     property bool showMaskState: false
-    property bool showOpacityReadout: opacityPercent >= 0
+    property bool showOpacityReadout: false
     property bool showVisibilityButton: true
     property bool showMenuButton: true
     property bool lockButtonEnabled: true
@@ -56,7 +60,17 @@ Rectangle {
     property string clickRouteContract: ""
     property string reorderTooltip: "Reorder from the layer menu or move buttons."
     property int thumbnailZoneSize: compact ? 30 : 34
-    property int actionZoneWidth: showLockButton || showMaskState || showOpacityReadout || showVisibilityButton || showMenuButton ? 184 : 0
+    readonly property int visibleActionCount: (showLockButton ? 1 : 0) +
+                                               (showMaskState ? 1 : 0) +
+                                               (showOpacityReadout ? 1 : 0) +
+                                               (showVisibilityButton ? 1 : 0) +
+                                               (showMenuButton ? 1 : 0)
+    readonly property int actionZoneWidth: (showLockButton ? theme.iconButtonSizeCompact : 0) +
+                                            (showMaskState ? 42 : 0) +
+                                            (showOpacityReadout ? 34 : 0) +
+                                            (showVisibilityButton ? theme.iconButtonSizeCompact : 0) +
+                                            (showMenuButton ? theme.iconButtonSizeCompact : 0) +
+                                            Math.max(0, visibleActionCount - 1) * theme.space4
 
     signal clicked()
     signal lockClicked()
@@ -67,17 +81,22 @@ Rectangle {
 
     readonly property bool hovered: rowHover.containsMouse
     readonly property bool thumbnailReady: thumbnailAvailable && thumbnailSource.length > 0
-    readonly property int rowHeight: compact ? 58 : 74
+    readonly property int rowHeight: Math.max(compact ? 48 : 56,
+                                               Math.max(layerTextColumn.implicitHeight + theme.space12,
+                                                        thumbnailZoneSize + theme.space14))
     readonly property color activeMaskAccent: theme.accentCool400
-    readonly property color rowAccent: selected ? accent
-                                       : activeMask ? activeMaskAccent
+    readonly property color rowAccent: activeMask ? activeMaskAccent
+                                       : selected ? accent
                                        : solo ? theme.warning
                                        : changed ? accent
                                        : theme.textMuted
-    readonly property color rowFill: !enabled ? theme.alpha(theme.glassBase, 0.26)
-                                 : selected ? theme.alpha(theme.glassLift, 0.52)
-                                 : hovered ? theme.alpha(theme.glassLift, 0.30)
-                                 : theme.alpha(theme.surfaceBottom, 0.48)
+    readonly property color rowFill: !enabled ? theme.alpha(theme.surfaceBottom, 0.26)
+                                 : selected ? theme.editorSelectionFill
+                                 : hovered ? theme.editorControlHover
+                                 : activeMask ? theme.alpha(activeMaskAccent, 0.08)
+                                 : solo ? theme.alpha(theme.warning, 0.06)
+                                 : changed ? theme.alpha(accent, 0.045)
+                                 : "transparent"
     readonly property string stateSummary: {
         let parts = []
         if (locked)
@@ -90,9 +109,9 @@ Rectangle {
             parts.push("Edited")
         return parts.join(" / ")
     }
-    readonly property string rowContract: "layer-row:v1|fixed-zones|no-elide|state-priority|menu-actions"
-    readonly property string zoneContract: "layer-row-zones:v1|accent-edge|thumbnail|name-state|metadata|state-badges|actions:visibility-mask-opacity-more|overflow-menu"
-    readonly property string premiumLayerContract: "premium-layer-row:v2|stable-height:true|thumbnail-zone:fixed|action-zone:fixed|soft-selected-fill:true|single-left-accent:true|active-mask-secondary:true|rename-stable:true|delete-separated:true"
+    readonly property string rowContract: "layer-row:v3|fixed-zones|content-height|no-elide|state-priority|actions:visibility-more|secondary-actions:overflow-menu|thumbnail-lock-badge:none"
+    readonly property string zoneContract: "layer-row-zones:v3|thumbnail|name-state|metadata|state-badges|actions:visibility-more|secondary-actions:overflow-menu"
+    readonly property string premiumLayerContract: "premium-layer-row:v3|content-height:true|thumbnail-zone:fixed|action-zone:fixed|selected-surface:true|left-accent:none|active-mask-secondary:true|rename-stable:true|delete-separated:true"
     readonly property string layerInteractionAcceptanceContract: "layer-interaction-acceptance:v1|select:true|rename:true|reorder:true|visibility:true|opacity:true|mask-select:true|transform:true|escape:true"
     readonly property string statePriorityContract: "layer-row-state-priority:v2|selected-layer-primary>active-mask-secondary>solo>changed>locked>hidden>hover"
     readonly property string activeMaskIndicatorContract: "layer-active-mask-indicator:v1|secondary-edge:right|accent:cool|visible:" +
@@ -108,16 +127,17 @@ Rectangle {
                                                    "|decode:" + String(screenAwareThumbnailSourceSize) +
                                                    "|dpr:" + thumbnailDevicePixelRatio.toFixed(2)
     readonly property bool contextualActionsVisible: hovered || activeFocus || selected || activeMask
-    readonly property real contextualActionOpacity: contextualActionsVisible ? 1.0 : 0.54
+    readonly property real contextualActionOpacity: 1.0
 
     Layout.fillWidth: true
     Layout.preferredHeight: rowHeight
-    radius: theme.radius8
+    radius: theme.radiusControl
     color: rowFill
-    border.width: activeFocus || selected || activeMask || hovered ? 1 : 0
-    border.color: activeFocus || selected ? theme.controlEdge
-                              : activeMask ? theme.alpha(rowAccent, 0.64)
-                                                       : theme.alpha(theme.textMuted, 0.26)
+    border.width: activeFocus ? theme.focusBorderWidth : selected || activeMask ? theme.hairlineWidth : 0
+    border.color: activeFocus ? theme.focusRing
+                  : selected ? theme.alpha(theme.editorSelectionEdge, 0.72)
+                  : activeMask ? theme.alpha(activeMaskAccent, 0.56)
+                  : "transparent"
     clip: true
     activeFocusOnTab: true
     Accessible.name: root.title
@@ -147,15 +167,6 @@ Rectangle {
     }
 
     Rectangle {
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        width: 3
-        visible: root.activeMask || root.solo || (root.changed && !root.selected)
-        color: root.activeMask ? root.activeMaskAccent : (root.solo ? theme.warning : root.rowAccent)
-    }
-
-    Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: parent.bottom
@@ -169,14 +180,14 @@ Rectangle {
         anchors.fill: parent
         anchors.leftMargin: 8
         anchors.rightMargin: 8
-        anchors.topMargin: 7
-        anchors.bottomMargin: 7
-        spacing: 8
+        anchors.topMargin: 5
+        anchors.bottomMargin: 5
+        spacing: 7
         z: 2
 
         Rectangle {
             objectName: "layerRowReorderHandle"
-            Layout.preferredWidth: 8
+            Layout.preferredWidth: 10
             Layout.fillHeight: true
             radius: 3
             color: "transparent"
@@ -235,39 +246,25 @@ Rectangle {
                 anchors.centerIn: parent
                 visible: !root.thumbnailReady
                 name: root.iconName
-                width: root.compact ? 13 : 15
+                width: root.compact ? 14 : 15
                 height: width
                 color: theme.textMain
             }
 
             Rectangle {
                 objectName: root.lockBadgeObjectName
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: 13
-                radius: 2
-                visible: root.showLockBadge || root.locked
-                color: theme.alpha(root.locked ? theme.textMuted : root.thumbnailAccent, 0.82)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: root.lockLabel
-                    color: "#06100E"
-                    font.family: theme.fontMono
-                    font.pixelSize: 7
-                    font.weight: Font.DemiBold
-                }
+                visible: false
             }
         }
 
         ColumnLayout {
+            id: layerTextColumn
             Layout.fillWidth: true
-            spacing: 3
+            spacing: theme.space2
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 6
+                spacing: theme.space4
 
                 Label {
                     objectName: root.titleObjectName
@@ -275,8 +272,8 @@ Rectangle {
                     text: root.title
                     color: theme.textMain
                     font.family: theme.fontUi
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
+                    font.pixelSize: theme.typeLabel
+                    font.weight: theme.weightControl
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone
@@ -286,6 +283,7 @@ Rectangle {
                     model: root.badges
 
                     delegate: Rectangle {
+                        id: badgeDelegate
 	                        required property var modelData
 	                        readonly property string badgeLabel: String(modelData.label || modelData)
 	                        readonly property string text: badgeLabel
@@ -293,14 +291,12 @@ Rectangle {
                         readonly property color badgeAccent: modelData.accent || root.accent
 
                         objectName: String(modelData.objectName || "")
-                        Layout.preferredWidth: Math.min(88, Math.max(38, badgeText.implicitWidth + 12))
-                        Layout.preferredHeight: 18
-                        radius: 3
-                        color: badgeActive ? theme.alpha(badgeAccent, 0.16)
-                                           : theme.alpha(theme.surfaceTop, 0.40)
-                        border.width: theme.chromeBorderWidth
-                        border.color: badgeActive ? theme.alpha(badgeAccent, 0.48)
-                                                  : theme.alpha(theme.textMuted, 0.22)
+                        Layout.preferredWidth: Math.min(100, badgeText.implicitWidth)
+                        Layout.preferredHeight: badgeText.implicitHeight
+                        radius: 0
+                        color: "transparent"
+                        border.width: 0
+                        border.color: "transparent"
 
                         ToolTip.visible: badgeHover.containsMouse && badgeLabel.length > 0
                         ToolTip.delay: 300
@@ -318,15 +314,13 @@ Rectangle {
                             anchors.fill: parent
                             anchors.leftMargin: 5
                             anchors.rightMargin: 5
-                            text: badgeLabel
-                            color: badgeActive ? badgeAccent : theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 8
-                            font.weight: Font.DemiBold
-                            horizontalAlignment: Text.AlignHCenter
+                            text: badgeDelegate.badgeLabel
+                            color: badgeDelegate.badgeActive ? theme.alpha(badgeDelegate.badgeAccent, 0.88) : theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                            font.weight: theme.weightControl
                             verticalAlignment: Text.AlignVCenter
-                            fontSizeMode: Text.HorizontalFit
-                            minimumPixelSize: 6
+                            maximumLineCount: 1
                             elide: Text.ElideNone
                         }
                     }
@@ -337,9 +331,10 @@ Rectangle {
                 objectName: root.subtitleObjectName
                 Layout.fillWidth: true
                 text: root.subtitle.length > 0 ? root.subtitle : root.stateSummary
-                color: root.selected || root.changed ? root.accent : theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 8
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                font.weight: theme.weightControl
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
@@ -350,9 +345,9 @@ Rectangle {
                 objectName: root.metadataObjectName
                 Layout.fillWidth: true
                 text: root.metadata.length > 0 ? root.metadata : root.detail
-                color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 8
+                color: theme.textFaint
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
@@ -436,7 +431,7 @@ Rectangle {
             Components.ToolButton {
                 objectName: root.visibilityButtonObjectName
                 visible: root.showVisibilityButton
-                iconName: root.hidden ? "delete" : "media"
+                iconName: root.hidden ? "hidden" : "visible"
                 compact: true
                 active: !root.hidden
                 enabled: root.visibilityButtonEnabled

@@ -22,6 +22,7 @@
 
 #include "editor_preview_controller.h"
 #include "editor_preview_image_sink.h"
+#include "edit_adjustment_patch.h"
 #include "canonical_composite_mask_alpha.h"
 #include "photo_render_utils.h"
 #include "thumbnail_refresh_queue_service.h"
@@ -4042,6 +4043,22 @@ int main(int argc, char** argv) {
       !almost_equal(layer_preset_controller.texture(), 44.0) ||
       !almost_equal(layer_preset_controller.vibrance(), 66.0)) {
     return fail("applying a preset to a layer should not mutate Base Image adjustments");
+  }
+  const auto layer_authoring_result = layer_preset_controller.saveCustomPreset(
+      QStringLiteral("Layer Only Look"),
+      QStringLiteral("Layer Looks"),
+      {QStringLiteral("tone")},
+      0);
+  const auto layer_authoring_state =
+      photo_editor::desktop::parse_adjustment_payload_or_legacy_recipe(
+          layer_preset_controller.presetAdjustmentPatchJson(QStringLiteral("Layer Only Look")))
+          .state.value_or(photo_editor::desktop::EditState{});
+  if (!layer_authoring_result.value(QStringLiteral("ok")).toBool() ||
+      !almost_equal(layer_authoring_state.exposure, 0.04) ||
+      !almost_equal(layer_authoring_state.vibrance, 0.0) ||
+      !almost_equal(layer_preset_controller.exposure(), 0.44) ||
+      !almost_equal(layer_preset_controller.vibrance(), 66.0)) {
+    return fail("saving a layer preset should capture that layer's selected groups without changing Base Image or layer state");
   }
   const auto layer_after_preset = layer_preset_controller.photoLayers().at(0).toMap();
   const auto preset_adjustments = required_map(layer_after_preset, QStringLiteral("adjustments"));

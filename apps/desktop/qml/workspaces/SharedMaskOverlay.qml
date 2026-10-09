@@ -17,6 +17,7 @@ Item {
     property bool compareMode: editorPreview.compareMode
     property bool activeBrushPainting: editorPreview.brushStrokeActive
     property bool enablePolygonHandles: true
+    property bool enableOutlineSelection: true
     property color accentColor: "#24DCC2"
     property real outlinePhase: 0
     property bool outlineAnimationEnabled: false
@@ -40,7 +41,7 @@ Item {
                                                    Number(externalFocusRegion.radiusY || 0) > 0
     readonly property int sharedOverlayVersion: 1
     readonly property string overlayGeometryContract: "image-rect-clipped|crop-rotation-aware:v1"
-    readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
+    readonly property string outlineRenderContract: "anti-aliased|zoom-stable|subpixel-contours:v2"
     readonly property string outlineScaleBucketContract: "outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale"
     readonly property string outlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
     readonly property string handleReadabilityContract: "dual-contrast-halo|large-hit-target|color-independent:v1"
@@ -104,8 +105,10 @@ Item {
         repeat: false
         onTriggered: {
             if (root.liveBrushVectorCanvasPaintPending &&
-                    maskCanvasOverlay.visible && liveBrushVectorCanvas.visible)
+                    maskCanvasOverlay.visible && liveBrushVectorCanvas.visible) {
+                liveBrushVectorCanvas.recordFramePhase("timer")
                 liveBrushVectorCanvas.requestPaint()
+            }
             if (root.geometricMaskCanvasPaintPending &&
                     maskCanvasOverlay.visible && geometricMaskCanvas.visible)
                 geometricMaskCanvas.requestPaint()
@@ -117,17 +120,23 @@ Item {
         }
     }
 
+    // New brush strokes and their traced alpha already use the visible photo's
+    // normalized coordinates. Applying the source crop again displaces them.
+    readonly property bool brushViewportCoordinates: editorPreview.activeMaskKind === "brush" &&
+        ((activeBrushPainting && editorPreview.activeMaskToolRole !== "retouch") ||
+         activeOutlineTrace.outline_brush_viewport_coordinates === true)
+
     CanvasCoordinateMapper {
         id: sharedCoordinateMapper
         contentX: 0
         contentY: 0
         contentWidth: root.width
         contentHeight: root.height
-        cropX: root.cropX
-        cropY: root.cropY
-        cropWidth: root.cropWidth
-        cropHeight: root.cropHeight
-        rotationDegrees: root.transformRotation
+        cropX: root.brushViewportCoordinates ? 0 : root.cropX
+        cropY: root.brushViewportCoordinates ? 0 : root.cropY
+        cropWidth: root.brushViewportCoordinates ? 1 : root.cropWidth
+        cropHeight: root.brushViewportCoordinates ? 1 : root.cropHeight
+        rotationDegrees: root.brushViewportCoordinates ? 0 : root.transformRotation
         fitMode: "overlay"
         devicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
     }
@@ -242,12 +251,6 @@ Item {
         return (Math.round(Number(value || 0) * ratio) + 0.5) / ratio
     }
 
-    function boundedCanvasCoordinate(value, visibleEdge) {
-        const edge = Math.max(1, Number(visibleEdge || 1))
-        const padding = Math.max(2048, edge * 2)
-        return root.clamp(Number(value || 0), -padding, edge + padding)
-    }
-
     function pointXValue(point, fallback) {
         const resolvedFallback = fallback === undefined ? 0.5 : fallback
         return point && point.x !== undefined ? point.x : resolvedFallback
@@ -297,28 +300,25 @@ Item {
         return buildOutlinePathWithOffset(ctx, points, 0, 0)
     }
 
-    function buildOutlinePathWithOffset(ctx, points, offsetX, offsetY) {
+    function buildOutlinePathWithOffset(ctx, points, offsetX, offsetY, appendToCurrentPath) {
         const count = points.length
         if (count < 2)
             return false
         const resolvedOffsetX = Number(offsetX || 0)
         const resolvedOffsetY = Number(offsetY || 0)
-        ctx.beginPath()
+        if (appendToCurrentPath !== true)
+            ctx.beginPath()
         const firstViewPoint = root.viewPointForImage(
                 root.pointXValue(points[0]),
                 root.pointYValue(points[0]))
-        ctx.moveTo(root.pixelAligned(root.boundedCanvasCoordinate(
-                       firstViewPoint.x - resolvedOffsetX, root.visibleCanvasWindow.width)),
-                   root.pixelAligned(root.boundedCanvasCoordinate(
-                       firstViewPoint.y - resolvedOffsetY, root.visibleCanvasWindow.height)))
+        ctx.moveTo(firstViewPoint.x - resolvedOffsetX,
+                   firstViewPoint.y - resolvedOffsetY)
         for (let i = 1; i < count; ++i) {
             const viewPoint = root.viewPointForImage(
                     root.pointXValue(points[i]),
                     root.pointYValue(points[i]))
-            ctx.lineTo(root.pixelAligned(root.boundedCanvasCoordinate(
-                           viewPoint.x - resolvedOffsetX, root.visibleCanvasWindow.width)),
-                       root.pixelAligned(root.boundedCanvasCoordinate(
-                           viewPoint.y - resolvedOffsetY, root.visibleCanvasWindow.height)))
+            ctx.lineTo(viewPoint.x - resolvedOffsetX,
+                       viewPoint.y - resolvedOffsetY)
         }
         if (count >= 3)
             ctx.closePath()
@@ -327,22 +327,27 @@ Item {
 
     function displayOutlinePathLargeEnough(points) {
         if (!points || points.length < 2)
-            return true
-        let minX = 1.0
-        let minY = 1.0
-        let maxX = 0.0
-        let maxY = 0.0
+            return false
+        let minX = Number.POSITIVE_INFINITY
+        let minY = Number.POSITIVE_INFINITY
+        let maxX = Number.NEGATIVE_INFINITY
+        let maxY = Number.NEGATIVE_INFINITY
         for (let i = 0; i < points.length; ++i) {
-            const x = root.pointXValue(points[i])
-            const y = root.pointYValue(points[i])
-            minX = Math.min(minX, x)
-            minY = Math.min(minY, y)
-            maxX = Math.max(maxX, x)
-            maxY = Math.max(maxY, y)
+            const point = root.viewPointForImage(
+                        root.pointXValue(points[i]),
+                        root.pointYValue(points[i]))
+            if (!Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y)))
+                return false
+            minX = Math.min(minX, Number(point.x))
+            minY = Math.min(minY, Number(point.y))
+            maxX = Math.max(maxX, Number(point.x))
+            maxY = Math.max(maxY, Number(point.y))
         }
-        const pixelWidth = Math.abs(maxX - minX) * root.width
-        const pixelHeight = Math.abs(maxY - minY) * root.height
-        return Math.max(pixelWidth, pixelHeight) >= 3.0 && pixelWidth * pixelHeight >= 18.0
+        const devicePixelRatio = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+        const minimumVisibleSpan = 0.5 / devicePixelRatio
+        const pixelWidth = maxX - minX
+        const pixelHeight = maxY - minY
+        return pixelWidth >= minimumVisibleSpan || pixelHeight >= minimumVisibleSpan
     }
 
     function strokeOutlinePaths(ctx, outlinePaths) {
@@ -353,11 +358,11 @@ Item {
         if (!outlinePaths || outlinePaths.length === 0)
             return
         const marching = editorPreview.maskPreviewMode === "marching-ants"
-        const dashOn = root.stableOutlineDash(10)
+        const dashOn = root.stableOutlineDash(7)
         const dashOff = root.stableOutlineDash(7)
-        const phase = marching && root.outlineAnimationEnabled
-                      ? root.stableOutlineDash(root.outlinePhase)
-                      : 0
+        const dashCycle = dashOn + dashOff
+        const rawPhase = marching && root.outlineAnimationEnabled ? Number(root.outlinePhase || 0) : 0
+        const phase = ((rawPhase % dashCycle) + dashCycle) % dashCycle
         const strokeColor = Qt.alpha(root.resolvedOverlayColor(root.activeOperationColor),
                                      marching ? 0.95 : 0.76)
         ctx.lineJoin = "round"
@@ -368,15 +373,28 @@ Item {
                 continue
             if (!root.buildOutlinePathWithOffset(ctx, points, offsetX, offsetY))
                 continue
-            if (ctx.setLineDash)
-                ctx.setLineDash(marching ? [dashOn, dashOff] : [])
-            ctx.lineDashOffset = marching ? -phase : 0
-            ctx.lineWidth = root.stableOutlineWidth(2)
-            ctx.strokeStyle = strokeColor
+            if (ctx.setLineDash) ctx.setLineDash([])
+            ctx.lineDashOffset = 0
+            ctx.lineWidth = root.stableOutlineWidth(2.5)
+            ctx.strokeStyle = theme.alpha(theme.ink950, 0.92)
             ctx.stroke()
+            ctx.lineWidth = root.stableOutlineWidth(1.25)
+            if (marching) {
+                if (ctx.setLineDash) ctx.setLineDash([dashOn, dashOff])
+                ctx.lineDashOffset = -phase
+                ctx.strokeStyle = theme.alpha(theme.polar, 0.98)
+                ctx.stroke()
+                ctx.lineDashOffset = -(phase + dashOn)
+                ctx.strokeStyle = theme.alpha(strokeColor, 0.98)
+                ctx.stroke()
+            } else {
+                ctx.lineDashOffset = 0
+                ctx.strokeStyle = strokeColor
+                ctx.stroke()
+            }
         }
-        if (ctx.setLineDash)
-            ctx.setLineDash([])
+        if (ctx.setLineDash) ctx.setLineDash([])
+        ctx.lineDashOffset = 0
     }
 
     function fillOutlinePaths(ctx, outlinePaths) {
@@ -390,13 +408,21 @@ Item {
                 editorPreview.maskPreviewMode === "marching-ants" ||
                 !outlinePaths || outlinePaths.length === 0)
             return
+        ctx.beginPath()
         ctx.fillStyle = Qt.alpha(root.resolvedOverlayColor(root.activeOperationColor),
                                  0.46 * root.overlayOpacityScale())
+        let hasClosedContour = false
         for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
             const points = outlinePaths[pathIndex]
-            if (!root.buildOutlinePathWithOffset(ctx, points, offsetX, offsetY))
+            if (!root.buildOutlinePathWithOffset(ctx, points, offsetX, offsetY, true))
                 continue
+            hasClosedContour = true
+        }
+        if (hasClosedContour) {
+            const previousFillRule = ctx.fillRule
+            ctx.fillRule = Qt.OddEvenFill
             ctx.fill()
+            ctx.fillRule = previousFillRule
         }
     }
 
@@ -529,8 +555,12 @@ Item {
             root.activeBrushPainting || liveBrushPoints.length > 0
         readonly property bool nativeLiveBrushPreviewVisible:
             activeBrushPainting && editorPreview.activeMaskLiveBrushPreviewNativeAvailable
+        readonly property bool immediateLiveBrushPreviewVisible:
+            activeBrushPainting && liveBrushPoints.length > 0 &&
+            !editorPreview.activeMaskBrushAutoMask && liveBrushPreviewSource.length === 0
         readonly property bool vectorLiveBrushPreviewVisible:
-            activeBrushPainting && liveBrushPoints.length > 0
+            activeBrushPainting && liveBrushPoints.length > 0 &&
+            editorPreview.activeMaskBrushAutoMask && liveBrushPreviewSource.length === 0
         readonly property string effectivePreviewSource:
             activeBrushPainting
             ? liveBrushPreviewSource
@@ -560,9 +590,9 @@ Item {
         }
 
         Image {
+            objectName: root.overlayObjectName("LiveBrushRasterImage", "liveBrushRasterImage")
             anchors.fill: parent
-            visible: root.previewImageLayerVisible() &&
-                     parent.effectivePreviewSource.length > 0
+            visible: parent.effectivePreviewSource.length > 0
             source: visible ? parent.effectivePreviewSource : ""
             fillMode: Image.Stretch
             smooth: true
@@ -578,8 +608,45 @@ Item {
             opacity: root.previewSourceOpacity(parent.activeBrushPainting)
         }
 
+        BrushLivePreviewItem {
+            objectName: root.overlayObjectName("ImmediateBrushCoverage", "immediateBrushCoverage")
+            anchors.fill: parent
+            controller: editorPreview
+            immediate: true
+            tint: root.activeOperationColor
+            visible: parent.immediateLiveBrushPreviewVisible
+            opacity: root.previewSourceOpacity(parent.activeBrushPainting)
+        }
+
         Canvas {
             id: liveBrushVectorCanvas
+            objectName: root.overlayObjectName("LiveBrushVectorCanvas", "liveBrushVectorCanvas")
+            // Receipt used by the workflow benchmark to reject unrelated frames.
+            property bool frameReceiptEnabled: false
+            property int completedPaintRevision: 0
+            property int paintedPointCount: 0
+            property int submittedPointCount: 0
+            property bool framePhaseTracingEnabled: false
+            property double framePhaseReferenceEpochMs: 0
+            property double framePhaseStrokeSignalOffsetMs: -1
+            property double framePhaseTimerOffsetMs: -1
+            property double framePhasePaintStartOffsetMs: -1
+            property double framePhasePaintEndOffsetMs: -1
+            property double framePhasePaintedOffsetMs: -1
+            function recordFramePhase(phase) {
+                if (!framePhaseTracingEnabled || framePhaseReferenceEpochMs <= 0)
+                    return
+                const propertyName = "framePhase" + phase.charAt(0).toUpperCase() + phase.slice(1) + "OffsetMs"
+                if (Number(liveBrushVectorCanvas[propertyName]) < 0)
+                    liveBrushVectorCanvas[propertyName] = Date.now() - framePhaseReferenceEpochMs
+            }
+            onPainted: {
+                recordFramePhase("painted")
+                if (frameReceiptEnabled) {
+                    paintedPointCount = submittedPointCount
+                    completedPaintRevision += 1
+                }
+            }
             x: root.visibleCanvasWindow.x
             y: root.visibleCanvasWindow.y
             width: root.visibleCanvasWindow.width
@@ -600,36 +667,32 @@ Item {
             }
 
             onPaint: {
+                recordFramePhase("paintStart")
                 const ctx = getContext("2d")
                 ctx.reset()
                 ctx.clearRect(0, 0, width, height)
                 const points = parent.liveBrushPoints || []
-                if (points.length === 0)
+                if (frameReceiptEnabled)
+                    submittedPointCount = points.length
+                if (points.length === 0) {
+                    recordFramePhase("paintEnd")
                     return
+                }
 
                 ctx.fillStyle = root.activeOperationColor
                 ctx.strokeStyle = root.activeOperationColor
                 ctx.lineCap = "round"
                 ctx.lineJoin = "round"
 
-                const first = points[0]
+                // Auto Mask needs source colors. Show a thin input trail until
+                // its canonical coverage arrives, without claiming a solid mask.
+                ctx.lineWidth = 1.5
                 ctx.beginPath()
-                ctx.arc(pointX(first), pointY(first), pointDiameter(first) / 2, 0, Math.PI * 2)
-                ctx.fill()
-
-                for (let i = 1; i < points.length; ++i) {
-                    const previous = points[i - 1]
-                    const current = points[i]
-                    ctx.lineWidth = (pointDiameter(previous) + pointDiameter(current)) / 2
-                    ctx.beginPath()
-                    ctx.moveTo(pointX(previous), pointY(previous))
-                    ctx.lineTo(pointX(current), pointY(current))
-                    ctx.stroke()
-
-                    ctx.beginPath()
-                    ctx.arc(pointX(current), pointY(current), pointDiameter(current) / 2, 0, Math.PI * 2)
-                    ctx.fill()
-                }
+                ctx.moveTo(pointX(points[0]), pointY(points[0]))
+                for (let i = 1; i < points.length; ++i)
+                    ctx.lineTo(pointX(points[i]), pointY(points[i]))
+                ctx.stroke()
+                recordFramePhase("paintEnd")
             }
 
             onVisibleChanged: root.scheduleLiveBrushVectorCanvasPaint()
@@ -640,6 +703,7 @@ Item {
                 target: editorPreview
 
                 function onActiveBrushStrokeChanged() {
+                    liveBrushVectorCanvas.recordFramePhase("strokeSignal")
                     root.scheduleLiveBrushVectorCanvasPaint()
                 }
 
@@ -715,14 +779,12 @@ Item {
                             ctx.setLineDash(count >= 3 ? [] : [6, 5])
                         ctx.beginPath()
                         let firstViewPoint = root.viewPointForImage(Number(points[0].x || 0), Number(points[0].y || 0))
-                        ctx.moveTo(root.pixelAligned(firstViewPoint.x - x),
-                                   root.pixelAligned(firstViewPoint.y - y))
+                        ctx.moveTo(firstViewPoint.x - x, firstViewPoint.y - y)
                         for (let i = 1; i < count; ++i) {
                             const viewPoint = root.viewPointForImage(
                                         Number(points[i].x || 0),
                                         Number(points[i].y || 0))
-                            ctx.lineTo(root.pixelAligned(viewPoint.x - x),
-                                       root.pixelAligned(viewPoint.y - y))
+                            ctx.lineTo(viewPoint.x - x, viewPoint.y - y)
                         }
                         if (count >= 3) {
                             ctx.closePath()
@@ -1038,7 +1100,6 @@ Item {
                  editorPreview.maskPreviewMode !== "none" &&
                  !root.compareMode &&
                  !root.activeBrushPainting &&
-                 !root.deepZoomCanvasMode &&
                  normalizedOutlinePathsCache.length > 0
         z: 6
 
@@ -1230,13 +1291,18 @@ Item {
         objectName: root.overlayObjectName("SharedActiveOutlineHitTarget", "sharedActiveOutlineHitTarget")
         readonly property string selectionSyncContract: "canvas-outline-hit-test|activeOutlineClicked|selectMaskSetAndLayer:v1"
         anchors.fill: parent
-        enabled: activeSelectionOutline.visible && !root.activeBrushPainting &&
+        enabled: root.enableOutlineSelection && activeSelectionOutline.visible && !root.activeBrushPainting &&
                  !root.agentPointTargetingEnabled
         acceptedButtons: Qt.LeftButton
         hoverEnabled: false
         preventStealing: false
         cursorShape: Qt.PointingHandCursor
         z: 7
+
+        onPressed: function(mouse) {
+            mouse.accepted = root.outlinePathsHitTest(mouse.x, mouse.y,
+                activeSelectionOutline.normalizedOutlinePathsCache, 12)
+        }
 
         onClicked: function(mouse) {
             if (!root.selectActiveOutlineFromCanvas(mouse.x, mouse.y))

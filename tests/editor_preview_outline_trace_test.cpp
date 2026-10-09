@@ -473,7 +473,7 @@ QRectF alpha_mask_bounds(
           static_cast<double>(max_y + 1) / static_cast<double>(height)));
 }
 
-double outline_tolerance_for_image_pixels(int width, int height, double pixels = 1.5) {
+double outline_tolerance_for_image_pixels(int width, int height, double pixels = 0.5) {
   return pixels / static_cast<double>(std::max(1, std::min(width, height)));
 }
 
@@ -674,6 +674,10 @@ int main(int argc, char** argv) {
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"));
   const auto canvas_overlay_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskCanvasOverlay.qml"));
+  const auto image_viewport_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/StudioImageViewport.qml"));
+  const auto mask_inspector_sections_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"));
   const auto controller_source =
       read_source_file(QStringLiteral("apps/desktop/src/editor_preview_controller.cpp"));
   const auto controller_header_source =
@@ -757,10 +761,10 @@ int main(int argc, char** argv) {
       !canvas_overlay_source.contains(QStringLiteral("property bool selectionFillVisible: false")) ||
       !canvas_overlay_source.contains(QStringLiteral("return root.selectionFillVisible &&")) ||
       !canvas_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(")) ||
-      !studio_workspace_source.contains(QStringLiteral("selectionFillVisible: workspaceContext.editInspectorTab === \"layers\"")) ||
+      !image_viewport_source.contains(QStringLiteral("selectionFillVisible: workspaceContext.editInspectorTab === \"layers\"")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.requestLayerFullResolutionPreview()")) ||
       !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool requestLayerFullResolutionPreview();")) ||
-      !studio_workspace_source.contains(QStringLiteral("text: \"Marching\"")) ||
+      !mask_inspector_sections_source.contains(QStringLiteral("text: \"Marching Ants\"")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: editorPreview.maskPreviewMode = \"marching-ants\"")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, false)")) ||
       !studio_workspace_source.contains(QStringLiteral("value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 100.0)")) ||
@@ -856,7 +860,7 @@ int main(int argc, char** argv) {
     return fail("StudioWorkspace pixel inspection should expose adaptive source-pixel zoom, threshold-gated grid, and crisp provider/native preview filtering");
   }
   const auto mask_pointer_press_index =
-      studio_workspace_source.indexOf(QStringLiteral("if (viewport.handleMaskPointerPressed(mouse))"));
+      studio_workspace_source.indexOf(QStringLiteral("if (viewport.handleMaskPointerPressed(mouse)"));
   const auto inspector_sampling_index =
       studio_workspace_source.indexOf(QStringLiteral("workspace.beginPixelInspectorSampling()"));
   if (mask_pointer_press_index < 0 || inspector_sampling_index < 0 ||
@@ -1008,7 +1012,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerStateBadgeRow\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerStateBadge\"")) ||
       !studio_workspace_source.contains(QStringLiteral("layer-state-badges:v1|global:base-row")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageGlobalAdjustmentBadge\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("accessibleDescription: baseLayerSummary + \" / Global edits target / Locked bottom layer / \" + baseLayerMetadataSummary")) ||
       !studio_workspace_source.contains(QStringLiteral("mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only")) ||
       !studio_workspace_source.contains(QStringLiteral("adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only")) ||
       !studio_workspace_source.contains(QStringLiteral("target-aware-adjustment-command-router:v3|commands:numeric,string,boolean,preset,reset,curve")) ||
@@ -1048,7 +1052,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("editorPreview.setPhotoLayerMaskOpacity(layerIndex, value / 100.0)")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.setPhotoLayerMaskDensity(layerIndex, value / 100.0)")) ||
       !studio_workspace_source.contains(QStringLiteral("function layerKeyboardNavigationSignature(")) ||
-      !studio_workspace_source.contains(QStringLiteral("layer-keyboard-navigation:v2|up-down:select|enter:edit|f2:rename|space:visibility|shift:range-select|modifier-up-down:reorder|escape:base-focus")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-keyboard-navigation:v3|arrows:nudge-in-layer-tools|up-down:select-otherwise|enter:edit|f2:rename|space:visibility|shift:range-select|modifier-up-down:reorder|escape:base-focus")) ||
       !studio_workspace_source.contains(QStringLiteral("function selectedPhotoLayerBatchTargets(")) ||
       !studio_workspace_source.contains(QStringLiteral("function selectedPhotoLayerBatchMenuItems(")) ||
       !studio_workspace_source.contains(QStringLiteral("function handleSelectedPhotoLayerBatchAction(")) ||
@@ -1087,16 +1091,19 @@ int main(int argc, char** argv) {
       !layer_row_source.contains(QStringLiteral("sourceSize.height: root.screenAwareThumbnailSourceSize")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string baseLayerThumbnailDprContract: thumbnailDprContract")) ||
       !studio_workspace_source.contains(QStringLiteral("thumbnailSourceSize: root.thumbnailSourceSizeForDisplay(thumbnailZoneSize, 96)")) ||
-      !studio_workspace_source.contains(QStringLiteral("layer-reorder-drop-targets:v1|before:")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-hierarchy-drop-targets:v2|before:")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerDropTargetBefore\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerDropTargetAfter\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerHierarchyDropHighlight\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function photoLayerGroupDropTargetAtPointer(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function finishPhotoLayerDrag(sourceIndex, sourceRow, pointerItem, pointerX, pointerY, dragProxy, rowsRepeater)")) ||
       !studio_workspace_source.contains(QStringLiteral("function movePhotoLayerPreservingSelection(")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)")) ||
       !studio_workspace_source.contains(QStringLiteral("property bool developerDiagnosticsEnabled: false")) ||
-      !studio_workspace_source.contains(QStringLiteral("developer-diagnostics-menu:v2|developer-mode-gated:true|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false")) ||
-      !studio_workspace_source.contains(QStringLiteral("tooltip: \"Open developer diagnostic overlays.\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("visible: root.developerDiagnosticsEnabled && root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive")) ||
+      !studio_workspace_source.contains(QStringLiteral("developer-diagnostics-menu:v3|image-inspection:user-accessible|advanced-details:developer-mode-gated|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false")) ||
+      !studio_workspace_source.contains(QStringLiteral("tooltip: \"Inspect clipping, focus, gamut, and tonal zones.\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive")) ||
       !studio_workspace_source.contains(QStringLiteral("CanvasCoordinateMapper")) ||
       !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
       !coordinate_mapper_source.contains(QStringLiteral("coordinate-transform:v1|view-to-image:true|image-to-view:true|crop:true|rotation:true|zoom-pan:true|painted-image-rect:true|fit-fill:true|device-pixel-ratio:true|roundtrip:true|clamp:true")) ||
@@ -2015,7 +2022,7 @@ int main(int argc, char** argv) {
       std::abs(
           known_alpha_trace.value(QStringLiteral("outline_trace_tolerance_normalized")).toDouble() -
           known_alpha_tolerance) > 1e-9 ||
-      known_alpha_trace.value(QStringLiteral("outline_trace_tolerance_pixels")).toDouble() != 1.5) {
+      known_alpha_trace.value(QStringLiteral("outline_trace_tolerance_pixels")).toDouble() != 0.5) {
     const auto detail =
         QStringLiteral("%1 tolerance=%2 traceTolerance=%3")
             .arg(outline_bounds_detail(
@@ -2445,6 +2452,7 @@ int main(int argc, char** argv) {
     return fail("outline trace metadata should identify fallback outlines when source alpha cannot be decoded");
   }
 
+  parity_controller.removeActiveMask();
   parity_controller.startPolygonSelection();
   parity_controller.appendActivePolygonPoint(0.18, 0.20);
   parity_controller.appendActivePolygonPoint(0.76, 0.24);
@@ -2452,15 +2460,15 @@ int main(int argc, char** argv) {
   parity_controller.appendActivePolygonPoint(0.24, 0.68);
   const auto polygon_mask =
       parity_controller.maskStack().at(parity_controller.activeMaskIndex()).toMap();
-  const auto polygon_alpha_trace = parity_controller.activeMaskOutlineTrace();
+  const auto polygon_alpha_trace = settled_range_outline_trace(parity_controller);
   const auto polygon_alpha_paths = parity_controller.activeMaskOutlinePaths();
   if (polygon_alpha_paths.isEmpty() ||
       !outline_points_are_image_normalized(polygon_alpha_paths) ||
       !has_final_alpha_outline_contract(
           polygon_alpha_trace,
           QStringLiteral("procedural-geometry")) ||
-      polygon_alpha_trace.value(QStringLiteral("outline_trace_source")).toString() !=
-          QStringLiteral("vector-path") ||
+      (computed_outline_source(polygon_alpha_trace) != QStringLiteral("vector-path") &&
+       computed_outline_source(polygon_alpha_trace) != QStringLiteral("composite-alpha")) ||
       polygon_mask.value(QStringLiteral("shapeAlphaSourceContract")).toString() !=
           QStringLiteral("editable-path-plus-alpha-tile-cache-v1") ||
       polygon_mask.value(QStringLiteral("shapeAlphaSourceOfTruth")).toString() !=
@@ -2468,9 +2476,28 @@ int main(int argc, char** argv) {
       !polygon_mask.value(QStringLiteral("shapeAlphaSourceSignature"))
            .toString()
            .startsWith(QStringLiteral("sha1:"))) {
+    std::cerr << "Polygon trace source=" << polygon_alpha_trace.value(QStringLiteral("outline_trace_source")).toString().toStdString()
+              << " provider=" << polygon_alpha_trace.value(QStringLiteral("mask_alpha_provider")).toString().toStdString()
+              << " masks=" << parity_controller.maskCount()
+              << " paths=" << polygon_alpha_paths.size()
+              << " shapeSource=" << polygon_mask.value(QStringLiteral("shapeAlphaSourceOfTruth")).toString().toStdString()
+              << " contract=" << polygon_mask.value(QStringLiteral("shapeAlphaSourceContract")).toString().toStdString()
+              << " signature=" << polygon_mask.value(QStringLiteral("shapeAlphaSourceSignature")).toString().left(12).toStdString() << '\n';
     return fail("polygon outline should stay tied to editable polygon alpha and final procedural geometry");
   }
 
+  parity_controller.setActiveMaskSelectionInverted(true);
+  const auto inverted_polygon_trace = settled_range_outline_trace(parity_controller);
+  const auto inverted_polygon_paths = parity_controller.activeMaskOutlinePaths();
+  const auto inverted_polygon_bounds = outline_bounds(inverted_polygon_paths);
+  if (computed_outline_source(inverted_polygon_trace) != QStringLiteral("composite-alpha") ||
+      inverted_polygon_paths.size() != 2 ||
+      !bounds_match(inverted_polygon_bounds, QRectF(0, 0, 1, 1), 0.015)) {
+    return fail("inverted polygon outlines must show the image boundary and unselected polygon hole");
+  }
+  parity_controller.setActiveMaskSelectionInverted(false);
+
+  parity_controller.removeActiveMask();
   parity_controller.startLassoSelection(false);
   const QVariantList lasso_raw_points{
       normalized_point(0.20, 0.26),
@@ -2491,7 +2518,7 @@ int main(int argc, char** argv) {
   }
   const auto lasso_mask =
       parity_controller.maskStack().at(parity_controller.activeMaskIndex()).toMap();
-  const auto lasso_alpha_trace = parity_controller.activeMaskOutlineTrace();
+  const auto lasso_alpha_trace = settled_range_outline_trace(parity_controller);
   const auto lasso_alpha_paths = parity_controller.activeMaskOutlinePaths();
   const auto lasso_outline_bounds = outline_bounds(lasso_alpha_paths);
   const auto lasso_final_points = lasso_mask.value(QStringLiteral("polygonPoints")).toList();
@@ -2501,8 +2528,8 @@ int main(int argc, char** argv) {
       !has_final_alpha_outline_contract(
           lasso_alpha_trace,
           QStringLiteral("procedural-geometry")) ||
-      lasso_alpha_trace.value(QStringLiteral("outline_trace_source")).toString() !=
-          QStringLiteral("vector-path") ||
+      (computed_outline_source(lasso_alpha_trace) != QStringLiteral("vector-path") &&
+       computed_outline_source(lasso_alpha_trace) != QStringLiteral("composite-alpha")) ||
       lasso_mask.value(QStringLiteral("shapeAlphaSourceContract")).toString() !=
           QStringLiteral("editable-path-plus-alpha-tile-cache-v1") ||
       lasso_mask.value(QStringLiteral("shapeAlphaSourceOfTruth")).toString() !=
@@ -2512,9 +2539,8 @@ int main(int argc, char** argv) {
       !normalized_point_lists_match(
           lasso_mask.value(QStringLiteral("lassoRawPoints")).toList(),
           lasso_raw_points) ||
-      normalized_point_lists_match(lasso_final_points, lasso_raw_points) ||
       !lasso_mask.value(QStringLiteral("lassoSimplified")).toBool() ||
-      !lasso_mask.value(QStringLiteral("lassoSmoothed")).toBool() ||
+      lasso_mask.value(QStringLiteral("lassoSmoothed")).toBool() ||
       lasso_mask.value(QStringLiteral("lassoSimplifiedPointCount")).toInt() !=
           lasso_final_points.size() ||
       !bounds_match(lasso_outline_bounds, lasso_final_bounds, 0.035) ||
@@ -2560,7 +2586,7 @@ int main(int argc, char** argv) {
   const auto simplified_lasso_mask =
       simplify_lasso_controller.maskStack().at(simplify_lasso_controller.activeMaskIndex()).toMap();
   if (!simplified_lasso_mask.value(QStringLiteral("lassoSimplified")).toBool() ||
-      !simplified_lasso_mask.value(QStringLiteral("lassoSmoothed")).toBool() ||
+      simplified_lasso_mask.value(QStringLiteral("lassoSmoothed")).toBool() ||
       !normalized_point_lists_match(
           simplified_lasso_mask.value(QStringLiteral("lassoRawPoints")).toList(),
           reducible_lasso_raw_points) ||
@@ -2573,7 +2599,7 @@ int main(int argc, char** argv) {
   photo_editor::desktop::EditorPreviewController duplicate_lasso_controller;
   duplicate_lasso_controller.startLassoSelection(false);
   duplicate_lasso_controller.appendActivePolygonPoint(0.40, 0.40);
-  duplicate_lasso_controller.appendActivePolygonPoint(0.401, 0.401);
+  duplicate_lasso_controller.appendActivePolygonPoint(0.4001, 0.4001);
   const auto duplicate_guard_mask =
       duplicate_lasso_controller.maskStack().at(duplicate_lasso_controller.activeMaskIndex()).toMap();
   if (duplicate_guard_mask.value(QStringLiteral("polygonPoints")).toList().size() != 1 ||
@@ -2743,7 +2769,7 @@ int main(int argc, char** argv) {
       std::abs(
           smart_alpha_trace.value(QStringLiteral("outline_trace_tolerance_normalized")).toDouble() -
           smart_outline_tolerance) > 1e-9 ||
-      smart_alpha_trace.value(QStringLiteral("outline_trace_tolerance_pixels")).toDouble() != 1.5) {
+      smart_alpha_trace.value(QStringLiteral("outline_trace_tolerance_pixels")).toDouble() != 0.5) {
     const auto detail =
         QStringLiteral("%1 tolerance=%2 traceTolerance=%3")
             .arg(outline_bounds_detail(
@@ -2923,6 +2949,18 @@ int main(int argc, char** argv) {
             .arg(range_source.height())
             .toUtf8();
     return fail(detail.constData());
+  }
+
+  outline_cache_controller.setMaskPreviewMode(QStringLiteral("overlay"));
+  const auto outline_before_subtract_brush = settled_outline_paths(outline_cache_controller);
+  outline_cache_controller.startSelectionBrush(true);
+  const auto outline_after_subtract_brush = settled_outline_paths(outline_cache_controller);
+  if (outline_before_subtract_brush.isEmpty() ||
+      outline_after_subtract_brush.isEmpty() ||
+      outline_cache_controller.activeMaskKind() != QStringLiteral("brush") ||
+      outline_cache_controller.activeMaskOperation() != QStringLiteral("subtract") ||
+      outline_cache_controller.activeMaskToolRole() != QStringLiteral("selection")) {
+    return fail("switching to a subtract brush should preserve the active selection set outline");
   }
 
   return EXIT_SUCCESS;

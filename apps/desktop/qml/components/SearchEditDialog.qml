@@ -12,13 +12,31 @@ Popup {
     readonly property bool confirming: workflow && workflow.phase === "confirm"
     readonly property bool searching: workflow && workflow.search.running
     modal: true
+    focus: true
     closePolicy: Popup.NoAutoClose
+    Timer {
+        id: initialFocusTimer
+        interval: 0
+        repeat: false
+        onTriggered: {
+            if (root.opened && !root.confirming)
+                instructionInput.forceActiveFocus(Qt.PopupFocusReason)
+        }
+    }
     width: Math.min(780, parent ? parent.width - 48 : 780)
     height: Math.min(confirming ? Math.min(720, 400 + workflow.search.results.length * 100) : 420,
                      parent ? parent.height - 48 : 720)
-    padding: 24
+    padding: theme.panelPaddingStandard
     Theme { id: theme }
-    background: Rectangle { color: theme.ink900; radius: 24; border.color: theme.lineSoft }
+    background: Rectangle {
+        color: theme.ink900
+        radius: theme.radiusPanel
+        border.color: theme.lineSoft
+        Accessible.role: Accessible.Dialog
+        Accessible.name: qsTr("Search & Edit")
+        Accessible.description: qsTr("Find photos, review matching targets, and create an edit draft.")
+        Accessible.ignored: false
+    }
     enter: Transition {
         ParallelAnimation {
             NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 220 }
@@ -32,8 +50,15 @@ Popup {
                 root.chosenIds = root.workflow.search.resultIds.slice()
                 editInput.text = String(root.workflow.search.searchPlan.editInstructions || "")
                 tokenLabel.text = root.workflow.confirmationToken
+                Qt.callLater(function() { root.focusMatchSelection() })
             }
         }
+    }
+    onOpened: {
+        if (confirming)
+            Qt.callLater(function() { root.focusMatchSelection() })
+        else
+            initialFocusTimer.start()
     }
     // Bind the approval gesture to exactly the result generation displayed here.
     Item { id: tokenLabel; property string text: "" }
@@ -44,39 +69,83 @@ Popup {
         else next.push(id)
         root.chosenIds = next
     }
+    function matchDisplayName(asset) {
+        const item = asset || ({})
+        const explicitName = String(item.displayLabel || item.fileName || item.name || "").trim()
+        if (explicitName.length > 0)
+            return explicitName
+        const path = String(item.filePath || item.sourcePath || "").trim()
+        const pathParts = path.split(/[\\/]/)
+        const fileName = pathParts.length > 0 ? String(pathParts[pathParts.length - 1]).trim() : ""
+        return fileName.length > 0 ? fileName : String(item.assetId || "matched photo")
+    }
     function firstPreviewReady() {
         const row = matches.itemAtIndex(0) as MatchRow
         return row !== null && row.previewReady
+    }
+    function focusMatchSelection() {
+        const row = matches.itemAtIndex(0) as MatchRow
+        if (root.opened && row)
+            row.focusSelection()
     }
     component MatchRow: Rectangle {
         id: matchRow
         required property var modelData
         readonly property bool previewReady: matchImage.status === Image.Ready
         width: ListView.view.width
-        height: 92
-        radius: 12
+        height: theme.scaled(92)
+        radius: theme.radiusControl
         color: theme.ink950
         RowLayout {
-            anchors.fill: parent; anchors.margins: 8; spacing: 10
-            CheckBox {
+            anchors.fill: parent; anchors.margins: theme.space8; spacing: theme.space10
+            ToneCheckBox {
+                id: includePhoto
+                objectName: "searchEditIncludePhoto_" + String(matchRow.modelData.assetId)
+                Layout.preferredWidth: theme.iconButtonSizeCompact
                 checked: root.chosenIds.indexOf(String(matchRow.modelData.assetId)) >= 0
-                Accessible.name: "Include " + String(matchRow.modelData.assetId)
+                accessibleLabel: "Include " + root.matchDisplayName(matchRow.modelData)
+                accessibleDescription: String(matchRow.modelData.reason || "Include this matching photo in the edit.")
                 onClicked: root.toggleTarget(String(matchRow.modelData.assetId))
             }
             Image {
                 id: matchImage
                 objectName: "searchEditMatchPreview"
-                Layout.preferredWidth: 90; Layout.preferredHeight: 72
+                Layout.preferredWidth: theme.scaled(90); Layout.preferredHeight: theme.scaled(72)
                 source: matchRow.modelData.thumbnailSource || matchRow.modelData.filePath || ""
                 asynchronous: true; fillMode: Image.PreserveAspectFit
             }
-            Label {
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: String(matchRow.modelData.reason || "")
-                textFormat: Text.PlainText
-                color: theme.textStrong; wrapMode: Text.Wrap
-                maximumLineCount: 3; elide: Text.ElideRight
+                spacing: theme.space4
+                Label {
+                    id: matchName
+                    objectName: "searchEditMatchName_" + String(matchRow.modelData.assetId)
+                    Layout.fillWidth: true
+                    text: root.matchDisplayName(matchRow.modelData)
+                    textFormat: Text.PlainText
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideMiddle
+                    HoverHandler { id: nameHover }
+                    ToolTip.visible: nameHover.hovered
+                    ToolTip.text: matchName.text
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: String(matchRow.modelData.reason || "")
+                    textFormat: Text.PlainText
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 3; elide: Text.ElideRight
+                }
             }
+        }
+        function focusSelection() {
+            includePhoto.forceActiveFocus(Qt.TabFocusReason)
         }
     }
     contentItem: ColumnLayout {
@@ -85,10 +154,12 @@ Popup {
             Layout.fillWidth: true
             Label {
                 Layout.fillWidth: true
-                text: root.confirming ? "Are these the photos?" : "Find photos. Make your edit."
+                text: root.confirming ? "Review matching photos" : "Search & Edit"
                 color: theme.textStrong
-                font.pixelSize: 24
-                font.bold: true
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeDialogTitle
+                font.weight: Font.DemiBold
+                wrapMode: Text.WordWrap
             }
             ActionButton {
                 objectName: "searchEditClose"
@@ -106,15 +177,15 @@ Popup {
             visible: !root.confirming
             Layout.fillWidth: true
             Layout.preferredHeight: 110
-            TextArea {
+            ToneTextArea {
                 id: instructionInput
                 objectName: "searchEditInstruction"
+                accessibleLabel: "Photos to find and edit instructions"
                 enabled: !root.searching
                 placeholderText: "Find my outdoor portraits, warm the background, and keep the people unchanged."
                 wrapMode: TextEdit.Wrap
                 color: theme.textStrong
                 selectByMouse: true
-                Accessible.name: "Photos to find and edits to make"
             }
         }
         Label {
@@ -134,6 +205,14 @@ Popup {
             clip: true
             spacing: 8
             model: root.workflow ? root.workflow.search.results : []
+            onCountChanged: {
+                if (root.confirming)
+                    Qt.callLater(function() { root.focusMatchSelection() })
+            }
+            onVisibleChanged: {
+                if (visible && root.confirming)
+                    Qt.callLater(function() { root.focusMatchSelection() })
+            }
             ScrollBar.vertical: ScrollBar {}
             delegate: MatchRow {}
         }
@@ -141,12 +220,12 @@ Popup {
             visible: root.confirming
             Layout.fillWidth: true
             Layout.preferredHeight: root.confirming ? 90 : 0
-            TextArea {
+            ToneTextArea {
                 id: editInput
                 objectName: "searchEditDirection"
+                accessibleLabel: "Review and correct the edit instructions"
                 wrapMode: TextEdit.Wrap
                 color: theme.textStrong; selectByMouse: true
-                Accessible.name: "Review and correct the edit instructions"
             }
         }
         Label {
@@ -183,6 +262,7 @@ Popup {
                 objectName: "searchEditFind"
                 visible: !root.confirming
                 text: root.searching ? "Searching…" : "Find photos"
+                tone: "primary"
                 showText: true
                 enabled: root.workflow && !root.searching && instructionInput.text.trim().length > 0
                 onClicked: root.workflow.start(instructionInput.text, root.modelConfig)
@@ -191,6 +271,7 @@ Popup {
                 objectName: "searchEditConfirm"
                 visible: root.confirming
                 text: "Create draft on " + root.chosenIds.length + (root.chosenIds.length === 1 ? " photo" : " photos")
+                tone: "primary"
                 showText: true
                 enabled: root.chosenIds.length > 0 && editInput.text.trim().length > 0
                 onClicked: {

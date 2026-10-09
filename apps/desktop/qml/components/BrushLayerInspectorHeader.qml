@@ -6,8 +6,9 @@ import "." as Components
 Rectangle {
     id: root
 
-    property string totalLayersText: "1 TOTAL LAYER"
+    property string totalLayersText: "1 layer"
     property bool isolationActive: false
+    property bool canIsolate: true
     property string targetIconName: "adjust"
     property string targetName: "Layer"
     property string targetStateText: "Brush target"
@@ -25,33 +26,32 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: brushLayerHeaderContent.implicitHeight + 14
-    radius: 4
+    implicitHeight: brushLayerHeaderContent.implicitHeight + 16
+    radius: 3
     color: theme.alpha(theme.surfaceTop, 0.66)
     border.width: theme.chromeBorderWidth
-    border.color: theme.alpha(root.accent, 0.34)
+    border.color: theme.alpha(theme.controlEdge, 0.45)
     clip: true
 
     ColumnLayout {
         id: brushLayerHeaderContent
         anchors.fill: parent
-        anchors.margins: 7
-        spacing: 7
+        anchors.margins: 8
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 6
+            spacing: 8
 
             Label {
                 objectName: "brushLayerInspectorCountLabel"
                 Layout.fillWidth: true
-                text: root.isolationActive ? "ISOLATION ACTIVE" : root.totalLayersText
-                color: root.isolationActive ? root.accent : theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 9
+                text: root.isolationActive ? "Isolation active" : root.totalLayersText
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
                 font.weight: Font.DemiBold
-                fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 7
+                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 elide: Text.ElideNone
             }
 
@@ -73,11 +73,14 @@ Rectangle {
             Components.MiniButton {
                 objectName: "brushLayerInspectorIsolationButton"
                 minimumReadableWidth: 76
+                enabled: root.canIsolate || root.isolationActive
                 text: root.isolationActive ? "Clear" : "Isolate"
                 iconName: root.isolationActive ? "close" : "preview"
                 role: "segmented"
                 active: root.isolationActive
-                tooltip: root.isolationActive ? "Show all visible layers again." : "Show only the top layer."
+                tooltip: root.isolationActive ? "Show all visible layers again."
+                                              : root.canIsolate ? "Show only the selected layer."
+                                                                : "Choose a layer to isolate."
                 onClicked: {
                     if (root.isolationActive)
                         root.clearIsolationRequested()
@@ -90,37 +93,28 @@ Rectangle {
         Rectangle {
             objectName: "brushLayerInspectorTargetCard"
             Layout.fillWidth: true
-            Layout.preferredHeight: 44
+            Layout.preferredHeight: Math.max(48, targetSummary.implicitHeight + 16)
             radius: 3
-            color: theme.alpha(root.accent, 0.085)
+            color: theme.alpha(theme.actionSecondaryFill, 0.45)
             border.width: theme.chromeBorderWidth
-            border.color: theme.alpha(root.accent, 0.42)
+            border.color: theme.alpha(theme.controlEdge, 0.45)
 
             RowLayout {
                 anchors.fill: parent
-                anchors.margins: 7
-                spacing: 7
+                anchors.margins: 8
+                spacing: 8
 
-                Rectangle {
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: 28
-                    radius: 3
-                    color: theme.alpha(root.accent, 0.14)
-                    border.width: 1
-                    border.color: theme.alpha(root.accent, 0.46)
-
-                    Components.AppIcon {
-                        anchors.centerIn: parent
-                        width: 14
-                        height: 14
-                        name: root.targetIconName
-                        color: root.accent
-                    }
+                Components.AppIcon {
+                    Layout.preferredWidth: 16
+                    Layout.preferredHeight: 16
+                    name: root.targetIconName
+                    color: theme.textMuted
                 }
 
                 ColumnLayout {
+                    id: targetSummary
                     Layout.fillWidth: true
-                    spacing: 1
+                    spacing: 2
 
                     Label {
                         objectName: "brushLayerInspectorTargetNameLabel"
@@ -128,7 +122,7 @@ Rectangle {
                         text: root.targetName
                         color: theme.textMain
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: theme.typeLabel
                         font.weight: Font.DemiBold
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         maximumLineCount: 2
@@ -140,10 +134,9 @@ Rectangle {
                         Layout.fillWidth: true
                         text: root.targetStateText
                         color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
-                        fontSizeMode: Text.HorizontalFit
-                        minimumPixelSize: 6
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         elide: Text.ElideNone
                     }
                 }
@@ -153,24 +146,25 @@ Rectangle {
         Rectangle {
             objectName: "brushLayerInspectorMaskCard"
             Layout.fillWidth: true
-            Layout.preferredHeight: 42
+            Layout.preferredHeight: Math.max(48, maskSummary.implicitHeight + 16)
             radius: 3
-            color: theme.alpha(root.accent, root.operation === "subtract" ? 0.045 : 0.070)
+            color: theme.alpha(theme.actionSecondaryFill, 0.45)
             border.width: theme.chromeBorderWidth
-            border.color: theme.alpha(root.accent, 0.32)
+            border.color: theme.alpha(theme.controlEdge, 0.45)
 
             ColumnLayout {
+                id: maskSummary
                 anchors.fill: parent
-                anchors.margins: 7
+                anchors.margins: 8
                 spacing: 2
 
                 Label {
                     objectName: "brushLayerInspectorMaskNameLabel"
                     Layout.fillWidth: true
                     text: root.maskName
-                    color: root.accent
+                    color: theme.textMain
                     font.family: theme.fontUi
-                    font.pixelSize: 11
+                    font.pixelSize: theme.typeLabel
                     font.weight: Font.DemiBold
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
@@ -181,11 +175,10 @@ Rectangle {
                     objectName: "brushLayerInspectorMaskStatusLabel"
                     Layout.fillWidth: true
                     text: root.maskStateText
-                    color: theme.textMain
-                    font.family: theme.fontMono
-                    font.pixelSize: 8
-                    fontSizeMode: Text.HorizontalFit
-                    minimumPixelSize: 6
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeCaption
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     elide: Text.ElideNone
                 }
             }

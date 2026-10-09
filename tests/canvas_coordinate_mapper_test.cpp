@@ -437,7 +437,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(
           QStringLiteral("onInteractionFinished: editorPreview.endCoalescedEdit()")) ||
       !studio_workspace_source.contains(
-          QStringLiteral("text-layer-editor:v2|single-instance:true|live-content:true|empty-text:true")) ||
+          QStringLiteral("text-layer-editor:v4|single-instance:true|multiline-content:true|empty-text:true")) ||
       !studio_workspace_source.contains(
           QStringLiteral("property bool cropLiquifyToolAvailable: true")) ||
       !studio_workspace_source.contains(

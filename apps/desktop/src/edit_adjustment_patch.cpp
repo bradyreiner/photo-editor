@@ -128,6 +128,104 @@ bool contains_large_identity_payload(
   return false;
 }
 
+qsizetype identity_payload_retained_bytes(const QVariant& value, qsizetype budget) {
+  qsizetype retained = 0;
+  const auto consume = [&](qsizetype bytes) {
+    if (bytes > budget - retained) {
+      retained = budget + 1;
+      return false;
+    }
+    retained += bytes;
+    return true;
+  };
+  const auto visit = [&](const auto& self, const QVariant& item) -> bool {
+    if (!consume(sizeof(QVariant))) return false;
+    const auto type = item.metaType().id();
+    if (type == QMetaType::QString) {
+      const auto string = item.toString();
+      return string.capacity() <= (budget - retained) / 2 &&
+          consume(string.capacity() * 2);
+    }
+    if (type == QMetaType::QByteArray) return consume(item.toByteArray().capacity());
+    if (type == QMetaType::QVariantList) {
+      const auto list = item.toList();
+      if (list.capacity() > (budget - retained) / static_cast<qsizetype>(sizeof(QVariant)) ||
+          !consume(list.capacity() * static_cast<qsizetype>(sizeof(QVariant)))) return false;
+      for (const auto& child : list) if (!self(self, child)) return false;
+    } else if (type == QMetaType::QVariantMap) {
+      const auto map = item.toMap();
+      for (auto it = map.cbegin(); it != map.cend(); ++it) {
+        // Conservatively cover the map node and the key's shared allocation.
+        if (!consume(128) || !self(self, it.key()) || !self(self, it.value())) return false;
+      }
+    } else if (type != QMetaType::UnknownType && type != QMetaType::Nullptr &&
+               type != QMetaType::Bool && type != QMetaType::Int && type != QMetaType::UInt &&
+               type != QMetaType::LongLong && type != QMetaType::ULongLong &&
+               type != QMetaType::Double && type != QMetaType::Float) {
+      // Unknown allocations (for example an image in imported payload data)
+      // must not bypass the byte ceiling.
+      return false;
+    }
+    return true;
+  };
+  return visit(visit, value) ? retained : budget + 1;
+}
+
+QVariantMap paint_payload_identity(const QVariantMap& payload) {
+  struct CachedPayload {
+    QVariantMap source;
+    QVariantMap identity;
+    qsizetype retained_bytes = 0;
+  };
+  static QMutex mutex;
+  static std::deque<CachedPayload> cache;
+  // Paint tiles are immutable, implicitly shared strings. Budget their UTF-16
+  // storage conservatively rather than keeping serialized JSON alongside them.
+  constexpr qsizetype budget = 256 * 1024 * 1024;
+  constexpr std::size_t maximum_entries = 16;
+  {
+    QMutexLocker lock(&mutex);
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+      if (it->source == payload) {
+        auto hit = std::move(*it);
+        cache.erase(it);
+        cache.push_front(std::move(hit));
+        return cache.front().identity;
+      }
+    }
+  }
+  const auto bytes = QJsonDocument::fromVariant(payload).toJson(QJsonDocument::Compact);
+  const QVariantMap identity{
+      {QStringLiteral("paintPayloadIdentityVersion"), 1},
+      {QStringLiteral("sha256"), QString::fromLatin1(
+          QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
+      {QStringLiteral("bytes"), bytes.size()},
+  };
+  // Charge the retained source, including string capacity and container nodes,
+  // rather than just its JSON length. No serialized pixels remain in the cache.
+  const auto retained_bytes = identity_payload_retained_bytes(payload, budget);
+  if (retained_bytes <= budget) {
+    QMutexLocker lock(&mutex);
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+      if (it->source == payload) {
+        auto hit = std::move(*it);
+        cache.erase(it);
+        cache.push_front(std::move(hit));
+        return cache.front().identity;
+      }
+    }
+    qsizetype retained = 0;
+    for (const auto& entry : cache) retained += entry.retained_bytes;
+    while (!cache.empty() &&
+           (cache.size() >= maximum_entries || retained + retained_bytes > budget)) {
+      retained -= cache.back().retained_bytes;
+      cache.pop_back();
+    }
+    cache.push_front({payload, identity, retained_bytes});
+  }
+  return identity;
+}
+
 QVariantMap compact_identity_entry(
     const QVariantMap& source_entry,
     bool mask_entry) {
@@ -136,6 +234,14 @@ QVariantMap compact_identity_entry(
   // snapshots here would bypass this cache's serialized-byte memory budget.
   entry.remove(QStringLiteral("paintDraftImage"));
   entry.remove(QStringLiteral("paintDraftTiles"));
+  // Hash immutable pixels independently of position, text, opacity and other
+  // metadata. A cutout larger than the ordinary entry-cache budget otherwise
+  // serializes again on every viewport query and every transform revision.
+  const auto paint_payload = entry.value(QStringLiteral("paintTiles")).toMap();
+  if (!mask_entry && !paint_payload.isEmpty() &&
+      contains_large_identity_payload(paint_payload)) {
+    entry.insert(QStringLiteral("paintTiles"), paint_payload_identity(paint_payload));
+  }
   // QVariant maps retain immutable, implicitly shared payloads. Equality
   // detects edits (including binary masks) while repeated viewport queries
   // avoid serializing and hashing the same large payload again.

@@ -7,6 +7,7 @@ Rectangle {
 
     property var issue: ({})
     property bool showTextResolutionActions: false
+    property bool showInspectAction: showTextResolutionActions
     property bool showIgnoreAction: severity !== "error"
     property bool currentIssue: false
     signal inspectRequested()
@@ -28,7 +29,7 @@ Rectangle {
 
     Layout.fillWidth: true
     implicitHeight: issueRow.implicitHeight + theme.space12
-    radius: theme.radius8
+    radius: theme.radiusControl
     color: tone === "error"
            ? theme.alpha(theme.error, 0.10)
            : theme.alpha(theme.warning, 0.10)
@@ -70,29 +71,29 @@ Rectangle {
 
             Label {
                 id: issueText
+                objectName: root.objectName.length ? root.objectName + "Message" : ""
                 Layout.fillWidth: true
                 text: root.message
                 color: root.tone === "error" ? theme.textStrong : theme.textMain
                 font.family: theme.fontUi
-                font.pixelSize: 10
+                font.pixelSize: theme.typeCaption
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                maximumLineCount: 3
                 elide: Text.ElideNone
                 verticalAlignment: Text.AlignVCenter
             }
         }
 
-        RowLayout {
+        Flow {
             Layout.fillWidth: true
-            visible: root.showTextResolutionActions || root.showIgnoreAction
+            Layout.preferredHeight: childrenRect.height
+            visible: root.showInspectAction || root.showTextResolutionActions || root.showIgnoreAction
             spacing: theme.space6
 
-            Item { Layout.fillWidth: true }
-
             ActionButton {
+                objectName: root.objectName.length ? root.objectName + "Inspect" : ""
                 text: "Inspect"
                 compact: true
-                visible: root.showTextResolutionActions
+                visible: root.showInspectAction
                 onClicked: root.inspectRequested()
             }
 

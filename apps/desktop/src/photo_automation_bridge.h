@@ -2,9 +2,11 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QPointer>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include <QQueue>
 #include <functional>
 
@@ -20,6 +22,9 @@ class AgentEditController;
 class CatalogAssetModel;
 class PhotoMcpServer;
 class SearchEditWorkflow;
+class TimelineDocumentController;
+class TimelinePlaybackController;
+class AgentAppCommandRegistry;
 
 class PhotoAutomationBridge final : public QObject {
   Q_OBJECT
@@ -36,6 +41,7 @@ class PhotoAutomationBridge final : public QObject {
   [[nodiscard]] QString endpointKind() const;
   [[nodiscard]] QString mcpEndpoint() const;
   [[nodiscard]] QString mcpEndpointKind() const;
+  [[nodiscard]] QString agentMcpEndpoint() const { return agent_mcp_endpoint_; }
   [[nodiscard]] QStringList mcpCapabilities() const;
   [[nodiscard]] int mcpConnectedClientCount() const;
   [[nodiscard]] int mcpTotalClientCount() const;
@@ -51,11 +57,22 @@ class PhotoAutomationBridge final : public QObject {
       const QStringList& mcp_capabilities = {QStringLiteral("read")});
   void stop();
   void setSearchEditWorkflow(SearchEditWorkflow* workflow) { search_edit_ = workflow; }
+  void setTimelineDocumentController(TimelineDocumentController* controller);
+  void setTimelinePlaybackController(TimelinePlaybackController* controller);
+  void setCompositionHandler(std::function<QVariantMap(const QVariantMap&)> handler) { composition_handler_ = std::move(handler); }
   void setEditAccessPolicy(std::function<bool()> policy) { edit_access_policy_ = std::move(policy); }
+  void setAppCommandRegistry(AgentAppCommandRegistry* registry) { app_commands_ = registry; }
   [[nodiscard]] QJsonObject handleJsonRequest(const QJsonObject& request) const;
 
  private:
+  friend class PhotoMcpServer;
+  [[nodiscard]] QJsonObject handleAgentJsonRequest(const QJsonObject& request) const;
+  [[nodiscard]] QJsonObject handleJsonRequestWithCapabilities(
+      const QJsonObject& request, const QStringList& capabilities) const;
+  QString agent_mcp_endpoint_;
+  std::function<QVariantMap(const QVariantMap&)> composition_handler_;
   std::function<bool()> edit_access_policy_;
+  AgentAppCommandRegistry* app_commands_ = nullptr;
   SearchEditWorkflow* search_edit_ = nullptr;
   void acceptPendingConnections();
   void acceptPendingTcpConnections();
@@ -78,6 +95,8 @@ class PhotoAutomationBridge final : public QObject {
 
   AgentEditController* agent_edit_ = nullptr;
   CatalogAssetModel* catalog_model_ = nullptr;
+  QPointer<TimelineDocumentController> timeline_document_;
+  QPointer<TimelinePlaybackController> timeline_playback_;
   QLocalServer* server_ = nullptr;
   QTcpServer* tcp_server_ = nullptr;
   QTcpServer* mcp_http_server_ = nullptr;

@@ -43,6 +43,8 @@ int main() {
   const std::string root = PHOTO_EDITOR_SOURCE_DIR;
   const auto dialog = read_file(root + "/apps/desktop/qml/components/AgentWalkthroughDialog.qml");
   const auto conversation = read_file(root + "/apps/desktop/qml/components/AgentConversationView.qml");
+  const auto session_terminal =
+      read_file(root + "/apps/desktop/qml/components/AgentSessionTerminal.qml");
   const auto workspace_overlay = read_file(root + "/apps/desktop/qml/components/AgentWorkspaceOverlay.qml");
   const auto studio = read_file(root + "/apps/desktop/qml/workspaces/StudioWorkspace.qml");
   const auto studio_image_viewport =
@@ -68,15 +70,47 @@ int main() {
     return fail("visual search must hand explicit chosen targets to review without applying or broadening scope");
   }
 
-  if (!contains(dialog, "ai-edit:v9|entry:left-rail-agent-terminal") ||
+  if (!contains(dialog, "property var sessionController: null") ||
+      !contains(dialog, "property var sessionContext: ({})") ||
+      !contains(dialog, "if (!root.hasSessionController() && root.visible && root.agentRunning())") ||
+      !contains(conversation, "AgentSessionTerminal {") ||
+      !contains(conversation, "visible: root.sessionFlowAvailable") ||
+      !contains(session_terminal, "sessionController.submit(prompt, root.sessionContext())") ||
+      !contains(session_terminal, "root.sessionController.answerQuestions(visibleAnswers)") ||
+      !contains(session_terminal, "root.sessionController.reviseAnswers(answers)") ||
+      !contains(session_terminal, "root.sessionController.start()") ||
+      !contains(session_terminal, "root.dialog.agentEditController.cancelRun(\"user_requested\")") ||
+      !contains(session_terminal, "root.dialog.agentEditController.revertTask()") ||
+      !contains(session_terminal, "objectName: \"agentSessionStartButton\"") ||
+      !contains(session_terminal, "objectName: \"agentSessionStopButton\"") ||
+      !contains(session_terminal, "objectName: \"agentSessionRevertButton\"") ||
+      !contains(session_terminal, "objectName: \"agentSessionReviseButton\"") ||
+      !contains(session_terminal, "function suggestedCopyNeedsReview()") ||
+      !contains(session_terminal, "Boolean(root.plan.copySuggestionApprovalRequired)") ||
+      !contains(session_terminal, "SUGGESTED COPY · REVIEW BEFORE START") ||
+      contains(session_terminal, "ScrollView {")) {
+    return fail("the injected session must use the conversational plan/Start flow, real Stop/Revert actions, and a non-scrolling terminal");
+  }
+
+  if (!contains(dialog, "ai-edit:v13|entry:left-rail-agent-terminal") ||
       !contains(dialog, "style-start:three-path-project-sticky") ||
       !contains(dialog, "sequence:direction-inspiration-live-work-review") ||
-      !contains(dialog, "surface:inset-retro-compute-panel") ||
+      !contains(dialog, "surface:crt-with-character") ||
+      contains(dialog, "compact-crt-bezel-v1.png") ||
+      contains(dialog, "BrandWordmark {") ||
+      contains(conversation, "LooksyAgentCharacter {") ||
       !contains(dialog, "property real presentationProgress: 0") ||
       !contains(dialog, "scale: 0.965 + root.presentationProgress * 0.035") ||
       !contains(dialog, "inspiration:visual-selection") ||
       !contains(dialog, "function open()") ||
+      !contains(dialog, "Accessible.role: Accessible.Dialog") ||
+      !contains(dialog, "function focusCurrentPageEntry()") ||
+      !contains(dialog, "id: focusRestoreTimer") ||
+      !contains(dialog, "objectName: \"agentWalkthroughEscapeShortcut\"") ||
       !contains(dialog, "objectName: \"agentReturnToEditorButton\"") ||
+      !contains(conversation, "function focusPageEntry()") ||
+      !contains(conversation, "objectName: \"agentChangePromptButton\"") ||
+      !contains(conversation, "Keys.priority: Keys.BeforeItem") ||
       !contains(conversation, "objectName: \"agentLivePreviewImage\"") ||
       !contains(conversation, "objectName: \"agentLiveActivityTimeline\"") ||
       !contains(conversation, "objectName: \"aiEditPlanVerificationSummary\"") ||
@@ -130,7 +164,7 @@ int main() {
       !contains(dialog, "Adjust the target or direction") ||
       !contains(dialog, "The rest of the batch stays untouched until you approve") ||
       !contains(dialog, "function presentAppliedResult(report)") ||
-      !contains(dialog, "AgentConversationView {")) {
+      !contains(dialog, "AgentTerminalScreen {")) {
     return fail("agent entry should use the resolved workspace target before prompt and inspiration, then apply the result");
   }
 
@@ -214,6 +248,10 @@ int main() {
       !contains(conversation, "objectName: \"aiEditReviewAfterImage\"") ||
       !contains(conversation, "objectName: \"aiEditAssignmentStoryRolePopupSurface\"") ||
       !contains(conversation, "aiEditStoryRole") ||
+      !contains(conversation, "Accessible.role: Accessible.RadioButton") ||
+      !contains(conversation, "Accessible.name: String(modelData.label || roleValue)") ||
+      !contains(conversation, "Accessible.description: String(modelData.detail || \"\") +") ||
+      !contains(conversation, "Accessible.checked: currentRole") ||
       !contains(conversation, "Shown · ") ||
       !contains(dialog, "PHOTOGRAPHER STEERED · REAL PROOFS REBUILT") ||
       !contains(dialog, "STORY MAP · REVIEW COVERAGE") ||
@@ -521,7 +559,7 @@ int main() {
       !contains(studio, "catalogAssets.projectFilter") ||
       !contains(studio, "function applyAgentResultToEditor(report)") ||
       !contains(studio, "editorPreview.applyExternalAdjustmentPatchEdit(") ||
-      !contains(studio, "function runAgentDraftForScope(scope, instructions)") ||
+      !contains(studio, "function runAgentDraftForScope(scope, instructions, keepAgentScreenOpen)") ||
       !contains(studio, "root.agentEditController.startDraftForScope(scope, instructions)") ||
       !contains(studio, "onDraftCommitted: function(report)") ||
       !contains(studio, "root.assetActivated(\"edit\")") ||
@@ -568,7 +606,8 @@ int main() {
   if (!contains(workspace_overlay, "objectName: \"agentWorkspaceSpeechBubble\"") ||
       !contains(workspace_overlay, "property string uiAnchor") ||
       !contains(workspace_overlay, "Behavior on x") ||
-      !contains(workspace_overlay, "touchPulse") ||
+      !contains(workspace_overlay, "objectName: \"agentWorkspaceControlContact\"") ||
+      !contains(workspace_overlay, "root.targetResolver(root.motionEvent, key)") ||
       !contains(workspace_overlay, "Photo \" + current + \" of \"") ||
       !contains(workspace_overlay, "root.assetRequested(assetId)") ||
       !contains(workspace_overlay, "property bool applyInProgress") ||
@@ -886,28 +925,22 @@ int main() {
 
   if (!contains(agent_light, "looksy-light:v3|form:rgb-optical-orb|render:photographic-light-asset") ||
       !contains(looksy_mark, "looksy-mark:v4|asset:period-crop|source:provided-looksy-logo") ||
-      !contains(looksy_character, "looksy-agent-character:v4|name:looksy|form:retro-camera-robot|sprite-atlas:4x2|cell:362x543") ||
-      !contains(looksy_character, "return Qt.rect(column * 362, row * 543, 362, 543)") ||
-      !contains(looksy_character, "sourceClipRect: root.activeClip") ||
+      !contains(looksy_character, "looksy-agent-character:v6|form:single-body-line-character") ||
+      !contains(looksy_character, "CrtSignalSurface {") ||
       !contains(looksy_character, "property bool celebrating") ||
-      !contains(looksy_character, "celebrationFrame >= 174") ||
-      !contains(looksy_character, "return 7") ||
-      !contains(looksy_character, "return 6") ||
-      !contains(looksy_character, "return 4") ||
-      !contains(looksy_character, "sourceClipRect: root.previousClip") ||
+      !contains(looksy_character, "celebration:small-nod") ||
       !contains(looksy_character, "Accessible.name: \"Looksy visual assistant, \" + mode") ||
-      !contains(conversation, "LooksyAgentCharacter {") ||
-      contains(assistant_dock, "LooksyAgentCharacter {") ||
-      !contains(assistant_dock, "looksy-agent-entry:v4|placement:left-rail") ||
-      !contains(assistant_dock, "name: \"agent-terminal\"") ||
-      !contains(assistant_dock, "HoverHandler {") ||
-      !contains(looksy_character, "root.normalizedMode === \"wave\"")) {
-    return fail("Looksy's robot should use a reactive pose atlas with restrained state transitions");
+      !contains(dialog, "objectName: \"agentRobotScreenArtwork\"") ||
+      !contains(assistant_dock, "LooksyAgentCharacter {") ||
+      !contains(assistant_dock, "looksy-agent-entry:v5|placement:left-rail") ||
+      !contains(assistant_dock, "glyphOnly: true") ||
+      !contains(assistant_dock, "HoverHandler {")) {
+    return fail("Looksy's character should retain accessible entry and restrained CRT reactions");
   }
 
-  if (!contains(progress_strip, "progress-strip:v3|channels:rgb|composite:additive|scope:leading-glint|motion:eased-sweep|reduced-motion:static") ||
+  if (!contains(progress_strip, "progress-strip:v4|channels:soft-color|composite:additive|scope:leading-glint|motion:eased-sweep|reduced-motion:static") ||
       !contains(progress_strip, "globalCompositeOperation = \"lighter\"") ||
-      !contains(progress_strip, "const colors = [theme.brandRed, theme.brandGreen, theme.brandBlue]") ||
+      !contains(progress_strip, "const colors = [") ||
       !contains(progress_strip, "Easing.InOutSine") ||
       !contains(main_qml, "activity-progress-placement:v2|header-overlay:true|layout-shift:false|text:false") ||
       !contains(main_qml, "objectName: \"additiveActivityProgressLine\"") ||
@@ -917,13 +950,14 @@ int main() {
 
   if (!contains(workspace_overlay, "property bool traveling: false") ||
       !contains(workspace_overlay, "property bool speaking: false") ||
-      !contains(workspace_overlay, "id: travelArrival") ||
+      !contains(workspace_overlay, "id: robotTravel") ||
+      !contains(workspace_overlay, "root.followSurfaceRoute()") ||
       !contains(workspace_overlay, "root.traveling = false") ||
-      !contains(workspace_overlay, "if (mode === \"adjust\" || mode === \"point\")") ||
+      !contains(workspace_overlay, "if (mode === \"adjust\" || mode === \"processing\")") ||
       !contains(workspace_overlay, "function assistantLightMode()") ||
       !contains(workspace_overlay, "function assistantLightTool()") ||
       !contains(workspace_overlay, "LooksyAgentCharacter {") ||
-      !contains(workspace_overlay, "tool: root.assistantLightTool()") ||
+      !contains(workspace_overlay, "tool: root.deployedTool") ||
       !contains(workspace_overlay, "talking: root.speaking && !root.traveling") ||
       !contains(controller_source, "character_mode = QStringLiteral(\"observe\")") ||
       !contains(controller_source, "character_mode = QStringLiteral(\"review\")")) {

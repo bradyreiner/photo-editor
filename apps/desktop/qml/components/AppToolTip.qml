@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Effects
@@ -5,52 +6,100 @@ import QtQuick.Effects
 ToolTip {
     id: root
 
-    property int maximumTextWidth: 300
+    property int maximumTextWidth: theme.scaled(300)
     property Item targetItem
+    property bool followPointer: false
+    property point pointerPosition: Qt.point(0, 0)
+    property string shortcutText: ""
 
     readonly property real preferredTextWidth: Math.min(
                                                    maximumTextWidth,
-                                                   Math.max(72, tooltipLabel.implicitWidth))
-    readonly property point anchorOrigin: targetItem ? targetItem.mapToItem(parent, 0, 0) : Qt.point(0, 0)
+                                                   Math.max(40, tooltipLabel.implicitWidth, shortcutLabel.implicitWidth))
+    property point anchorOrigin: Qt.point(0, 0)
 
-    padding: 10
-    leftPadding: 12
-    rightPadding: 12
-    topPadding: 8
-    bottomPadding: 8
+    function updateAnchor() {
+        if (targetItem && parent)
+            anchorOrigin = targetItem.mapToItem(parent, 0, 0)
+    }
+
+    padding: theme.space10
+    delay: 300
+    timeout: 3000
+    leftPadding: theme.space8
+    rightPadding: theme.space8
+    topPadding: theme.space6
+    bottomPadding: theme.space6
     implicitWidth: preferredTextWidth + leftPadding + rightPadding
-    implicitHeight: tooltipLabel.implicitHeight + topPadding + bottomPadding
+    implicitHeight: tooltipContent.implicitHeight + topPadding + bottomPadding
     parent: Overlay.overlay
-    x: Math.max(8, Math.min(parent.width - width - 8,
-                            anchorOrigin.x + (targetItem ? targetItem.width - width : 0) / 2))
-    y: anchorOrigin.y > height + 12
-       ? anchorOrigin.y - height - 8
-       : anchorOrigin.y + (targetItem ? targetItem.height : 0) + 8
+    x: parent ? Math.max(theme.space8, Math.min(parent.width - width - theme.space8,
+                                     followPointer ? pointerPosition.x + 14
+                                                   : anchorOrigin.x + (targetItem ? targetItem.width - width : 0) / 2)) : 0
+    y: parent ? (followPointer
+                 ? (pointerPosition.y + height + 16 < parent.height
+                    ? pointerPosition.y + 14
+                    : Math.max(theme.space8, pointerPosition.y - height - theme.space12))
+                 : (anchorOrigin.y > height + 12
+                    ? anchorOrigin.y - height - theme.space8
+                    : anchorOrigin.y + (targetItem ? targetItem.height : 0) + theme.space8)) : 0
     z: 1000
+    onAboutToShow: {
+        root.updateAnchor()
+        if (String(root.text).trim().length === 0)
+            root.close()
+    }
+    onOpened: root.updateAnchor()
 
-    contentItem: Text {
-        id: tooltipLabel
-        text: root.text
+    enter: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: theme.opticalHoverDuration } }
+    exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: theme.reducedMotion ? 0 : 70 } }
+
+    contentItem: Column {
+        id: tooltipContent
         width: root.preferredTextWidth
-        color: theme.textStrong
-        font.family: theme.fontUi
-        font.pixelSize: 12
-        lineHeight: 1.2
-        wrapMode: Text.Wrap
-        renderType: Text.NativeRendering
+        spacing: theme.space4
+        Text {
+            id: tooltipLabel
+            text: root.text
+            width: root.preferredTextWidth
+            color: theme.textStrong
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeCaption
+            lineHeight: 1.2
+            wrapMode: Text.Wrap
+            renderType: Text.NativeRendering
+        }
+        Text {
+            id: shortcutLabel
+            visible: root.shortcutText.length > 0
+            text: root.shortcutText
+            width: root.preferredTextWidth
+            color: theme.opticalLight
+            font.family: theme.fontMono
+            font.pixelSize: theme.typeMicro
+            wrapMode: Text.Wrap
+            renderType: Text.NativeRendering
+        }
     }
 
     background: Rectangle {
-        radius: 8
-        color: theme.surfaceTop
-        border.width: 1
-        border.color: theme.lineStrong
-        layer.enabled: true
+        radius: theme.radiusSurface
+        color: theme.popupFill
+        border.width: theme.hairlineWidth
+        border.color: theme.alpha(theme.lineStrong, 0.65)
+        layer.enabled: GraphicsInfo.api !== GraphicsInfo.Software
         layer.effect: MultiEffect {
             shadowEnabled: true
-            shadowColor: "#80000000"
-            shadowBlur: 0.28
-            shadowVerticalOffset: 3
+            shadowColor: "#60000000"
+            shadowBlur: 0.18
+            shadowVerticalOffset: theme.space2
+        }
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: theme.space3
+            height: 1
+            color: theme.alpha(theme.opticalLight, 0.18)
         }
     }
 

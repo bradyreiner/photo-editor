@@ -28,6 +28,19 @@ double normalized_outline_display_scale(double scale) {
   return std::max(0.25, std::round(clamped * 4.0) / 4.0);
 }
 
+double outline_tolerance_for_sampled_raster(
+    double reference_tolerance_pixels,
+    const QSize& reference_size,
+    const QSize& sampled_size) {
+  const double tolerance = std::max(0.0, reference_tolerance_pixels);
+  if (!reference_size.isValid() || !sampled_size.isValid() ||
+      sampled_size.width() <= 0 || sampled_size.height() <= 0) return tolerance;
+  const double magnification = std::max({1.0,
+      static_cast<double>(reference_size.width()) / sampled_size.width(),
+      static_cast<double>(reference_size.height()) / sampled_size.height()});
+  return tolerance / magnification;
+}
+
 bool variant_value_is_outline_point(const QVariant& value) {
   if (value.metaType().id() != QMetaType::QVariantMap) {
     return false;
@@ -87,22 +100,15 @@ QVector<QPointF> tolerance_simplified_closed_outline_points(
   if (points.size() <= 4) {
     return points;
   }
-  QSet<quint64> visited_points;
+  QSet<QPair<double, double>> visited_points;
   const auto repeated_point_end =
       std::hypot(
           points.first().x() - points.last().x(),
           points.first().y() - points.last().y()) <= 1e-6
           ? points.size() - 1
           : points.size();
-  const auto point_key = [](const QPointF& point) {
-    const auto x = static_cast<quint32>(
-        static_cast<int>(std::llround(point.x())));
-    const auto y = static_cast<quint32>(
-        static_cast<int>(std::llround(point.y())));
-    return (static_cast<quint64>(x) << 32) | static_cast<quint64>(y);
-  };
   for (auto index = 0; index < repeated_point_end; ++index) {
-    const auto key = point_key(points.at(index));
+    const auto key = qMakePair(points.at(index).x(), points.at(index).y());
     if (visited_points.contains(key)) {
       return points;
     }

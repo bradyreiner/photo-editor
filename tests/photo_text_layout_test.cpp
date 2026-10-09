@@ -28,6 +28,40 @@ int main(int argc, char** argv) {
     std::cerr << "Inspector metrics must match full-resolution text layout\n";
     return 1;
   }
+  const auto layout_only = rasterize_photo_text(sentence, style, {150, 400}, {1, 1},
+      Qt::AlignLeft, 0, {}, true);
+  if (layout_only.error != metrics.error || layout_only.line_count != metrics.line_count ||
+      layout_only.content_width != metrics.content_width ||
+      layout_only.content_height != metrics.content_height || layout_only.overflow != metrics.overflow ||
+      !layout_only.ink_bounds.isEmpty()) {
+    std::cerr << "Layout-only inspector metrics must match the raster route without requesting glyph bounds\n";
+    return 1;
+  }
+  auto variable_style = style;
+  variable_style.axes.insert(QStringLiteral("wdth"), 100.0);
+  const auto variable_full = rasterize_photo_text(sentence, variable_style, {150, 400}, {1, 1});
+  const auto variable_metrics = rasterize_photo_text(sentence, variable_style, {150, 400}, {1, 1},
+      Qt::AlignLeft, 0, {}, true);
+  if (!decode_photo_text_style(encode_photo_text_style(variable_style)) ||
+      variable_metrics.line_count != variable_full.line_count ||
+      variable_metrics.content_width != variable_full.content_width ||
+      variable_metrics.content_height != variable_full.content_height ||
+      variable_metrics.overflow != variable_full.overflow || !variable_metrics.ink_bounds.isEmpty()) {
+    std::cerr << "Version-4 variable-axis layout metrics must match raster layout\n";
+    return 1;
+  }
+  auto glass_style = variable_style;
+  glass_style.material = QStringLiteral("frosted_glass");
+  const auto glass_full = rasterize_photo_text(sentence, glass_style, {150, 400}, {1, 1});
+  const auto glass_metrics = rasterize_photo_text(sentence, glass_style, {150, 400}, {1, 1},
+      Qt::AlignLeft, 0, {}, true);
+  if (encode_photo_text_style(glass_style).value(QStringLiteral("version")).toInt() != 8 ||
+      glass_metrics.line_count != glass_full.line_count || glass_metrics.content_width != glass_full.content_width ||
+      glass_metrics.content_height != glass_full.content_height || glass_metrics.overflow != glass_full.overflow ||
+      !glass_metrics.ink_bounds.isEmpty()) {
+    std::cerr << "Version-8 material layout metrics must match raster layout\n";
+    return 1;
+  }
   const auto clipped = rasterize_photo_text(sentence, style, {150, 30}, {150, 30});
   if (!clipped.overflow || clipped.image.isNull()) { std::cerr << "Typography check failed at line " << __LINE__ << "\n"; return 1; }
   style.line_height = 2;

@@ -176,6 +176,87 @@ int main(int argc, char** argv) {
         std::cerr << "Persisted Gaussian did not spread the impulse in desktop output\n";
         return 1;
       }
+
+      PhotoEffectInstance diffusion;
+      diffusion.id = "f1-optical-diffusion";
+      diffusion.type_id = "optical_diffusion";
+      diffusion.input_scope = PhotoEffectInputScope::CompositeBelow;
+      diffusion.diffusion = PhotoEffectInstance::Diffusion{
+          .radius = 4.0,
+          .threshold = 0.55,
+          .knee = 0.2,
+          .strength = 0.9,
+          .warmth = 0.25,
+          .highlight_protection = 0.0,
+      };
+      const auto diffusion_payload = encode_photo_layer_effects(std::vector{diffusion});
+      QImage f1_source(32, 32, QImage::Format_ARGB32);
+      f1_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+      f1_source.fill(Qt::black);
+      for (int y = 11; y <= 20; ++y)
+        for (int x = 11; x <= 20; ++x)
+          f1_source.setPixelColor(x, y, Qt::white);
+      if (!diffusion_payload) return 1;
+      QVariantMap diffusion_layer{{"id", "f1-optical-diffusion-layer"},
+          {"kind", "adjustment"}, {"canvasWidth", 32}, {"canvasHeight", 32},
+          {"effectStack", *diffusion_payload}};
+      EditRecipeState diffusion_state;
+      diffusion_state.photographic_rendering_model = model;
+      diffusion_state.layers = {diffusion_layer};
+      EditRecipeState diffusion_baseline_state;
+      diffusion_baseline_state.photographic_rendering_model = model;
+      const auto diffusion_baseline = render_output_image_with_backend(f1_source,
+          diffusion_baseline_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+          RenderBackendPreference::CpuOnly);
+      RenderBackendTelemetry diffusion_cpu_telemetry;
+      const auto diffusion_cpu = render_output_image_with_backend(f1_source,
+          diffusion_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+          RenderBackendPreference::CpuOnly, nullptr, &diffusion_cpu_telemetry);
+      RenderBackendTelemetry diffusion_auto_telemetry;
+      const auto diffusion_auto = render_output_image_with_backend(f1_source,
+          diffusion_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+          RenderBackendPreference::Auto, nullptr, &diffusion_auto_telemetry);
+      const auto diffusion_reopened_state = parse_edit_recipe_json(
+          serialize_edit_recipe_json(diffusion_state));
+      const auto diffusion_reopened = render_output_image_with_backend(f1_source,
+          diffusion_reopened_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+          RenderBackendPreference::CpuOnly);
+      if (diffusion_cpu.isNull() || diffusion_auto.isNull() || diffusion_reopened.isNull() || diffusion_baseline.isNull() ||
+          image_delta(diffusion_cpu, diffusion_baseline) < 10 ||
+          image_delta(diffusion_cpu, diffusion_auto) != 0 ||
+          image_delta(diffusion_cpu, diffusion_reopened) != 0 ||
+          diffusion_auto_telemetry.backend != QStringLiteral("cpu")) {
+        std::cerr << "F1 output must render, route to its supported backend, and reopen pixel-identically"
+                  << " model=" << model.toStdString()
+                  << " cpu_null=" << diffusion_cpu.isNull()
+                  << " auto_null=" << diffusion_auto.isNull()
+                  << " reopened_null=" << diffusion_reopened.isNull()
+                  << " effect_delta=" << image_delta(diffusion_cpu, diffusion_baseline)
+                  << " auto_delta=" << image_delta(diffusion_cpu, diffusion_auto)
+                  << " reopen_delta=" << image_delta(diffusion_cpu, diffusion_reopened)
+                  << " backend=" << diffusion_auto_telemetry.backend.toStdString()
+                  << " fallback=" << diffusion_auto_telemetry.fallback_reason.toStdString() << '\n';
+        return 1;
+      }
+      const auto diffusion_gpu_support = evaluate_gpu_pipeline_support(
+          impulse, diffusion_state, nullptr, {}, true);
+      const auto gpu_rejection_is_explicit =
+          diffusion_gpu_support.fallback_reason.contains(QStringLiteral("photo_layers")) ||
+          diffusion_gpu_support.fallback_reason == QStringLiteral("metal_not_compiled");
+      if (diffusion_gpu_support.supported ||
+          !gpu_rejection_is_explicit) {
+        std::cerr << "F1 must report photo-layer GPU support honestly until that path is accelerated\n";
+        return 1;
+      }
+      std::cout << "f1_backend_route model=" << model.toStdString()
+                << " auto=" << diffusion_auto_telemetry.backend.toStdString()
+                << " auto_fallback=" << diffusion_auto_telemetry.fallback_reason.toStdString()
+                << " assumed_gpu_support=" << diffusion_gpu_support.supported
+                << " assumed_gpu_reason=" << diffusion_gpu_support.fallback_reason.toStdString()
+                << " auto_cpu_pixel_delta=" << image_delta(diffusion_cpu, diffusion_auto)
+                << " reopened_pixel_delta=" << image_delta(diffusion_cpu, diffusion_reopened)
+                << '\n';
+
       auto unsupported = effects;
       auto box_effects = effects;
       box_effects[0].type_id = "box_blur";

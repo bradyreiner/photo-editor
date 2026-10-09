@@ -105,5 +105,78 @@ int main() {
       single_point_prompt_result_is_plausible(plausible, 0.0, 0.0)) {
     return fail("single-point results must be centered, bounded, nontrivial, and non-global");
   }
+
+  SegmentationResult prompt_mask;
+  prompt_mask.width = 4;
+  prompt_mask.height = 4;
+  prompt_mask.mask_data = QByteArray(16, char(0));
+  prompt_mask.mask_data[5] = char(0xff);
+  prompt_mask.mask_data[6] = char(0xff);
+  const QVector<SmartSelectPrompt> prompts{
+      {.x = 1.0 / 3.0, .y = 1.0 / 3.0, .negative = false},
+      {.x = 2.0 / 3.0, .y = 1.0 / 3.0, .negative = false},
+      {.x = 2.0 / 3.0, .y = 2.0 / 3.0, .negative = true},
+  };
+  if (!smart_select_result_honors_prompts(prompt_mask, prompts)) {
+    return fail("valid Smart Select output must contain positive and omit negative prompt points");
+  }
+  prompt_mask.mask_data[10] = char(0xff);
+  if (smart_select_result_honors_prompts(prompt_mask, prompts)) {
+    return fail("Smart Select output that includes a negative prompt must be rejected");
+  }
+  prompt_mask.mask_data[10] = char(0);
+  prompt_mask.mask_data[5] = char(0);
+  if (smart_select_result_honors_prompts(prompt_mask, prompts)) {
+    return fail("Smart Select output that omits a positive prompt must be rejected");
+  }
+  prompt_mask = {};
+  prompt_mask.width = 5;
+  prompt_mask.height = 5;
+  prompt_mask.mask_data = QByteArray(25, char(0));
+  prompt_mask.mask_data[6] = char(0xff);
+  prompt_mask.mask_data[18] = char(0xff);
+  const QVector<SmartSelectPrompt> fragmented_prompts{
+      {.x = 0.25, .y = 0.25, .negative = false},
+      {.x = 0.75, .y = 0.75, .negative = false},
+  };
+  if (smart_select_result_honors_prompts(prompt_mask, fragmented_prompts)) {
+    return fail("disconnected prompt-colored specks must not pass as one Smart Select region");
+  }
+  prompt_mask = {};
+  prompt_mask.width = 6;
+  prompt_mask.height = 2;
+  prompt_mask.mask_data = QByteArray(12, char(0));
+  prompt_mask.mask_data[0] = char(0xff);
+  prompt_mask.mask_data[1] = char(0xff);
+  prompt_mask.mask_data[4] = char(0xff);
+  prompt_mask.mask_data[5] = char(0xff);
+  const QVector<SmartSelectPrompt> separated_subject_prompts{
+      {.x = 0.0, .y = 0.0, .negative = false},
+      {.x = 1.0, .y = 0.0, .negative = false},
+  };
+  if (smart_select_result_honors_prompts(prompt_mask, separated_subject_prompts) ||
+      !smart_select_result_honors_prompts(
+          prompt_mask, separated_subject_prompts, true)) {
+    return fail("multi-subject drags may accept separate prompted components while one-object checks stay connected");
+  }
+  SegmentationResult hollow;
+  hollow.width = 10;
+  hollow.height = 10;
+  hollow.mask_data = QByteArray(100, char(0));
+  for (int y = 3; y <= 6; ++y) {
+    for (int x = 3; x <= 6; ++x) {
+      if (x == 3 || x == 6 || y == 3 || y == 6)
+        hollow.mask_data[y * 10 + x] = char(0xff);
+    }
+  }
+  const QVector<SmartSelectPrompt> hollow_box{
+      {.x = 0.5, .y = 0.5, .negative = false,
+       .box = QRectF(QPointF(0.2, 0.2), QPointF(0.8, 0.8))}};
+  if (!smart_select_result_honors_prompts(hollow, hollow_box) ||
+      smart_select_result_honors_prompts(
+          hollow, {{.x = 0.1, .y = 0.1, .negative = false,
+                    .box = QRectF(QPointF(0.0, 0.0), QPointF(0.15, 0.15))}})) {
+    return fail("box constraints must allow hollow objects and background corners but reject empty target bounds");
+  }
   return EXIT_SUCCESS;
 }

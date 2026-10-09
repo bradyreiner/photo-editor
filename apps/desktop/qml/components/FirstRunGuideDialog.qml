@@ -175,6 +175,7 @@ Popup {
                 ActionButton {
                     objectName: "firstRunSampleButton"
                     Layout.fillWidth: true
+                    Layout.minimumHeight: theme.scaled(46)
                     text: "Try the sample photos"
                     iconName: "star"
                     tone: "primary"
@@ -186,6 +187,7 @@ Popup {
                 ActionButton {
                     objectName: "firstRunOwnPhotosButton"
                     Layout.fillWidth: true
+                    Layout.minimumHeight: theme.scaled(46)
                     text: "Import my photos"
                     iconName: "folder"
                     minimumReadableWidth: 230

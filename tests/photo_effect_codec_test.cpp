@@ -117,5 +117,59 @@ int main() {
   const auto future_invert = serialize_photo_effect_stack(std::vector{invert});
   if (!future_invert || *deserialize_photo_effect_stack(*future_invert) != std::vector{invert})
     return fail("Unknown future invert algorithms must retain opaque settings");
+
+  PhotoEffectInstance grain;
+  grain.id = "grain";
+  grain.type_id = "film_grain";
+  grain.grain = {1.375, 0.027, -0.62, 20261007U};
+  PhotoEffectInstance leak;
+  leak.id = "leak";
+  leak.type_id = "light_leak";
+  leak.leak = {-0.14, 1.12, 32.5, 0.54, 0.31, 0.76, 913U};
+  PhotoEffectInstance split;
+  split.id = "split";
+  split.type_id = "split_tone";
+  split.split_tone = {28.0, 0.21, 221.0, 0.13, -0.34};
+  PhotoEffectInstance vignette;
+  vignette.id = "vignette";
+  vignette.type_id = "vignette";
+  vignette.vignette = {0.76, 0.24, 0.48, 0.65};
+  PhotoEffectInstance duotone;
+  duotone.id = "duotone";
+  duotone.type_id = "duotone";
+  duotone.duotone = {248.0, 43.0, 0.81, 0.17};
+  PhotoEffectInstance fade;
+  fade.id = "fade";
+  fade.type_id = "soft_fade";
+  fade.soft_fade = {0.067, 0.88, 0.93};
+  const std::vector new_effects{grain, leak, split, vignette, duotone, fade};
+  const auto new_payload = serialize_photo_effect_stack(new_effects);
+  const auto new_decoded = new_payload ? deserialize_photo_effect_stack(*new_payload) : std::nullopt;
+  if (!new_decoded || *new_decoded != new_effects || serialize_photo_effect_stack(*new_decoded) != new_payload)
+    return fail("Six new photographic effect parameters must roundtrip exactly");
+  auto invalid_grain = grain;
+  invalid_grain.grain.strength = 0.51;
+  if (serialize_photo_effect_stack(std::vector{invalid_grain}))
+    return fail("Out-of-range film grain strength serialized");
+  auto invalid_leak = leak;
+  invalid_leak.leak.center_x = 2.01;
+  if (serialize_photo_effect_stack(std::vector{invalid_leak}))
+    return fail("Out-of-range light leak position serialized");
+  auto invalid_tone = split;
+  invalid_tone.split_tone.highlight_hue = 361.0;
+  if (serialize_photo_effect_stack(std::vector{invalid_tone}))
+    return fail("Out-of-range split tone hue serialized");
+  auto invalid_vignette = vignette;
+  invalid_vignette.vignette.feather = -0.01;
+  if (serialize_photo_effect_stack(std::vector{invalid_vignette}))
+    return fail("Negative vignette feather serialized");
+  auto invalid_duotone = duotone;
+  invalid_duotone.duotone.balance = 1.01;
+  if (serialize_photo_effect_stack(std::vector{invalid_duotone}))
+    return fail("Out-of-range duotone balance serialized");
+  auto invalid_fade = fade;
+  invalid_fade.soft_fade.saturation = std::numeric_limits<double>::infinity();
+  if (serialize_photo_effect_stack(std::vector{invalid_fade}))
+    return fail("Non-finite soft fade saturation serialized");
   std::cout << "Effect codec roundtrip, precision, locale, future preservation and rejection checks passed\n";
 }

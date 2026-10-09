@@ -39,7 +39,8 @@ QVector<BrushPreviewPoint> sampled_brush_points_for_segment(
     bool erase,
     double pressure,
     double tilt_x,
-    double tilt_y) {
+    double tilt_y,
+    double image_aspect) {
   QVector<BrushPreviewPoint> sampled_points;
   const auto cursor_point = brush_preview_point(
       normalized_x,
@@ -76,14 +77,25 @@ QVector<BrushPreviewPoint> sampled_brush_points_for_segment(
     return sampled_points;
   }
 
-  const auto distance =
-      std::hypot(clamped_point.x - last_point->x, clamped_point.y - last_point->y);
-  const auto cursor_distance =
-      std::hypot(cursor_point.x - last_point->x, cursor_point.y - last_point->y);
-  const auto spacing = normalized_brush_dab_spacing(clamped_point.size, brush_spacing);
+  // Measure travel in units of the image's shorter edge, as the tip does.
+  const auto x_scale = image_aspect > 0.0 ? std::max(1.0, image_aspect) : 1.0;
+  const auto y_scale = image_aspect > 0.0 ? std::max(1.0, 1.0 / image_aspect) : 1.0;
+  const auto distance = std::hypot((clamped_point.x - last_point->x) * x_scale,
+                                  (clamped_point.y - last_point->y) * y_scale);
+  const auto cursor_distance = std::hypot((cursor_point.x - last_point->x) * x_scale,
+                                         (cursor_point.y - last_point->y) * y_scale);
+  const auto spacing = image_aspect > 0.0
+      ? std::max(0.00005, std::min(std::min(last_point->size, clamped_point.size) * 0.10,
+                                 clamped_point.size * std::clamp(brush_spacing, 0.05, 2.0)))
+      : normalized_brush_dab_spacing(clamped_point.size, brush_spacing);
   if (distance <= spacing * 0.35) {
     if (smoothing_amount > 0.0 && cursor_distance > spacing * 0.35) {
-      sampled_points.append(cursor_point);
+      if (image_aspect > 0.0) {
+        const auto tail_steps = std::max(1, static_cast<int>(std::ceil(cursor_distance / spacing)));
+        for (int step = 1; step <= tail_steps; ++step)
+          sampled_points.append(interpolated_brush_preview_point(*last_point, cursor_point,
+              static_cast<double>(step) / tail_steps));
+      } else sampled_points.append(cursor_point);
     }
     return sampled_points;
   }
@@ -109,7 +121,15 @@ QVector<BrushPreviewPoint> sampled_brush_points_for_segment(
   const auto endpoint_distance =
       std::hypot(cursor_point.x - sampled_endpoint.x, cursor_point.y - sampled_endpoint.y);
   if (smoothing_amount > 0.0 && endpoint_distance > 0.000001) {
-    sampled_points.append(cursor_point);
+    if (image_aspect > 0.0) {
+      const auto tail_start = sampled_endpoint;
+      const auto tail_distance = std::hypot((cursor_point.x - tail_start.x) * x_scale,
+                                            (cursor_point.y - tail_start.y) * y_scale);
+      const auto tail_steps = std::max(1, static_cast<int>(std::ceil(tail_distance / spacing)));
+      for (int step = 1; step <= tail_steps; ++step)
+        sampled_points.append(interpolated_brush_preview_point(tail_start, cursor_point,
+            static_cast<double>(step) / tail_steps));
+    } else sampled_points.append(cursor_point);
   }
   return sampled_points;
 }

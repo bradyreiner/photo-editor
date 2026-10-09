@@ -1,16 +1,21 @@
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 #include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
+#include <QEventLoop>
 #include <QDataStream>
 #include <QDir>
 #include <QElapsedTimer>
@@ -18,6 +23,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QImage>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -33,11 +39,13 @@
 #include <QQuickWindow>
 #include <QSet>
 #include <QSettings>
+#include <QSGRendererInterface>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTest>
 #include <QThreadPool>
 #include <QTimer>
 #include <QTime>
@@ -49,17 +57,26 @@
 #include "app_shell_controller.h"
 #include "app_bootstrap.h"
 #include "brush_live_preview_item.h"
+#include "brush_input_schema.h"
+#include "brush_matte_rebuild.h"
+#include "local_mask_compiler.h"
 #include "photo_text_document_style.h"
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
+#include "recent_user_input_filter.h"
 #include "visual_search_controller.h"
 #include "catalog_similarity_search.h"
 #include "search_runtime_bundle.h"
 #include "search_edit_workflow.h"
 #include "agent_edit_controller.h"
 #include "edit_adjustment_patch.h"
+#include "edit_recipe_mask_schema.h"
 #include "editor_preview_controller.h"
+#include "photo_render_utils.h"
+#include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #include "editor_preview_image_provider.h"
+#include "counting_preview_image_provider.h"
+#include "native_preview_readback.h"
 #include "editor_preview_texture_item.h"
 #include "export_job_controller.h"
 #include "job_queue_model.h"
@@ -89,6 +106,103 @@ struct JobQueueModelTestAccess {
 };
 
 struct EditorPreviewControllerTestAccess {
+  static quint64 history_preview_token(const EditorPreviewController& controller) {
+    return controller.history_read_token_->load();
+  }
+  static bool history_preview_active(const EditorPreviewController& controller) {
+    return controller.history_preview_state_.has_value();
+  }
+  static QVariantMap brush_outline_worker_state(EditorPreviewController& controller) {
+    auto& watcher = controller.mask_worker_coordinator_.activeMaskOutlineWatcher();
+    QVariantMap state{{"running", watcher.isRunning()}, {"finished", watcher.isFinished()}};
+    if (watcher.isFinished()) {
+      const auto result = watcher.result();
+      state.insert("success", result.success);
+      state.insert("source", result.source);
+      state.insert("path_count", result.paths.size());
+      state.insert("revision", result.request.state_revision);
+      state.insert("current_revision", controller.mask_session_.workRevision());
+    }
+    return state;
+  }
+  static QByteArray live_brush_alpha(const EditorPreviewController& controller) {
+    return controller.active_brush_live_preview_frame_.raster.alpha;
+  }
+  static QSize live_brush_size(const EditorPreviewController& controller) {
+    return controller.active_brush_live_preview_frame_.raster.image.size();
+  }
+  static auto live_brush_points(const EditorPreviewController& controller) {
+    return controller.active_brush_live_points_;
+  }
+  static QString recipe_json(const EditorPreviewController& controller) {
+    return serialize_edit_recipe_json(controller.currentState());
+  }
+  static QVariantMap layer_stack_timings(const EditorPreviewController& controller) {
+    return controller.last_photo_layer_stack_performance_;
+  }
+  static void install_checkpoint_raster(EditorPreviewController& controller, int edge) {
+    auto state = controller.currentState();
+    QByteArray alpha(edge * edge, '\0');
+    quint32 noise = 0x12345678U;
+    for (auto& byte : alpha) {
+      noise ^= noise << 13; noise ^= noise >> 17; noise ^= noise << 5;
+      byte = static_cast<char>(noise & 255U);
+    }
+    auto mask = default_mask_definition(QStringLiteral("brush"));
+    mask.insert(QStringLiteral("id"), QStringLiteral("checkpoint-tool-mask"));
+    mask.insert(QStringLiteral("segmentationWidth"), edge);
+    mask.insert(QStringLiteral("segmentationHeight"), edge);
+    mask.insert(QStringLiteral("segmentationData"), alpha);
+    state.mask_stack = {mask};
+    state.active_mask_index = -1;
+    controller.applyState(state);
+  }
+  static qint64 stop_checkpoint_helper_and_size(EditorPreviewController& controller) {
+    controller.persist_timer_.stop();
+    return QFileInfo(controller.recipe_save_journal_.path()).size();
+  }
+
+  static auto inspector_surface(const EditorPreviewController& controller) { return controller.pixel_inspector_native_surface_; }
+  static auto* native_texture(EditorPreviewController& controller) { return controller.display_preview_texture_.get(); }
+  static bool full_native_coverage(const EditorPreviewController& controller) {
+    return controller.display_preview_native_full_resolution_coverage_size_ ==
+               controller.displayPreviewNativeSize() &&
+        QRegion(QRect(QPoint(), controller.displayPreviewNativeSize())).subtracted(
+            controller.display_preview_native_full_resolution_coverage_).isEmpty();
+  }
+  static void publish_visible_patch_without_base(
+      EditorPreviewController& controller, const QImage& reference, const QRect& rect) {
+    controller.display_preview_texture_->clear();
+    controller.display_preview_native_rendered_cache_key_.clear();
+    controller.display_preview_native_full_resolution_coverage_ = {};
+    controller.display_preview_native_full_resolution_coverage_size_ = {};
+    controller.display_preview_native_full_resolution_coverage_state_signature_.clear();
+    RenderResult result;
+    result.success = true;
+    result.full_resolution = true;
+    result.generation = controller.preview_session_.generation();
+    result.file_path = controller.file_path_;
+    result.render_reason = QStringLiteral("viewport_change");
+    result.render_mode = QStringLiteral("max_preview_visible_tile");
+    result.tile_visible_region_active = true;
+    result.tile_visible_region = controller.preview_viewport_rect_;
+    result.output_width = reference.width();
+    result.output_height = reference.height();
+    result.source_width = controller.sourceImageWidth();
+    result.source_height = controller.sourceImageHeight();
+    result.texture_upload_rect = rect;
+    result.texture_upload_image = reference.copy(rect);
+    result.partial_texture_upload_candidate = true;
+    controller.handleRenderResult(true, result);
+  }
+  static QImage inspector_cpu_image(const EditorPreviewController& controller) { return controller.pixel_inspector_preview_image_; }
+  static bool inspector_has_cpu_image(const EditorPreviewController& controller) { return !controller.pixel_inspector_preview_image_.isNull(); }
+  static bool inspector_idle(const EditorPreviewController& controller) {
+    return !controller.native_pixel_sample_active_ && !controller.native_pixel_sample_pending_;
+  }
+  static auto* inspector_watcher(EditorPreviewController& controller) { return &controller.native_pixel_sample_watcher_; }
+  static auto preview_request(const EditorPreviewController& controller) { return controller.currentRenderRequest(false); }
+  static auto full_preview_request(const EditorPreviewController& controller) { return controller.currentRenderRequest(true); }
   static bool preview_idle(const EditorPreviewController& controller) {
     return !controller.render_scheduler_.interactiveActive() &&
            !controller.render_scheduler_.pendingDispatchActive() &&
@@ -231,21 +345,44 @@ photo_editor::desktop::CatalogAssetItem make_asset(
   return item;
 }
 
-void process_layout_events(int rounds = 3) {
+void process_layout_events(int rounds = 3, const char* context = "") {
   for (int index = 0; index < rounds; ++index) {
+    QElapsedTimer process_events_timer;
+    process_events_timer.start();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    const auto process_events_elapsed_ms = process_events_timer.elapsed();
+    if (process_events_elapsed_ms >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=process_layout_events context=" << context
+                << " elapsed_ms=" << process_events_elapsed_ms
+                << std::endl;
+    }
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   }
 }
 
-bool wait_for_condition(const std::function<bool()>& condition, int timeout_ms = 3000) {
+bool wait_for_condition(
+    const std::function<bool()>& condition,
+    int timeout_ms = 3000,
+    const char* context = "") {
   QElapsedTimer timer;
   timer.start();
   while (timer.elapsed() < timeout_ms) {
     if (condition()) {
       return true;
     }
+    QElapsedTimer process_events_timer;
+    process_events_timer.start();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    const auto process_events_elapsed_ms = process_events_timer.elapsed();
+    if (process_events_elapsed_ms >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=wait_for_condition context=" << context
+                << " elapsed_ms=" << process_events_elapsed_ms
+                << std::endl;
+    }
     if (condition()) {
       return true;
     }
@@ -257,6 +394,149 @@ bool wait_for_condition(const std::function<bool()>& condition, int timeout_ms =
   QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
   return condition();
 }
+
+bool save_timeline_and_wait(
+    photo_editor::desktop::TimelineDocumentController* timeline_document,
+    const char* context,
+    QString* error = nullptr) {
+  if (timeline_document == nullptr) {
+    if (error != nullptr)
+      *error = QStringLiteral("Timeline document controller is unavailable.");
+    return false;
+  }
+  if (!timeline_document->saveTimelineAsync()) {
+    if (error != nullptr)
+      *error = timeline_document->status();
+    return false;
+  }
+  if (!wait_for_condition(
+          [timeline_document]() { return !timeline_document->timelineSaveInProgress(); },
+          120000,
+          context)) {
+    if (error != nullptr)
+      *error = QStringLiteral("Timed out while saving the timeline.");
+    return false;
+  }
+  const auto save_status = timeline_document->status();
+  if (timeline_document->savedDocumentPath().isEmpty() ||
+      !save_status.startsWith(QStringLiteral("Saved timeline "))) {
+    if (error != nullptr)
+      *error = save_status.isEmpty()
+                   ? QStringLiteral("Timeline save did not complete successfully.")
+                   : save_status;
+    return false;
+  }
+  return true;
+}
+
+class RouteInputDispatchProbe final : public QObject {
+ public:
+  explicit RouteInputDispatchProbe(QObject* target)
+      : QObject(target), target_(target) {
+    if (target_ != nullptr) {
+      target_->installEventFilter(this);
+    }
+  }
+
+  ~RouteInputDispatchProbe() override {
+    joinPoster();
+  }
+
+  void postNoOpKeyAfter(
+      const std::chrono::steady_clock::time_point route_started_at,
+      const int delay_ms = 15) {
+    joinPoster();
+    post_time_ns_.store(0, std::memory_order_relaxed);
+    dispatch_time_ns_.store(0, std::memory_order_relaxed);
+    completion_time_ns_.store(0, std::memory_order_relaxed);
+    route_offset_ms_.store(0, std::memory_order_relaxed);
+    auto* const target = target_.data();
+    const auto completion_event_type = completionEventType();
+    poster_ = std::thread([this, target, route_started_at, delay_ms, completion_event_type]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+      const auto posted_at = std::chrono::steady_clock::now();
+      route_offset_ms_.store(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              posted_at - route_started_at)
+              .count(),
+          std::memory_order_release);
+      post_time_ns_.store(timestampNs(posted_at), std::memory_order_release);
+      if (target != nullptr) {
+        QCoreApplication::postEvent(
+            target,
+            new QKeyEvent(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier));
+        QCoreApplication::postEvent(target, new QEvent(completion_event_type));
+      }
+    });
+  }
+
+  void joinPoster() {
+    if (poster_.joinable()) {
+      poster_.join();
+    }
+  }
+
+  [[nodiscard]] bool delivered() const {
+    return completion_time_ns_.load(std::memory_order_acquire) > 0;
+  }
+
+  [[nodiscard]] bool recentInputFilterObserved() const {
+    return recent_input_filter_observed_.load(std::memory_order_acquire);
+  }
+
+  [[nodiscard]] double dispatchDelayMs() const {
+    const auto posted = post_time_ns_.load(std::memory_order_acquire);
+    const auto dispatched = dispatch_time_ns_.load(std::memory_order_acquire);
+    if (posted <= 0 || dispatched < posted) {
+      return -1.0;
+    }
+    return static_cast<double>(dispatched - posted) / 1000000.0;
+  }
+
+  [[nodiscard]] qint64 routeOffsetMs() const {
+    return route_offset_ms_.load(std::memory_order_acquire);
+  }
+
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == target_ && event != nullptr &&
+        post_time_ns_.load(std::memory_order_acquire) > 0) {
+      if (event->type() == QEvent::KeyPress) {
+        const auto* key_event = static_cast<QKeyEvent*>(event);
+        if (key_event->key() == Qt::Key_unknown) {
+          dispatch_time_ns_.store(timestampNs(), std::memory_order_release);
+        }
+      } else if (event->type() == completionEventType()) {
+        recent_input_filter_observed_.store(
+            target_->property("recentUserInput").toBool(), std::memory_order_release);
+        completion_time_ns_.store(timestampNs(), std::memory_order_release);
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+ private:
+  static QEvent::Type completionEventType() {
+    static const auto event_type =
+        static_cast<QEvent::Type>(QEvent::registerEventType());
+    return event_type;
+  }
+
+  static qint64 timestampNs(
+      const std::chrono::steady_clock::time_point timestamp =
+          std::chrono::steady_clock::now()) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               timestamp.time_since_epoch())
+        .count();
+  }
+
+  QPointer<QObject> target_;
+  std::thread poster_;
+  std::atomic<qint64> post_time_ns_{0};
+  std::atomic<qint64> dispatch_time_ns_{0};
+  std::atomic<qint64> completion_time_ns_{0};
+  std::atomic<qint64> route_offset_ms_{0};
+  std::atomic<bool> recent_input_filter_observed_{false};
+};
 
 QObject* find_named_object_recursive(QObject* root, const QString& object_name, QSet<const QObject*>& visited) {
   if (root == nullptr || visited.contains(root)) {
@@ -397,6 +677,7 @@ void log_summary(
     const SampleSummary& summary,
     int iterations,
     const QVariantMap& extra = {}) {
+  if (iterations <= 0) return;
   auto fields = extra;
   fields.insert(QStringLiteral("workflow"), QStringLiteral("actual_app_qml"));
   fields.insert(QStringLiteral("stage"), stage);
@@ -420,6 +701,17 @@ void save_capture_if_requested(
     const QString& capture_dir,
     const QString& name,
     QJsonArray* captures) {
+  QElapsedTimer capture_timer;
+  capture_timer.start();
+  const auto report_slow_capture = qScopeGuard([&]() {
+    const auto elapsed_ms = capture_timer.elapsed();
+    if (elapsed_ms >= 50) {
+      std::cerr << "UI_TIMING utc="
+                << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toStdString()
+                << " call=save_capture_if_requested name=" << name.toStdString()
+                << " elapsed_ms=" << elapsed_ms << std::endl;
+    }
+  });
   if (window == nullptr || capture_dir.isEmpty() || captures == nullptr) {
     return;
   }
@@ -427,6 +719,26 @@ void save_capture_if_requested(
     return;
   }
   process_layout_events(8);
+  QEventLoop frame_loop;
+  QTimer frame_timeout;
+  frame_timeout.setSingleShot(true);
+  bool frame_presented = false;
+  const auto frame_connection = QObject::connect(
+      window, &QQuickWindow::frameSwapped, &frame_loop, [&]() {
+        frame_presented = true;
+        frame_loop.quit();
+      });
+  const auto timeout_connection = QObject::connect(
+      &frame_timeout, &QTimer::timeout, &frame_loop, &QEventLoop::quit);
+  frame_timeout.start(1000);
+  window->update();
+  if (!frame_presented)
+    frame_loop.exec();
+  frame_timeout.stop();
+  QObject::disconnect(frame_connection);
+  QObject::disconnect(timeout_connection);
+  if (!frame_presented)
+    return;
   const auto image = window->grabWindow();
   if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
     return;
@@ -691,6 +1003,184 @@ bool horizontal_control_group_fits(
   return true;
 }
 
+QJsonObject measure_timeline_continuous_scrub_preview(
+    QObject* workspace,
+    photo_editor::desktop::TimelinePlaybackController* timeline_playback) {
+  if (workspace == nullptr || timeline_playback == nullptr) {
+    return {};
+  }
+  timeline_playback->play();
+  const auto media_ready_after_warmup = wait_for_condition(
+      [timeline_playback]() { return timeline_playback->mediaReady(); },
+      8000,
+      "timeline-scrub-media-ready");
+  const auto first_frame_ready_after_warmup = wait_for_condition(
+      [timeline_playback]() {
+        return timeline_playback->frameProcessingMetrics()
+                   .value(QStringLiteral("sampleCount"))
+                   .toLongLong() > 0;
+      },
+      3000,
+      "timeline-scrub-first-frame");
+  timeline_playback->pause();
+  timeline_playback->seekSequenceSeconds(0.0);
+  timeline_playback->resetPlaybackDiagnostics();
+  auto scrub_probe_active = false;
+  auto last_scrub_frame_sample_count =
+      timeline_playback->frameProcessingMetrics()
+          .value(QStringLiteral("sampleCount"))
+          .toLongLong();
+  auto scrub_published_frame_count = qint64{0};
+  auto scrub_interaction_active_samples = 0;
+  auto scrub_input_index = 0;
+  std::vector<double> scrub_request_times_ms;
+  std::vector<double> scrub_frame_response_ms;
+  QElapsedTimer scrub_elapsed_timer;
+  const auto scrub_frame_connection = QObject::connect(
+      timeline_playback,
+      &photo_editor::desktop::TimelinePlaybackController::processedFrameSourceChanged,
+      workspace,
+      [&]() {
+        if (!scrub_probe_active) {
+          return;
+        }
+        const auto sample_count = timeline_playback->frameProcessingMetrics()
+                                     .value(QStringLiteral("sampleCount"))
+                                     .toLongLong();
+        if (sample_count < last_scrub_frame_sample_count) {
+          last_scrub_frame_sample_count = sample_count;
+          return;
+        }
+        if (sample_count == last_scrub_frame_sample_count) {
+          return;
+        }
+        const auto new_samples = sample_count - last_scrub_frame_sample_count;
+        for (auto sample = qint64{0}; sample < new_samples; ++sample) {
+          ++scrub_published_frame_count;
+          if (!scrub_request_times_ms.empty()) {
+            scrub_frame_response_ms.push_back(
+                scrub_elapsed_timer.elapsed() - scrub_request_times_ms.back());
+          }
+        }
+        last_scrub_frame_sample_count = sample_count;
+      });
+
+  const auto begin_gesture_method =
+      workspace->metaObject()->indexOfMethod("beginTimelineSeekGesture()") >= 0;
+  if (begin_gesture_method) {
+    QMetaObject::invokeMethod(workspace, "beginTimelineSeekGesture");
+  } else {
+    workspace->setProperty("timelineSeeking", true);
+  }
+  timeline_playback->pause();
+  scrub_elapsed_timer.start();
+  scrub_probe_active = true;
+
+  constexpr auto scrub_request_count = 48;
+  constexpr auto scrub_request_interval_ms = 40;
+  QEventLoop scrub_input_loop;
+  QTimer scrub_input_timer;
+  scrub_input_timer.setTimerType(Qt::PreciseTimer);
+  scrub_input_timer.setInterval(scrub_request_interval_ms);
+  QObject::connect(&scrub_input_timer, &QTimer::timeout, &scrub_input_loop, [&]() {
+    if (timeline_playback->interactionActive()) {
+      ++scrub_interaction_active_samples;
+    }
+    const auto forward_index = scrub_input_index < scrub_request_count / 2
+                                  ? scrub_input_index
+                                  : scrub_request_count - 1 - scrub_input_index;
+    const auto requested_seconds = 0.1 + static_cast<double>(forward_index) * 0.15;
+    scrub_request_times_ms.push_back(scrub_elapsed_timer.elapsed());
+    QMetaObject::invokeMethod(
+        workspace,
+        "requestTimelineSeek",
+        Q_ARG(QVariant, requested_seconds));
+    ++scrub_input_index;
+    if (scrub_input_index >= scrub_request_count) {
+      scrub_input_timer.stop();
+      scrub_input_loop.quit();
+    }
+  });
+  scrub_input_timer.start();
+  scrub_input_loop.exec();
+
+  const auto samples_before_final_response = scrub_published_frame_count;
+  (void)wait_for_condition(
+      [&]() { return scrub_published_frame_count > samples_before_final_response; },
+      120,
+      "timeline-continuous-scrub-frame");
+  const auto scrub_active_duration_ms = scrub_elapsed_timer.elapsed();
+  scrub_probe_active = false;
+  QObject::disconnect(scrub_frame_connection);
+  if (workspace->metaObject()->indexOfMethod("finishTimelineSeekGesture()") >= 0) {
+    QMetaObject::invokeMethod(workspace, "finishTimelineSeekGesture");
+  } else {
+    workspace->setProperty("timelineSeeking", false);
+    workspace->setProperty("interactionPlayheadPreviewSeconds", -1.0);
+  }
+
+  auto scrub_preview_probe = QJsonObject{};
+  if (!scrub_frame_response_ms.empty()) {
+    std::sort(scrub_frame_response_ms.begin(), scrub_frame_response_ms.end());
+    const auto p95_index = std::min(
+        scrub_frame_response_ms.size() - 1,
+        static_cast<std::size_t>(std::ceil(
+            static_cast<double>(scrub_frame_response_ms.size()) * 0.95) - 1.0));
+    scrub_preview_probe.insert(
+        QStringLiteral("latestInputToFrameP95Ms"), scrub_frame_response_ms[p95_index]);
+    scrub_preview_probe.insert(
+        QStringLiteral("latestInputToFrameMaxMs"), scrub_frame_response_ms.back());
+  } else {
+    scrub_preview_probe.insert(QStringLiteral("latestInputToFrameP95Ms"), -1.0);
+    scrub_preview_probe.insert(QStringLiteral("latestInputToFrameMaxMs"), -1.0);
+  }
+  const auto scrub_frame_rate = scrub_active_duration_ms > 0
+                                    ? static_cast<double>(scrub_published_frame_count) * 1000.0 /
+                                          static_cast<double>(scrub_active_duration_ms)
+                                    : 0.0;
+  scrub_preview_probe.insert(QStringLiteral("requestedUpdates"), scrub_input_index);
+  scrub_preview_probe.insert(QStringLiteral("inputRateHz"), 25.0);
+  scrub_preview_probe.insert(QStringLiteral("mediaReadyAfterWarmup"), media_ready_after_warmup);
+  scrub_preview_probe.insert(
+      QStringLiteral("firstFrameReadyAfterWarmup"), first_frame_ready_after_warmup);
+  scrub_preview_probe.insert(QStringLiteral("activeDurationMs"), scrub_active_duration_ms);
+  scrub_preview_probe.insert(QStringLiteral("processedFrames"), scrub_published_frame_count);
+  scrub_preview_probe.insert(QStringLiteral("processedFramesPerSecond"), scrub_frame_rate);
+  scrub_preview_probe.insert(
+      QStringLiteral("interactionActiveSamples"), scrub_interaction_active_samples);
+  scrub_preview_probe.insert(
+      QStringLiteral("interactionActiveRatio"),
+      scrub_input_index > 0
+          ? static_cast<double>(scrub_interaction_active_samples) /
+                static_cast<double>(scrub_input_index)
+          : 0.0);
+  scrub_preview_probe.insert(
+      QStringLiteral("previewSource"),
+      timeline_playback->usingRenderCache()
+          ? QStringLiteral("render-cache")
+          : timeline_playback->usingProxy() ? QStringLiteral("proxy")
+                                            : QStringLiteral("original"));
+  scrub_preview_probe.insert(
+      QStringLiteral("adaptiveQualityActive"), timeline_playback->adaptiveQualityActive());
+  scrub_preview_probe.insert(
+      QStringLiteral("hasVideoSource"), timeline_playback->hasVideoSource());
+  scrub_preview_probe.insert(
+      QStringLiteral("mediaReady"), timeline_playback->mediaReady());
+  scrub_preview_probe.insert(
+      QStringLiteral("playbackHealth"), timeline_playback->playbackHealth());
+  scrub_preview_probe.insert(
+      QStringLiteral("activeSourceUrl"), timeline_playback->activeSourceUrl());
+  scrub_preview_probe.insert(
+      QStringLiteral("processedFrameSource"), timeline_playback->processedFrameSource());
+  scrub_preview_probe.insert(
+      QStringLiteral("playbackDiagnostics"),
+      QJsonObject::fromVariantMap(timeline_playback->playbackDiagnostics()));
+  scrub_preview_probe.insert(
+      QStringLiteral("frameProcessingMetrics"),
+      QJsonObject::fromVariantMap(timeline_playback->frameProcessingMetrics()));
+  return scrub_preview_probe;
+}
+
 int run_timeline_ui_proof(
     QQuickWindow* root_window,
     QObject* root,
@@ -921,6 +1411,35 @@ int run_timeline_ui_proof(
   timeline_document->setSourceOutSeconds(8.0);
   timeline_document->seekSequenceSeconds(5.0);
   timeline_document->insertSourceClipAtPlayhead();
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_SCRUB_PROBE_ONLY")) {
+    auto* const scrub_workspace = active_workspace(root);
+    if (scrub_workspace == nullptr || timeline_document->clipCount() == 0 ||
+        !wait_for_condition(
+            [scrub_workspace]() {
+              return named_item_visible(
+                  scrub_workspace, QStringLiteral("timelineProgramMonitor"));
+            },
+            5000,
+            "timeline-scrub-program-monitor")) {
+      return fail(QStringLiteral("Timeline scrub probe could not initialize the Program preview."));
+    }
+    timeline_document->selectClip(0);
+    timeline_document->seekSequenceSeconds(0.0);
+    timeline_playback->seekSequenceSeconds(0.0);
+    process_layout_events(4);
+    const auto scrub_preview_probe = measure_timeline_continuous_scrub_preview(
+        scrub_workspace, timeline_playback);
+    QFile scrub_probe_file(
+        QDir(output_dir).filePath(QStringLiteral("timeline-scrub-preview.json")));
+    if (scrub_preview_probe.isEmpty() ||
+        !scrub_probe_file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+        scrub_probe_file.write(
+            QJsonDocument(scrub_preview_probe).toJson(QJsonDocument::Indented)) <= 0) {
+      return fail(QStringLiteral("Timeline scrub probe could not write its result."));
+    }
+    std::cout << QJsonDocument(scrub_preview_probe).toJson().constData();
+    return EXIT_SUCCESS;
+  }
   timeline_document->addTitleClip();
   timeline_document->generateCaptionsFromTranscript(
       QStringLiteral("Build the story clearly. Keep every moment readable."));
@@ -974,12 +1493,23 @@ int run_timeline_ui_proof(
     return fail(QStringLiteral("Timeline UI proof could not create its waveform fixture."));
   }
   const auto proof_tracks_before_audio = timeline_document->sequenceTracks();
+  auto proof_audio_lane = std::numeric_limits<int>::max();
+  for (const auto& track_value : proof_tracks_before_audio) {
+    const auto track = track_value.toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("audio")) {
+      proof_audio_lane = qMin(
+          proof_audio_lane, track.value(QStringLiteral("laneIndex")).toInt());
+    }
+  }
+  if (proof_audio_lane == std::numeric_limits<int>::max()) {
+    return fail(QStringLiteral("Timeline UI proof could not find an audio track for its waveform fixture."));
+  }
   for (int track_index = 0; track_index < proof_tracks_before_audio.size(); ++track_index) {
     const auto track = proof_tracks_before_audio.at(track_index).toMap();
     if (track.value(QStringLiteral("trackKind")).toString() != QStringLiteral("audio")) {
       continue;
     }
-    const auto should_target = track.value(QStringLiteral("laneIndex")).toInt() == 1;
+    const auto should_target = track.value(QStringLiteral("laneIndex")).toInt() == proof_audio_lane;
     if (track.value(QStringLiteral("targeted")).toBool() != should_target) {
       timeline_document->toggleTrackTargeted(track_index);
     }
@@ -992,6 +1522,37 @@ int run_timeline_ui_proof(
       QStringLiteral("Dialogue waveform"),
       8.0,
       QString{});
+  const auto proof_audio_clip_added = [&timeline_document]() {
+    for (const auto& track_value : timeline_document->sequenceTracks()) {
+      const auto track = track_value.toMap();
+      if (track.value(QStringLiteral("trackKind")).toString() != QStringLiteral("audio")) {
+        continue;
+      }
+      for (const auto& clip_value : track.value(QStringLiteral("clips")).toList()) {
+        if (clip_value.toMap().value(QStringLiteral("displayLabel")).toString() ==
+            QStringLiteral("Dialogue waveform")) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+  if (!proof_audio_clip_added) {
+    QStringList audio_track_states;
+    for (const auto& track_value : timeline_document->sequenceTracks()) {
+      const auto track = track_value.toMap();
+      if (track.value(QStringLiteral("trackKind")).toString() == QStringLiteral("audio")) {
+        audio_track_states.push_back(
+            QStringLiteral("%1 lane=%2 targeted=%3 locked=%4")
+                .arg(track.value(QStringLiteral("displayLabel")).toString())
+                .arg(track.value(QStringLiteral("laneIndex")).toInt())
+                .arg(track.value(QStringLiteral("targeted")).toBool())
+                .arg(track.value(QStringLiteral("locked")).toBool()));
+      }
+    }
+    return fail(QStringLiteral("Timeline UI proof could not insert its waveform fixture: %1; audio tracks: %2")
+                    .arg(timeline_document->status(), audio_track_states.join(QStringLiteral(", "))));
+  }
   // Fixture preparation is not an interactive edit. Ensure a pressure sample or
   // stale latency-sensitive intent cannot leave its required waveform deferred.
   timeline_document->setCachePressureLevelForTesting(QStringLiteral("normal"));
@@ -1079,8 +1640,10 @@ int run_timeline_ui_proof(
       4.0,
       QUrl::fromLocalFile(offline_fixture_path).toString());
   timeline_document->addSequenceMarker(QStringLiteral("Review opening"));
-  if (!timeline_document->saveTimeline() || timeline_document->savedDocumentPath().isEmpty()) {
-    return fail(QStringLiteral("Timeline UI proof could not save its populated document."));
+  QString initial_save_error;
+  if (!save_timeline_and_wait(timeline_document, "timeline-ui-proof-save", &initial_save_error)) {
+    return fail(QStringLiteral("Timeline UI proof could not save its populated document: %1")
+                    .arg(initial_save_error));
   }
   const auto saved_path = timeline_document->savedDocumentPath();
   const auto expected_clip_count = timeline_document->clipCount();
@@ -2706,19 +3269,93 @@ int run_timeline_ui_proof(
 
   root->setProperty("width", 1440);
   root->setProperty("height", 900);
-  process_layout_events(6);
-  QVariant second_track_top;
-  if (!QMetaObject::invokeMethod(
-          workspace,
-          "trackTopY",
-          Q_RETURN_ARG(QVariant, second_track_top),
-          Q_ARG(QVariant, QVariant(1)))) {
-    return fail(QStringLiteral("Timeline proof could not locate its second video track."));
+  if (viewport != nullptr) {
+    viewport->setProperty("contentX", 0.0);
+    viewport->setProperty("contentY", 0.0);
   }
-  const auto viewport_rect = item_scene_rect(viewport);
-  const auto drop_scene_x = viewport_rect.left() + 500.0 - viewport->property("contentX").toDouble();
-  const auto drop_scene_y = viewport_rect.top() + second_track_top.toDouble() + 20.0 -
-                            viewport->property("contentY").toDouble();
+  process_layout_events(10);
+  auto second_video_track_row = -1;
+  auto video_track_count = 0;
+  for (auto row = 0; row < sequence_tracks.size(); ++row) {
+    const auto track = sequence_tracks.at(row).toMap();
+    if (track.value(QStringLiteral("trackKind")).toString() != QStringLiteral("video") ||
+        track.value(QStringLiteral("trackRole")).toString() == QStringLiteral("caption")) {
+      continue;
+    }
+    if (video_track_count++ == 1) {
+      second_video_track_row = row;
+      break;
+    }
+  }
+  QQuickItem* second_video_drop_lane = nullptr;
+  QSet<const QObject*> drop_lane_search_visited;
+  const auto find_second_video_drop_lane = [&](const auto& self,
+                                               QObject* candidate) -> QQuickItem* {
+    if (candidate == nullptr || drop_lane_search_visited.contains(candidate)) return nullptr;
+    drop_lane_search_visited.insert(candidate);
+    if (candidate->objectName() == QStringLiteral("timelineMediaDropPreview")) {
+      auto* preview = qobject_cast<QQuickItem*>(candidate);
+      auto* lane = preview == nullptr ? nullptr : preview->parentItem();
+      if (lane != nullptr &&
+          lane->property("trackRowIndex").toInt() == second_video_track_row) {
+        return lane;
+      }
+    }
+    if (auto* item = qobject_cast<QQuickItem*>(candidate); item != nullptr) {
+      for (auto* child_item : item->childItems()) {
+        if (auto* lane = self(self, child_item); lane != nullptr) return lane;
+      }
+    }
+    if (auto* window = qobject_cast<QQuickWindow*>(candidate); window != nullptr) {
+      if (auto* lane = self(self, window->contentItem()); lane != nullptr) return lane;
+    }
+    for (auto* child : candidate->children()) {
+      if (auto* lane = self(self, child); lane != nullptr) return lane;
+    }
+    return nullptr;
+  };
+  second_video_drop_lane = find_second_video_drop_lane(find_second_video_drop_lane, workspace);
+  if (second_video_track_row < 0 || second_video_drop_lane == nullptr ||
+      !item_visible(second_video_drop_lane)) {
+    return fail(QStringLiteral("Timeline proof could not locate the visible second video lane (row=%1).")
+                    .arg(second_video_track_row));
+  }
+  const auto drop_lane_x = qBound(20.0, 500.0, second_video_drop_lane->width() - 20.0);
+  auto drop_scene_point = second_video_drop_lane->mapToScene(
+      QPointF(drop_lane_x, second_video_drop_lane->height() * 0.5));
+  auto drop_viewport_point = viewport->mapFromScene(drop_scene_point);
+  if (drop_viewport_point.x() < 0.0 || drop_viewport_point.x() > viewport->width() ||
+      drop_viewport_point.y() < 0.0 || drop_viewport_point.y() > viewport->height()) {
+    const auto max_content_x = qMax(
+        0.0, viewport->property("contentWidth").toDouble() - viewport->width());
+    const auto max_content_y = qMax(
+        0.0, viewport->property("contentHeight").toDouble() - viewport->height());
+    viewport->setProperty(
+        "contentX",
+        qBound(0.0,
+               viewport->property("contentX").toDouble() + drop_viewport_point.x() -
+                   viewport->width() * 0.5,
+               max_content_x));
+    viewport->setProperty(
+        "contentY",
+        qBound(0.0,
+               viewport->property("contentY").toDouble() + drop_viewport_point.y() -
+                   viewport->height() * 0.5,
+               max_content_y));
+    process_layout_events(6);
+    drop_lane_search_visited.clear();
+    second_video_drop_lane = find_second_video_drop_lane(find_second_video_drop_lane, workspace);
+    if (second_video_drop_lane == nullptr || !item_visible(second_video_drop_lane)) {
+      return fail(QStringLiteral("Timeline proof could not keep its target video lane visible after scrolling."));
+    }
+    drop_scene_point = second_video_drop_lane->mapToScene(
+        QPointF(drop_lane_x, second_video_drop_lane->height() * 0.5));
+    drop_viewport_point = viewport->mapFromScene(drop_scene_point);
+  }
+  if (drop_viewport_point.x() < 0.0 || drop_viewport_point.x() > viewport->width() ||
+      drop_viewport_point.y() < 0.0 || drop_viewport_point.y() > viewport->height()) {
+    return fail(QStringLiteral("Timeline proof target lane remained outside the visible timeline viewport."));
+  }
   if (!QMetaObject::invokeMethod(
           workspace,
           "updateExternalMediaDrop",
@@ -2726,8 +3363,8 @@ int run_timeline_ui_proof(
               {QStringLiteral("mediaType"), QStringLiteral("video")},
               {QStringLiteral("titleText"), QStringLiteral("Drop preview")},
           })),
-          Q_ARG(QVariant, QVariant(drop_scene_x)),
-          Q_ARG(QVariant, QVariant(drop_scene_y)))) {
+          Q_ARG(QVariant, QVariant(drop_scene_point.x())),
+          Q_ARG(QVariant, QVariant(drop_scene_point.y())))) {
     return fail(QStringLiteral("Timeline proof could not drive its external media drag path."));
   }
   process_layout_events(6);
@@ -2762,10 +3399,10 @@ int run_timeline_ui_proof(
           },
           &manifest,
           QJsonObject{
-              {QStringLiteral("operation"), QStringLiteral("insert")},
-              {QStringLiteral("targetTrackRow"), 1},
-              {QStringLiteral("previewX"), 500.0},
-          })) {
+          {QStringLiteral("operation"), QStringLiteral("insert")},
+          {QStringLiteral("targetTrackRow"), second_video_track_row},
+          {QStringLiteral("previewX"), drop_lane_x},
+      })) {
     return fail(QStringLiteral("Timeline UI proof could not capture exact lane drop feedback."));
   }
   workspace->setProperty("externalMediaDropState", QVariantMap{{QStringLiteral("visible"), false}});
@@ -3223,21 +3860,25 @@ int run_timeline_ui_proof(
     return fail(QStringLiteral("Visual Inspector scroll position did not restore by selection type and tab."));
   }
   const auto disclosure_by_type = workspace->property("inspectorDisclosureByType").toMap();
-  if (disclosure_by_type.value(QStringLiteral("visual")).toMap()
+  if (disclosure_by_type.value(QStringLiteral("video")).toMap()
           .value(QStringLiteral("Exposure"), true).toBool()) {
-    return fail(QStringLiteral("Applied-effect disclosure did not persist for visual selections."));
+    return fail(QStringLiteral("Applied-effect disclosure did not persist for video selections."));
   }
   workspace->setProperty("sourcePanelCollapsed", false);
   workspace->setProperty("monitorPanelHeight", original_monitor_panel_height);
   process_layout_events(6);
 
+  auto* source_window = find_named_object(root, QStringLiteral("timelineDetachedSourceWindow"));
+  auto* inspector_window = find_named_object(root, QStringLiteral("timelineDetachedInspectorWindow"));
+  if (source_window == nullptr || inspector_window == nullptr) {
+    return fail(QStringLiteral("Timeline UI proof could not find its detached panel windows."));
+  }
+  source_window->setProperty("contentRequested", true);
+  inspector_window->setProperty("contentRequested", true);
   workspace->setProperty("sourcePanelDetached", true);
   workspace->setProperty("effectsPanelDetached", true);
   process_layout_events(10);
-  auto* source_window = find_named_object(root, QStringLiteral("timelineDetachedSourceWindow"));
-  auto* inspector_window = find_named_object(root, QStringLiteral("timelineDetachedInspectorWindow"));
-  if (source_window == nullptr || inspector_window == nullptr ||
-      !source_window->property("visible").toBool() ||
+  if (!source_window->property("visible").toBool() ||
       !inspector_window->property("visible").toBool() ||
       named_item_visible(root, QStringLiteral("timelineSourceRail")) ||
       named_item_visible(root, QStringLiteral("timelineEffectsRail"))) {
@@ -3732,6 +4373,9 @@ int run_timeline_ui_proof(
     return fail(QStringLiteral("Timeline playhead drag missed its interaction or visible-feedback budget."));
   }
 
+  const auto scrub_preview_probe =
+      measure_timeline_continuous_scrub_preview(workspace, timeline_playback);
+
   auto* acceptance_clip = find_visible_named_item(workspace, QStringLiteral("timelineClipContent"));
   const auto clip_width_before_trim = acceptance_clip == nullptr ? 0.0 : acceptance_clip->width();
   const auto acceptance_clip_state = timeline_document->currentClip();
@@ -3787,21 +4431,65 @@ int run_timeline_ui_proof(
     return fail(QStringLiteral("Timeline fade preview did not settle into its document commit."));
   }
 
-  auto* acceptance_program_panel = find_visible_named_item(
-      workspace, QStringLiteral("timelineProgramPanel"));
-  const auto program_height_before = item_scene_rect(acceptance_program_panel).height();
-  const auto monitor_height_before = workspace->property("monitorPanelHeight").toDouble();
+  auto* acceptance_monitor_panel = find_visible_named_item(
+      workspace, QStringLiteral("timelineMainSplit"));
+  const auto monitor_panel_height_before =
+      item_scene_rect(acceptance_monitor_panel).height();
+  auto* vertical_splitter_handle = find_visible_named_item(
+      workspace, QStringLiteral("timelineVerticalSplitterHandle"));
+  const auto splitter_center = vertical_splitter_handle == nullptr
+                                   ? QPointF()
+                                   : vertical_splitter_handle->mapToScene(QPointF(
+                                         vertical_splitter_handle->width() * 0.5,
+                                         vertical_splitter_handle->height() * 0.5));
+  const auto splitter_drag_end = splitter_center + QPointF(0.0, 24.0);
   if (!measure_interaction(
           QStringLiteral("splitter-resize"),
-          [workspace, monitor_height_before]() {
-            workspace->setProperty("monitorPanelHeight", monitor_height_before + 24.0);
+          [root_window, vertical_splitter_handle, splitter_center, splitter_drag_end]() {
+            if (root_window == nullptr || vertical_splitter_handle == nullptr)
+              return;
+            const auto send_pointer = [root_window](
+                                          QEvent::Type type,
+                                          const QPointF& position,
+                                          Qt::MouseButton button,
+                                          Qt::MouseButtons buttons) {
+              QMouseEvent event(
+                  type,
+                  position,
+                  root_window->mapToGlobal(position.toPoint()),
+                  button,
+                  buttons,
+                  Qt::NoModifier);
+              QCoreApplication::sendEvent(root_window, &event);
+            };
+            send_pointer(
+                QEvent::MouseButtonPress,
+                splitter_center,
+                Qt::LeftButton,
+                Qt::LeftButton);
+            send_pointer(
+                QEvent::MouseMove,
+                splitter_drag_end,
+                Qt::NoButton,
+                Qt::LeftButton);
+            send_pointer(
+                QEvent::MouseButtonRelease,
+                splitter_drag_end,
+                Qt::LeftButton,
+                Qt::NoButton);
           },
-          [acceptance_program_panel, program_height_before]() {
-            return item_visible(acceptance_program_panel) &&
-                   std::abs(item_scene_rect(acceptance_program_panel).height() -
-                            program_height_before) > 1.0;
+          [acceptance_monitor_panel,
+           vertical_splitter_handle,
+           monitor_panel_height_before]() {
+            return item_visible(acceptance_monitor_panel) &&
+                   item_visible(vertical_splitter_handle) &&
+                   std::abs(item_scene_rect(acceptance_monitor_panel).height() -
+                            monitor_panel_height_before) > 1.0;
           })) {
-    return fail(QStringLiteral("Timeline splitter resize missed its interaction or visible-feedback budget."));
+    return fail(QStringLiteral("Timeline splitter resize missed its interaction or visible-feedback budget (panel=%1 requested=%2 preference=%3).")
+                    .arg(monitor_panel_height_before)
+                    .arg(splitter_drag_end.y() - splitter_center.y())
+                    .arg(workspace->property("monitorPanelHeight").toDouble()));
   }
 
   auto* acceptance_clip_for_zoom = find_visible_named_item(
@@ -3866,8 +4554,10 @@ int run_timeline_ui_proof(
   if (!QFile::copy(source_path, offline_fixture_path)) {
     return fail(QStringLiteral("Timeline acceptance proof could not relink its missing-media fixture."));
   }
-  if (!timeline_document->saveTimeline()) {
-    return fail(QStringLiteral("Timeline acceptance proof could not save its final edit."));
+  QString final_save_error;
+  if (!save_timeline_and_wait(timeline_document, "timeline-acceptance-save", &final_save_error)) {
+    return fail(QStringLiteral("Timeline acceptance proof could not save its final edit: %1")
+                    .arg(final_save_error));
   }
   const auto acceptance_export_path =
       QDir(output_dir).filePath(QStringLiteral("timeline-release-acceptance.mp4"));
@@ -3876,7 +4566,10 @@ int run_timeline_ui_proof(
   export_timer.start();
   if (!timeline_document->renderCurrentTimeline(acceptance_export_path) ||
       QFileInfo(acceptance_export_path).size() <= 1024) {
-    return fail(QStringLiteral("Timeline acceptance proof could not render a real final export."));
+    return fail(QStringLiteral(
+                    "Timeline acceptance proof could not render a real final export: %1 (bytes=%2).")
+                    .arg(timeline_document->status())
+                    .arg(QFileInfo(acceptance_export_path).size()));
   }
 
   const QJsonObject acceptance_report{
@@ -3888,6 +4581,7 @@ int run_timeline_ui_proof(
            QStringLiteral("collapse-panels"), QStringLiteral("save"), QStringLiteral("reopen"),
            QStringLiteral("export")}},
       {QStringLiteral("interactionLatencyMs"), interaction_latency_ms},
+      {QStringLiteral("continuousScrubPreview"), scrub_preview_probe},
       {QStringLiteral("exportPath"), acceptance_export_path},
       {QStringLiteral("exportBytes"), QFileInfo(acceptance_export_path).size()},
       {QStringLiteral("exportElapsedMs"), export_timer.elapsed()},
@@ -3923,6 +4617,9 @@ int run_timeline_ui_proof(
 #include "photo_recipe_clipboard_proof.h"
 
 int main(int argc, char** argv) {
+  Q_INIT_RESOURCE(looksy_agent_sprite);
+  Q_INIT_RESOURCE(looksy_brand_assets);
+  Q_INIT_RESOURCE(shell_visual_test_shaders);
   if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
   }
@@ -3936,6 +4633,8 @@ int main(int argc, char** argv) {
   const auto arguments = app.arguments();
   const auto optical_proof_dir = option_value(arguments, QStringLiteral("--optical-ui-proof-dir"));
   const bool optical_real_export = !optical_proof_dir.isEmpty() && arguments.contains("--optical-real-export");
+  const bool optical_real_subject_selection =
+      !optical_proof_dir.isEmpty() && qEnvironmentVariableIsSet("PHOTO_EDITOR_OPTICAL_REAL_SUBJECT");
   if (!optical_proof_dir.isEmpty()) qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
   const auto recipe_clipboard_proof_dir = option_value(arguments, QStringLiteral("--recipe-clipboard-proof-dir"));
   if (!recipe_clipboard_proof_dir.isEmpty()) qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
@@ -3945,6 +4644,17 @@ int main(int argc, char** argv) {
   const auto iterations = std::max(1, option_int(arguments, QStringLiteral("--iterations"), 5));
   const auto timeout_ms =
       std::max(1000, option_int(arguments, QStringLiteral("--timeout-ms"), 15000));
+  const bool brush_only = arguments.contains(QStringLiteral("--brush-only"));
+  const bool brush_auto_mask = arguments.contains(QStringLiteral("--brush-auto-mask"));
+  const bool route_only = arguments.contains(QStringLiteral("--route-only"));
+  const bool route_only_no_render =
+      arguments.contains(QStringLiteral("--route-only-no-render"));
+  const bool route_only_async = arguments.contains(QStringLiteral("--route-only-async"));
+  const bool route_only_active_editor =
+      arguments.contains(QStringLiteral("--route-only-active-editor"));
+  if ((route_only_no_render || route_only_async) && !route_only) {
+    return fail(QStringLiteral("Route-only diagnostic options require --route-only."));
+  }
   const auto capture_dir = option_value(arguments, QStringLiteral("--capture-dir"));
   const auto viewer_film_proof_dir = option_value(arguments, QStringLiteral("--viewer-film-proof-dir"));
   const auto capture_setup_proof_dir = option_value(arguments, QStringLiteral("--capture-setup-proof-dir"));
@@ -3965,11 +4675,42 @@ int main(int argc, char** argv) {
   if (!runtime_root.isValid() || !cache_root.isValid() || !fixture_dir.isValid()) {
     return fail(QStringLiteral("Unable to create actual-app workflow temporary directories."));
   }
-  if (!option_value(arguments, "--workspace-switch-proof-dir").isEmpty() || gaussian_proof || color_interaction_proof || !recipe_clipboard_proof_dir.isEmpty() || !optical_proof_dir.isEmpty()) {
+  const bool native_readback_proof = arguments.contains("--native-readback-proof");
+  const bool library_proof = arguments.contains("--library-grid-proof") ||
+      arguments.contains("--asset-selection-proof") ||
+      arguments.contains("--cutout-adjustment-proof") ||
+      arguments.contains("--layer-drop-indicator-proof") ||
+      arguments.contains("--layer-move-proof") ||
+      arguments.contains("--direct-cutout-color-proof") ||
+      arguments.contains("--brush-fidelity-proof") ||
+      arguments.contains("--library-duration-proof") ||
+      arguments.contains("--library-membership-proof") ||
+      arguments.contains("--library-startup-proof");
+  if (!option_value(arguments, "--workspace-switch-proof-dir").isEmpty() ||
+      gaussian_proof || color_interaction_proof || brush_only ||
+      !recipe_clipboard_proof_dir.isEmpty() || !optical_proof_dir.isEmpty() ||
+      !timeline_ui_proof_dir.isEmpty() || library_proof || native_readback_proof) {
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, runtime_root.path());
     QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, runtime_root.path());
   }
+  // Exercise macOS's production preferences backend without touching the user's
+  // preferences. INI remains the default for all existing isolated proofs.
+  const bool native_settings_fixture = brush_only &&
+      qEnvironmentVariableIsSet("PHOTO_EDITOR_BENCHMARK_NATIVE_SETTINGS");
+  if (native_settings_fixture) {
+    QCoreApplication::setOrganizationName(QStringLiteral("LooksyPerformanceFixtures"));
+    QCoreApplication::setApplicationName(
+        QStringLiteral("ToolPreferences-") + QDir(runtime_root.path()).dirName());
+    QSettings::setDefaultFormat(QSettings::NativeFormat);
+  }
+  const auto clear_native_settings_fixture = qScopeGuard([&] {
+    if (native_settings_fixture) {
+      QSettings settings;
+      settings.clear();
+      settings.sync();
+    }
+  });
   if (!search_edit_proof_dir.isEmpty() || live_visual_search) {
     const auto isolated_data = QDir(search_edit_proof_dir.isEmpty() ? visual_search_proof_dir : search_edit_proof_dir)
         .filePath(QStringLiteral("runtime"));
@@ -3985,10 +4726,10 @@ int main(int argc, char** argv) {
         // runs remain separate evidence; an unavailable critic requires review.
         {"toolCallPlanning", false}, {"contextWindow", 16384}}}}}).toJson());
   }
-  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_APP_DATA_DIR")) {
+  if (library_proof || native_readback_proof || !qEnvironmentVariableIsSet("PHOTO_EDITOR_APP_DATA_DIR")) {
     qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
   }
-  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_CACHE_DIR")) {
+  if (library_proof || native_readback_proof || !qEnvironmentVariableIsSet("PHOTO_EDITOR_CACHE_DIR")) {
     qputenv("PHOTO_EDITOR_CACHE_DIR", cache_root.path().toUtf8());
   }
   if (optical_real_export) {
@@ -3997,7 +4738,10 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_CACHE_DIR", cache_root.path().toUtf8());
     qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   } else {
-    qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArray("postgres://example/test"));
+    const auto membership_database = arguments.contains("--library-membership-proof")
+        ? option_value(arguments, "--membership-database-url") : QString{};
+    qputenv("PHOTO_EDITOR_DATABASE_URL", membership_database.isEmpty()
+        ? QByteArray("postgresql://127.0.0.1:1/photo_editor_offline_test") : membership_database.toUtf8());
   }
   const auto stop_owned_catalog = qScopeGuard([&] {
     if (!optical_real_export) return;
@@ -4023,12 +4767,57 @@ int main(int argc, char** argv) {
       QStringLiteral("benchmark.actual_app_workflow.started"),
       {
           {QStringLiteral("workflow"), QStringLiteral("actual_app_qml")},
+          {QStringLiteral("scenario"), route_only ? QStringLiteral("route_only")
+              : brush_only ? QStringLiteral("brush_only") : QStringLiteral("full_workflow")},
+          {QStringLiteral("brush_auto_mask"), brush_auto_mask},
           {QStringLiteral("elapsed_ms"), 0},
           {QStringLiteral("iterations"), iterations},
           {QStringLiteral("source"), source_path},
       });
 
+  if (!option_value(arguments, "--responsiveness-proof-dir").isEmpty()) {
+    const QDir helper_root(fixture_dir.filePath("responsiveness"));
+    const QDir binaries(helper_root.filePath("rust/target/debug"));
+    if (!QDir().mkpath(binaries.absolutePath())) return fail("Cannot create isolated helper directory.");
+    QFile manifest(helper_root.filePath("rust/Cargo.toml"));
+    if (!manifest.open(QIODevice::WriteOnly)) return fail("Cannot create isolated helper manifest.");
+    manifest.write("# isolated responsiveness fixture\n");
+    for (const auto* name : {"catalog_state", "catalog_snapshot"}) {
+      QFile helper(binaries.filePath(QLatin1String(name)));
+      if (!helper.open(QIODevice::WriteOnly)) return fail("Cannot create isolated helper.");
+      helper.write("#!/bin/sh\nexit 1\n");
+      helper.close();
+      helper.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    }
+    qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", helper_root.absolutePath().toUtf8());
+    if (photo_editor::desktop::AppBootstrap::helperProgram("catalog_state") != binaries.filePath("catalog_state"))
+      return fail("Responsiveness fixture helper is not authoritative.");
+  }
+
+  if (arguments.contains("--library-membership-proof")) {
+    const auto helper = option_value(arguments, "--membership-helper-fixture");
+    const QDir helper_root(fixture_dir.filePath("membership"));
+    const QDir binaries(helper_root.filePath("rust/target/debug"));
+    if (!QFileInfo(helper).isExecutable() || !QDir().mkpath(binaries.absolutePath()))
+      return fail("Membership proof needs an executable helper fixture.");
+    QFile manifest(helper_root.filePath("rust/Cargo.toml"));
+    if (!manifest.open(QIODevice::WriteOnly) || manifest.write("# isolated fixture\n") < 0)
+      return fail("Cannot create membership fixture repository.");
+    for (const auto& name : {QStringLiteral("catalog_state"), QStringLiteral("catalog_snapshot")})
+      if (!QFile::link(helper, binaries.filePath(name))) return fail("Cannot install membership fixture.");
+    QFile snapshot(helper_root.filePath("snapshot.json"));
+    if (!snapshot.open(QIODevice::WriteOnly) ||
+        snapshot.write(R"({"assets":[],"projects":[],"drives":[],"review_states":{},"relinked_paths":{}})") < 0)
+      return fail("Cannot create membership fixture snapshot.");
+    qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", helper_root.absolutePath().toUtf8());
+    qputenv("PHOTO_EDITOR_MEMBERSHIP_FIXTURE_ROOT", helper_root.absolutePath().toUtf8());
+    if (photo_editor::desktop::AppBootstrap::helperProgram("catalog_state") != binaries.filePath("catalog_state"))
+      return fail("Membership fixture helper is not authoritative.");
+  }
+
   photo_editor::desktop::AppShellController app_shell;
+  if (library_proof || brush_only || native_readback_proof)
+    app_shell.completeFirstRunExperience();
   photo_editor::desktop::CatalogAssetModel catalog_assets;
   photo_editor::desktop::CatalogSimilaritySearch similarity_search(&catalog_assets, "isolated-actual-ui-proof");
   if (!similarity_proof_dir.isEmpty()) {
@@ -4063,7 +4852,7 @@ int main(int argc, char** argv) {
     app_shell.completeFirstRunExperience();
   }
 
-  preview_backend.setPreferredBackend(color_interaction_proof || workspace_switch_proof || gaussian_proof ? QStringLiteral("Auto") : QStringLiteral("CPU"));
+  preview_backend.setPreferredBackend(color_interaction_proof || workspace_switch_proof || gaussian_proof || brush_only ? QStringLiteral("Auto") : QStringLiteral("CPU"));
   editor_preview.setPreviewTargetEdge(960);
 
   qmlRegisterType<photo_editor::desktop::PhotoTextDocumentStyle>("PhotoEditor", 1, 0, "PhotoTextDocumentStyle");
@@ -4093,6 +4882,28 @@ int main(int argc, char** argv) {
   qmlRegisterType<photo_editor::desktop::GaussianSceneViewport>("PhotoEditor", 1, 0, "GaussianSceneViewport");
 #endif
   QQmlApplicationEngine engine;
+  engine.rootContext()->setContextProperty(
+      "timelineInspectorDeferredLoadingEnabled",
+      !arguments.contains(QStringLiteral("--timeline-route-performance-eager-inspector")));
+  engine.rootContext()->setContextProperty(
+      "timelineSourceDeferredLoadingEnabled",
+      !arguments.contains(QStringLiteral("--timeline-route-performance-eager-source-panel")));
+  engine.rootContext()->setContextProperty(
+      "timelineRoutePerformanceForceCollapsedInspector",
+      arguments.contains(QStringLiteral("--timeline-route-performance-force-collapsed-inspector")));
+  engine.rootContext()->setContextProperty(
+      "timelineRoutePerformanceForceCollapsedSourcePanel",
+      arguments.contains(QStringLiteral("--timeline-route-performance-force-collapsed-source-panel")));
+  QStringList library_qml_errors;
+  if (library_proof) {
+    QObject::connect(&engine, &QQmlEngine::warnings, &app, [&](const QList<QQmlError>& warnings) {
+      for (const auto& warning : warnings) {
+        if (warning.description().contains("TypeError") ||
+            warning.description().contains("ReferenceError"))
+          library_qml_errors.append(warning.toString());
+      }
+    });
+  }
 #if defined(__APPLE__) && defined(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
   engine.rootContext()->setContextProperty("gaussianScene", &gaussian_scene);
 #endif
@@ -4126,9 +4937,11 @@ int main(int argc, char** argv) {
         : option_value(arguments, QStringLiteral("--visual-index-path")));
     visual_search.setUseIndex(true);
   }
-  auto* editor_preview_image_provider = new photo_editor::desktop::EditorPreviewImageProvider;
+  auto* editor_preview_image_provider = new CountingPreviewImageProvider;
   editor_preview.setImageProvider(editor_preview_image_provider);
   engine.addImageProvider(QStringLiteral("editor-preview"), editor_preview_image_provider);
+  engine.addImageProvider(
+      QStringLiteral("timeline-playback"), timeline_playback.createImageProvider());
   engine.rootContext()->setContextProperty("appShell", &app_shell);
   engine.rootContext()->setContextProperty("catalogAssets", &catalog_assets);
   engine.rootContext()->setContextProperty("visualSearch", &visual_search);
@@ -4146,13 +4959,18 @@ int main(int argc, char** argv) {
   QElapsedTimer shell_timer;
   shell_timer.start();
   const auto main_qml_path =
-      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(QStringLiteral("apps/desktop/qml/Main.qml"));
+      qEnvironmentVariableIsSet("PHOTO_EDITOR_BENCHMARK_QML_ROOT")
+          ? QDir(qEnvironmentVariable("PHOTO_EDITOR_BENCHMARK_QML_ROOT")).filePath(QStringLiteral("Main.qml"))
+          : QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(QStringLiteral("apps/desktop/qml/Main.qml"));
   photo_editor::desktop::observability::logInfo(
       photoEditorPerfLog(),
       QStringLiteral("benchmark.actual_app_workflow.qml_load_started"),
       {{QStringLiteral("workflow"), QStringLiteral("actual_app_qml")},
        {QStringLiteral("elapsed_ms"), 0},
-       {QStringLiteral("path"), main_qml_path}});
+       {QStringLiteral("path"), main_qml_path},
+       {QStringLiteral("qt_platform"), QGuiApplication::platformName()},
+       {QStringLiteral("requested_rhi_backend"), qEnvironmentVariable("QSG_RHI_BACKEND")},
+       {QStringLiteral("settings_backend"), native_settings_fixture ? QStringLiteral("native-isolated") : QStringLiteral("default")}});
   engine.load(QUrl::fromLocalFile(main_qml_path));
   QCoreApplication::processEvents();
   photo_editor::desktop::observability::logInfo(
@@ -4169,6 +4987,7 @@ int main(int argc, char** argv) {
   if (root == nullptr || root_window == nullptr) {
     return fail(QStringLiteral("Actual-app workflow requires Main.qml to expose a root window."));
   }
+  new photo_editor::desktop::RecentUserInputFilter(root_window);
   root->setProperty("width", optical_proof_dir.isEmpty() ? 1600 : std::max(900, option_int(arguments, "--optical-width", 1600)));
   root->setProperty("height", optical_proof_dir.isEmpty() ? 1000 : std::max(650, option_int(arguments, "--optical-height", 1000)));
   process_layout_events(8);
@@ -4188,6 +5007,227 @@ int main(int argc, char** argv) {
       0,
       {{QStringLiteral("root_width"), root->property("width").toInt()},
        {QStringLiteral("root_height"), root->property("height").toInt()}});
+
+  if (route_only) {
+    // Isolate first-use workspace construction from photo decode, preview
+    // rendering, masks, thumbnails, and export jobs in the full workflow.
+    // Mark synthetic input before the short route loop so Main.qml's idle
+    // workspace prewarm cannot overlap the measurement.
+    QElapsedTimer route_suite_timer;
+    route_suite_timer.start();
+    root->setProperty("recentUserInput", true);
+    if (route_only_active_editor) {
+      timeline_document.createTimelineWithSettings(
+          {{QStringLiteral("timelineName"), QStringLiteral("Route Performance Fixture")},
+           {QStringLiteral("width"), 1080},
+           {QStringLiteral("height"), 1920},
+           {QStringLiteral("frameRate"), 30},
+           {QStringLiteral("audioSampleRate"), 48000},
+           {QStringLiteral("colorSpace"), QStringLiteral("Rec.709")},
+           {QStringLiteral("dataLevels"), QStringLiteral("Legal")}});
+    }
+    if (route_only_async) {
+      auto* carousel_loader = find_named_object(
+          root,
+          QStringLiteral("carouselWorkspaceLoader"));
+      auto* timeline_loader = find_named_object(
+          root,
+          QStringLiteral("timelineWorkspaceLoader"));
+      if (carousel_loader == nullptr || timeline_loader == nullptr ||
+          !carousel_loader->setProperty("asynchronous", true) ||
+          !timeline_loader->setProperty("asynchronous", true)) {
+        return fail(QStringLiteral("Route-only asynchronous Loader controls are unavailable."));
+      }
+    }
+    if (route_only_no_render) {
+      root_window->hide();
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+    }
+    std::vector<double> carousel_route_samples;
+    std::vector<double> carousel_input_dispatch_samples;
+    std::vector<double> timeline_route_samples;
+    std::vector<double> timeline_input_dispatch_samples;
+    carousel_route_samples.reserve(static_cast<std::size_t>(iterations));
+    carousel_input_dispatch_samples.reserve(static_cast<std::size_t>(iterations));
+    timeline_route_samples.reserve(static_cast<std::size_t>(iterations));
+    timeline_input_dispatch_samples.reserve(static_cast<std::size_t>(iterations));
+
+    const auto measure_route = [&](const int workspace_index,
+                                   const QString& workspace_name,
+                                   const QString& ready_item,
+                                   const QString& route_stage,
+                                   const QString& input_stage,
+                                   std::vector<double>* route_samples,
+                                   std::vector<double>* input_samples,
+                                   const int iteration) {
+      if (workspace_index < 0 || route_samples == nullptr || input_samples == nullptr)
+        return false;
+
+      QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+      root->setProperty("qmlFrameCaptureEnabled", true);
+      QMetaObject::invokeMethod(root, "beginQmlFrameCaptureWindow");
+      QElapsedTimer route_timer;
+      route_timer.start();
+      const auto route_started_at = std::chrono::steady_clock::now();
+      RouteInputDispatchProbe input_probe(root_window);
+      input_probe.postNoOpKeyAfter(route_started_at);
+      QElapsedTimer workspace_switch_timer;
+      workspace_switch_timer.start();
+      root->setProperty("currentWorkspace", workspace_index);
+      const auto workspace_switch_setter_ms = workspace_switch_timer.elapsed();
+      if (!wait_for_condition(
+              [&]() {
+                auto* workspace = active_workspace(root);
+                return workspace != nullptr && workspace->objectName() == workspace_name;
+              },
+              timeout_ms)) {
+        std::cerr << "Route-only workspace root timed out: " << workspace_name.toStdString()
+                  << '\n';
+        return false;
+      }
+      const auto workspace_root_ready_ms = route_timer.elapsed();
+      if (!wait_for_condition(
+              [&]() {
+                auto* workspace = active_workspace(root);
+                if (workspace == nullptr || workspace->objectName() != workspace_name)
+                  return false;
+                if (!route_only_no_render)
+                  return named_item_visible(workspace, ready_item);
+                const auto ready_object =
+                    find_named_object(workspace, ready_item);
+                return workspace->property("visible").toBool() && ready_object != nullptr &&
+                       ready_object->property("visible").toBool();
+              },
+              timeout_ms)) {
+        std::cerr << "Route-only workspace timed out: " << workspace_name.toStdString()
+                  << '\n';
+        return false;
+      }
+
+      const auto route_elapsed_ms = route_timer.elapsed();
+      route_samples->push_back(static_cast<double>(route_elapsed_ms));
+      if (!wait_for_condition(
+              [&input_probe]() { return input_probe.delivered(); },
+              timeout_ms,
+              "route-only-input-event")) {
+        std::cerr << "Route-only input probe timed out: " << workspace_name.toStdString()
+                  << '\n';
+        return false;
+      }
+      input_probe.joinPoster();
+      const auto input_dispatch_delay_ms = input_probe.dispatchDelayMs();
+      const auto recent_input_detected = input_probe.recentInputFilterObserved();
+      if (input_dispatch_delay_ms < 0.0 || !recent_input_detected) {
+        std::cerr << "Route-only input probe was not observed: "
+                  << workspace_name.toStdString() << '\n';
+        return false;
+      }
+      input_samples->push_back(input_dispatch_delay_ms);
+      log_stage(
+          input_stage,
+          static_cast<qint64>(std::lround(input_dispatch_delay_ms)),
+          iteration,
+          {{QStringLiteral("dispatch_delay_ms_exact"), input_dispatch_delay_ms},
+           {QStringLiteral("route_offset_ms"), input_probe.routeOffsetMs()},
+           {QStringLiteral("workspace_switch_setter_ms"), workspace_switch_setter_ms},
+           {QStringLiteral("workspace_root_ready_ms"), workspace_root_ready_ms},
+           {QStringLiteral("route_visible_ms"), route_elapsed_ms},
+           {QStringLiteral("recent_user_input_detected"), recent_input_detected},
+           {QStringLiteral("preview_asset_loaded"), false},
+           {QStringLiteral("active_timeline"), route_only_active_editor},
+           {QStringLiteral("window_visible"), root_window->isVisible()}});
+      root_window->removeEventFilter(&input_probe);
+      process_layout_events(1);
+      QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+      root->setProperty("qmlFrameCaptureEnabled", false);
+      log_stage(
+          route_stage,
+          route_elapsed_ms,
+          iteration,
+          {{QStringLiteral("preview_asset_loaded"), false},
+           {QStringLiteral("active_timeline"), route_only_active_editor},
+           {QStringLiteral("workspace_switch_setter_ms"), workspace_switch_setter_ms},
+           {QStringLiteral("workspace_root_ready_ms"), workspace_root_ready_ms},
+           {QStringLiteral("window_visible"), root_window->isVisible()}});
+      return true;
+    };
+
+    const auto library_workspace_index =
+        root->property("libraryWorkspaceIndex").toInt();
+    const auto carousel_workspace_index =
+        root->property("carouselWorkspaceIndex").toInt();
+    const auto timeline_workspace_index =
+        root->property("timelineWorkspaceIndex").toInt();
+    for (int iteration = 0; iteration < iterations; ++iteration) {
+      if (iteration > 0) {
+        root->setProperty("currentWorkspace", library_workspace_index);
+        if (!wait_for_condition(
+                [&]() {
+                  auto* workspace = active_workspace(root);
+                  return workspace != nullptr &&
+                         workspace->objectName() == QStringLiteral("libraryStudioWorkspace");
+                },
+                timeout_ms)) {
+          return fail(QStringLiteral("Route-only workflow could not return to Library."));
+        }
+      }
+      if (!measure_route(
+              carousel_workspace_index,
+              QStringLiteral("carouselWorkspace"),
+              QStringLiteral("carouselSetupSurface"),
+              QStringLiteral("carousel_route_to_visible"),
+              QStringLiteral("carousel_input_event_dispatch_delay"),
+              &carousel_route_samples,
+              &carousel_input_dispatch_samples,
+              iteration) ||
+          !measure_route(
+              timeline_workspace_index,
+              QStringLiteral("timelineWorkspace"),
+              route_only_active_editor ? QStringLiteral("timelineEditorPageContent")
+                                       : QStringLiteral("timelineSetupSurface"),
+              QStringLiteral("timeline_route_to_visible"),
+              QStringLiteral("timeline_input_event_dispatch_delay"),
+              &timeline_route_samples,
+              &timeline_input_dispatch_samples,
+              iteration)) {
+        return fail(QStringLiteral("Route-only workflow did not complete its route and input measurements."));
+      }
+    }
+
+    QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+    log_summary(
+        QStringLiteral("carousel_route_to_visible"),
+        summarize_samples(carousel_route_samples),
+        iterations,
+        {{QStringLiteral("preview_asset_loaded"), false}});
+    log_summary(
+        QStringLiteral("carousel_input_event_dispatch_delay"),
+        summarize_samples(carousel_input_dispatch_samples),
+        iterations,
+        {{QStringLiteral("preview_asset_loaded"), false}});
+    log_summary(
+        QStringLiteral("timeline_route_to_visible"),
+        summarize_samples(timeline_route_samples),
+        iterations,
+        {{QStringLiteral("preview_asset_loaded"), false}});
+    log_summary(
+        QStringLiteral("timeline_input_event_dispatch_delay"),
+        summarize_samples(timeline_input_dispatch_samples),
+        iterations,
+        {{QStringLiteral("preview_asset_loaded"), false}});
+    photo_editor::desktop::observability::logInfo(
+        photoEditorPerfLog(),
+        QStringLiteral("benchmark.actual_app_workflow.completed"),
+        {{QStringLiteral("workflow"), QStringLiteral("actual_app_qml")},
+         {QStringLiteral("scenario"), QStringLiteral("route_only")},
+         {QStringLiteral("iterations"), iterations},
+         {QStringLiteral("preview_asset_loaded"), false},
+         {QStringLiteral("active_timeline"), route_only_active_editor},
+         {QStringLiteral("workspace_loader_async"), route_only_async},
+         {QStringLiteral("window_visible"), root_window->isVisible()},
+         {QStringLiteral("elapsed_ms"), route_suite_timer.elapsed()}});
+    return EXIT_SUCCESS;
+  }
 
   if (!optical_proof_dir.isEmpty()) {
     using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
@@ -4268,8 +5308,8 @@ int main(int argc, char** argv) {
     wait_for_condition([&]() { return idle_sample.elapsed() >= 300; }, 1000);
     if (caustic->property("paintCount").toInt() != idle_paints)
       return fail("Completion continued painting while idle.");
-    auto* reset_view = workspace->findChild<QQuickItem*>(QStringLiteral("resetViewButton"));
-    if (!reset_view) return fail("Preview reset button is missing.");
+    auto* reset_view = workspace->findChild<QQuickItem*>(QStringLiteral("fitToViewButton"));
+    if (!reset_view) return fail("Preview Fit button is missing.");
     const auto edited_exposure = editor_preview.exposure();
     const auto reset_position = reset_view->mapToScene(QPointF(reset_view->width() / 2, reset_view->height() / 2));
     send_pointer(QEvent::MouseButtonPress, reset_position, Qt::LeftButton, Qt::LeftButton);
@@ -4688,22 +5728,54 @@ int main(int argc, char** argv) {
           !wait_for_condition([&]() { return catalog_assets.selectedIndex() == 0; }, timeout_ms) ||
           !settle_preview()) return fail("Filmstrip could not return to the original photo.");
     }
-    QImage matte(512, 512, QImage::Format_RGB32);
-    for (int y = 0; y < 512; ++y) {
-      for (int x = 0; x < 512; ++x) {
-        const double dx = (x - 256.0) / 155.0;
-        const double dy = (y - 280.0) / 230.0;
-        const int alpha = static_cast<int>(255.0 * std::clamp((1.0 - dx * dx - dy * dy) * 15.0, 0.0, 1.0));
-        matte.setPixel(x, y, qRgb(alpha, alpha, alpha));
+    QVariantMap real_subject_mask;
+    if (optical_real_subject_selection) {
+      editor_preview.addAIMask(QStringLiteral("subject"));
+      if (!wait_for_condition([&]() {
+            return Access::all_idle(editor_preview);
+          }, timeout_ms))
+        return fail(QStringLiteral("Native Vision subject preview did not settle."));
+      if (!editor_preview.hasActiveMask())
+        return fail(QStringLiteral("Native Vision did not create a subject mask from the supplied real photo: %1")
+                        .arg(editor_preview.previewFailureDetail()));
+      real_subject_mask =
+          editor_preview.maskStack().at(editor_preview.activeMaskIndex()).toMap();
+      const auto mask_bytes = real_subject_mask.value(QStringLiteral("segmentationData")).toByteArray();
+      const auto metadata = real_subject_mask.value(QStringLiteral("generatedMaskMetadata")).toMap();
+      if (real_subject_mask.value(QStringLiteral("kind")).toString() != QStringLiteral("subject") ||
+          mask_bytes.isEmpty() ||
+          real_subject_mask.value(QStringLiteral("segmentationWidth")).toInt() <= 0 ||
+          real_subject_mask.value(QStringLiteral("segmentationHeight")).toInt() <= 0 ||
+          !metadata.value(QStringLiteral("objectAwareRefinement")).toBool() ||
+          metadata.value(QStringLiteral("objectAwareRefinementRuntime")).toString().isEmpty())
+        return fail(QStringLiteral("Native Vision subject mask is missing its matte or refinement metadata."));
+      std::cout << "real-photo-selection-runtime="
+                << editor_preview.smartSelectionRuntimeLabel().toStdString()
+                << " object-aware-defaults-applied="
+                << metadata.value(QStringLiteral("objectAwareDefaultsApplied")).toBool()
+                << " fine-edge=" << real_subject_mask.value(QStringLiteral("selectionFineEdge")).toDouble()
+                << " selection-feather=" << real_subject_mask.value(QStringLiteral("selectionFeather")).toDouble()
+                << " matte=" << real_subject_mask.value(QStringLiteral("segmentationWidth")).toInt()
+                << 'x' << real_subject_mask.value(QStringLiteral("segmentationHeight")).toInt()
+                << '\n';
+    } else {
+      QImage matte(512, 512, QImage::Format_RGB32);
+      for (int y = 0; y < 512; ++y) {
+        for (int x = 0; x < 512; ++x) {
+          const double dx = (x - 256.0) / 155.0;
+          const double dy = (y - 280.0) / 230.0;
+          const int alpha = static_cast<int>(255.0 * std::clamp((1.0 - dx * dx - dy * dy) * 15.0, 0.0, 1.0));
+          matte.setPixel(x, y, qRgb(alpha, alpha, alpha));
+        }
       }
+      const auto matte_path = fixture_dir.filePath(QStringLiteral("selection-fixture.png"));
+      if (!matte.save(matte_path) || !editor_preview.addAlphaImageMask(matte_path)) return fail("Selection fixture could not be created.");
+      // Layout proof uses the imported matte unchanged. Expensive refinement is
+      // a separate rendering/performance gate, not a prerequisite to view tools.
+      if (!editor_preview.resetActiveMaskRefinement()) return fail("Imported matte refinement could not reset.");
+      editor_preview.setActiveMaskFeather(0.0);
+      editor_preview.setActiveMaskSelectionSmooth(0.0);
     }
-    const auto matte_path = fixture_dir.filePath(QStringLiteral("selection-fixture.png"));
-    if (!matte.save(matte_path) || !editor_preview.addAlphaImageMask(matte_path)) return fail("Selection fixture could not be created.");
-    // Layout proof uses the imported matte unchanged. Expensive refinement is
-    // a separate rendering/performance gate, not a prerequisite to view tools.
-    if (!editor_preview.resetActiveMaskRefinement()) return fail("Imported matte refinement could not reset.");
-    editor_preview.setActiveMaskFeather(0.0);
-    editor_preview.setActiveMaskSelectionSmooth(0.0);
     QMetaObject::invokeMethod(workspace, "activateEditTool", Q_ARG(QVariant, QStringLiteral("masks")));
     process_layout_events(12);
     send_pointer(QEvent::MouseMove, QPointF(10, 10), Qt::NoButton, Qt::NoButton);
@@ -4754,7 +5826,14 @@ int main(int argc, char** argv) {
     const QJsonObject receipt{{"source", source_path}, {"recipePersistenceDisabled", true},
         {"platform", QGuiApplication::platformName()}, {"compactCarouselInspectorVerified", compact_inspector_verified}, {"filmstripScrollVerified", filmstrip_scroll_verified}, {"filmstripWheelVerified", filmstrip_scroll_verified}, {"wipePointerVerified", true}, {"pointerChangedExposure", true}, {"viewResetPreservedExposure", true}, {"bypassKeyboardNavigation", true},
         {"finiteCompletion", true}, {"idlePaintsStable", true}, {"exportCompletionStates", true}, {"reducedMotionSuppressed", true}, {"selectionRenderFailure", selection_failure}, {"selectionFeather", editor_preview.activeMaskFeather()},
-        {"presetKeyboardVerified", true}, {"maskEnableStateVerified", true}, {"selectionSmooth", editor_preview.activeMaskSelectionSmooth()}, {"selectionFixture", "synthetic ellipse; refinement reset; not AI segmentation"}, {"captures", captures}};
+        {"presetKeyboardVerified", true}, {"maskEnableStateVerified", true}, {"selectionSmooth", editor_preview.activeMaskSelectionSmooth()},
+        {"selectionFixture", optical_real_subject_selection ? "native Apple Vision subject matte from supplied photo; generated-mask refinement defaults recorded" : "synthetic ellipse; refinement reset; not AI segmentation"},
+        {"realSubjectSelection", optical_real_subject_selection},
+        {"selectionRuntime", optical_real_subject_selection ? editor_preview.smartSelectionRuntimeLabel() : QString()},
+        {"selectionRefinementDefaultsApplied", optical_real_subject_selection ? real_subject_mask.value(QStringLiteral("generatedMaskMetadata")).toMap().value(QStringLiteral("objectAwareDefaultsApplied")).toBool() : false},
+        {"selectionFineEdge", optical_real_subject_selection ? real_subject_mask.value(QStringLiteral("selectionFineEdge")).toDouble() : 0.0},
+        {"selectionFeather", optical_real_subject_selection ? real_subject_mask.value(QStringLiteral("selectionFeather")).toDouble() : 0.0},
+        {"captures", captures}};
     QFile receipt_file(QDir(optical_proof_dir).filePath(QStringLiteral("receipt.json")));
     if (captures.size() != (24 + (optical_real_export ? 1 : 0) + (compact_inspector_verified ? 1 : 0) + (filmstrip_scroll_verified ? 1 : 0)) || !receipt_file.open(QIODevice::WriteOnly))
       return fail(QStringLiteral("Optical proof captures or receipt incomplete."));
@@ -4766,7 +5845,8 @@ int main(int argc, char** argv) {
     return run_photo_recipe_clipboard_proof(root_window, catalog_assets, editor_preview,
         engine, source_path, recipe_clipboard_proof_dir);
   }
-  if (!capture_setup_proof_dir.isEmpty()) return run_gaussian_capture_setup_proof(root_window, capture_setup_proof_dir, timeout_ms);
+  if (!capture_setup_proof_dir.isEmpty()) return run_gaussian_capture_setup_proof(root_window, capture_setup_proof_dir, timeout_ms,
+      option_value(arguments, QStringLiteral("--capture-only-state")));
   if (!viewer_film_proof_dir.isEmpty()) {
 #if defined(__APPLE__) && defined(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
     return run_gaussian_viewer_film_proof(root_window,gaussian_scene,option_value(arguments,"--scene-project"),
@@ -4788,23 +5868,298 @@ int main(int argc, char** argv) {
 #endif
   }
 
-  if (arguments.contains("--library-grid-proof")) {
+  if (arguments.contains("--library-membership-proof")) {
+#include "catalog_membership_native_proof.inc"
+  }
+  if (arguments.contains("--library-duration-proof")) {
+#include "catalog_duration_native_proof.inc"
+  }
+  if (arguments.contains("--library-startup-proof")) {
+    QJsonArray captures;
+    auto* workspace = active_workspace(root);
+    auto* popup = find_named_object(root, QStringLiteral("startupLoadingPopup"));
+    if (!workspace || !popup) return fail("Library startup surfaces are unavailable.");
+    root->setProperty("recentUserInput", true);
+    // Exercise the real asynchronous snapshot completion without using the
+    // user's catalog or preferences. The helper returns one offline record.
+    const auto helper_root = fixture_dir.filePath("snapshot-helper");
+    QDir().mkpath(helper_root + "/rust/target/debug");
+    QFile manifest(helper_root + "/rust/Cargo.toml");
+    if (!manifest.open(QIODevice::WriteOnly)) return fail("Cannot create helper fixture.");
+    manifest.close();
+    QFile helper(helper_root + "/rust/target/debug/catalog_snapshot");
+    if (!helper.open(QIODevice::WriteOnly)) return fail("Cannot create snapshot fixture.");
+    helper.write("#!/bin/sh\n/bin/sleep 1\nprintf '%s' '{\"assets\":[{\"asset_id\":\"startup-fixture\",\"location\":{}}],\"drives\":[],\"projects\":[],\"review_states\":{}}'\n");
+    helper.close();
+    helper.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    const auto previous_root = qgetenv("PHOTO_EDITOR_REPOSITORY_ROOT");
+    qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", helper_root.toUtf8());
+    const auto restore_root = qScopeGuard([&]() {
+      if (previous_root.isEmpty()) qunsetenv("PHOTO_EDITOR_REPOSITORY_ROOT");
+      else qputenv("PHOTO_EDITOR_REPOSITORY_ROOT", previous_root);
+    });
+    bool ready_after_publication = false;
+    const auto loading_connection = QObject::connect(&catalog_assets,
+        &photo_editor::desktop::CatalogAssetModel::loadingChanged, &app, [&]() {
+          if (!catalog_assets.loading()) ready_after_publication = catalog_assets.assetCount() == 1;
+        });
+    catalog_assets.refresh();
+    if (!wait_for_condition([&]() { return popup->property("opened").toBool(); }, timeout_ms))
+      return fail("Startup popup did not appear while the catalog was loading.");
+    save_capture_if_requested(root_window, capture_dir, "library-startup-loading", &captures);
+    if (!wait_for_condition([&]() { return !catalog_assets.loading() &&
+        !popup->property("visible").toBool(); }, timeout_ms) || !ready_after_publication)
+      return fail("Startup loading closed before the catalog was published.");
+    QObject::disconnect(loading_connection);
+    catalog_assets.replaceAssetsForTesting({});
+    process_layout_events(8);
+    auto* empty = find_visible_named_item(workspace, "libraryEmptyState");
+    auto* empty_action = find_visible_named_item(workspace, "libraryEmptyStateAction");
+    if (!empty || !empty_action || named_item_visible(workspace, "libraryInspectorPanel"))
+      return fail("Empty library must show an import action and hide the blank inspector.");
+    save_capture_if_requested(root_window, capture_dir, "library-empty", &captures);
+    if (!QMetaObject::invokeMethod(empty_action, "clicked") ||
+        !workspace->property("importModeOpen").toBool())
+      return fail("Empty library import action did not open Import.");
+    workspace->setProperty("importModeOpen", false);
+
+    QVector<photo_editor::desktop::CatalogAssetItem> items;
+    QVector<QString> sources;
+    const QImage source_image(source_path);
+    for (int index = 0; index < 40; ++index) {
+      auto item = make_asset(QStringLiteral("startup-photo-%1").arg(index), source_path, {});
+      item.online = false;
+      items.append(item);
+      const auto path = fixture_dir.filePath(QStringLiteral("startup-thumb-%1.png").arg(index));
+      const auto size = index % 3 == 0 ? QSize(160, 240) : index % 3 == 1 ? QSize(240, 160) : QSize(240, 180);
+      if (!source_image.scaled(size, Qt::IgnoreAspectRatio).save(path))
+        return fail("Cannot prepare mixed-aspect thumbnail fixture.");
+      sources.append(QUrl::fromLocalFile(path).toString());
+    }
+    catalog_assets.replaceAssetsForTesting(items);
+    catalog_assets.selectIndex(0);
+    process_layout_events(8);
+    for (int index = 0; index < items.size(); ++index) {
+      if (!catalog_assets.applyThumbnailResultForTesting(items[index].asset_id, source_path,
+          items[index].adjustment_patch_json, sources[index]))
+        return fail("Delayed thumbnail result was rejected.");
+    }
+    auto* grid = workspace->findChild<QQuickItem*>("studioLibraryGalleryGrid");
+    auto* inspector = workspace->findChild<QQuickItem*>("libraryInspectorPreview");
+    if (!grid || !inspector) return fail("Loaded Library surfaces are unavailable.");
+    const auto thumbnails_ready = [&]() {
+      int ready = 0;
+      int visible = 0;
+      const auto bounds = grid->mapRectToScene(QRectF(0, 0, grid->width(), grid->height()));
+      std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+        if (item->objectName() == "libraryGalleryImage" && item_visible(item) &&
+            item->mapRectToScene(QRectF(0, 0, item->width(), item->height())).intersects(bounds)) {
+          ++visible;
+          if (item->property("status").toInt() == 1) ++ready;
+        }
+        for (auto* child : item->childItems()) visit(child);
+      };
+      visit(grid);
+      return visible > 1 && ready == visible;
+    };
+    if (!wait_for_condition([&]() { return thumbnails_ready() &&
+        inspector->property("source").toString() == sources[0] &&
+        inspector->property("status").toInt() == 1; }, timeout_ms))
+      return fail("Delayed thumbnails did not populate the grid and selected inspector.");
+    for (int index = 0; index < 3; ++index) {
+      const double expected[] = {2.0 / 3.0, 1.5, 4.0 / 3.0};
+      if (!wait_for_condition([&]() {
+        QVariant ratio;
+        return QMetaObject::invokeMethod(workspace, "libraryGalleryAspectRatio",
+            Q_RETURN_ARG(QVariant, ratio), Q_ARG(QVariant, QVariant(index)),
+            Q_ARG(QVariant, QVariant(sources[index])),
+            Q_ARG(QVariant, QVariant(items[index].asset_id))) &&
+            std::abs(ratio.toDouble() - expected[index]) <= 0.01;
+      }, timeout_ms))
+        return fail("Library layout did not discover the source thumbnail aspect ratio.");
+    }
+    // Intrinsic aspect discovery may rebuild rows once; idle and window resize
+    // must then settle, rather than continually feeding painted size into layout.
+    for (const auto width : {1600, 1437, 1600}) {
+      root_window->setWidth(width);
+      QElapsedTimer settle; settle.start();
+      while (settle.elapsed() < 700) { QCoreApplication::processEvents(); QThread::msleep(5); }
+      const auto revision = grid->property("layoutRevision").toInt();
+      settle.restart();
+      while (settle.elapsed() < 500) { QCoreApplication::processEvents(); QThread::msleep(5); }
+      if (grid->property("layoutRevision").toInt() != revision || !thumbnails_ready())
+        return fail("Mixed-aspect Library thumbnails did not settle after resize.");
+    }
+    save_capture_if_requested(root_window, capture_dir, "library-startup-ready", &captures);
+    if (!library_qml_errors.isEmpty())
+      return fail("Library startup raised QML errors: " + library_qml_errors.join('\n'));
+    const QJsonObject result{{"ok", true}, {"startupReadyAfterPublication", ready_after_publication},
+        {"delayedThumbnailsReady", true}, {"inspectorReady", true}, {"resizeSettled", true},
+        {"assetCount", items.size()}, {"captures", captures}};
+    if (!capture_dir.isEmpty()) {
+      QFile receipt(QDir(capture_dir).filePath("receipt.json"));
+      if (!receipt.open(QIODevice::WriteOnly)) return fail("Cannot write startup proof receipt.");
+      receipt.write(QJsonDocument(result).toJson());
+    }
+    std::cout << QJsonDocument(result).toJson().constData();
+    return EXIT_SUCCESS;
+  }
+
+#include "layer_drop_indicator_native_proof.inc"
+#include "layer_move_native_proof.inc"
+#include "direct_cutout_color_native_proof.inc"
+#include "brush_fidelity_native_proof.inc"
+
+  if (arguments.contains("--cutout-adjustment-proof")) {
+    using namespace photo_editor::desktop;
+    using Access = EditorPreviewControllerTestAccess;
+    const QString id = QStringLiteral("cutout-adjustment-native");
+    catalog_assets.replaceAssetsForTesting({make_asset(id, source_path)});
+    catalog_assets.selectIndexWithModifiers(0, 0);
+    if (!QMetaObject::invokeMethod(root, "openSelectedPhotoInEdit") ||
+        !wait_for_condition([&] { return editor_preview.assetId() == id &&
+            Access::all_idle(editor_preview) && active_workspace(root) &&
+            active_workspace(root)->objectName() == "editStudioWorkspace"; }, timeout_ms))
+      return fail("Cutout proof could not open the isolated photo in Edit.");
+    auto* workspace = active_workspace(root);
+    workspace->setProperty("editInspectorTab", "layers");
+    editor_preview.setExposure(0.3);
+    editor_preview.setTemperature(18);
+    const QImage source(source_path);
+    const auto render = [&] {
+      return render_output_image_with_backend(source, parse_edit_recipe_json(Access::recipe_json(editor_preview)),
+          QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32, RenderBackendPreference::CpuOnly);
+    };
+    const auto settle = [&] {
+      return wait_for_condition([&] { return Access::all_idle(editor_preview) &&
+          !editor_preview.photoPaintBusy(); }, timeout_ms);
+    };
+    int button_clicks = 0;
+    const auto click_add = [&] {
+      if (!settle()) return false;
+      process_layout_events(4);
+      auto* button = find_named_item(workspace, "photoLayerAddSplitButton");
+      if (!button || !item_visible(button)) return false;
+      const auto before = render();
+      const auto count = editor_preview.photoLayerCount();
+      const auto point = button->mapToScene(QPointF(button->width() * 0.35, button->height() / 2));
+      QTest::mouseClick(root_window, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+      ++button_clicks;
+      return editor_preview.photoLayerCount() == count + 1 && settle() &&
+          !before.isNull() && render() == before;
+    };
+    if (!click_add()) return fail("Visible Add Layer click must add a neutral first adjustment.");
+    if (!editor_preview.setPhotoLayerAdjustmentValue(0, "exposure", 0.4) ||
+        !editor_preview.setPhotoLayerAdjustmentValue(0, "temperature", -12))
+      return fail("Could not configure the grade below the native cutout.");
+    editor_preview.addMask("rectangle");
+    editor_preview.setActiveMaskFeather(0);
+    editor_preview.setActiveMaskCenterX(0.25);
+    editor_preview.setActiveMaskCenterY(0.5);
+    editor_preview.setActiveMaskRadiusX(0.25);
+    editor_preview.setActiveMaskRadiusY(0.5);
+    const auto mask = editor_preview.maskSets().value(0).toMap();
+    const auto create_cutout = [&](const QString& key) {
+      const auto count = editor_preview.photoLayerCount();
+      if (!QMetaObject::invokeMethod(workspace, "handleMaskSetRowMenuAction",
+              Q_ARG(QVariant, QVariant(key)), Q_ARG(QVariant, QVariant(mask)),
+              Q_ARG(QVariant, QVariant(-1)), Q_ARG(QVariant, QVariant(-1)),
+              Q_ARG(QVariant, QVariant(0))) ||
+          editor_preview.photoLayerCount() != count + 1 || !settle()) return false;
+      QVariant selected;
+      return QMetaObject::invokeMethod(workspace, "setActivePhotoLayer", Q_RETURN_ARG(QVariant, selected),
+          Q_ARG(QVariant, QVariant(0))) && selected.toBool();
+    };
+    QJsonArray captures;
+    if (!create_cutout("copy-pixels") || !click_add())
+      return fail("Linked cutout and second Add Layer click must render safely and preserve colors.");
+    save_capture_if_requested(root_window, capture_dir, "linked-cutout-second-adjustment", &captures);
+    if (!create_cutout("copy-independent") || !editor_preview.photoPaintError().isEmpty() || !click_add())
+      return fail("Independent cutout and another Add Layer click must render safely and preserve colors.");
+    save_capture_if_requested(root_window, capture_dir, "independent-cutout-new-adjustment", &captures);
+    std::cout << QJsonDocument(QJsonObject{{"schema", "cutout-adjustment-native:v1"}, {"ok", true},
+        {"qt_platform", QGuiApplication::platformName()}, {"isolated_data", true},
+        {"native_add_layer_clicks", button_clicks}, {"linked_cutout", true}, {"independent_cutout", true},
+        {"neutral_add_pixels_identical", true}, {"captures", captures}}).toJson().constData();
+    return EXIT_SUCCESS;
+  }
+
+  if (arguments.contains("--library-grid-proof") || arguments.contains("--asset-selection-proof")) {
     root->setProperty("currentWorkspace", root->property("libraryWorkspaceIndex"));
     if (!wait_for_condition([&] { return active_workspace(root) != nullptr &&
-        active_workspace(root)->objectName() == "libraryStudioWorkspace"; }, timeout_ms))
+        active_workspace(root)->objectName() == "libraryStudioWorkspace"; }, timeout_ms,
+        "library-route-ready"))
       return fail("Library route not ready.");
     const auto count = std::clamp(option_int(arguments, "--asset-count", 2000), 20, 10000);
-    catalog_assets.setInteractiveRenderingActive(true);
+    const QImage library_source_image(source_path);
+    if (library_source_image.isNull())
+      return fail("Could not prepare the representative 240-pixel Library thumbnail fixture.");
+    const auto unique_cached_thumbnail_sources =
+        arguments.contains("--unique-cached-thumbnail-sources");
+    const auto library_thumbnail_image = library_source_image.scaled(
+        QSize(240, 160), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    QVector<QString> library_thumbnail_sources;
+    library_thumbnail_sources.reserve(count);
+    if (unique_cached_thumbnail_sources) {
+      for (int index = 0; index < count; ++index) {
+        const auto library_thumbnail_path = fixture_dir.filePath(
+            QStringLiteral("library-grid-thumbnail-%1.png").arg(index));
+        if (!library_thumbnail_image.save(library_thumbnail_path))
+          return fail("Could not write a unique Library thumbnail source.");
+        library_thumbnail_sources.push_back(QUrl::fromLocalFile(library_thumbnail_path).toString());
+      }
+    } else {
+      const auto library_thumbnail_path = fixture_dir.filePath(
+          QStringLiteral("library-grid-thumbnail.png"));
+      if (!library_thumbnail_image.save(library_thumbnail_path))
+        return fail("Could not prepare the representative 240-pixel Library thumbnail fixture.");
+      const auto shared_thumbnail_source = QUrl::fromLocalFile(library_thumbnail_path).toString();
+      for (int index = 0; index < count; ++index)
+        library_thumbnail_sources.push_back(shared_thumbnail_source);
+    }
     QVector<photo_editor::desktop::CatalogAssetItem> items;
-    for (int i = 0; i < count; ++i)
-      items.append(make_asset(QStringLiteral("library-proof-%1").arg(i), source_path));
+    QString selection_recipe;
+    const auto selection_recipe_mb = std::clamp(option_int(arguments, "--selection-recipe-mb", 0), 0, 128);
+    if (arguments.contains("--asset-selection-proof") && selection_recipe_mb > 0) {
+      photo_editor::desktop::EditRecipeState recipe;
+      QVariantMap tiles;
+      for (int tile = 0; tile < selection_recipe_mb * 16; ++tile)
+        tiles.insert(QStringLiteral("%1,0").arg(tile), QString(64 * 1024, QChar('A' + tile % 26)));
+      recipe.layers.append(QVariantMap{{"id", "selection-paint"}, {"kind", "pixel"}, {"name", "Cutout"},
+          {"paintTiles", QVariantMap{{"version", 1}, {"tiles", tiles}}}});
+      selection_recipe = photo_editor::desktop::serialize_adjustment_patch_json(recipe,
+          photo_editor::desktop::all_adjustment_groups(), photo_editor::desktop::AdjustmentPatchScope::AssetBound);
+    }
+    for (int i = 0; i < count; ++i) {
+      auto item = make_asset(QStringLiteral("library-proof-%1").arg(i), source_path,
+                             library_thumbnail_sources.at(i));
+      if (i == 1 || i == 2) item.adjustment_patch_json = selection_recipe;
+      if (unique_cached_thumbnail_sources)
+        item.online = false;
+      items.append(item);
+    }
     QElapsedTimer timer;
     timer.start();
     catalog_assets.replaceAssetsForTesting(items);
-    process_layout_events(8);
+    const auto catalog_replace_ms = timer.elapsed();
+    process_layout_events(8, "library-initial-grid-populate");
+    const auto initial_grid_settle_ms = timer.elapsed() - catalog_replace_ms;
     auto* workspace = active_workspace(root);
     auto* grid = workspace->findChild<QQuickItem*>("studioLibraryGalleryGrid");
     if (!grid || !grid->isVisible()) return fail("Library grid not visible.");
+    QElapsedTimer gallery_assets_probe_timer;
+    gallery_assets_probe_timer.start();
+    const auto gallery_assets_probe = catalog_assets.galleryAssets();
+    const auto gallery_assets_probe_ms = gallery_assets_probe_timer.elapsed();
+    QVariant gallery_rows_probe;
+    QElapsedTimer gallery_rows_probe_timer;
+    gallery_rows_probe_timer.start();
+    const auto gallery_rows_probe_invoked = QMetaObject::invokeMethod(
+        workspace,
+        "libraryGalleryRows",
+        Q_RETURN_ARG(QVariant, gallery_rows_probe),
+        Q_ARG(QVariant, QVariant(grid->property("galleryViewportWidth"))));
+    const auto gallery_rows_probe_ms = gallery_rows_probe_timer.elapsed();
     auto tile_count = [&] {
       std::function<int(QQuickItem*)> count_tiles = [&](QQuickItem* item) {
         int found = item->objectName() == "libraryGalleryTile" ? 1 : 0;
@@ -4825,11 +6180,427 @@ int main(int argc, char** argv) {
     const auto populate_ms = timer.elapsed();
     const auto initial_tiles = tile_count();
     if (!has_tile(0)) return fail("First gallery item was not instantiated.");
-    const auto scroll_end = std::max(0.0, grid->property("contentHeight").toDouble() - grid->height());
+    if (arguments.contains("--asset-selection-proof")) {
+      int opened = 0;
+      const auto asset_connection = QObject::connect(&editor_preview,
+          &photo_editor::desktop::EditorPreviewController::assetChanged, [&] { ++opened; });
+      const auto cleanup = qScopeGuard([&] { QObject::disconnect(asset_connection); });
+      QJsonArray measurements;
+      QJsonArray captures;
+      const auto click = [&](QQuickItem* item, bool double_click) {
+        if (!item || !item->isVisible()) return false;
+        const auto point = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+        QElapsedTimer click_timer; click_timer.start();
+        if (double_click)
+          QTest::mouseDClick(root_window, Qt::LeftButton, Qt::NoModifier, point.toPoint(), 10);
+        else
+          QTest::mouseClick(root_window, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+        const auto dispatch_ms = static_cast<double>(click_timer.nsecsElapsed()) / 1e6;
+        double paint_feedback_ms = 0;
+        if (arguments.contains("--selection-frame-proof")) {
+          QEventLoop paint_loop;
+          QTimer paint_timeout;
+          paint_timeout.setSingleShot(true);
+          int presented_frames = 0;
+          const auto paint_connection = QObject::connect(root_window, &QQuickWindow::frameSwapped,
+              &paint_loop, [&] {
+                if (++presented_frames >= 2) paint_loop.quit();
+                else root_window->update();
+              });
+          QObject::connect(&paint_timeout, &QTimer::timeout, &paint_loop, &QEventLoop::quit);
+          paint_timeout.start(1000);
+          root_window->update();
+          paint_loop.exec();
+          QObject::disconnect(paint_connection);
+          if (presented_frames < 2) return false;
+          paint_feedback_ms = static_cast<double>(click_timer.nsecsElapsed()) / 1e6;
+        }
+        process_layout_events(3, "asset-selection-click");
+        measurements.append(QJsonObject{{"target", item->objectName()},
+            {"double_click", double_click}, {"dispatch_ms", dispatch_ms}, {"paint_feedback_ms", paint_feedback_ms}});
+        return true;
+      };
+      std::function<QQuickItem*(QQuickItem*, int)> tile_at = [&](QQuickItem* item, int index) -> QQuickItem* {
+        if (item->objectName() == "libraryGalleryTile" && item->property("assetIndex").toInt() == index)
+          return item;
+        for (auto* child : item->childItems()) if (auto* found = tile_at(child, index)) return found;
+        return nullptr;
+      };
+      const auto original_asset = editor_preview.assetId();
+      const auto original_opens = opened;
+      if (arguments.contains("--selection-only")) {
+        double max_dispatch_ms = 0;
+        double max_paint_feedback_ms = 0;
+        for (const auto index : {1, 0, 2, 0, 1}) {
+          if (!click(tile_at(grid, index), false) || catalog_assets.selectedIndex() != index ||
+              editor_preview.assetId() != original_asset || opened != original_opens)
+            return fail("Selection latency fixture must select without opening any image.");
+          max_dispatch_ms = std::max(max_dispatch_ms, measurements.last().toObject().value("dispatch_ms").toDouble());
+          max_paint_feedback_ms = std::max(max_paint_feedback_ms, measurements.last().toObject().value("paint_feedback_ms").toDouble());
+        }
+        const auto budget_ms = option_int(arguments, "--selection-budget-ms", 0);
+        const auto paint_budget_ms = option_int(arguments, "--selection-paint-budget-ms", 0);
+        const auto within_budget = (budget_ms <= 0 || max_dispatch_ms < budget_ms) &&
+            (paint_budget_ms <= 0 || max_paint_feedback_ms < paint_budget_ms);
+        std::cout << QJsonDocument(QJsonObject{{"schema", "selection-latency-proof:v1"}, {"ok", within_budget},
+            {"recipe_mb", selection_recipe_mb}, {"max_dispatch_ms", max_dispatch_ms}, {"budget_ms", budget_ms},
+            {"max_paint_feedback_ms", max_paint_feedback_ms}, {"paint_budget_ms", paint_budget_ms},
+            {"opens", opened - original_opens}, {"measurements", measurements}}).toJson().constData();
+        return within_budget ? EXIT_SUCCESS : EXIT_FAILURE;
+      }
+      if (!click(tile_at(grid, 1), false) || catalog_assets.selectedIndex() != 1 ||
+          editor_preview.assetId() != original_asset || opened != original_opens)
+        return fail("A Library single click must select without opening or replacing the editor.");
+      save_capture_if_requested(root_window, capture_dir, "library-selection", &captures);
+      if (!click(tile_at(grid, 1), true) || !wait_for_condition([&] {
+            return editor_preview.assetId() == "library-proof-1" &&
+                root->property("currentWorkspace") == root->property("editWorkspaceIndex");
+          }, timeout_ms, "library-double-click-open"))
+        return fail("A Library double click must open the selected photo in Edit.");
+      workspace = active_workspace(root);
+      if (!wait_for_condition([&] { return !root->property("workspaceTransitionActive").toBool() &&
+          workspace->property("pageContentReady").toBool(); }, timeout_ms, "filmstrip-selection-ready"))
+        return fail("Edit did not finish opening before the filmstrip selection test.");
+      workspace->setProperty("editFilmstripCollapsed", false);
+      process_layout_events(8, "filmstrip-visible");
+      std::function<QQuickItem*(QQuickItem*)> find_next_card = [&](QQuickItem* item) -> QQuickItem* {
+        if (item->objectName() == "editFilmstripThumbnailCard" && item->property("assetIndex").toInt() == 2)
+          return item;
+        for (auto* child : item->childItems()) if (auto* found = find_next_card(child)) return found;
+        return nullptr;
+      };
+      auto* next_card = find_next_card(qobject_cast<QQuickItem*>(workspace));
+      const auto filmstrip_opens = opened;
+      if (!click(next_card, false) || catalog_assets.selectedIndex() != 2 ||
+          editor_preview.assetId() != "library-proof-1" || opened != filmstrip_opens) {
+        std::cerr << "Filmstrip selection: selected=" << catalog_assets.selectedIndex()
+                  << " asset=" << editor_preview.assetId().toStdString() << " opens=" << opened - filmstrip_opens
+                  << " card=" << (next_card != nullptr) << '\n';
+        return fail("A filmstrip single click must leave the active editor document untouched.");
+      }
+      QVariant export_payload;
+      if (!QMetaObject::invokeMethod(root, "currentExportPayload", Q_RETURN_ARG(QVariant, export_payload)) ||
+          export_payload.toMap().value("assetId").toString() != "library-proof-1")
+        return fail("Export must still target the open image after selecting another thumbnail.");
+      save_capture_if_requested(root_window, capture_dir, "filmstrip-selection", &captures);
+      if (!click(next_card, true) || !wait_for_condition([&] {
+            return editor_preview.assetId() == "library-proof-2";
+          }, timeout_ms, "filmstrip-double-click-open"))
+        return fail("A filmstrip double click must open the newly selected photo.");
+      QVariant boards_added;
+      if (!QMetaObject::invokeMethod(root, "addBoardsFromCurrentEdit", Q_RETURN_ARG(QVariant, boards_added)) ||
+          !boards_added.toBool()) return fail("Could not prepare the isolated board-selection fixture.");
+      QVariant board_added;
+      if (!QMetaObject::invokeMethod(root, "addEditBoard", Q_RETURN_ARG(QVariant, board_added),
+              Q_ARG(QVariant, false)) || !board_added.toBool()) return fail("Could not add the second board.");
+      process_layout_events(8, "board-selection-fixture");
+      workspace = active_workspace(root);
+      if (!wait_for_condition([&] { return !root->property("workspaceTransitionActive").toBool() &&
+          !workspace->property("editBoardSwitchBusy").toBool(); }, timeout_ms, "board-selection-ready"))
+        return fail("Board fixture did not finish opening before its selection test.");
+      const auto loaded_board = editor_preview.assetId();
+      const auto board_opens = opened;
+      if (!click(find_named_item(workspace, "editCanvasBoardHeaderSelect0"), false) ||
+          workspace->property("selectedEditBoardIndex").toInt() != 0 ||
+          editor_preview.assetId() != loaded_board || opened != board_opens || carousel_document.currentIndex() != 1) {
+        auto* area = find_named_item(workspace, "editCanvasBoardHeaderSelect0");
+        std::cerr << "Board selection: selected=" << workspace->property("selectedEditBoardIndex").toInt()
+                  << " loaded=" << editor_preview.assetId().toStdString() << " expected=" << loaded_board.toStdString()
+                  << " opens=" << opened - board_opens << " current=" << carousel_document.currentIndex()
+                  << " area=" << (area != nullptr) << " visible=" << (area && area->isVisible()) << '\n';
+        QJsonArray failure_captures;
+        save_capture_if_requested(root_window, capture_dir, "board-selection-failure", &failure_captures);
+        return fail("A board single click must highlight without loading or changing the edit target.");
+      }
+      auto* first_board = find_named_item(workspace, "editCanvasBoard0");
+      auto* second_board = find_named_item(workspace, "editCanvasBoard1");
+      if (!first_board || !first_board->property("highlightedBoard").toBool() ||
+          !second_board || second_board->property("highlightedBoard").toBool())
+        return fail("Board highlighting must follow selection while its edit target stays unchanged.");
+      if (!capture_dir.isEmpty()) {
+        QElapsedTimer highlight_timer; highlight_timer.start();
+        wait_for_condition([&] { return highlight_timer.elapsed() >= 250; }, 1000, "board-highlight-frame");
+      }
+      save_capture_if_requested(root_window, capture_dir, "board-selection", &captures);
+      if (!click(find_named_item(workspace, "editCanvasBoardHeaderSelect0"), true) ||
+          !wait_for_condition([&] { return carousel_document.currentIndex() == 0 &&
+              editor_preview.assetId() != loaded_board; }, timeout_ms, "board-double-click-open"))
+        return fail("A board double click must open that board for editing.");
+      root->setProperty("editBoardsActive", false);
+      root->setProperty("carouselPhotoEditActive", false);
+      carousel_document.createCarouselWithSettings({{"carouselName", "Media activation fixture"},
+          {"documentFormat", "4x5"}, {"slideCount", 1}, {"templateKind", "full"}});
+      QQmlComponent carousel_component(&engine, QUrl::fromLocalFile(
+          QDir(QFileInfo(main_qml_path).absolutePath()).filePath("workspaces/CarouselView.qml")));
+      std::unique_ptr<QObject> carousel_object(carousel_component.createWithInitialProperties(
+          {{"integratedEdit", true}, {"width", root_window->width()}, {"height", root_window->height()}}));
+      auto* carousel_view = qobject_cast<QQuickItem*>(carousel_object.get());
+      if (!carousel_view) return fail("Could not create the Carousel media activation fixture.");
+      carousel_view->setParentItem(root_window->contentItem());
+      carousel_view->setZ(1000);
+      carousel_view->setProperty("mediaPickerAssets", QVariantList{QVariantMap{
+          {"assetId", "activation-photo"}, {"mediaType", "photo"}, {"online", true},
+          {"filePath", source_path}, {"thumbnailSource", QUrl::fromLocalFile(source_path).toString()}}});
+      process_layout_events(8, "carousel-media-fixture");
+      auto* media_thumb = find_named_item(carousel_view, "carouselQuickLibraryAssetactivation-photo");
+      if (!media_thumb) return fail("Carousel quick-library thumbnail was not instantiated.");
+      // Isolate the production delegate from inspector scrolling; retain its
+      // original QML creation context and handlers to test real click routing.
+      media_thumb->setParentItem(carousel_view);
+      media_thumb->setPosition(QPointF(20, 20));
+      media_thumb->setZ(2000);
+      media_thumb->setVisible(true);
+      if (!click(media_thumb, false) ||
+          carousel_view->property("selectedQuickLibraryAssetId").toString() != "activation-photo" ||
+          carousel_document.selectionDetails().value("hasMedia").toBool())
+        return fail("A Carousel media single click must select without placing or loading the image.");
+      if (!click(media_thumb, true) ||
+          !carousel_document.selectionDetails().value("hasMedia").toBool())
+        return fail("A Carousel media double click must place the selected image.");
+      std::cout << QJsonDocument(QJsonObject{{"schema", "asset-selection-proof:v1"}, {"ok", true},
+          {"library_select_only", true}, {"filmstrip_select_only", true}, {"board_select_only", true},
+          {"carousel_media_select_only", true}, {"export_keeps_open_image", true},
+          {"double_click_open", true}, {"isolated_data", true}, {"measurements", measurements},
+          {"captures", captures}}).toJson().constData();
+      return EXIT_SUCCESS;
+    }
+    QJsonArray captures;
+    auto* app_navigation_bar = root->findChild<QQuickItem*>(QStringLiteral("appNavigationBar"));
+    auto* main_workspace_surface = root->findChild<QQuickItem*>(QStringLiteral("mainWorkspaceSurface"));
+    if (!app_navigation_bar || !main_workspace_surface)
+      return fail("Library scroll proof requires the shell navigation and workspace surface.");
+    const auto app_navigation_y_before_scroll = app_navigation_bar->mapRectToScene(
+        QRectF(0, 0, app_navigation_bar->width(), app_navigation_bar->height())).y();
+    const auto workspace_surface_y_before_scroll = main_workspace_surface->mapRectToScene(
+        QRectF(0, 0, main_workspace_surface->width(), main_workspace_surface->height())).y();
+    const auto grid_y_before_scroll = grid->mapRectToScene(
+        QRectF(0, 0, grid->width(), grid->height())).y();
+    save_capture_if_requested(root_window, capture_dir, "library-top-before-scroll", &captures);
+    // ListView refines its estimated content height as the final, shorter row
+    // is instantiated. Compare against the current scroll limit each frame.
+    const auto scroll_end = [&]() {
+      return std::max(0.0, grid->property("contentHeight").toDouble() - grid->height());
+    };
+    const auto layout_revision_before_scroll = grid->property("layoutRevision").toInt();
+    std::function<QQuickItem*(QQuickItem*, int)> find_tile_by_index = [&](QQuickItem* item, int index) -> QQuickItem* {
+      if (item->objectName() == "libraryGalleryTile" && item->property("assetIndex").toInt() == index)
+        return item;
+      for (auto* child : item->childItems()) {
+        if (auto* found = find_tile_by_index(child, index))
+          return found;
+      }
+      return nullptr;
+    };
+    const auto visible_thumbnail_readiness = [&]() {
+      QPair<int, int> counts{0, 0};
+      const auto viewport_bounds = grid->mapRectToScene(QRectF(0, 0, grid->width(), grid->height()));
+      std::function<void(QQuickItem*)> visit = [&](QQuickItem* item) {
+        if (item->objectName() == "libraryGalleryTile" && item->isVisible()) {
+          const auto tile_bounds = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+          if (tile_bounds.intersects(viewport_bounds)) {
+            ++counts.first;
+            std::function<QQuickItem*(QQuickItem*)> find_image = [&](QQuickItem* parent) -> QQuickItem* {
+              for (auto* child : parent->childItems()) {
+                if (child->objectName() == "libraryGalleryImage")
+                  return child;
+                if (auto* nested = find_image(child))
+                  return nested;
+              }
+              return nullptr;
+            };
+            if (auto* image = find_image(item); image != nullptr && image->property("status").toInt() == 1)
+              ++counts.second;
+          }
+        }
+        for (auto* child : item->childItems())
+          visit(child);
+      };
+      visit(grid);
+      return counts;
+    };
+    QPointer<QQuickItem> first_tile_before_scroll(find_tile_by_index(grid, 0));
+    if (first_tile_before_scroll.isNull())
+      return fail("First library tile disappeared before wheel input started.");
+    const auto wheel_point = grid->mapToScene(QPointF(grid->width() / 2.0, grid->height() / 2.0));
+    const auto wheel_global_point = root_window->mapToGlobal(wheel_point.toPoint());
+    std::vector<double> wheel_event_to_frame_samples;
+    wheel_event_to_frame_samples.reserve(256);
+    std::vector<double> wheel_dispatch_samples;
+    wheel_dispatch_samples.reserve(256);
+    QElapsedTimer wheel_heartbeat_clock;
+    wheel_heartbeat_clock.start();
+    qint64 wheel_heartbeat_last_ms = wheel_heartbeat_clock.elapsed();
+    qint64 wheel_event_heartbeat_max_gap_ms = 0;
+    bool wheel_event_heartbeat_active = false;
+    QTimer wheel_heartbeat;
+    wheel_heartbeat.setInterval(1);
+    const auto heartbeat_connection = QObject::connect(&wheel_heartbeat, &QTimer::timeout,
+        root_window, [&]() {
+          const auto now_ms = wheel_heartbeat_clock.elapsed();
+          if (wheel_event_heartbeat_active)
+            wheel_event_heartbeat_max_gap_ms = std::max(
+                wheel_event_heartbeat_max_gap_ms, now_ms - wheel_heartbeat_last_ms);
+          wheel_heartbeat_last_ms = now_ms;
+        });
+    wheel_heartbeat.start();
     timer.restart();
-    grid->setProperty("contentY", scroll_end);
-    process_layout_events(8);
+    int wheel_event_count = 0;
+    bool first_tile_retained_after_first_wheel = false;
+    int slowest_wheel_event_index = 0;
+    double slowest_wheel_event_content_y = 0.0;
+    double slowest_wheel_event_ms = -1.0;
+    int visible_thumbnail_frame_count = 0;
+    int visible_thumbnail_ready_frame_count = 0;
+    int visible_thumbnail_asset_samples = 0;
+    int visible_thumbnail_ready_asset_samples = 0;
+    while (grid->property("contentY").toDouble() < scroll_end() - 1.0 && wheel_event_count < 512) {
+      const auto content_y_before = grid->property("contentY").toDouble();
+      wheel_event_heartbeat_max_gap_ms = 0;
+      wheel_heartbeat_last_ms = wheel_heartbeat_clock.elapsed();
+      wheel_event_heartbeat_active = true;
+      QElapsedTimer wheel_event_timer;
+      wheel_event_timer.start();
+      QWheelEvent wheel(wheel_point, wheel_global_point, QPoint(0, -180), QPoint(0, -120),
+                        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+      QEventLoop frame_loop;
+      QTimer frame_timeout;
+      frame_timeout.setSingleShot(true);
+      bool wheel_frame_presented = false;
+      bool frame_timed_out = false;
+      const auto frame_connection = QObject::connect(
+          root_window, &QQuickWindow::frameSwapped, &frame_loop, [&]() {
+            wheel_frame_presented = true;
+            frame_loop.quit();
+          });
+      const auto timeout_connection = QObject::connect(
+          &frame_timeout, &QTimer::timeout, &frame_loop, [&]() {
+            frame_timed_out = true;
+            frame_loop.quit();
+          });
+      frame_timeout.start(1000);
+      QElapsedTimer wheel_dispatch_timer;
+      wheel_dispatch_timer.start();
+      QCoreApplication::sendEvent(root_window, &wheel);
+      wheel_dispatch_samples.push_back(static_cast<double>(wheel_dispatch_timer.elapsed()));
+      ++wheel_event_count;
+      if (!wheel_frame_presented)
+        frame_loop.exec();
+      frame_timeout.stop();
+      QObject::disconnect(frame_connection);
+      QObject::disconnect(timeout_connection);
+      const auto heartbeat_tail_gap_ms = wheel_heartbeat_clock.elapsed() - wheel_heartbeat_last_ms;
+      wheel_event_heartbeat_max_gap_ms = std::max(wheel_event_heartbeat_max_gap_ms,
+                                                   heartbeat_tail_gap_ms);
+      wheel_event_heartbeat_active = false;
+      const auto wheel_event_moved_content = grid->property("contentY").toDouble() > content_y_before + 0.5;
+      if (!wheel_event_moved_content || !wheel_frame_presented) {
+        save_capture_if_requested(root_window, capture_dir, "library-wheel-failure", nullptr);
+        const auto grid_bounds = grid->mapRectToScene(QRectF(0, 0, grid->width(), grid->height()));
+        std::cerr << "Library wheel diagnostic: accepted=" << wheel.isAccepted()
+                  << " before=" << content_y_before
+                  << " after=" << grid->property("contentY").toDouble()
+                  << " end=" << scroll_end()
+                  << " gridVisible=" << grid->isVisible()
+                  << " gridEnabled=" << grid->isEnabled()
+                  << " frameTimedOut=" << frame_timed_out
+                  << " gridRect=" << grid_bounds.x() << ',' << grid_bounds.y() << ','
+                  << grid_bounds.width() << ',' << grid_bounds.height()
+                  << " wheelPos=" << wheel_point.x() << ',' << wheel_point.y()
+                  << " window=" << root_window->width() << 'x' << root_window->height() << '\n';
+        return fail("Library grid wheel input did not move content and present a new frame.");
+      }
+      const auto event_to_frame_ms = static_cast<double>(wheel_event_timer.elapsed());
+      wheel_event_to_frame_samples.push_back(event_to_frame_ms);
+      const auto thumbnail_readiness = visible_thumbnail_readiness();
+      if (thumbnail_readiness.first > 0) {
+        ++visible_thumbnail_frame_count;
+        visible_thumbnail_asset_samples += thumbnail_readiness.first;
+        visible_thumbnail_ready_asset_samples += thumbnail_readiness.second;
+        if (thumbnail_readiness.second > 0)
+          ++visible_thumbnail_ready_frame_count;
+      }
+      if (wheel_event_count == 1)
+        first_tile_retained_after_first_wheel = !first_tile_before_scroll.isNull() &&
+            first_tile_before_scroll->property("assetIndex").toInt() == 0;
+      if (event_to_frame_ms > slowest_wheel_event_ms) {
+        slowest_wheel_event_ms = event_to_frame_ms;
+        slowest_wheel_event_index = wheel_event_count;
+        slowest_wheel_event_content_y = grid->property("contentY").toDouble();
+      }
+      if (event_to_frame_ms > 50.0) {
+        std::cerr << "Library slow wheel detail: event=" << wheel_event_count
+                  << " eventToFrame=" << event_to_frame_ms
+                  << "ms dispatch=" << wheel_dispatch_samples.back()
+                  << "ms guiHeartbeatGap=" << wheel_event_heartbeat_max_gap_ms
+                  << "ms contentY=" << grid->property("contentY").toDouble()
+                  << "/" << scroll_end()
+                  << " listCount=" << grid->property("count").toInt()
+                  << " currentIndex=" << grid->property("currentIndex").toInt()
+                  << " tiles=" << tile_count()
+                  << " layoutRevision=" << grid->property("layoutRevision").toInt()
+                  << " contentHeight=" << grid->property("contentHeight").toDouble()
+                  << " editLoaded=" << root->property("editWorkspaceLoaded").toBool()
+                  << " carouselLoaded=" << root->property("carouselWorkspaceLoaded").toBool()
+                  << " timelineLoaded=" << root->property("timelineWorkspaceLoaded").toBool()
+                  << " exportLoaded=" << root->property("exportWorkspaceLoaded").toBool()
+                  << " qmlFrameMax=" << root->property("qmlFrameMaxIntervalMs").toDouble()
+                  << " qmlFrameJank=" << root->property("qmlFrameJankCount").toInt()
+                  << '\n';
+      }
+    }
+    QObject::disconnect(heartbeat_connection);
     const auto scroll_ms = timer.elapsed();
+    const auto app_navigation_y_after_scroll = app_navigation_bar->mapRectToScene(
+        QRectF(0, 0, app_navigation_bar->width(), app_navigation_bar->height())).y();
+    const auto workspace_surface_y_after_scroll = main_workspace_surface->mapRectToScene(
+        QRectF(0, 0, main_workspace_surface->width(), main_workspace_surface->height())).y();
+    const auto grid_y_after_scroll = grid->mapRectToScene(
+        QRectF(0, 0, grid->width(), grid->height())).y();
+    if (!app_navigation_bar->isVisible() ||
+        std::abs(app_navigation_y_after_scroll - app_navigation_y_before_scroll) > 1.0 ||
+        std::abs(workspace_surface_y_after_scroll - workspace_surface_y_before_scroll) > 1.0 ||
+        std::abs(grid_y_after_scroll - grid_y_before_scroll) > 1.0)
+      return fail("Library wheel input moved or hid the shell navigation instead of only scrolling the gallery.");
+    const auto wheel_event_summary = summarize_samples(wheel_event_to_frame_samples);
+    const auto wheel_dispatch_summary = summarize_samples(wheel_dispatch_samples);
+    QElapsedTimer bottom_thumbnail_readiness_timer;
+    bottom_thumbnail_readiness_timer.start();
+    QPair<int, int> bottom_thumbnail_readiness;
+    const auto bottom_visible_thumbnails_ready = wait_for_condition([&]() {
+      bottom_thumbnail_readiness = visible_thumbnail_readiness();
+      return bottom_thumbnail_readiness.first > 0 &&
+             bottom_thumbnail_readiness.second == bottom_thumbnail_readiness.first;
+    }, timeout_ms, "library-bottom-visible-thumbnails");
+    const auto bottom_thumbnail_readiness_ms = bottom_thumbnail_readiness_timer.elapsed();
+    const auto scroll_layout_rebuilds = grid->property("layoutRevision").toInt() - layout_revision_before_scroll;
+    if (grid->property("contentY").toDouble() < scroll_end() - 1.0)
+      return fail("Library grid wheel input did not reach the final virtualized row.");
+    if (scroll_layout_rebuilds != 0)
+      return fail("Default 3:2 thumbnail loads should not rebuild every gallery row while scrolling.");
+    if (visible_thumbnail_frame_count == 0 || visible_thumbnail_ready_frame_count == 0 ||
+        !bottom_visible_thumbnails_ready) {
+      std::cerr << "Library thumbnail readiness: frames=" << visible_thumbnail_frame_count
+                << " framesWithReady=" << visible_thumbnail_ready_frame_count
+                << " readySamples=" << visible_thumbnail_ready_asset_samples << "/"
+                << visible_thumbnail_asset_samples
+                << " bottomReady=" << bottom_thumbnail_readiness.second << "/"
+                << bottom_thumbnail_readiness.first
+                << " bottomWaitMs=" << bottom_thumbnail_readiness_ms
+                << " activeWorkers=" << catalog_assets.activeThumbnailWorkerCount()
+                << " pendingWorkers=" << catalog_assets.pendingThumbnailWorkerCount() << '\n';
+      return fail("The Library should present ready thumbnails during wheel scrolling and finish the visible row after motion stops.");
+    }
+    if (wheel_event_summary.p95_ms > 50.0 || wheel_event_summary.max_ms > 100.0) {
+      std::cerr << "Library wheel latency: p95=" << wheel_event_summary.p95_ms
+                << "ms max=" << wheel_event_summary.max_ms
+                << "ms dispatchP95=" << wheel_dispatch_summary.p95_ms
+                << "ms dispatchMax=" << wheel_dispatch_summary.max_ms
+                << "ms slowestEvent=" << slowest_wheel_event_index
+                << " contentY=" << slowest_wheel_event_content_y
+                << " rowRebuilds=" << scroll_layout_rebuilds
+                << " firstTileRetained=" << first_tile_retained_after_first_wheel << '\n';
+      return fail("Library grid wheel-to-present latency exceeded the 50/100 ms p95/max budget.");
+    }
     const auto end_tiles = tile_count();
     if (!has_tile(count - 1)) return fail("Scrolling failed to instantiate the last gallery item.");
     auto publish_images = [&](int first, int last) {
@@ -4837,7 +6608,7 @@ int main(int argc, char** argv) {
         const auto& item = items[index];
         const auto patch = catalog_assets.assetById(item.asset_id).value("adjustmentPatchJson").toString();
         if (!catalog_assets.applyThumbnailResultForTesting(item.asset_id, item.file_path, patch,
-            QUrl::fromLocalFile(source_path).toString())) return false;
+            item.thumbnail_source)) return false;
       }
       return wait_for_condition([&] {
         std::function<int(QQuickItem*)> ready_images = [&](QQuickItem* item) {
@@ -4846,15 +6617,15 @@ int main(int argc, char** argv) {
           return found;
         };
         return ready_images(grid) > 0;
-      }, timeout_ms);
+      }, timeout_ms, first == 0 ? "library-top-thumb-publication"
+                                : "library-bottom-thumb-publication");
     };
-    QJsonArray captures;
     if (!publish_images(std::max(0, count - 40), count - 1)) return fail("End thumbnails did not become ready.");
     save_capture_if_requested(root_window, capture_dir, "library-end", &captures);
     grid->setProperty("contentY", 0.0);
-    process_layout_events(4);
+    process_layout_events(4, "library-return-to-top");
     if (!publish_images(0, std::min(39, count - 1))) return fail("Start thumbnails did not become ready.");
-    process_layout_events(8);
+    process_layout_events(8, "library-top-thumb-settle");
     std::function<QQuickItem*(QQuickItem*)> first_tile = [&](QQuickItem* item) -> QQuickItem* {
       if (item->objectName() == "libraryGalleryTile" && item->property("assetIndex").toInt() == 0) return item;
       for (auto* child : item->childItems()) if (auto* found = first_tile(child)) return found;
@@ -4866,34 +6637,39 @@ int main(int argc, char** argv) {
     for (int update = 0; update < 30; ++update) {
       catalog_assets.dataChanged(catalog_assets.index(0, 0), catalog_assets.index(0, 0),
           {photo_editor::desktop::CatalogAssetModel::RatingRole});
-      process_layout_events(2);
+      process_layout_events(2, "library-metadata-update");
     }
     const auto update_ms = timer.elapsed();
     const auto delegate_retained = !retained_tile.isNull();
     const auto layout_rebuilds = grid->property("layoutRevision").toInt() - layout_revision;
     if (arguments.contains("--require-incremental") && (!delegate_retained || layout_rebuilds != 0))
       return fail("A metadata-only update recreated gallery delegates.");
-    save_capture_if_requested(root_window, capture_dir, "library-start", &captures);
     if (!has_tile(0)) return fail("Scrolling back lost the first gallery item.");
     if (!QMetaObject::invokeMethod(workspace, "selectAsset", Q_ARG(QVariant, QVariant(0)),
         Q_ARG(QVariant, QVariant(0))) || catalog_assets.selectedIndex() != 0)
       return fail("Virtualized gallery selection did not preserve the asset index.");
     catalog_assets.setSelectedRating(4);
-    process_layout_events(4);
+    process_layout_events(4, "library-rating-update");
     if (!first_tile(grid) || first_tile(grid)->property("rating").toInt() != 4)
       return fail("An incremental rating update did not reach the visible tile.");
     catalog_assets.toggleSelectedPick();
-    process_layout_events(4);
+    process_layout_events(4, "library-pick-update");
     if (!first_tile(grid)->property("picked").toBool())
       return fail("An incremental pick update did not reach the visible tile.");
-    save_capture_if_requested(root_window, capture_dir, "library-rated", &captures);
+    QElapsedTimer filter_apply_timer;
+    filter_apply_timer.start();
     catalog_assets.setMinimumRatingFilter(4);
-    process_layout_events(6);
+    const auto filter_model_update_ms = filter_apply_timer.elapsed();
+    process_layout_events(6, "library-filter-apply");
+    const auto filter_apply_ms = filter_apply_timer.elapsed();
     if (catalog_assets.assetCount() != 1 || !first_tile(grid) ||
         first_tile(grid)->property("assetId").toString() != items[0].asset_id)
       return fail("Rating filter did not rebuild the gallery with the correct identity.");
+    QElapsedTimer filter_clear_timer;
+    filter_clear_timer.start();
     catalog_assets.setMinimumRatingFilter(0);
-    process_layout_events(6);
+    process_layout_events(6, "library-filter-clear");
+    const auto filter_clear_ms = filter_clear_timer.elapsed();
     if (catalog_assets.assetCount() != count || !first_tile(grid) ||
         first_tile(grid)->property("rating").toInt() != 4)
       return fail("Clearing the filter lost the incrementally updated rating.");
@@ -4906,9 +6682,47 @@ int main(int argc, char** argv) {
     if (arguments.contains("--require-virtualized") &&
         (initial_tiles <= 0 || initial_tiles > 100 || end_tiles <= 0 || end_tiles > 100))
       return fail("Library created an unbounded number of delegates.");
-    std::cout << QJsonDocument(QJsonObject{{"assets", count}, {"populate_ms", populate_ms},
-        {"scroll_ms", scroll_ms}, {"initial_tiles", initial_tiles}, {"end_tiles", end_tiles},
-        {"metadata_update_ms", update_ms}, {"delegate_retained", delegate_retained}, {"layout_rebuilds", layout_rebuilds}}).toJson().constData();
+    const QJsonObject result{{"assets", count}, {"populate_ms", populate_ms},
+        {"catalog_replace_ms", catalog_replace_ms},
+        {"initial_grid_settle_ms", initial_grid_settle_ms},
+        {"gallery_assets_probe_count", gallery_assets_probe.size()},
+        {"gallery_assets_probe_ms", gallery_assets_probe_ms},
+        {"gallery_rows_probe_invoked", gallery_rows_probe_invoked},
+        {"gallery_rows_probe_ms", gallery_rows_probe_ms},
+        {"scroll_ms", scroll_ms}, {"wheel_event_count", wheel_event_count},
+        {"wheel_event_to_frame_p95_ms", wheel_event_summary.p95_ms},
+        {"wheel_event_to_frame_max_ms", wheel_event_summary.max_ms},
+        {"wheel_dispatch_p95_ms", wheel_dispatch_summary.p95_ms},
+        {"wheel_dispatch_max_ms", wheel_dispatch_summary.max_ms},
+        {"slowest_wheel_event_index", slowest_wheel_event_index},
+        {"slowest_wheel_event_content_y", slowest_wheel_event_content_y},
+        {"visible_thumbnail_frame_count", visible_thumbnail_frame_count},
+        {"visible_thumbnail_ready_frame_count", visible_thumbnail_ready_frame_count},
+        {"visible_thumbnail_asset_samples", visible_thumbnail_asset_samples},
+        {"visible_thumbnail_ready_asset_samples", visible_thumbnail_ready_asset_samples},
+        {"visible_thumbnail_readiness_ratio", visible_thumbnail_asset_samples > 0
+            ? static_cast<double>(visible_thumbnail_ready_asset_samples) / visible_thumbnail_asset_samples
+            : 0.0},
+        {"bottom_visible_thumbnail_count", bottom_thumbnail_readiness.first},
+        {"bottom_visible_thumbnail_ready_count", bottom_thumbnail_readiness.second},
+        {"bottom_thumbnail_readiness_ms", bottom_thumbnail_readiness_ms},
+        {"unique_cached_thumbnail_sources", unique_cached_thumbnail_sources},
+        {"first_tile_retained_after_first_wheel", first_tile_retained_after_first_wheel},
+        {"scroll_layout_rebuilds", scroll_layout_rebuilds},
+        {"initial_tiles", initial_tiles}, {"end_tiles", end_tiles},
+        {"metadata_update_ms", update_ms}, {"delegate_retained", delegate_retained},
+        {"filter_model_update_ms", filter_model_update_ms},
+        {"filter_apply_ms", filter_apply_ms}, {"filter_clear_ms", filter_clear_ms},
+        {"layout_rebuilds", layout_rebuilds}, {"captures", captures}};
+    if (!capture_dir.isEmpty()) {
+      if (captures.size() != 2)
+        return fail("Large-catalog visual proof did not capture both the top and bottom gallery states.");
+      QFile receipt_file(QDir(capture_dir).filePath(QStringLiteral("receipt.json")));
+      if (!receipt_file.open(QIODevice::WriteOnly))
+        return fail("Large-catalog visual receipt could not be written.");
+      receipt_file.write(QJsonDocument(result).toJson());
+    }
+    std::cout << QJsonDocument(result).toJson().constData();
     return EXIT_SUCCESS;
   }
 
@@ -5166,6 +6980,9 @@ int main(int argc, char** argv) {
     return EXIT_SUCCESS;
   }
 
+  // Native interaction measurements use the complete shell and isolated storage.
+#include "editor_responsiveness_proof.inc"
+
   if (!timeline_ui_proof_dir.isEmpty()) {
     auto timeline_media_asset = make_asset(
         QStringLiteral("timeline-proof-library-video"),
@@ -5199,11 +7016,16 @@ int main(int argc, char** argv) {
   std::vector<double> open_samples;
   std::vector<double> masks_samples;
   std::vector<double> brush_page_samples;
+  std::vector<double> brush_feedback_first_use_samples;
+  std::vector<double> brush_stroke_first_use_samples;
   std::vector<double> brush_feedback_samples;
+  std::vector<double> brush_raster_completion_samples;
   std::vector<double> brush_commit_visible_samples;
   std::vector<double> tool_draft_samples;
   std::vector<double> carousel_route_samples;
+  std::vector<double> carousel_input_dispatch_samples;
   std::vector<double> timeline_route_samples;
+  std::vector<double> timeline_input_dispatch_samples;
   std::vector<double> export_route_samples;
   std::vector<double> frame_tick_samples;
 
@@ -5213,11 +7035,15 @@ int main(int argc, char** argv) {
   open_samples.reserve(static_cast<std::size_t>(iterations));
   masks_samples.reserve(static_cast<std::size_t>(iterations));
   brush_page_samples.reserve(static_cast<std::size_t>(iterations));
+  brush_feedback_first_use_samples.reserve(1);
   brush_feedback_samples.reserve(static_cast<std::size_t>(iterations));
+  brush_raster_completion_samples.reserve(static_cast<std::size_t>(iterations));
   brush_commit_visible_samples.reserve(static_cast<std::size_t>(iterations));
   tool_draft_samples.reserve(static_cast<std::size_t>(iterations));
   carousel_route_samples.reserve(static_cast<std::size_t>(iterations));
+  carousel_input_dispatch_samples.reserve(static_cast<std::size_t>(iterations));
   timeline_route_samples.reserve(static_cast<std::size_t>(iterations));
+  timeline_input_dispatch_samples.reserve(static_cast<std::size_t>(iterations));
   export_route_samples.reserve(static_cast<std::size_t>(iterations));
   frame_tick_samples.reserve(static_cast<std::size_t>(iterations));
 
@@ -5258,6 +7084,10 @@ int main(int argc, char** argv) {
       QStringLiteral("edit_workspace_prewarm_ready"),
       edit_prewarm_timer.elapsed(),
       0);
+
+  if (native_readback_proof) {
+#include "native_inspector_readback_proof.inc"
+  }
 
   if (color_interaction_proof) {
     using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
@@ -5540,6 +7370,9 @@ int main(int argc, char** argv) {
         open_timer.elapsed(),
         iteration,
         {{QStringLiteral("asset_id"), asset_id},
+         {QStringLiteral("qt_platform"), QGuiApplication::platformName()},
+         {QStringLiteral("qt_graphics_api"), static_cast<int>(root_window->rendererInterface()->graphicsApi())},
+         {QStringLiteral("qt_metal_renderer"), root_window->rendererInterface()->graphicsApi() == QSGRendererInterface::Metal},
          {QStringLiteral("source_image_width"), editor_preview.sourceImageWidth()},
          {QStringLiteral("source_image_height"), editor_preview.sourceImageHeight()}});
     if (iteration == 0) {
@@ -5549,6 +7382,9 @@ int main(int argc, char** argv) {
           QStringLiteral("03-edit-open-photo"),
           &captures);
     }
+
+#include "checkpoint_tool_native_proof.inc"
+#include "effect_tool_native_proof.inc"
 
     QElapsedTimer masks_timer;
     masks_timer.start();
@@ -5574,6 +7410,8 @@ int main(int argc, char** argv) {
     }
     masks_samples.push_back(static_cast<double>(masks_timer.elapsed()));
     log_stage(QStringLiteral("masks_page_to_tool_rail_ready"), masks_timer.elapsed(), iteration);
+
+#include "lasso_tool_native_proof.inc"
 
     QElapsedTimer brush_page_timer;
     brush_page_timer.start();
@@ -5671,29 +7509,155 @@ int main(int argc, char** argv) {
           &captures);
     }
 
+    editor_preview.setActiveMaskBrushAutoMask(brush_auto_mask);
+    auto* vector_canvas = find_named_object(active_workspace(root), QStringLiteral("editImageViewportLiveBrushVectorCanvas"));
+    if (vector_canvas == nullptr) return fail(QStringLiteral("Live brush Canvas receipt unavailable."));
+    vector_canvas->setProperty("frameReceiptEnabled", true);
+    const bool brush_phase_profile = qEnvironmentVariableIsSet("PHOTO_EDITOR_BRUSH_PHASE_PROFILE");
+    vector_canvas->setProperty("framePhaseTracingEnabled", brush_phase_profile);
+    vector_canvas->setProperty("framePhaseReferenceEpochMs", 0.0);
+    vector_canvas->setProperty("framePhaseStrokeSignalOffsetMs", -1.0);
+    vector_canvas->setProperty("framePhaseTimerOffsetMs", -1.0);
+    vector_canvas->setProperty("framePhasePaintStartOffsetMs", -1.0);
+    vector_canvas->setProperty("framePhasePaintEndOffsetMs", -1.0);
+    vector_canvas->setProperty("framePhasePaintedOffsetMs", -1.0);
+    auto* immediate_coverage = find_named_object(active_workspace(root), QStringLiteral("editImageViewportImmediateBrushCoverage"));
+    auto* raster_image = find_named_item(active_workspace(root), QStringLiteral("editImageViewportLiveBrushRasterImage"));
+    const auto immediate_revision_before = immediate_coverage ? immediate_coverage->property("completedPaintRevision").toInt() : 0;
+    const auto canvas_revision_before = vector_canvas->property("completedPaintRevision").toInt();
+    QElapsedTimer stroke_timer;
+    stroke_timer.start();
     editor_preview.beginActiveBrushStroke();
+    const auto stroke_setup_ms = stroke_timer.elapsed();
+    const auto brush_points_before = editor_preview.activeMaskLiveBrushPoints().size();
+    const auto brush_preview_revision_before = editor_preview.activeMaskLiveBrushPreviewRevision();
     QElapsedTimer feedback_timer;
     feedback_timer.start();
+    struct BrushFrameReceipt {
+      std::atomic<qint64> canvas_synced_ms{-1};
+      std::atomic<qint64> presented_ms{-1};
+      std::atomic<qint64> stroke_presented_ms{-1};
+    };
+    const auto receipt = std::make_shared<BrushFrameReceipt>();
+    const auto phase_reference_epoch_ms = brush_phase_profile
+        ? QDateTime::currentMSecsSinceEpoch() : qint64{0};
+    vector_canvas->setProperty("framePhaseReferenceEpochMs", phase_reference_epoch_ms);
+    qint64 raster_observed_ms = -1;
+    const auto raster_connection = QObject::connect(&editor_preview,
+        &photo_editor::desktop::EditorPreviewController::activeBrushStrokeChanged,
+        root_window, [&] {
+          if (raster_observed_ms < 0 && editor_preview.activeMaskLiveBrushPreviewRevision() > brush_preview_revision_before)
+            raster_observed_ms = feedback_timer.elapsed();
+        });
+    // The GUI thread is blocked during scene-graph synchronization, so reading
+    // Canvas properties here is safe. Require a completed paint with live points
+    // to have synchronized before accepting the following swap.
+    const auto sync_connection = QObject::connect(root_window, &QQuickWindow::afterSynchronizing,
+        root_window, [receipt, vector_canvas, immediate_coverage, raster_image, immediate_revision_before,
+                      canvas_revision_before, brush_points_before, feedback_timer, &editor_preview] {
+          const bool immediate_painted = immediate_coverage &&
+              immediate_coverage->property("completedPaintRevision").toInt() > immediate_revision_before &&
+              immediate_coverage->property("paintedPointCount").toInt() > brush_points_before;
+          const bool raster_painted = raster_image && raster_image->isVisible() &&
+              raster_image->property("status").toInt() == 1 &&
+              editor_preview.activeMaskLiveBrushPreviewPointCount() > brush_points_before;
+          const bool trail_painted = vector_canvas->property("completedPaintRevision").toInt() > canvas_revision_before &&
+              vector_canvas->property("paintedPointCount").toInt() > brush_points_before;
+          if (receipt->canvas_synced_ms.load() < 0 && (immediate_painted || raster_painted || trail_painted))
+            receipt->canvas_synced_ms.store(feedback_timer.elapsed());
+        }, Qt::DirectConnection);
+    const auto swap_connection = QObject::connect(root_window, &QQuickWindow::frameSwapped,
+        root_window, [receipt, feedback_timer, stroke_timer] {
+          if (receipt->canvas_synced_ms.load() >= 0 && receipt->presented_ms.load() < 0) {
+            receipt->stroke_presented_ms.store(stroke_timer.elapsed());
+            receipt->presented_ms.store(feedback_timer.elapsed());
+          }
+        }, Qt::DirectConnection);
+    const auto disconnect_feedback = qScopeGuard([&] {
+      QObject::disconnect(raster_connection);
+      QObject::disconnect(sync_connection);
+      QObject::disconnect(swap_connection);
+    });
     editor_preview.addBrushPoint(0.31, 0.36);
+    const auto point_dispatch_ms = feedback_timer.elapsed();
+    const auto feedback_is_visible = [&]() { return receipt->presented_ms.load() >= 0; };
+    if (!feedback_is_visible()) {
+      QEventLoop feedback_loop;
+      QTimer feedback_timeout;
+      feedback_timeout.setSingleShot(true);
+      const auto frame_connection = QObject::connect(
+          root_window, &QQuickWindow::frameSwapped, &feedback_loop, [&]() {
+            if (feedback_is_visible()) feedback_loop.quit();
+          });
+      const auto timeout_connection = QObject::connect(
+          &feedback_timeout, &QTimer::timeout, &feedback_loop, &QEventLoop::quit);
+      feedback_timeout.start(timeout_ms);
+      feedback_loop.exec();
+      QObject::disconnect(frame_connection);
+      QObject::disconnect(timeout_connection);
+    }
+    if (!feedback_is_visible()) {
+      return fail(QStringLiteral("Timed out waiting for the first rendered frame containing live brush feedback."));
+    }
+    const auto brush_feedback_ms = static_cast<double>(receipt->presented_ms.load());
+    QVariantMap brush_timing_fields{
+        {QStringLiteral("feedback_contract"), QStringLiteral("controller_point_to_painted_canvas_sync_and_swap:v2")},
+        {QStringLiteral("stroke_setup_ms"), stroke_setup_ms},
+        {QStringLiteral("point_dispatch_ms"), point_dispatch_ms},
+        {QStringLiteral("canvas_paint_and_sync_ms"), receipt->canvas_synced_ms.load()},
+        {QStringLiteral("frame_swap_ms"), receipt->presented_ms.load()},
+        {QStringLiteral("auto_mask"), brush_auto_mask},
+        {QStringLiteral("live_preview_backend"), editor_preview.activeMaskLiveBrushPreviewBackend()}};
+    if (brush_phase_profile) {
+      brush_timing_fields.insert(QStringLiteral("phase_start_epoch_ms"), phase_reference_epoch_ms);
+      brush_timing_fields.insert(QStringLiteral("phase_stroke_signal_offset_ms"),
+          vector_canvas->property("framePhaseStrokeSignalOffsetMs"));
+      brush_timing_fields.insert(QStringLiteral("phase_timer_offset_ms"),
+          vector_canvas->property("framePhaseTimerOffsetMs"));
+      brush_timing_fields.insert(QStringLiteral("phase_paint_start_offset_ms"),
+          vector_canvas->property("framePhasePaintStartOffsetMs"));
+      brush_timing_fields.insert(QStringLiteral("phase_paint_end_offset_ms"),
+          vector_canvas->property("framePhasePaintEndOffsetMs"));
+      brush_timing_fields.insert(QStringLiteral("phase_painted_offset_ms"),
+          vector_canvas->property("framePhasePaintedOffsetMs"));
+    }
+    if (iteration == 0) {
+      brush_stroke_first_use_samples.push_back(static_cast<double>(receipt->stroke_presented_ms.load()));
+      log_stage(QStringLiteral("brush_stroke_begin_to_qml_frame_first_use"),
+          receipt->stroke_presented_ms.load(), iteration, brush_timing_fields);
+    }
+    if (iteration == 0) {
+      brush_feedback_first_use_samples.push_back(brush_feedback_ms);
+      log_stage(
+          QStringLiteral("brush_controller_point_to_qml_frame_first_use"),
+          receipt->presented_ms.load(), iteration, brush_timing_fields);
+    } else {
+      brush_feedback_samples.push_back(brush_feedback_ms);
+    }
+    log_stage(
+        QStringLiteral("brush_controller_point_to_qml_frame"),
+        receipt->presented_ms.load(), iteration, brush_timing_fields);
+    if (iteration == 0) save_capture_if_requested(root_window, capture_dir,
+        QStringLiteral("05-brush-feedback"), &captures);
     if (!wait_for_condition(
             [&]() {
-              return !editor_preview.activeMaskLiveBrushPreviewBackend().isEmpty() &&
-                     editor_preview.activeMaskLiveBrushPreviewElapsedMs() > 0;
+              return editor_preview.activeMaskLiveBrushPreviewRevision() > brush_preview_revision_before;
             },
             timeout_ms)) {
-      return fail(QStringLiteral("Timed out waiting for brush live feedback."));
+      return fail(QStringLiteral("Timed out waiting for the high-fidelity brush bitmap worker."));
     }
-    brush_feedback_samples.push_back(static_cast<double>(feedback_timer.elapsed()));
+    if (raster_observed_ms < 0) raster_observed_ms = feedback_timer.elapsed();
+    brush_raster_completion_samples.push_back(static_cast<double>(raster_observed_ms));
     log_stage(
-        QStringLiteral("brush_pointer_down_to_qml_feedback"),
-        feedback_timer.elapsed(),
+        QStringLiteral("brush_high_fidelity_raster_complete"),
+        raster_observed_ms,
         iteration,
-        {{QStringLiteral("live_preview_elapsed_ms"),
-          editor_preview.activeMaskLiveBrushPreviewElapsedMs()},
-         {QStringLiteral("live_preview_backend"),
-          editor_preview.activeMaskLiveBrushPreviewBackend()},
-         {QStringLiteral("live_preview_within_latency_budget"),
-          editor_preview.activeMaskLiveBrushPreviewWithinLatencyBudget()}});
+        {{QStringLiteral("worker_elapsed_ms"), editor_preview.activeMaskLiveBrushPreviewElapsedMs()},
+         {QStringLiteral("feedback_already_presented"), raster_observed_ms >= receipt->presented_ms.load()}});
+    // Stop reading this workspace before later workflow routes can unload it.
+    QObject::disconnect(raster_connection);
+    QObject::disconnect(sync_connection);
+    QObject::disconnect(swap_connection);
     editor_preview.addBrushPoint(0.40, 0.44);
     editor_preview.addBrushPoint(0.49, 0.52);
     editor_preview.addBrushPoint(0.58, 0.60);
@@ -5726,8 +7690,16 @@ int main(int argc, char** argv) {
         iteration,
         {{QStringLiteral("tool"), QStringLiteral("exposure")}});
 
+    if (brush_only) continue;
+
+    QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+    root->setProperty("qmlFrameCaptureEnabled", true);
+    QMetaObject::invokeMethod(root, "beginQmlFrameCaptureWindow");
     QElapsedTimer carousel_route_timer;
     carousel_route_timer.start();
+    const auto carousel_route_started_at = std::chrono::steady_clock::now();
+    RouteInputDispatchProbe carousel_input_probe(root_window);
+    carousel_input_probe.postNoOpKeyAfter(carousel_route_started_at);
     root->setProperty("currentWorkspace", root->property("carouselWorkspaceIndex"));
     if (!wait_for_condition(
             [&]() {
@@ -5739,14 +7711,48 @@ int main(int argc, char** argv) {
             timeout_ms)) {
       return fail(QStringLiteral("Timed out routing to the Carousel workspace."));
     }
-    carousel_route_samples.push_back(static_cast<double>(carousel_route_timer.elapsed()));
+    const auto carousel_route_elapsed_ms = carousel_route_timer.elapsed();
+    carousel_route_samples.push_back(static_cast<double>(carousel_route_elapsed_ms));
+    if (!wait_for_condition(
+            [&carousel_input_probe]() { return carousel_input_probe.delivered(); },
+            timeout_ms,
+            "carousel-route-input-event")) {
+      return fail(QStringLiteral("Timed out dispatching the no-op key event during Carousel routing."));
+    }
+    carousel_input_probe.joinPoster();
+    const auto carousel_input_dispatch_delay_ms =
+        carousel_input_probe.dispatchDelayMs();
+    const auto carousel_recent_input_detected =
+        carousel_input_probe.recentInputFilterObserved();
+    if (carousel_input_dispatch_delay_ms < 0.0 || !carousel_recent_input_detected) {
+      return fail(QStringLiteral("Carousel route input probe was not observed by the UI input filter."));
+    }
+    carousel_input_dispatch_samples.push_back(carousel_input_dispatch_delay_ms);
+    log_stage(
+        QStringLiteral("carousel_input_event_dispatch_delay"),
+        static_cast<qint64>(std::lround(carousel_input_dispatch_delay_ms)),
+        iteration,
+        {{QStringLiteral("dispatch_delay_ms_exact"), carousel_input_dispatch_delay_ms},
+         {QStringLiteral("route_offset_ms"), carousel_input_probe.routeOffsetMs()},
+         {QStringLiteral("route_visible_ms"), carousel_route_elapsed_ms},
+         {QStringLiteral("recent_user_input_detected"), carousel_recent_input_detected}});
+    root_window->removeEventFilter(&carousel_input_probe);
+    process_layout_events(1);
+    QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+    root->setProperty("qmlFrameCaptureEnabled", false);
     log_stage(
         QStringLiteral("carousel_route_to_visible"),
-        carousel_route_timer.elapsed(),
+        carousel_route_elapsed_ms,
         iteration);
 
+    QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+    root->setProperty("qmlFrameCaptureEnabled", true);
+    QMetaObject::invokeMethod(root, "beginQmlFrameCaptureWindow");
     QElapsedTimer timeline_route_timer;
     timeline_route_timer.start();
+    const auto timeline_route_started_at = std::chrono::steady_clock::now();
+    RouteInputDispatchProbe timeline_input_probe(root_window);
+    timeline_input_probe.postNoOpKeyAfter(timeline_route_started_at);
     root->setProperty("currentWorkspace", root->property("timelineWorkspaceIndex"));
     if (!wait_for_condition(
             [&]() {
@@ -5759,10 +7765,38 @@ int main(int argc, char** argv) {
             timeout_ms)) {
       return fail(QStringLiteral("Timed out routing to the Timeline workspace."));
     }
-    timeline_route_samples.push_back(static_cast<double>(timeline_route_timer.elapsed()));
+    const auto timeline_route_elapsed_ms = timeline_route_timer.elapsed();
+    timeline_route_samples.push_back(static_cast<double>(timeline_route_elapsed_ms));
+    if (!wait_for_condition(
+            [&timeline_input_probe]() { return timeline_input_probe.delivered(); },
+            timeout_ms,
+            "timeline-route-input-event")) {
+      return fail(QStringLiteral("Timed out dispatching the no-op key event during Timeline routing."));
+    }
+    timeline_input_probe.joinPoster();
+    const auto timeline_input_dispatch_delay_ms =
+        timeline_input_probe.dispatchDelayMs();
+    const auto timeline_recent_input_detected =
+        timeline_input_probe.recentInputFilterObserved();
+    if (timeline_input_dispatch_delay_ms < 0.0 || !timeline_recent_input_detected) {
+      return fail(QStringLiteral("Timeline route input probe was not observed by the UI input filter."));
+    }
+    timeline_input_dispatch_samples.push_back(timeline_input_dispatch_delay_ms);
+    log_stage(
+        QStringLiteral("timeline_input_event_dispatch_delay"),
+        static_cast<qint64>(std::lround(timeline_input_dispatch_delay_ms)),
+        iteration,
+        {{QStringLiteral("dispatch_delay_ms_exact"), timeline_input_dispatch_delay_ms},
+         {QStringLiteral("route_offset_ms"), timeline_input_probe.routeOffsetMs()},
+         {QStringLiteral("route_visible_ms"), timeline_route_elapsed_ms},
+         {QStringLiteral("recent_user_input_detected"), timeline_recent_input_detected}});
+    root_window->removeEventFilter(&timeline_input_probe);
+    process_layout_events(1);
+    QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
+    root->setProperty("qmlFrameCaptureEnabled", false);
     log_stage(
         QStringLiteral("timeline_route_to_visible"),
-        timeline_route_timer.elapsed(),
+        timeline_route_elapsed_ms,
         iteration);
 
     QElapsedTimer export_route_timer;
@@ -5830,8 +7864,20 @@ int main(int argc, char** argv) {
       summarize_samples(brush_page_samples),
       iterations);
   log_summary(
-      QStringLiteral("brush_pointer_down_to_qml_feedback"),
+      QStringLiteral("brush_controller_point_to_qml_frame"),
       summarize_samples(brush_feedback_samples),
+      static_cast<int>(brush_feedback_samples.size()));
+  log_summary(
+      QStringLiteral("brush_controller_point_to_qml_frame_first_use"),
+      summarize_samples(brush_feedback_first_use_samples),
+      static_cast<int>(brush_feedback_first_use_samples.size()));
+  log_summary(
+      QStringLiteral("brush_stroke_begin_to_qml_frame_first_use"),
+      summarize_samples(brush_stroke_first_use_samples),
+      static_cast<int>(brush_stroke_first_use_samples.size()));
+  log_summary(
+      QStringLiteral("brush_high_fidelity_raster_complete"),
+      summarize_samples(brush_raster_completion_samples),
       iterations);
   log_summary(
       QStringLiteral("brush_release_to_qml_commit_visible"),
@@ -5844,15 +7890,23 @@ int main(int argc, char** argv) {
   log_summary(
       QStringLiteral("carousel_route_to_visible"),
       summarize_samples(carousel_route_samples),
-      iterations);
+      static_cast<int>(carousel_route_samples.size()));
+  log_summary(
+      QStringLiteral("carousel_input_event_dispatch_delay"),
+      summarize_samples(carousel_input_dispatch_samples),
+      static_cast<int>(carousel_input_dispatch_samples.size()));
   log_summary(
       QStringLiteral("timeline_route_to_visible"),
       summarize_samples(timeline_route_samples),
-      iterations);
+      static_cast<int>(timeline_route_samples.size()));
+  log_summary(
+      QStringLiteral("timeline_input_event_dispatch_delay"),
+      summarize_samples(timeline_input_dispatch_samples),
+      static_cast<int>(timeline_input_dispatch_samples.size()));
   log_summary(
       QStringLiteral("export_route_to_visible"),
       summarize_samples(export_route_samples),
-      iterations);
+      static_cast<int>(export_route_samples.size()));
   log_summary(
       QStringLiteral("qml_frame_tick"),
       summarize_samples(frame_tick_samples),
@@ -5891,8 +7945,12 @@ int main(int argc, char** argv) {
           {QStringLiteral("tool_draft_p95_ms"), summarize_samples(tool_draft_samples).p95_ms},
           {QStringLiteral("carousel_route_p95_ms"),
            summarize_samples(carousel_route_samples).p95_ms},
+          {QStringLiteral("carousel_input_dispatch_p95_ms"),
+           summarize_samples(carousel_input_dispatch_samples).p95_ms},
           {QStringLiteral("timeline_route_p95_ms"),
            summarize_samples(timeline_route_samples).p95_ms},
+          {QStringLiteral("timeline_input_dispatch_p95_ms"),
+           summarize_samples(timeline_input_dispatch_samples).p95_ms},
           {QStringLiteral("export_route_p95_ms"),
            summarize_samples(export_route_samples).p95_ms},
           {QStringLiteral("frame_swaps_total"), frame_swap_count},

@@ -16,11 +16,18 @@ struct AiModelBundleVerification final {
   bool ok = false;
   bool manifest_available = false;
   bool inpaint_artifact_verified = false;
+  bool smart_selection_artifacts_verified = false;
   QString root;
   QString manifest_path;
   QString inpaint_model_path;
   QString inpaint_sha256;
   qint64 inpaint_bytes = 0;
+  QString smart_selection_encoder_path;
+  QString smart_selection_encoder_sha256;
+  qint64 smart_selection_encoder_bytes = 0;
+  QString smart_selection_decoder_path;
+  QString smart_selection_decoder_sha256;
+  qint64 smart_selection_decoder_bytes = 0;
   int artifact_count = 0;
   QString error_code;
   QString error_message;
@@ -38,6 +45,7 @@ struct AiModelRuntimeStatus final {
   bool inpaint_available = false;
   bool bundle_verified = false;
   bool inpaint_artifact_verified = false;
+  bool smart_selection_artifacts_verified = false;
 };
 
 struct AiInpaintRequest final {
@@ -99,7 +107,8 @@ void shutdown_ai_model_runtime();
     const QString& model_root);
 [[nodiscard]] SegmentationResult generate_ai_smart_selection_mask(
     const QImage& source_image,
-    const QVector<SmartSelectPrompt>& prompts);
+    const QVector<SmartSelectPrompt>& prompts,
+    const SegmentationResult* previous_mask = nullptr);
 [[nodiscard]] AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request);
 
 }  // namespace photo_editor::desktop

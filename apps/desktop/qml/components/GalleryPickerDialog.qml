@@ -16,6 +16,9 @@ Dialog {
     property string scope: "all"
     property var assets: []
     property Component sidePanelFooter
+    property Item focusReturnItem: null
+    property Item focusFallbackItem: null
+    readonly property bool compactHeader: galleryMainPanel.width < root.theme.scaled(520)
     readonly property bool hasSelection: selectedIndex >= 0 && selectedIndex < assets.length
     readonly property var selectedAsset: hasSelection ? assets[selectedIndex] : ({})
     readonly property string selectedAssetId: hasSelection ? String(selectedAsset.assetId || "") : ""
@@ -27,8 +30,8 @@ Dialog {
     readonly property string selectedFilePath: hasSelection ? String(selectedAsset.filePath || "") : ""
     readonly property string selectedTimelineDocumentPath: hasSelection ? String(selectedAsset.timelineDocumentPath || "") : ""
     readonly property bool selectedOnline: hasSelection ? Boolean(selectedAsset.online) : false
-    readonly property string dialogVisibilityContract: "dialog-visibility:v1|gallery-picker|always:title-scope-grid-selection-panel-close|contextual:selected-preview-offline-warning-side-footer-empty-state|one-expansion:project-scope-all-media-asset-activation|hover-focus:asset-card-selection-keyboard|diagnostic:offline-path-detail|preserve:functionality"
-    readonly property string dialogSurfaceContract: "dialog-surface:v1|gallery-picker|grid:dominant|scope:header|selection-panel:always|preview:contextual|footer:contextual|cards:shared-readable|empty-state:bounded-card|no-elide:true|no-overlap:true"
+    readonly property string dialogVisibilityContract: "dialog-visibility:v2|gallery-picker|always:title-scope-grid-close|contextual:selection-panel-selected-preview-offline-warning-side-footer-empty-state|one-expansion:project-scope-all-media-asset-activation|hover-focus:asset-card-selection-keyboard|diagnostic:offline-path-detail|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v2|gallery-picker|grid:dominant|scope:header|selection-panel:when-selected|preview:contextual|footer:preserved-in-empty-state|cards:shared-readable|empty-state:flat-guidance|no-elide:true|no-overlap:true"
     readonly property string functionPreservationMap: "function-preservation:v1|select-asset:grid-card|activate-asset:double-click-or-enter|scope-project:header-toggle|scope-all:header-toggle|offline-state:selection-panel|side-footer:contextual-loader"
 
     signal projectScopeRequested()
@@ -65,27 +68,73 @@ Dialog {
             return
         }
         selectedIndex = index
+        mediaGrid.currentIndex = index
     }
 
     function openDialog() {
-        if (assets.length > 0)
+        if (assets.length > 0) {
             selectedIndex = 0
-        else
+            mediaGrid.currentIndex = 0
+        } else {
             clearSelection()
+            mediaGrid.currentIndex = -1
+        }
         open()
+    }
+
+    function focusInitialTarget() {
+        const initialIndex = hasSelection ? selectedIndex : 0
+        const initialCard = assets.length > 0 ? mediaGrid.itemAtIndex(initialIndex) : null
+        if (initialCard)
+            initialCard.forceActiveFocus(Qt.TabFocusReason)
+        else
+            closeButton.forceActiveFocus(Qt.TabFocusReason)
     }
 
     onAssetsChanged: {
         if (assets.length === 0) {
             clearSelection()
+            mediaGrid.currentIndex = -1
             return
         }
-        if (selectedIndex < 0 || selectedIndex >= assets.length)
+        if (selectedIndex < 0 || selectedIndex >= assets.length) {
             selectedIndex = 0
+            mediaGrid.currentIndex = 0
+        }
+    }
+
+    onAboutToShow: {
+        const popupWindow = root.parent ? root.parent.Window.window : null
+        if (!root.focusReturnItem && popupWindow)
+            root.focusReturnItem = popupWindow.activeFocusItem
+        if (!root.focusFallbackItem && popupWindow)
+            root.focusFallbackItem = popupWindow.contentItem
+    }
+    onOpened: initialFocusTimer.restart()
+    onClosed: focusRestoreTimer.restart()
+    Timer {
+        id: initialFocusTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.focusInitialTarget()
+    }
+    Timer {
+        id: focusRestoreTimer
+        interval: 1
+        repeat: false
+        onTriggered: {
+            if (root.focusReturnItem && root.focusReturnItem.visible && root.focusReturnItem.enabled) {
+                root.focusReturnItem.forceActiveFocus(Qt.TabFocusReason)
+            } else if (root.focusFallbackItem && root.focusFallbackItem.visible && root.focusFallbackItem.enabled) {
+                root.focusFallbackItem.forceActiveFocus(Qt.TabFocusReason)
+            }
+            root.focusReturnItem = null
+        }
     }
 
     parent: Overlay.overlay
     modal: true
+    focus: true
     width: Math.min((parent ? parent.width : 1112) - 32, 1080)
     height: Math.min((parent ? parent.height : 792) - 32, 760)
     x: parent ? (parent.width - width) / 2 : 0
@@ -94,15 +143,21 @@ Dialog {
     closePolicy: Popup.CloseOnEscape
 
     background: PopupSurface {
-        radius: 22
+        radius: root.theme.radiusPanel
         accent: root.theme.accentWarm400
         accentRail: false
+        Accessible.name: root.dialogTitle
+        Accessible.description: root.subtitle.length > 0 ? root.subtitle : "Choose media from the gallery."
+        Accessible.role: Accessible.Dialog
+        Accessible.ignored: false
     }
 
     contentItem: RowLayout {
         spacing: 0
 
         Rectangle {
+            id: galleryMainPanel
+            objectName: "galleryPickerMainPanel"
             Layout.fillWidth: true
             Layout.fillHeight: true
             color: "transparent"
@@ -112,23 +167,31 @@ Dialog {
                 anchors.margins: 18
                 spacing: 12
 
-                RowLayout {
+                GridLayout {
                     Layout.fillWidth: true
-                    spacing: 10
+                    columns: root.compactHeader ? 2 : 4
+                    columnSpacing: 10
+                    rowSpacing: 8
 
                     ColumnLayout {
+                        objectName: "galleryPickerTitleGroup"
+                        Layout.columnSpan: root.compactHeader ? 2 : 1
                         Layout.fillWidth: true
                         spacing: 4
 
                         Label {
+                            Layout.fillWidth: true
                             text: root.dialogTitle
                             color: root.theme.textStrong
                             font.family: root.theme.fontDisplay
-                            font.pixelSize: 26
+                            font.pixelSize: root.theme.typeDialogTitle
                             font.weight: Font.DemiBold
                         }
 
                         Label {
+                            Layout.fillWidth: true
+                            visible: text.length > 0
+                            wrapMode: Text.WordWrap
                             text: root.subtitle
                             color: root.theme.textMuted
                             font.family: root.theme.fontUi
@@ -137,6 +200,7 @@ Dialog {
                     }
 
                     ActionButton {
+                        objectName: "galleryPickerProjectScopeButton"
                         text: "Current Project"
                         compact: true
                         active: root.scope === "project"
@@ -145,6 +209,7 @@ Dialog {
                     }
 
                     ActionButton {
+                        objectName: "galleryPickerAllMediaScopeButton"
                         text: "All Media"
                         compact: true
                         active: root.scope === "all"
@@ -152,6 +217,10 @@ Dialog {
                     }
 
                     ActionButton {
+                        id: closeButton
+                        objectName: "galleryPickerCloseButton"
+                        Layout.columnSpan: root.compactHeader && root.showProjectScopeToggle ? 2 : 1
+                        Layout.alignment: root.compactHeader ? Qt.AlignRight : Qt.AlignVCenter
                         text: "Close"
                         onClicked: root.close()
                     }
@@ -160,7 +229,7 @@ Dialog {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    radius: 18
+                    radius: root.theme.radiusPanel
                     color: root.theme.alpha(root.theme.ink950, 0.76)
                     border.width: 1
                     border.color: root.theme.alpha(root.theme.lineSoft, 0.4)
@@ -181,6 +250,7 @@ Dialog {
                         delegate: GalleryAssetCard {
                             required property int index
                             required property var modelData
+                            objectName: "galleryPickerAsset-" + String(modelData.assetId || index)
 
                             assetIndex: index
                             asset: modelData
@@ -198,39 +268,18 @@ Dialog {
                     Rectangle {
                         id: galleryEmptyStateCard
                         objectName: "galleryPickerEmptyStateCard"
-                        readonly property string emptyStateContract: "gallery-empty-state:v1|bounded-card:true|icon-zone:true|text-wrap:true|max-lines:3|no-elide:true|no-overlap:true"
+                        readonly property string emptyStateContract: "gallery-empty-state:v2|guidance:flat|text-wrap:true|max-lines:3|no-elide:true|no-overlap:true"
                         anchors.centerIn: parent
                         visible: root.assets.length === 0
-                        width: Math.min(parent.width - 40, Math.max(240, galleryEmptyStateContent.implicitWidth + 32))
+                        width: Math.max(0, parent.width - 40)
                         height: galleryEmptyStateContent.implicitHeight + 28
-                        radius: 14
-                        color: root.theme.alpha(root.theme.ink900, 0.84)
-                        border.width: 1
-                        border.color: root.theme.alpha(root.theme.lineSoft, 0.38)
+                        color: "transparent"
 
                         ColumnLayout {
                             id: galleryEmptyStateContent
                             anchors.fill: parent
                             anchors.margins: 14
                             spacing: 8
-
-                            Rectangle {
-                                Layout.alignment: Qt.AlignHCenter
-                                Layout.preferredWidth: 28
-                                Layout.preferredHeight: 28
-                                radius: 14
-                                color: root.theme.alpha(root.theme.accentCool400, 0.14)
-                                border.width: 1
-                                border.color: root.theme.alpha(root.theme.accentCool400, 0.34)
-
-                                AppIcon {
-                                    anchors.centerIn: parent
-                                    width: 14
-                                    height: 14
-                                    name: "media"
-                                    color: root.theme.textMuted
-                                }
-                            }
 
                             Label {
                                 objectName: "galleryPickerEmptyStateLabel"
@@ -247,10 +296,19 @@ Dialog {
                         }
                     }
                 }
+                Loader {
+                    objectName: "galleryPickerEmptyFooter"
+                    Layout.fillWidth: true
+                    active: !root.hasSelection && root.sidePanelFooter !== undefined && root.sidePanelFooter !== null
+                    visible: active
+                    sourceComponent: root.sidePanelFooter
+                }
             }
         }
 
         Rectangle {
+            objectName: "galleryPickerSelectionPanel"
+            visible: root.hasSelection
             Layout.preferredWidth: 280
             Layout.fillHeight: true
             color: root.theme.alpha(root.theme.ink950, 0.84)
@@ -271,8 +329,8 @@ Dialog {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 170
-                    radius: 14
-                    color: "#0b1014"
+                    radius: root.theme.radiusControl
+                    color: root.theme.ink950
                     border.width: 1
                     border.color: root.theme.alpha(root.theme.lineSoft, 0.34)
                     clip: true
@@ -355,7 +413,7 @@ Dialog {
 
                 Loader {
                     Layout.fillWidth: true
-                    active: root.sidePanelFooter !== undefined && root.sidePanelFooter !== null
+                    active: root.hasSelection && root.sidePanelFooter !== undefined && root.sidePanelFooter !== null
                     sourceComponent: root.sidePanelFooter
                 }
 

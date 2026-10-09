@@ -9,8 +9,8 @@ Dialog {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: 860
-    height: 620
+    width: Math.min(theme.scaled(860), parent ? parent.width - 32 : theme.scaled(860))
+    height: Math.min(theme.scaled(620), parent ? parent.height - 32 : theme.scaled(620))
     padding: 0
     standardButtons: Dialog.NoButton
 
@@ -21,37 +21,37 @@ Dialog {
     property string activeShortcutPreset: "app-native"
     property string shortcutSearchText: ""
     property var editableShortcuts: [
-        { "id": "command-palette", "label": "Command Palette", "sequence": primary("K"), "defaultSequence": primary("K") },
-        { "id": "workspace-library", "label": "Go To Library", "sequence": primary("1"), "defaultSequence": primary("1") },
-        { "id": "workspace-edit", "label": "Go To Edit", "sequence": primary("2"), "defaultSequence": primary("2") },
-        { "id": "tool-adjust", "label": "Adjust Tool", "sequence": primaryAlt("A"), "defaultSequence": primaryAlt("A") },
-        { "id": "tool-crop", "label": "Crop Tool", "sequence": primaryAlt("C"), "defaultSequence": primaryAlt("C") },
-        { "id": "tool-masks", "label": "Masks Tool", "sequence": primaryAlt("M"), "defaultSequence": primaryAlt("M") },
-        { "id": "tool-brush", "label": "Brush Tool", "sequence": primaryAlt("B"), "defaultSequence": primaryAlt("B") },
-        { "id": "tool-compare", "label": "Compare Tool", "sequence": primaryAlt("P"), "defaultSequence": primaryAlt("P") },
-        { "id": "tool-export", "label": "Export Tool", "sequence": primaryAlt("E"), "defaultSequence": primaryAlt("E") },
-        { "id": "queue-export", "label": "Start Export", "sequence": primary("Shift+E"), "defaultSequence": primary("Shift+E") },
+        { "id": "command-palette", "label": "Command Palette", "sequence": primarySequence("K"), "defaultSequence": primarySequence("K") },
+        { "id": "workspace-library", "label": "Go To Library", "sequence": primarySequence("1"), "defaultSequence": primarySequence("1") },
+        { "id": "workspace-edit", "label": "Go To Edit", "sequence": primarySequence("2"), "defaultSequence": primarySequence("2") },
+        { "id": "tool-adjust", "label": "Adjust Tool", "sequence": primarySequenceAlt("A"), "defaultSequence": primarySequenceAlt("A") },
+        { "id": "tool-crop", "label": "Crop Tool", "sequence": primarySequenceAlt("C"), "defaultSequence": primarySequenceAlt("C") },
+        { "id": "tool-masks", "label": "Masks Tool", "sequence": primarySequenceAlt("M"), "defaultSequence": primarySequenceAlt("M") },
+        { "id": "tool-brush", "label": "Brush Tool", "sequence": primarySequenceAlt("B"), "defaultSequence": primarySequenceAlt("B") },
+        { "id": "tool-compare", "label": "Compare Tool", "sequence": primarySequenceAlt("P"), "defaultSequence": primarySequenceAlt("P") },
+        { "id": "tool-export", "label": "Export Tool", "sequence": primarySequenceAlt("E"), "defaultSequence": primarySequenceAlt("E") },
+        { "id": "queue-export", "label": "Start Export", "sequence": primarySequence("Shift+E"), "defaultSequence": primarySequence("Shift+E") },
         { "id": "toggle-full-edit", "label": "Full-Screen Edit", "sequence": "F", "defaultSequence": "F" }
     ]
     readonly property int editableShortcutCount: editableShortcuts.length
-    readonly property string dialogVisibilityContract: "dialog-visibility:v1|keyboard-shortcuts|always:title-search-editable-presets-shortcut-sections-close|contextual:status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality"
-    readonly property string dialogSurfaceContract: "dialog-surface:v1|keyboard-shortcuts|search:header|editable:top|sections:scrollable|keys:fixed-readable|descriptions:wrap|presets:readable-buttons|no-elide:true|no-overlap:true"
+    readonly property string dialogVisibilityContract: "dialog-visibility:v2|keyboard-shortcuts|always:title-search-close|contextual:matching-editable-shortcuts-matching-reference-sections-presets-without-query-status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v2|keyboard-shortcuts|search:header|editable:matching|sections:scrollable-matching|keys:scaled-wrapped|descriptions:wrap|presets:wrapping-buttons|empty:explicit|no-elide:true|no-overlap:true"
     readonly property string functionPreservationMap: "function-preservation:v2|search-shortcuts:header-field|edit-sequence:inline-field-persisted|reset-sequence:inline-reset|apply-presets:preset-buttons-persisted|conflict-detection:dialog-and-controller|runtime-actions:live-bindings|platform-modifiers:mac-or-control|shortcut-help:section-cards"
     readonly property var shortcutPresetMappings: [
         {
             "id": "app-native",
             "label": "App Native",
             "sequences": {
-                "command-palette": primary("K"),
-                "workspace-library": primary("1"),
-                "workspace-edit": primary("2"),
-                "tool-adjust": primaryAlt("A"),
-                "tool-crop": primaryAlt("C"),
-                "tool-masks": primaryAlt("M"),
-                "tool-brush": primaryAlt("B"),
-                "tool-compare": primaryAlt("P"),
-                "tool-export": primaryAlt("E"),
-                "queue-export": primary("Shift+E"),
+                "command-palette": primarySequence("K"),
+                "workspace-library": primarySequence("1"),
+                "workspace-edit": primarySequence("2"),
+                "tool-adjust": primarySequenceAlt("A"),
+                "tool-crop": primarySequenceAlt("C"),
+                "tool-masks": primarySequenceAlt("M"),
+                "tool-brush": primarySequenceAlt("B"),
+                "tool-compare": primarySequenceAlt("P"),
+                "tool-export": primarySequenceAlt("E"),
+                "queue-export": primarySequence("Shift+E"),
                 "toggle-full-edit": "F"
             }
         },
@@ -59,16 +59,16 @@ Dialog {
             "id": "lightroom",
             "label": "Lightroom",
             "sequences": {
-                "command-palette": primary("K"),
+                "command-palette": primarySequence("K"),
                 "workspace-library": "G",
                 "workspace-edit": "D",
-                "tool-adjust": primaryAlt("A"),
-                "tool-crop": primaryAlt("C"),
-                "tool-masks": primaryAlt("M"),
-                "tool-brush": primaryAlt("B"),
-                "tool-compare": primaryAlt("P"),
-                "tool-export": primaryAlt("E"),
-                "queue-export": primary("Shift+E"),
+                "tool-adjust": primarySequenceAlt("A"),
+                "tool-crop": primarySequenceAlt("C"),
+                "tool-masks": primarySequenceAlt("M"),
+                "tool-brush": primarySequenceAlt("B"),
+                "tool-compare": primarySequenceAlt("P"),
+                "tool-export": primarySequenceAlt("E"),
+                "queue-export": primarySequence("Shift+E"),
                 "toggle-full-edit": "F"
             }
         },
@@ -76,16 +76,16 @@ Dialog {
             "id": "photoshop",
             "label": "Photoshop",
             "sequences": {
-                "command-palette": primary("Alt+K"),
+                "command-palette": primarySequence("Alt+K"),
                 "workspace-library": "F5",
                 "workspace-edit": "F6",
-                "tool-adjust": primaryAlt("A"),
-                "tool-crop": primaryAlt("C"),
-                "tool-masks": primaryAlt("M"),
-                "tool-brush": primaryAlt("B"),
-                "tool-compare": primaryAlt("P"),
-                "tool-export": primaryAlt("E"),
-                "queue-export": primary("Alt+Shift+S"),
+                "tool-adjust": primarySequenceAlt("A"),
+                "tool-crop": primarySequenceAlt("C"),
+                "tool-masks": primarySequenceAlt("M"),
+                "tool-brush": primarySequenceAlt("B"),
+                "tool-compare": primarySequenceAlt("P"),
+                "tool-export": primarySequenceAlt("E"),
+                "queue-export": primarySequence("Alt+Shift+S"),
                 "toggle-full-edit": "F"
             }
         },
@@ -93,16 +93,16 @@ Dialog {
             "id": "capture-one",
             "label": "Capture One",
             "sequences": {
-                "command-palette": primary("K"),
-                "workspace-library": primary("B"),
-                "workspace-edit": primary("E"),
-                "tool-adjust": primaryAlt("A"),
-                "tool-crop": primaryAlt("C"),
-                "tool-masks": primaryAlt("M"),
-                "tool-brush": primaryAlt("B"),
-                "tool-compare": primaryAlt("P"),
-                "tool-export": primaryAlt("E"),
-                "queue-export": primary("D"),
+                "command-palette": primarySequence("K"),
+                "workspace-library": primarySequence("B"),
+                "workspace-edit": primarySequence("E"),
+                "tool-adjust": primarySequenceAlt("A"),
+                "tool-crop": primarySequenceAlt("C"),
+                "tool-masks": primarySequenceAlt("M"),
+                "tool-brush": primarySequenceAlt("B"),
+                "tool-compare": primarySequenceAlt("P"),
+                "tool-export": primarySequenceAlt("E"),
+                "queue-export": primarySequence("D"),
                 "toggle-full-edit": "F11"
             }
         }
@@ -119,7 +119,8 @@ Dialog {
                 { "keys": primary("V"), "description": "Paste copied edit groups onto selected photos. Ctrl+V also works on Mac." },
                 { "keys": primary("O"), "description": "Import a folder into the library." },
                 { "keys": primary("N"), "description": "Create a new timeline." },
-                { "keys": primary("1-5"), "description": "Switch directly between Library, Edit, Carousel, Timeline, and Export." },
+                { "keys": primary("1-5"), "description": "Switch directly between Library, Edit, Boards in Edit, Timeline, and Export." },
+                { "keys": primary("E"), "description": "Open the selected photo in Edit. Unavailable when a video or timeline is selected." },
                 { "keys": primary("A"), "description": "Select all visible items in Library, Import, or Timeline." },
                 { "keys": primary("Shift+A"), "description": "Clear the active library, import, or timeline selection." },
                 { "keys": primary("Shift+E"), "description": "Queue the current selection for export." },
@@ -207,10 +208,10 @@ Dialog {
             ]
         },
         {
-            title: "Carousel",
+            title: "Boards in Edit",
             accent: theme.success,
             items: [
-                { "keys": primary("Z"), "description": "Undo the last carousel edit." },
+                { "keys": primary("Z"), "description": "Undo the last board edit." },
                 { "keys": primary("Shift+Z"), "description": "Redo the last undone edit." },
                 { "keys": primary("C / X / V"), "description": "Copy, cut, or paste selected layers." },
                 { "keys": primary("D"), "description": "Duplicate selected layers." },
@@ -219,7 +220,7 @@ Dialog {
                 { "keys": primary("Shift+A"), "description": "Add a new slide." },
                 { "keys": primary("["), "description": "Move the current slide earlier." },
                 { "keys": primary("]"), "description": "Move the current slide later." },
-                { "keys": primary("Shift+C"), "description": "Export the active carousel." }
+                { "keys": primary("Shift+C"), "description": "Export the active board document." }
             ]
         }
     ]
@@ -232,6 +233,23 @@ Dialog {
 
     function primaryAlt(key) {
         return primaryLabel + "+Alt+" + key
+    }
+
+    function primarySequence(key) {
+        return "Ctrl+" + key
+    }
+
+    function primarySequenceAlt(key) {
+        return "Ctrl+Alt+" + key
+    }
+
+    function normalizeShortcutSequence(sequence) {
+        return String(sequence || "").trim().replace(/(^|\+)Cmd(?=\+)/g, "$1Ctrl")
+    }
+
+    function displayShortcutSequence(sequence) {
+        const normalized = normalizeShortcutSequence(sequence)
+        return macStyle ? normalized.replace(/(^|\+)Ctrl(?=\+)/g, "$1Cmd") : normalized
     }
 
     function coreWorkflowShortcutSignature() {
@@ -290,13 +308,13 @@ Dialog {
     function shortcutSequence(shortcutId) {
         for (let i = 0; i < editableShortcuts.length; ++i) {
             if (editableShortcuts[i].id === shortcutId)
-                return String(editableShortcuts[i].sequence || "")
+                return displayShortcutSequence(editableShortcuts[i].sequence)
         }
         return ""
     }
 
     function shortcutConflictIds(sequence, excludingShortcutId) {
-        const cleanSequence = String(sequence || "").trim().toLowerCase()
+        const cleanSequence = normalizeShortcutSequence(sequence).toLowerCase()
         const cleanExcludedId = String(excludingShortcutId || "")
         let conflicts = []
         if (cleanSequence.length === 0)
@@ -332,7 +350,9 @@ Dialog {
     }
 
     function editableShortcutMatches(shortcut) {
-        return shortcutMatchesQuery(shortcut.label + " " + shortcut.id, shortcut.sequence, shortcutSearchText)
+        return shortcutMatchesQuery(shortcut.label + " " + shortcut.id,
+                                    displayShortcutSequence(shortcut.sequence),
+                                    shortcutSearchText)
     }
 
     function sectionShortcutMatchCount(section) {
@@ -342,6 +362,12 @@ Dialog {
             if (shortcutMatchesQuery(item.description, item.keys, shortcutSearchText))
                 count += 1
         }
+        return count
+    }
+    function editableShortcutMatchCount() {
+        let count = 0
+        for (let index = 0; index < editableShortcuts.length; ++index)
+            if (editableShortcutMatches(editableShortcuts[index])) count += 1
         return count
     }
 
@@ -378,7 +404,7 @@ Dialog {
         let usedSequences = {}
         for (let i = 0; i < editableShortcuts.length; ++i) {
             const shortcut = editableShortcuts[i]
-            const sequence = String(preset.sequences[shortcut.id] || shortcut.sequence || "").trim().toLowerCase()
+            const sequence = normalizeShortcutSequence(preset.sequences[shortcut.id] || shortcut.sequence || "").toLowerCase()
             if (sequence.length === 0)
                 continue
             if (usedSequences[sequence])
@@ -406,7 +432,7 @@ Dialog {
             shortcuts[i] = {
                 "id": shortcut.id,
                 "label": shortcut.label,
-                "sequence": String(preset.sequences[shortcut.id] || shortcut.sequence || "").trim(),
+                "sequence": normalizeShortcutSequence(preset.sequences[shortcut.id] || shortcut.sequence || ""),
                 "defaultSequence": shortcut.defaultSequence
             }
         }
@@ -425,7 +451,7 @@ Dialog {
 
     function setShortcutSequence(shortcutId, sequence) {
         const cleanId = String(shortcutId || "")
-        const cleanSequence = String(sequence || "").trim()
+        const cleanSequence = normalizeShortcutSequence(sequence)
         if (cleanId.length === 0 || cleanSequence.length === 0) {
             shortcutEditorStatus = "Shortcut cannot be empty."
             return false
@@ -485,7 +511,7 @@ Dialog {
             shortcuts[index] = {
                 "id": shortcuts[index].id,
                 "label": shortcuts[index].label,
-                "sequence": appShell.shortcutSequence(shortcuts[index].id, shortcuts[index].defaultSequence),
+                "sequence": normalizeShortcutSequence(appShell.shortcutSequence(shortcuts[index].id, shortcuts[index].defaultSequence)),
                 "defaultSequence": shortcuts[index].defaultSequence
             }
         }
@@ -493,6 +519,10 @@ Dialog {
     }
 
     Component.onCompleted: loadPersistedShortcuts()
+    onOpened: {
+        shortcutSearchText = ""
+        shortcutSearchField.forceActiveFocus(Qt.PopupFocusReason)
+    }
 
     parent: Overlay.overlay
     x: parent ? Math.round((parent.width - width) / 2) : 0
@@ -503,6 +533,7 @@ Dialog {
     }
 
     background: PopupSurface {
+        radius: theme.radiusPanel
         accent: theme.accentWarm400
         accentRail: false
     }
@@ -524,36 +555,38 @@ Dialog {
                     Layout.fillWidth: true
                     text: "Keyboard Shortcuts"
                     color: theme.textStrong
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 28
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeDialogTitle
                     font.weight: Font.DemiBold
+                    wrapMode: Text.WordWrap
                 }
 
                 Label {
                     Layout.fillWidth: true
-                    text: macStyle
-                          ? "Custom shortcuts use Command on macOS, alongside native shortcuts like Command+Comma for Preferences."
-                          : "Custom shortcuts use Control on desktop platforms, alongside native shortcuts like Control+Comma for Preferences."
+                    text: "Edit mappings or search the shortcut reference."
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 12
+                    font.pixelSize: theme.typeControl
                     wrapMode: Text.WordWrap
                 }
             }
 
-            TextField {
+            ToneTextField {
+                id: shortcutSearchField
                 objectName: "shortcutSearchField"
-                Layout.preferredWidth: 240
+                accessibleLabel: "Search keyboard shortcuts"
+                Layout.preferredWidth: Math.min(theme.scaled(240), root.availableWidth * 0.32)
                 placeholderText: "Search shortcuts"
                 text: root.shortcutSearchText
                 selectByMouse: true
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: theme.typeControl
                 onTextEdited: root.shortcutSearchText = text
             }
 
             ActionButton {
+                objectName: "keyboardShortcutsCloseButton"
                 text: "Close"
                 compact: true
                 onClicked: root.close()
@@ -570,8 +603,21 @@ Dialog {
                 width: Math.max(0, parent.width)
                 spacing: theme.space16
 
+                Label {
+                    objectName: "keyboardShortcutsNoResults"
+                    Layout.fillWidth: true
+                    visible: root.shortcutSearchText.trim().length > 0 && root.shortcutSearchResultCount() === 0
+                    text: "No shortcuts match \u201c" + root.shortcutSearchText + "\u201d."
+                    textFormat: Text.PlainText
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeBody
+                    wrapMode: Text.WordWrap
+                }
+
                 GlassSurface {
                     objectName: "editableShortcutsPanel"
+                    visible: root.editableShortcutMatchCount() > 0
                     Layout.fillWidth: true
                     radius: theme.radiusPanel
                     accent: theme.accentWarm400
@@ -590,11 +636,12 @@ Dialog {
                             text: "Editable Shortcuts"
                             color: theme.textStrong
                             font.family: theme.fontUi
-                            font.pixelSize: 16
+                            font.pixelSize: theme.typeSection
                             font.weight: Font.DemiBold
                         }
 
-                        RowLayout {
+                        ColumnLayout {
+                            visible: root.shortcutSearchText.trim().length === 0
                             Layout.fillWidth: true
                             spacing: theme.space8
 
@@ -603,19 +650,22 @@ Dialog {
                                 text: "Preset mappings"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 11
+                                font.pixelSize: theme.typeCaption
                             }
 
-                            Repeater {
-                                model: root.shortcutPresetMappings
-
-                                delegate: ActionButton {
-                                    required property var modelData
-                                    text: modelData.label
-                                    compact: true
-                                    minimumReadableWidth: 112
-                                    enabled: root.activeShortcutPreset !== modelData.id
-                                    onClicked: root.applyShortcutPreset(modelData.id)
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: theme.space8
+                                Repeater {
+                                    model: root.shortcutPresetMappings
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        text: modelData.label
+                                        compact: true
+                                        minimumReadableWidth: 112
+                                        enabled: root.activeShortcutPreset !== modelData.id
+                                        onClicked: root.applyShortcutPreset(modelData.id)
+                                    }
                                 }
                             }
                         }
@@ -631,22 +681,24 @@ Dialog {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    Layout.minimumWidth: 160
+                                    Layout.minimumWidth: theme.scaled(160)
                                     text: modelData.label
                                     color: theme.textMain
                                     font.family: theme.fontUi
-                                    font.pixelSize: 12
+                                    font.pixelSize: theme.typeControl
                                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 }
 
-                                TextField {
-                                    Layout.preferredWidth: 150
-                                    Layout.minimumWidth: 150
-                                    text: modelData.sequence
+                                ToneTextField {
+                                    objectName: "shortcutSequenceField_" + String(modelData.id)
+                                    accessibleLabel: "Shortcut for " + String(modelData.label)
+                                    Layout.preferredWidth: theme.scaled(150)
+                                    Layout.minimumWidth: theme.scaled(150)
+                                    text: root.displayShortcutSequence(modelData.sequence)
                                     selectByMouse: true
                                     color: theme.textStrong
                                     font.family: theme.fontMono
-                                    font.pixelSize: 12
+                                    font.pixelSize: theme.typeControl
                                     onEditingFinished: root.setShortcutSequence(modelData.id, text)
                                 }
 
@@ -665,7 +717,7 @@ Dialog {
                             text: root.shortcutEditorStatus
                             color: theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 11
+                            font.pixelSize: theme.typeCaption
                         }
                     }
                 }
@@ -695,7 +747,7 @@ Dialog {
                                 text: modelData.title
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 16
+                                font.pixelSize: theme.typeSection
                                 font.weight: Font.DemiBold
                             }
 
@@ -720,25 +772,23 @@ Dialog {
 
                                         Rectangle {
                                             Layout.alignment: Qt.AlignTop
-                                            Layout.minimumWidth: 96
-                                            Layout.preferredWidth: Math.min(220, Math.max(96, keyLabel.implicitWidth + 18))
-                                            Layout.maximumWidth: 220
-                                            radius: 7
+                                            Layout.minimumWidth: theme.scaled(96)
+                                            Layout.preferredWidth: Math.min(theme.scaled(220), Math.max(theme.scaled(96), keyLabel.implicitWidth + theme.space18))
+                                            Layout.maximumWidth: theme.scaled(220)
+                                            radius: theme.radiusControl
                                             color: theme.alpha(theme.ink950, 0.34)
                                             border.width: 1
                                             border.color: theme.alpha(theme.polar, 0.16)
-                                            implicitHeight: Math.max(34, keyLabel.implicitHeight + 12)
+                                            implicitHeight: Math.max(theme.controlHeightDense, keyLabel.implicitHeight + theme.space8 * 2)
 
                                             Label {
                                                 id: keyLabel
                                                 anchors.fill: parent
-                                                anchors.margins: 8
+                                                anchors.margins: theme.space8
                                                 text: modelData.keys
                                                 color: theme.textStrong
                                                 font.family: theme.fontMono
-                                                font.pixelSize: 12
-                                                fontSizeMode: Text.HorizontalFit
-                                                minimumPixelSize: 9
+                                                font.pixelSize: theme.typeControl
                                                 font.weight: Font.DemiBold
                                                 horizontalAlignment: Text.AlignHCenter
                                                 verticalAlignment: Text.AlignVCenter
@@ -752,7 +802,7 @@ Dialog {
                                             text: modelData.description
                                             color: theme.textMain
                                             font.family: theme.fontUi
-                                            font.pixelSize: 12
+                                            font.pixelSize: theme.typeControl
                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                             elide: Text.ElideNone
                                         }

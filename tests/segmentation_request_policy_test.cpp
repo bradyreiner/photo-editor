@@ -75,6 +75,16 @@ int main() {
            .contains(QStringLiteral("unavailable"))) {
     return fail("runtime failures must produce model diagnostics guidance");
   }
+  result.error_message = QStringLiteral(
+      "Could not build inference plan - ANECF error: failed to load ANE model");
+  const auto vision_initialization_status = actionable_segmentation_failure_status(
+      QStringLiteral("Vision"), QStringLiteral("Subject"), result, true);
+  if (segmentation_failure_reason_code(result, true) !=
+          QStringLiteral("model-initialization-failed") ||
+      !vision_initialization_status.contains(QStringLiteral("Lasso or Brush Add/Remove")) ||
+      !vision_initialization_status.contains(QStringLiteral("ANECF"))) {
+    return fail("Vision model initialization failures must offer a useful selection fallback and retain details");
+  }
   result.error_message = QStringLiteral("No foreground detected");
   if (segmentation_failure_reason_code(result, true) !=
           QStringLiteral("no-target") ||

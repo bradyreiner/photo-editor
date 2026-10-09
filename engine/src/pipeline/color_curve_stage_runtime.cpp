@@ -27,7 +27,12 @@ using StageClock = std::chrono::steady_clock;
                                static_cast<std::size_t>(height);
 }
 
-[[nodiscard]] bool finite_surface(const std::vector<ColorPixel>& pixels) {
+[[nodiscard]] bool finite_surface(
+    const std::vector<ColorPixel>& pixels,
+    bool input_finite_validated = false) {
+  if (input_finite_validated) {
+    return true;
+  }
   return std::ranges::all_of(pixels, [](const ColorPixel& pixel) {
     return std::isfinite(pixel.red) && std::isfinite(pixel.green) &&
            std::isfinite(pixel.blue) && std::isfinite(pixel.alpha);
@@ -58,12 +63,13 @@ bool apply_color_curves_stage(
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated) {
   if (!valid_surface(pixels, width, height) || cancellation.cancelled()) {
     return false;
   }
   if (!has_any_curve(state)) {
-    return finite_surface(*pixels);
+    return finite_surface(*pixels, input_finite_validated);
   }
 
   const auto timer = StageClock::now();

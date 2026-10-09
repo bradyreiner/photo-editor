@@ -99,11 +99,29 @@ a skipped hardware proof as release evidence.
 6. Promote the new artifact path into `docs/performance-baselines.md` only when it is useful as a
    stable comparison point.
 
-## Next Coverage Gaps
+## Remaining Coverage Gaps
 
-- Add a library culling driver that emits frame/jank and thumbnail queue pressure.
-- Add import-stage timings for streaming discovery, metadata extraction, and database writes.
-- Add export batch throughput gates grouped by backend and fallback reason.
-- Add timeline scroll/playback drivers around probe, poster, waveform, and playback state.
-- Add QML frame/binding churn samples for Library, Edit, Timeline, and Carousel.
-- Add memory growth checks to suite summaries so large libraries cannot hide unbounded cache growth.
+The suite now includes Library scroll, large-folder import, export batch, timeline edit, QML route
+readiness, frame/jank, and memory-growth measurements. Keep those entries in the checklist and
+suite inventory; the remaining gaps are proof quality and runtime coverage:
+
+- Confirm cold startup and first-use route budgets against the rebuilt production app. The actual
+  workflow driver loads `Main.qml` from the checkout, while production loads the compiled
+  `PhotoEditor.Main` module.
+- Collect RSS and GPU-memory measurements on a host where process sampling is available. The
+  current sandbox blocks `ps`, leaving memory fields empty in its benchmark artifacts.
+- Add sustained CPU/GPU profiling for over-budget render and route stages so stage timing can be
+  tied to sampled hot functions and device work.
+- Correlate workflow and performance context with crash diagnostics where crash reporting is
+  available and enabled by the user. No crash was reproduced in the current workflow run.
+- Keep representative photo/video workloads and target-hardware runs as release evidence; synthetic
+  and single-host timings remain diagnostic baselines.
+- Qualify undo/redo, photo selection, layer insertion/reordering, RAW, masks, and shape editing with
+  large stacked documents. The new paint stress route covers long pixel-paint layers and their
+  thumbnail refresh, but it does not establish those adjacent workflows or native Metal latency.
+
+The current first-use Carousel and Timeline failures, the rejected asynchronous-loader attempt, and
+their artifact paths are recorded in
+[`actual-qml-workflow-performance-2026-09-23.md`](actual-qml-workflow-performance-2026-09-23.md).
+The high-tile-count paint-stack change and its thumbnail/cache receipts are recorded in
+[`photo-paint-thumbnail-stress-2026-09-23`](evidence/photo-paint-thumbnail-stress-2026-09-23/README.md).

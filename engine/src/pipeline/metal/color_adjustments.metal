@@ -103,6 +103,10 @@ struct UserLutStageUniforms {
   uint output_transfer;
   uint lut_size;
   uint pixel_count;
+  float shaper_input_min;
+  float shaper_input_max;
+  uint shaper_size;
+  uint shaper_offset;
 };
 
 struct GeometryStageUniforms {
@@ -181,6 +185,7 @@ struct CompiledFillLayerUniform {
   uint has_downstream_look;
   float lens_vignette;
   float dehaze;
+  uint erase_base_image;
 };
 
 struct FillLayerUniforms {
@@ -1048,6 +1053,14 @@ kernel void apply_retained_fill_layers(
     const float alpha = adjustment
         ? composition_weight : clamp(source.a * composition_weight, 0.0f, 1.0f);
     previous_layer_alpha = alpha;
+    if (layer.erase_base_image != 0u) {
+      if (alpha > 1.0e-6f) {
+        pixel.a *= 1.0f - alpha;
+        if (pixel.a <= 1.0e-6f) pixel = float4(0.0f);
+      }
+      previous_layer_alpha = pixel.a;
+      continue;
+    }
     const float3 blended = retained_fill_blend_pixel(
         pixel.rgb, source.rgb, layer.blend_mode, uniforms);
     if (adjustment) pixel = float4(mix(pixel.rgb, blended, alpha), pixel.a);
@@ -1623,6 +1636,24 @@ static float user_lut_decode_transfer(float value, uint transfer) {
   return value;
 }
 
+static float3 user_lut_apply_shaper(
+    float3 value,
+    device const float4* lut,
+    uint size,
+    float input_min,
+    float input_max) {
+  const float3 position = clamp(
+      (value - input_min) * (float(size - 1u) / (input_max - input_min)),
+      0.0f,
+      float(size - 1u));
+  const uint3 lower = min(uint3(position), uint3(size - 2u));
+  const float3 fraction = position - float3(lower);
+  return float3(
+      mix(lut[lower.r].r, lut[lower.r + 1u].r, fraction.r),
+      mix(lut[lower.g].g, lut[lower.g + 1u].g, fraction.g),
+      mix(lut[lower.b].b, lut[lower.b + 1u].b, fraction.b));
+}
+
 kernel void apply_user_lut_stage(
     device float4* pixels [[buffer(0)]],
     device const float4* lut [[buffer(1)]],
@@ -1635,19 +1666,32 @@ kernel void apply_user_lut_stage(
       user_lut_encode_transfer(lut_input.r, uniforms.input_transfer),
       user_lut_encode_transfer(lut_input.g, uniforms.input_transfer),
       user_lut_encode_transfer(lut_input.b, uniforms.input_transfer));
+  if (uniforms.shaper_size > 1u) {
+    lut_input = user_lut_apply_shaper(
+        lut_input,
+        lut + uniforms.shaper_offset,
+        uniforms.shaper_size,
+        uniforms.shaper_input_min,
+        uniforms.shaper_input_max);
+  }
   const float3 domain_min = float3(
       uniforms.domain_min[0], uniforms.domain_min[1], uniforms.domain_min[2]);
   const float3 domain_max = float3(
       uniforms.domain_max[0], uniforms.domain_max[1], uniforms.domain_max[2]);
-  const float3 normalized = clamp(
-      (lut_input - domain_min) / (domain_max - domain_min), 0.0f, 1.0f);
-  float3 lut_output = apply_lut_3d(
-      normalized, lut, int(uniforms.lut_size)).rgb;
-  const float spread = max(
-      abs(lut_input.r - lut_input.g),
-      max(abs(lut_input.g - lut_input.b), abs(lut_input.r - lut_input.b)));
-  if (spread < 1.0e-9f) {
-    lut_output = float3((lut_output.r + lut_output.g + lut_output.b) / 3.0f);
+  float3 lut_output = lut_input;
+  if (uniforms.lut_size > 1u) {
+    const float3 normalized = clamp(
+        (lut_input - domain_min) / (domain_max - domain_min), 0.0f, 1.0f);
+    lut_output = apply_lut_3d(
+        normalized,
+        lut,
+        int(uniforms.lut_size)).rgb;
+    const float spread = max(
+        abs(lut_input.r - lut_input.g),
+        max(abs(lut_input.g - lut_input.b), abs(lut_input.r - lut_input.b)));
+    if (spread < 1.0e-9f) {
+      lut_output = float3((lut_output.r + lut_output.g + lut_output.b) / 3.0f);
+    }
   }
   lut_output = float3(
       user_lut_decode_transfer(lut_output.r, uniforms.output_transfer),

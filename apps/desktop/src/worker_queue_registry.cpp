@@ -159,7 +159,10 @@ void WorkerQueueRegistry::publishUserIntent(
     const QString& focused_item_id) {
   QMutexLocker locker(&intent_mutex());
   auto& state = user_intent_state();
-  state.surface = normalized_token(surface, QStringLiteral("background"));
+  const auto next_surface = normalized_token(surface, QStringLiteral("background"));
+  // A late hidden-workspace callback must not replace the visible editor intent.
+  if (!workspace_visible && state.workspace_visible && state.surface != next_surface) return;
+  state.surface = next_surface;
   state.workspace_visible = workspace_visible;
   state.playback_active = workspace_visible && playback_active;
   state.interaction_active = workspace_visible && interaction_active;

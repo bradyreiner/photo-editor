@@ -13,6 +13,7 @@
 #include "mask_range_preview_math.h"
 #include "mask_source_revision.h"
 #include "photo_render_utils.h"
+#include "photo_layer_adjustment_recipe.h"
 #include "scaled_mask_matte_service.h"
 #include "thumbnail_render_job.h"
 #include "working_image.h"
@@ -60,8 +61,16 @@ QString render_source_layer_thumbnail(
   if (!scene_linear_source && !decoded.colorSpace().isValid()) {
     decoded.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
-  const auto rendered = scene_linear_source ? render_output_image_with_backend(
-      decoded, neutral, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+  auto content_state = neutral;
+  if (layer.value(QStringLiteral("hasNonNeutralAdjustments")).toBool()) {
+    auto recipe = photo_layer_adjustment_recipe(layer);
+    recipe.insert(QStringLiteral("kind"), QStringLiteral("adjustment"));
+    recipe.insert(QStringLiteral("id"), QStringLiteral("thumbnail-content-colors"));
+    content_state.layers = {recipe};
+    content_state.photographic_rendering_model = request.state.photographic_rendering_model;
+  }
+  const auto rendered = scene_linear_source || !content_state.layers.isEmpty() ? render_output_image_with_backend(
+      decoded, content_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
       RenderBackendPreference::CpuOnly, &source_metadata, nullptr, {},
       photo_editor::pipeline::RemovalQuality::Final,
       RenderOutputPolicy::DisplayReferred, nullptr, cancellation)
@@ -72,11 +81,14 @@ QString render_source_layer_thumbnail(
   const auto source = encoded_layer_thumbnail_source(thumbnail);
   if (source.isEmpty() || cancellation.cancelled()) return {};
   if (metadata != nullptr) {
-    metadata->insert(QStringLiteral("thumbnailRenderSource"), scene_linear_source
+    const auto content_colors = !content_state.layers.isEmpty();
+    metadata->insert(QStringLiteral("thumbnailRenderSource"), content_colors
+        ? QStringLiteral("layer-content-colors") : scene_linear_source
         ? QStringLiteral("source-neutral-develop") : QStringLiteral("source-icc-conversion"));
-    metadata->insert(QStringLiteral("thumbnailSharedRenderPath"), scene_linear_source);
+    metadata->insert(QStringLiteral("thumbnailSharedRenderPath"), scene_linear_source || content_colors);
     metadata->insert(QStringLiteral("thumbnailSharedRenderPathContract"),
-        scene_linear_source ? QStringLiteral("source-neutral-canonical-output-v1")
+        content_colors ? QStringLiteral("raster-content-colors-canonical-output-v1")
+        : scene_linear_source ? QStringLiteral("source-neutral-canonical-output-v1")
                             : QStringLiteral("source-display-referred-icc-v1"));
     metadata->insert(QStringLiteral("thumbnailColorManaged"), true);
     metadata->insert(QStringLiteral("thumbnailColorManagementContract"),
@@ -645,10 +657,12 @@ ThumbnailRefreshQueueRenderers make_thumbnail_worker_renderers(
   return ThumbnailRefreshQueueRenderers{
       .adjustment_layer_dependencies =
           ThumbnailRefreshQueueAdjustmentLayerDependencies{
-              .recipe_hash =
-                  photo_layer_thumbnail_recipe_hash,
-              .entry_recipe_hash =
-                  photo_layer_thumbnail_entry_recipe_hash,
+              .recipe_hash = [](const QVariantMap& layer) {
+                return photo_layer_thumbnail_recipe_hash(layer);
+              },
+              .entry_recipe_hash = [](const QVariantMap& layer) {
+                return photo_layer_thumbnail_entry_recipe_hash(layer);
+              },
               .thumbnail_source =
                   [renderer_dependencies =
                        std::move(adjustment_renderer_dependencies)](

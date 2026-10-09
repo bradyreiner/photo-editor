@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -20,6 +21,7 @@ Item {
     property bool histogramLogScale: true
     property bool compactMode: false
     property bool expanded: false
+    property bool presetsExpanded: false
     readonly property bool compactLayout: compactMode && !expanded
     readonly property real histogramPrimaryFillOpacity: 0.10
     readonly property real histogramPrimaryStrokeOpacity: 0.28
@@ -27,7 +29,7 @@ Item {
     readonly property real histogramLuminanceStrokeOpacity: 0.30
     readonly property real histogramRgbFillOpacity: 0.035
     readonly property real histogramRgbStrokeOpacity: 0.12
-    readonly property real graphInset: compactLayout ? 10 : 16
+    readonly property real graphInset: compactLayout ? 6 : 8
     readonly property real handleHitRadius: 28
     readonly property real endpointHandleHitRadius: 36
     readonly property int pointCount: currentPoints().length
@@ -381,52 +383,17 @@ Item {
         return clearPresetPreview();
     }
 
-    Rectangle {
-        anchors.fill: parent
-        radius: 0
-        color: "transparent"
-        border.width: 0
-    }
-
     ColumnLayout {
         anchors.fill: parent
-        anchors.leftMargin: theme.space6
-        anchors.rightMargin: theme.space6
-        anchors.topMargin: theme.space6
-        anchors.bottomMargin: theme.space4
-        spacing: theme.space6
+        anchors.leftMargin: theme.space2
+        anchors.rightMargin: theme.space2
+        anchors.topMargin: theme.space2
+        anchors.bottomMargin: theme.space2
+        spacing: theme.space4
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
-            visible: !root.compactLayout
-
-            Label {
-                objectName: root.objectName.length > 0 ? root.objectName + "TitleLabel" : ""
-                text: "Point Curve"
-                color: theme.textStrong
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeTitle
-                font.weight: Font.DemiBold
-            }
-
-            Item {
-                Layout.fillWidth: true
-            }
-
-            Label {
-                objectName: root.objectName.length > 0 ? root.objectName + "ValueHeaderLabel" : ""
-                text: "In / Out"
-                color: theme.textFaint
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                font.letterSpacing: 0
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 4
+            spacing: theme.space2
 
             Repeater {
                 model: root.availableChannels
@@ -435,7 +402,7 @@ Item {
                     required property var modelData
 
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 34
+                    Layout.preferredHeight: theme.controlHeightDense
                     channelName: String(modelData)
                     selected: root.selectedChannel === modelData
                     accent: root.accent
@@ -446,47 +413,16 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 6
+            spacing: theme.space4
             visible: !root.compactLayout
 
-            Rectangle {
+            Label {
                 objectName: root.objectName.length > 0 ? root.objectName + "ChannelModeBadge" : ""
-                Layout.preferredHeight: 22
-                Layout.preferredWidth: 112
-                radius: 3
-                color: theme.alpha(root.accent, 0.08)
-                border.width: 1
-                border.color: theme.alpha(root.accent, 0.34)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: root.channelModeLabel
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeCaption
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 0
-                }
-            }
-
-            Rectangle {
-                objectName: root.objectName.length > 0 ? root.objectName + "PointCountBadge" : ""
-                Layout.preferredHeight: 26
-                Layout.preferredWidth: 72
-                radius: 3
-                color: theme.alpha(theme.ink950, 0.30)
-                border.width: 1
-                border.color: theme.alpha(theme.glassEdge, 0.16)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: root.pointCount + " pts"
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeCaption
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 0
-                }
+                text: root.channelModeLabel
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                font.weight: theme.weightControl
             }
 
             Item {
@@ -495,8 +431,9 @@ Item {
 
             ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "DeletePointButton" : ""
-                Layout.preferredHeight: 28
-                Layout.preferredWidth: 70
+                Layout.preferredHeight: theme.controlHeightDense
+                Layout.preferredWidth: theme.scaled(62)
+                visible: root.selectedPointDeletable
                 enabled: root.selectedPointDeletable
                 text: "Delete"
                 font.pixelSize: theme.typeCaption
@@ -508,22 +445,31 @@ Item {
 
             ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "ResetCurveButton" : ""
-                Layout.preferredHeight: 28
-                Layout.preferredWidth: 58
+                Layout.preferredHeight: theme.controlHeightDense
+                Layout.preferredWidth: theme.scaled(58)
                 text: "Reset"
                 font.pixelSize: theme.typeCaption
                 compact: true
                 tooltipText: "Reset the active curve."
                 onClicked: root.resetActiveCurve()
             }
+
+            MiniButton {
+                objectName: root.objectName.length > 0 ? root.objectName + "PresetsToggleButton" : ""
+                visible: !root.compactLayout && root.presetNames && root.presetNames.length > 0
+                text: "Presets"
+                role: "secondary"
+                active: root.presetsExpanded
+                tooltip: "Show curve presets"
+                onClicked: root.presetsExpanded = !root.presetsExpanded
+            }
         }
 
-        GridLayout {
+        Flow {
             Layout.fillWidth: true
-            columns: 4
-            columnSpacing: 6
-            rowSpacing: 6
-            visible: !root.compactLayout && root.presetNames && root.presetNames.length > 0
+            visible: !root.compactLayout && root.presetsExpanded &&
+                     root.presetNames && root.presetNames.length > 0
+            spacing: theme.space2
 
             Repeater {
                 model: root.presetNames
@@ -531,8 +477,8 @@ Item {
                 delegate: ToneCurvePresetButton {
                     required property var modelData
 
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 30
+                    width: implicitWidth
+                    height: theme.controlHeightDense
                     presetName: String(modelData)
                     onPreviewRequested: function(presetName) { root.previewPreset(presetName) }
                     onPreviewCleared: root.clearPresetPreview()
@@ -549,10 +495,9 @@ Item {
                 id: curveArea
                 objectName: "toneCurveGraph"
                 anchors.fill: parent
-                radius: theme.radius8
+                radius: 0
                 color: theme.surfaceInset
-                border.width: 1
-                border.color: theme.lineSoft
+                border.width: 0
                 antialiasing: true
 
                 Canvas {
@@ -912,14 +857,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Label {
-                Layout.fillWidth: true
-                text: "Shift: fine · Ctrl: lock axis · Arrows: nudge · Esc: cancel"
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: theme.typeCaption
-                wrapMode: Text.WordWrap
-            }
+            Item { Layout.fillWidth: true }
             MiniButton {
                 objectName: "toneCurveExpandButton"
                 visible: root.compactMode

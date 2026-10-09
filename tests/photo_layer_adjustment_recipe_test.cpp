@@ -67,6 +67,20 @@ int main() {
     return fail("replacing a photo-layer recipe with identical content must be a no-op");
   }
 
+  for (const auto* kind : {"pixel", "source"}) {
+    auto raster = layer;
+    raster.insert("kind", QString::fromLatin1(kind));
+    if (!photo_layer_supports_adjustment_recipe(raster)) return fail("Raster layers must own color recipes");
+    auto changed = raster;
+    changed.insert("saturation", -80);
+    if (photo_layer_thumbnail_recipe_hash(raster) == photo_layer_thumbnail_recipe_hash(changed))
+      return fail("Direct colors must invalidate raster thumbnails");
+    raster.insert("paintTiles", QVariantMap{{"tiles", QVariantMap{}}});
+    changed.insert("paintTiles", raster.value("paintTiles"));
+    if (photo_layer_thumbnail_recipe_hash(raster, 7) == photo_layer_thumbnail_recipe_hash(changed, 7))
+      return fail("Direct colors must invalidate thumbnails with an unchanged paint revision");
+  }
+
   std::cout << "photo_layer_adjustment_recipe_test passed\n";
   return 0;
 }

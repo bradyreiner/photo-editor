@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://looksy.local/schemas/campaign-v1.json",
+  "title": "Looksy campaign manifest",
+  "type": "object",
+  "required": ["schema_version", "campaign_id", "title", "brand", "cta", "assets", "claims", "scenes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "campaign_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$"},
+    "title": {"type": "string", "minLength": 1},
+    "brand": {
+      "type": "object",
+      "required": ["name", "colors"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "tagline": {"type": "string"},
+        "logo_asset": {"type": "string"},
+        "logo_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "logo_rights_status": {"enum": ["cleared", "internal-review"]},
+        "logo_rights_refs": {"type": "array", "items": {"type": "string"}},
+        "logo_review_status": {"enum": ["approved", "pending"]},
+        "colors": {
+          "type": "object",
+          "required": ["background", "foreground", "accent", "optical"],
+          "properties": {
+            "background": {"$ref": "#/$defs/color"},
+            "foreground": {"$ref": "#/$defs/color"},
+            "accent": {"$ref": "#/$defs/color"},
+            "optical": {"$ref": "#/$defs/color"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "cta": {
+      "type": "object",
+      "required": ["label"],
+      "properties": {"label": {"type": "string", "minLength": 1}, "destination": {"type": "string"}},
+      "additionalProperties": true
+    },
+    "aspect_ratios": {
+      "type": "array",
+      "items": {"enum": ["9:16", "4:5", "16:9"]},
+      "uniqueItems": true
+    },
+    "audio_track": {"type": "string", "description": "Optional ID from assets; omitted means silent render."},
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "kind", "rights_status"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["image", "video", "audio", "capture"]},
+          "media_type": {"enum": ["image", "video"], "description": "Set video on a kind=capture record for a moving app recording; the app capture proof gate still applies."},
+          "rights_status": {"enum": ["cleared", "internal-review"]},
+          "proof_status": {"enum": ["verified", "pending"]},
+          "proof_refs": {"type": "array", "items": {"type": "string"}},
+          "rights_refs": {"type": "array", "items": {"type": "string"}},
+          "sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+          "source": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "status", "evidence_refs"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "text": {"type": "string", "minLength": 1},
+          "status": {"enum": ["verified", "pending"]},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "duration_s", "headline", "body"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {"enum": ["title", "image", "video", "app", "compare"]},
+          "duration_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+          "headline": {"type": "string"},
+          "body": {"type": "string"},
+          "media_refs": {"type": "array", "items": {"type": "string"}},
+          "claim_refs": {"type": "array", "items": {"type": "string"}},
+          "motion": {"enum": ["slow_zoom", "pan_left", "pan_right", "none"]}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {"color": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+  "additionalProperties": true
+}

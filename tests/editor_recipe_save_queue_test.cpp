@@ -69,5 +69,22 @@ int main(int argc, char** argv) {
   if (!pasted_revision || pasted_revision->state.exposure != 9) return 1;
   pasted.complete(true);
   if (pasted.pending() || pasted.active()) return 1;
+  // A newer manual revision must not inherit ownership from the active agent
+  // save, including when an older helper fails or the outbox is reopened.
+  EditorRecipeSaveQueue attributed;
+  a.agent_task_id = QStringLiteral("task-a");
+  attributed.enqueue(a);
+  const auto* owned = attributed.begin();
+  auto manual = a;
+  manual.agent_task_id.clear();
+  manual.state.exposure = 10;
+  attributed.enqueue(manual);
+  if (!owned || owned->agent_task_id != QStringLiteral("task-a")) return 1;
+  attributed.complete(false);
+  EditorRecipeSaveQueue attributed_recovered;
+  attributed_recovered.restore(attributed.checkpoint());
+  const auto* recovered_manual = attributed_recovered.begin();
+  if (!recovered_manual || !recovered_manual->agent_task_id.isEmpty() ||
+      recovered_manual->state.exposure != 10) return 1;
   std::cout << "Asset-bound coalescing, immutable active revision, failure ordering and retry passed.\n";
 }

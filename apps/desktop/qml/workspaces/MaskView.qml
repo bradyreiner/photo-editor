@@ -855,7 +855,7 @@ Rectangle {
 
     NumberAnimation on selectionOutlinePhase {
         from: 0
-        to: 24
+        to: 14
         duration: 900
         loops: Animation.Infinite
         running: root.selectionOutlineAnimationEnabled
@@ -914,6 +914,8 @@ Rectangle {
                         compareMode: false
                         activeBrushPainting: root.tabletBrushStrokeActive || editorPreview.brushStrokeActive
                         accentColor: "#19E0B0"
+                        outlinePhase: root.selectionOutlinePhase
+                        outlineAnimationEnabled: root.selectionOutlineAnimationEnabled
                         cropX: editorPreview.cropRectX
                         cropY: editorPreview.cropRectY
                         cropWidth: editorPreview.cropRectWidth
@@ -1942,8 +1944,9 @@ Rectangle {
                         title: "Tools"
                         subtitle: "Select, refine, and retouch tools for the canvas."
 
-                        TextField {
+                        ToneTextField {
                             objectName: "maskSearchField"
+                            accessibleLabel: "Search mask tools and controls"
                             Layout.fillWidth: true
                             text: root.maskSearchQuery
                             placeholderText: "Search masks, tools, controls"
@@ -3317,7 +3320,7 @@ Rectangle {
                                       editorPreview.activeMaskRetouchMode === "heal" ||
                                       editorPreview.activeMaskRetouchMode === "patch")
                             text: editorPreview.inpaintPrompt
-                            placeholderText: "Optional inpaint prompt"
+                            placeholderText: "Texture hint (smooth or textured); fills from nearby pixels"
                             enabled: !editorPreview.activeMaskCommitted
                             onEditingFinished: editorPreview.inpaintPrompt = text
                         }

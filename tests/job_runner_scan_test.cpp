@@ -5,6 +5,9 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QThreadPool>
@@ -15,8 +18,14 @@ struct JobRunnerTestAccess {
   static void enable(JobRunner& runner) { runner.ready_ = true; }
   static void scan(JobRunner& runner) { runner.processNextJob(); }
   static bool reading(const JobRunner& runner) { return runner.queue_reading_; }
+  static void observeOnly(JobRunner& runner) {
+    QObject::disconnect(&runner.queue_watcher_, &QFutureWatcher<JobQueueReadResult>::finished,
+        &runner, &JobRunner::finishQueueObservation);
+  }
+  static bool observed(const JobRunner& runner) { return runner.queue_watcher_.isFinished(); }
+  static auto observation(const JobRunner& runner) { return runner.queue_watcher_.result(); }
   static QTimer* timer(JobRunner& runner) { return &runner.wake_timer_; }
-  static QString active(const JobRunner& runner) { return runner.active_job_id_; }
+  static QString active(const JobRunner& runner) { return runner.active_attempts_.isEmpty() ? QString{} : runner.active_attempts_.cbegin().key(); }
 };
 }
 using namespace photo_editor::desktop;
@@ -128,6 +137,21 @@ exit "$status"
   if (!wait([&] { return calls().count('\n') == before_burst + 2 &&
       !JobRunnerTestAccess::reading(runner) && !JobRunnerTestAccess::timer(runner)->isActive(); }) ||
       !JobRunnerTestAccess::active(runner).isEmpty() || calls().contains("upsert")) return fail("superseded snapshot must not dispatch; burst must coalesce");
+
+  QJsonArray pending;
+  for (int i = 0; i < 100; ++i) pending.push_back(QJsonObject{
+      {"job_id", QStringLiteral("candidate-%1").arg(i)}, {"job_kind", "asset_export"},
+      {"status", "Queued"}, {"metadata_json", QJsonObject{{"queueOrder", 100-i}}}});
+  if (!fixture(QJsonDocument(pending).toJson())) return 1;
+  JobRunner bounded;
+  JobRunnerTestAccess::enable(bounded);
+  JobRunnerTestAccess::observeOnly(bounded);
+  JobRunnerTestAccess::scan(bounded);
+  if (!wait([&] { return JobRunnerTestAccess::observed(bounded); })) return 1;
+  const auto observed = JobRunnerTestAccess::observation(bounded);
+  if (observed.records.size() != 100 || observed.resources.size() != 1 ||
+      !observed.resources.contains("candidate-99")) return fail("inspect only the first admissible candidate in priority order");
+  if (!fixture("[]")) return 1;
 
   auto closing = std::make_unique<JobRunner>();
   JobRunnerTestAccess::enable(*closing);

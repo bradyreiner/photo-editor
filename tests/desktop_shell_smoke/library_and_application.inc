@@ -2257,10 +2257,8 @@
       QStringLiteral("zoomOutButton"),
       QStringLiteral("zoomInButton"),
       QStringLiteral("diagnosticsOverlayButton"),
-      QStringLiteral("resetViewButton"),
       QStringLiteral("referenceImageButton"),
       QStringLiteral("inspectorPanelToggleButton"),
-      QStringLiteral("interfaceDensityButton"),
       QStringLiteral("fullScreenEditButton"),
       QStringLiteral("diagnosticsPanelCloseButton"),
       QStringLiteral("loupeOverlayButton"),
@@ -2533,13 +2531,11 @@
       QStringLiteral("zoomOutButton"),
       QStringLiteral("zoomInButton"),
       QStringLiteral("diagnosticsOverlayButton"),
-      QStringLiteral("resetViewButton"),
   };
   const QStringList action_toolbar_items{
       QStringLiteral("referenceImageButton"),
       QStringLiteral("clearReferenceImageButton"),
       QStringLiteral("inspectorPanelToggleButton"),
-      QStringLiteral("interfaceDensityButton"),
       QStringLiteral("fullScreenEditButton"),
   };
   const QStringList diagnostics_panel_items{
@@ -4666,7 +4662,7 @@
       Q_ARG(QVariant, QStringLiteral("adjust")));
   QVariant workflow_shortcut_signature;
   const auto workflow_shortcut_prefix =
-      root->property("macStyle").toBool() ? QStringLiteral("Meta+Alt+") : QStringLiteral("Ctrl+Alt+");
+      QStringLiteral("Ctrl+Alt+");
   const auto expected_workflow_shortcut_signature =
       QStringLiteral("adjust:%1A|crop:%1C|masks:%1M|brush:%1B|compare:%1P|export:%1E")
           .arg(workflow_shortcut_prefix);
@@ -4720,8 +4716,10 @@
           "setShortcutSequence",
           Q_RETURN_ARG(QVariant, edited_shortcut),
           Q_ARG(QVariant, QStringLiteral("command-palette")),
-          Q_ARG(QVariant, QStringLiteral("Ctrl+Alt+K"))) ||
+          Q_ARG(QVariant, QStringLiteral("Cmd+Alt+K"))) ||
       !edited_shortcut.toBool() ||
+      app_shell.shortcutSequence(QStringLiteral("command-palette"), QString{}) !=
+          QStringLiteral("Ctrl+Alt+K") ||
       !QMetaObject::invokeMethod(
           keyboard_shortcuts,
           "resetShortcutSequence",
@@ -4729,6 +4727,22 @@
            Q_ARG(QVariant, QStringLiteral("command-palette"))) ||
       !reset_shortcut.toBool()) {
     return fail("keyboard shortcuts dialog should expose editable shortcut mappings");
+  }
+  if (!app_shell.setShortcutOverride(
+          QStringLiteral("command-palette"), QStringLiteral("Cmd+Alt+K"))) {
+    return fail("legacy Command spelling should remain a valid persisted shortcut override");
+  }
+  QVariant normalized_legacy_shortcut;
+  const auto normalized_legacy_shortcut_ok = QMetaObject::invokeMethod(
+      root,
+      "configuredShortcut",
+      Q_RETURN_ARG(QVariant, normalized_legacy_shortcut),
+      Q_ARG(QVariant, QStringLiteral("command-palette")),
+      Q_ARG(QVariant, QStringLiteral("Ctrl+K")));
+  app_shell.resetShortcutOverride(QStringLiteral("command-palette"));
+  if (!normalized_legacy_shortcut_ok ||
+      normalized_legacy_shortcut.toString() != QStringLiteral("Ctrl+Alt+K")) {
+    return fail("older Cmd shortcut overrides should retain their Command intent under Qt's portable modifier mapping");
   }
   const auto expected_mask_shortcut_help_signature =
       QStringLiteral("create:Ctrl+Shift+M|add-subtract-intersect:Ctrl+Shift+A/S/I|"

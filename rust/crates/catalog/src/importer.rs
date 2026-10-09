@@ -1,5 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use exif::{In, Reader, Tag, Value};
 use sha2::{Digest, Sha256};
-use time::{Month, OffsetDateTime};
+use time::{Month, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use walkdir::WalkDir;
 
 use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
@@ -83,6 +83,7 @@ pub struct ExtractedMetadata {
     pub capture_year: u16,
     pub capture_month: u8,
     pub capture_day: u8,
+    pub capture_timestamp: Option<String>,
     pub camera_make: String,
     pub camera_model: String,
     pub lens_model: String,
@@ -226,6 +227,7 @@ pub fn plan_import_destinations(request: &ImportRequest) -> std::io::Result<Impo
 
 pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
     let planning = plan_import_destinations(request)?;
+    let mut sources = ImportSourceVerification::default();
     let mut reused_existing = 0_usize;
     let mut backed_up = 0_usize;
     let mut reused_backup = 0_usize;
@@ -242,8 +244,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             continue;
         }
 
-        let identical =
-            files_have_identical_contents(&destination.source_path, managed_destination)?;
+        let identical = sources.identical(&destination.source_path, managed_destination)?;
         match request.duplicate_policy {
             DuplicatePolicy::Skip => skipped_duplicates += 1,
             DuplicatePolicy::ReuseIdentical => {
@@ -273,7 +274,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             std::fs::create_dir_all(parent)?;
         }
         if backup_destination.exists() {
-            if files_have_identical_contents(&destination.source_path, backup_destination)? {
+            if sources.identical(&destination.source_path, backup_destination)? {
                 reused_backup += 1;
             } else {
                 return Err(std::io::Error::new(
@@ -286,6 +287,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             }
         } else {
             copy_file_verified_atomically(
+                &mut sources,
                 &destination.source_path,
                 backup_destination,
                 PublishPolicy::CreateNew,
@@ -310,11 +312,12 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
                 std::fs::create_dir_all(parent)?;
             }
             if managed_destination.exists()
-                && files_have_identical_contents(&destination.source_path, managed_destination)?
+                && sources.identical(&destination.source_path, managed_destination)?
             {
                 continue;
             }
             copy_file_verified_atomically(
+                &mut sources,
                 &destination.source_path,
                 managed_destination,
                 if managed_destination.exists() {
@@ -335,6 +338,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             capture_year: destination.metadata.capture_year,
             capture_month: destination.metadata.capture_month,
             capture_day: destination.metadata.capture_day,
+            capture_timestamp: destination.metadata.capture_timestamp,
             camera_make: destination.metadata.camera_make,
             camera_model: destination.metadata.camera_model,
             lens_model: destination.metadata.lens_model,
@@ -382,6 +386,11 @@ fn files_have_identical_contents(left: &Path, right: &Path) -> std::io::Result<b
     loop {
         let left_read = left_reader.read(&mut left_buffer)?;
         let right_read = right_reader.read(&mut right_buffer)?;
+        #[cfg(test)]
+        {
+            copy_test::record_read(left, left_read, false);
+            copy_test::record_read(right, right_read, false);
+        }
         if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
             return Ok(false);
         }
@@ -392,16 +401,24 @@ fn files_have_identical_contents(left: &Path, right: &Path) -> std::io::Result<b
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<[u8; 32]> {
-    let mut reader = BufReader::new(File::open(path)?);
+    sha256_reader(File::open(path)?, path)
+}
+
+fn sha256_reader(file: File, _path: &Path) -> std::io::Result<[u8; 32]> {
+    let mut reader = BufReader::new(file);
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = reader.read(&mut buffer)?;
+        #[cfg(test)]
+        copy_test::record_read(_path, read, true);
         if read == 0 {
             break;
         }
         digest.update(&buffer[..read]);
     }
+    #[cfg(test)]
+    copy_test::digest_finished(_path);
     Ok(digest.finalize().into())
 }
 
@@ -411,11 +428,150 @@ enum PublishPolicy {
     Replace,
 }
 
+// This cache lives for one import only. A source version is pinned at its first
+// comparison/copy; a later change fails the import rather than mixing versions.
+#[derive(Debug, PartialEq, Eq)]
+struct SourceVersion {
+    len: u64,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+    #[cfg(unix)]
+    unix_identity: (u64, u64, i64, i64, i64, i64),
+}
+
+impl SourceVersion {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            created: metadata.created().ok(),
+            #[cfg(unix)]
+            unix_identity: {
+                use std::os::unix::fs::MetadataExt;
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.mtime(),
+                    metadata.mtime_nsec(),
+                    metadata.ctime(),
+                    metadata.ctime_nsec(),
+                )
+            },
+        }
+    }
+
+    fn can_reuse_digest(&self) -> bool {
+        // Require identity and subsecond change timestamps. Coarse timestamps
+        // and platforms without this fingerprint keep full source rehashing.
+        #[cfg(unix)]
+        {
+            self.unix_identity.1 != 0 && self.unix_identity.5 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+}
+
+struct VerifiedSource {
+    version: SourceVersion,
+    reuse_digest: bool,
+    digest: Option<[u8; 32]>,
+}
+
+impl VerifiedSource {
+    fn changed(path: &Path) -> std::io::Error {
+        std::io::Error::other(format!(
+            "import source changed during verification: {}",
+            path.display()
+        ))
+    }
+
+    fn check_metadata(&self, path: &Path, metadata: &std::fs::Metadata) -> std::io::Result<()> {
+        if self.version != SourceVersion::from_metadata(metadata) {
+            return Err(Self::changed(path));
+        }
+        Ok(())
+    }
+
+    fn read_digest(&mut self, path: &Path) -> std::io::Result<[u8; 32]> {
+        let file = File::open(path)?;
+        self.check_metadata(path, &file.metadata()?)?;
+        // Retain the handle to detect writes to an unlinked/replaced source too.
+        let digest = sha256_reader(file.try_clone()?, path)?;
+        self.check_metadata(path, &file.metadata()?)?;
+        self.check_metadata(path, &std::fs::metadata(path)?)?;
+        if self.digest.is_some_and(|previous| previous != digest) {
+            return Err(Self::changed(path));
+        }
+        self.digest = Some(digest);
+        Ok(digest)
+    }
+
+    fn digest(&mut self, path: &Path) -> std::io::Result<[u8; 32]> {
+        self.check_metadata(path, &std::fs::metadata(path)?)?;
+        if self.reuse_digest {
+            if let Some(digest) = self.digest {
+                return Ok(digest);
+            }
+        }
+        self.read_digest(path)
+    }
+
+    fn verify(&mut self, path: &Path) -> std::io::Result<()> {
+        self.check_metadata(path, &std::fs::metadata(path)?)?;
+        if self.digest.is_some() && !self.reuse_digest {
+            self.read_digest(path)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ImportSourceVerification {
+    sources: HashMap<PathBuf, VerifiedSource>,
+}
+
+impl ImportSourceVerification {
+    fn source(&mut self, path: &Path) -> std::io::Result<&mut VerifiedSource> {
+        use std::collections::hash_map::Entry;
+        match self.sources.entry(path.to_owned()) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                let version = SourceVersion::from_metadata(&std::fs::metadata(path)?);
+                let reuse_digest = version.can_reuse_digest();
+                Ok(entry.insert(VerifiedSource {
+                    version,
+                    reuse_digest,
+                    digest: None,
+                }))
+            }
+        }
+    }
+
+    fn identical(&mut self, source: &Path, destination: &Path) -> std::io::Result<bool> {
+        let pinned = self.source(source)?;
+        pinned.verify(source)?;
+        let identical = files_have_identical_contents(source, destination)?;
+        pinned.verify(source)?;
+        Ok(identical)
+    }
+}
+
 fn copy_file_verified_atomically(
+    sources: &mut ImportSourceVerification,
     source: &Path,
     destination: &Path,
     publish_policy: PublishPolicy,
 ) -> std::io::Result<()> {
+    let pinned = sources.source(source)?;
+    let expected = if pinned.reuse_digest {
+        Some(pinned.digest(source)?)
+    } else {
+        pinned.check_metadata(source, &std::fs::metadata(source)?)?;
+        None
+    };
     let mut partial_name = destination.as_os_str().to_os_string();
     partial_name.push(".virel-partial");
     let partial_path = PathBuf::from(partial_name);
@@ -423,36 +579,43 @@ fn copy_file_verified_atomically(
         std::fs::remove_file(&partial_path)?;
     }
 
-    let copy_result = std::fs::copy(source, &partial_path);
-    if let Err(error) = copy_result {
+    let result = (|| {
+        #[cfg(test)]
+        copy_test::point("before_copy", source, &partial_path);
+        let _copied = std::fs::copy(source, &partial_path)?;
+        #[cfg(test)]
+        copy_test::record_copy(_copied);
+        #[cfg(test)]
+        copy_test::point("after_copy", source, &partial_path);
+        // Without a reusable fingerprint, retain a fresh source hash for every
+        // copy, after copying just as in the uncached path. read_digest also
+        // rejects a different checksum from an earlier copy in this import.
+        let expected = match expected {
+            Some(digest) => digest,
+            None => pinned.read_digest(source)?,
+        };
+        if expected != sha256_file(&partial_path)? {
+            return Err(std::io::Error::other(format!(
+                "SHA-256 verification failed while copying {}",
+                source.display()
+            )));
+        }
+        pinned.check_metadata(source, &std::fs::metadata(source)?)?;
+        if publish_policy == PublishPolicy::CreateNew && destination.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "refusing to overwrite existing file at {}",
+                    destination.display()
+                ),
+            ));
+        }
+        publish_verified_partial(&partial_path, destination, publish_policy)
+    })();
+    if result.is_err() {
         let _ = std::fs::remove_file(&partial_path);
-        return Err(error);
     }
-
-    if sha256_file(source)? != sha256_file(&partial_path)? {
-        let _ = std::fs::remove_file(&partial_path);
-        return Err(std::io::Error::other(format!(
-            "SHA-256 verification failed while copying {}",
-            source.display()
-        )));
-    }
-
-    if publish_policy == PublishPolicy::CreateNew && destination.exists() {
-        let _ = std::fs::remove_file(&partial_path);
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!(
-                "refusing to overwrite existing file at {}",
-                destination.display()
-            ),
-        ));
-    }
-
-    if let Err(error) = publish_verified_partial(&partial_path, destination, publish_policy) {
-        let _ = std::fs::remove_file(&partial_path);
-        return Err(error);
-    }
-    Ok(())
+    result
 }
 
 #[cfg(not(windows))]
@@ -511,6 +674,16 @@ fn publish_verified_partial(
     }
 }
 
+fn import_metadata_worker_count(paths: usize, available: usize, requested: Option<&str>) -> usize {
+    let available = available.max(1);
+    requested
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(available)
+        .min(available)
+        .min(paths)
+}
+
 fn extract_metadata_parallel(paths: &[PathBuf]) -> Vec<ExtractedMetadata> {
     if paths.len() < 2 {
         return paths
@@ -519,10 +692,11 @@ fn extract_metadata_parallel(paths: &[PathBuf]) -> Vec<ExtractedMetadata> {
             .collect();
     }
 
-    let worker_count = thread::available_parallelism()
+    let available = thread::available_parallelism()
         .map(|value| value.get())
-        .unwrap_or(1)
-        .clamp(1, paths.len());
+        .unwrap_or(1);
+    let requested = std::env::var("PHOTO_EDITOR_IMPORT_METADATA_THREADS").ok();
+    let worker_count = import_metadata_worker_count(paths.len(), available, requested.as_deref());
     let chunk_size = paths.len().div_ceil(worker_count);
     let mut indexed_metadata = thread::scope(|scope| {
         let mut handles = Vec::with_capacity(worker_count);
@@ -788,15 +962,34 @@ pub fn extract_metadata(path: &Path) -> std::io::Result<ExtractedMetadata> {
 
     let mut metadata = ExtractedMetadata::default();
 
-    if let Some(date) = field_string(&exif, Tag::DateTimeOriginal)
-        .or_else(|| field_string(&exif, Tag::DateTimeDigitized))
-        .or_else(|| field_string(&exif, Tag::DateTime))
-    {
-        if let Some((year, month, day)) = parse_exif_date(&date) {
-            metadata.capture_year = year;
-            metadata.capture_month = month;
-            metadata.capture_day = day;
-        }
+    let original_date = field_ascii_string(&exif, Tag::DateTimeOriginal);
+    let original_subseconds = field_ascii_string(&exif, Tag::SubSecTimeOriginal);
+    let original_offset = field_ascii_string(&exif, Tag::OffsetTimeOriginal);
+    metadata.capture_timestamp = original_date.as_deref().and_then(|date| {
+        parse_exif_capture_timestamp(
+            date,
+            original_subseconds.as_deref(),
+            original_offset.as_deref(),
+        )
+    });
+
+    let capture_datetime = original_date
+        .as_deref()
+        .and_then(parse_exif_capture_datetime)
+        .or_else(|| {
+            field_ascii_string(&exif, Tag::DateTimeDigitized)
+                .as_deref()
+                .and_then(parse_exif_capture_datetime)
+        })
+        .or_else(|| {
+            field_ascii_string(&exif, Tag::DateTime)
+                .as_deref()
+                .and_then(parse_exif_capture_datetime)
+        });
+    if let Some(datetime) = capture_datetime {
+        metadata.capture_year = u16::try_from(datetime.year()).unwrap_or_default();
+        metadata.capture_month = month_to_u8(datetime.month());
+        metadata.capture_day = datetime.day();
     }
 
     metadata.camera_make = field_string(&exif, Tag::Make).unwrap_or_default();
@@ -856,6 +1049,16 @@ fn field_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn field_ascii_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
+    exif.get_field(tag, In::PRIMARY)
+        .and_then(|field| match &field.value {
+            Value::Ascii(values) => values.first(),
+            _ => None,
+        })
+        .map(|value| String::from_utf8_lossy(value).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn field_unsigned_i32(exif: &exif::Exif, tag: Tag) -> Option<i32> {
     exif.get_field(tag, In::PRIMARY)
         .and_then(|field| match &field.value {
@@ -880,16 +1083,40 @@ fn field_rational_f64(exif: &exif::Exif, tag: Tag) -> Option<f64> {
         })
 }
 
-fn parse_exif_date(value: &str) -> Option<(u16, u8, u8)> {
-    let mut parts = value.split_whitespace();
-    let date = parts.next()?;
-    let mut date_parts = date.split(':');
+const EXIF_DATE_TIME_FORMAT: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]:[month]:[day] [hour]:[minute]:[second]");
+const ISO_LOCAL_DATE_TIME_FORMAT: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+const EXIF_OFFSET_FORMAT: &[time::format_description::FormatItem<'static>] =
+    time::macros::format_description!("[offset_hour sign:mandatory]:[offset_minute]");
 
-    let year = date_parts.next()?.parse::<u16>().ok()?;
-    let month = date_parts.next()?.parse::<u8>().ok()?;
-    let day = date_parts.next()?.parse::<u8>().ok()?;
+fn parse_exif_capture_datetime(value: &str) -> Option<PrimitiveDateTime> {
+    let datetime = PrimitiveDateTime::parse(value.trim(), EXIF_DATE_TIME_FORMAT).ok()?;
+    (1..=9999).contains(&datetime.year()).then_some(datetime)
+}
 
-    Some((year, month, day))
+fn parse_exif_capture_timestamp(
+    value: &str,
+    subseconds: Option<&str>,
+    offset: Option<&str>,
+) -> Option<String> {
+    let datetime = parse_exif_capture_datetime(value)?;
+    let mut timestamp = datetime.format(ISO_LOCAL_DATE_TIME_FORMAT).ok()?;
+    if let Some(subseconds) = subseconds.map(str::trim).filter(|value| {
+        (1..=9).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        timestamp.push('.');
+        timestamp.push_str(subseconds);
+    }
+    if let Some(offset) = offset
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && UtcOffset::parse(value, EXIF_OFFSET_FORMAT).is_ok())
+    {
+        // Keep the camera's local clock reading and attach its stated offset;
+        // never reinterpret a missing or invalid offset as UTC.
+        timestamp.push_str(offset);
+    }
+    Some(timestamp)
 }
 
 fn path_to_utf8(path: &Path) -> std::io::Result<String> {
@@ -935,9 +1162,16 @@ fn month_to_u8(month: Month) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "importer_copy_test.rs"]
+mod copy_test;
+
+#[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Cursor;
 
+    use exif::experimental::Writer;
+    use exif::Field;
     use tempfile::tempdir;
 
     use super::*;
@@ -1336,6 +1570,7 @@ mod tests {
             capture_year: 2026,
             capture_month: 8,
             capture_day: 4,
+            capture_timestamp: None,
             camera_make: String::new(),
             camera_model: String::new(),
             lens_model: String::new(),
@@ -1416,5 +1651,95 @@ mod tests {
         assert_eq!(metadata.iso, Some(400));
         assert_eq!(metadata.shutter_speed, "1/250 s");
         assert_eq!(metadata.aperture, Some(2.8));
+    }
+
+    fn ascii_exif_field(tag: Tag, value: &str) -> Field {
+        Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value: Value::Ascii(vec![value.as_bytes().to_vec()]),
+        }
+    }
+
+    fn write_tiff_with_exif(path: &Path, fields: &[Field]) {
+        let mut writer = Writer::new();
+        for field in fields {
+            writer.push_field(field);
+        }
+        let mut output = Cursor::new(Vec::new());
+        writer
+            .write(&mut output, false)
+            .expect("encode EXIF fixture");
+        fs::write(path, output.into_inner()).expect("write EXIF fixture");
+    }
+
+    #[test]
+    fn extracts_exif_capture_timestamp_with_subseconds_and_offset() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("capture.tif");
+        write_tiff_with_exif(
+            &path,
+            &[
+                ascii_exif_field(Tag::DateTimeOriginal, "2024:02:29 23:59:58"),
+                ascii_exif_field(Tag::SubSecTimeOriginal, "037"),
+                ascii_exif_field(Tag::OffsetTimeOriginal, "-07:00"),
+            ],
+        );
+
+        let metadata = extract_metadata(&path).expect("read EXIF fixture");
+        assert_eq!(
+            metadata.capture_timestamp.as_deref(),
+            Some("2024-02-29T23:59:58.037-07:00")
+        );
+        assert_eq!(metadata.capture_year, 2024);
+        assert_eq!(metadata.capture_month, 2);
+        assert_eq!(metadata.capture_day, 29);
+    }
+
+    #[test]
+    fn preserves_local_exif_time_when_offset_is_missing_or_invalid() {
+        assert_eq!(
+            parse_exif_capture_timestamp("2024:07:08 09:10:11", Some("5"), None).as_deref(),
+            Some("2024-07-08T09:10:11.5")
+        );
+        assert_eq!(
+            parse_exif_capture_timestamp("2024:07:08 09:10:11", None, Some("-25:00")).as_deref(),
+            Some("2024-07-08T09:10:11")
+        );
+    }
+
+    #[test]
+    fn malformed_subseconds_are_dropped_without_losing_a_valid_capture_time() {
+        assert_eq!(
+            parse_exif_capture_timestamp("2024:07:08 09:10:11", Some("1x"), Some("+05:30"))
+                .as_deref(),
+            Some("2024-07-08T09:10:11+05:30")
+        );
+        assert_eq!(
+            parse_exif_capture_timestamp("2024:07:08 09:10:11", Some("1234567890"), None)
+                .as_deref(),
+            Some("2024-07-08T09:10:11")
+        );
+    }
+
+    #[test]
+    fn invalid_exif_calendar_or_time_falls_back_to_file_date_without_timestamp() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("invalid-date.tif");
+        write_tiff_with_exif(
+            &path,
+            &[ascii_exif_field(
+                Tag::DateTimeOriginal,
+                "2023:02:29 25:61:61",
+            )],
+        );
+
+        let fallback = fallback_metadata(&path);
+        let metadata = extract_metadata(&path).expect("read invalid-date EXIF fixture");
+        assert_eq!(metadata.capture_timestamp, None);
+        assert_eq!(metadata.capture_year, fallback.capture_year);
+        assert_eq!(metadata.capture_month, fallback.capture_month);
+        assert_eq!(metadata.capture_day, fallback.capture_day);
+        assert!(metadata.capture_year > 0);
     }
 }

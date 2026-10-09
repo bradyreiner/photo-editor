@@ -24,11 +24,26 @@ Item {
     property color mint: "#d4ad6a"
     property string scope: ""
     property string previousScope: ""
+    property int targetLayerIndex: 0
+    property var compareGroups: []
+    property var previousCompareGroups: []
     property int toggles: 0
     property int holds: 0
-    function activeAdjustmentLayerIndex() { return -1 }
+    function activeAdjustmentLayerIndex() { return targetLayerIndex }
     function sectionComparisonActive(key) { return scope === key }
     function toggleSectionComparison(key) { toggles++; scope = scope === key ? "" : key }
+    function compareEditGroupActive(key) { return compareGroups.indexOf(key) >= 0 }
+    function toggleCompareEditGroup(key) {
+        const groups = compareGroups.slice(0)
+        const index = groups.indexOf(key)
+        if (index >= 0) groups.splice(index, 1)
+        else groups.push(key)
+        compareGroups = groups
+    }
+    function holdCompareEditGroup(key, held) {
+        if (held) { previousCompareGroups = compareGroups.slice(0); compareGroups = [key] }
+        else compareGroups = previousCompareGroups.slice(0)
+    }
     function holdSectionComparison(key, held) {
         if (held) { holds++; previousScope = scope; scope = key }
         else { scope = previousScope }
@@ -107,6 +122,24 @@ Item {
   wb_group->setVisible(true);
   QTest::mouseMove(&window, QPoint(0, window.height() - 1));
   QTest::qWait(100);
+  host->setProperty("targetLayerIndex", -1);
+  QTest::qWait(50);
+  QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, wb);
+  auto compare_groups = host->property("compareGroups").toList();
+  if (compare_groups.size() != 1 || compare_groups.front().toString() != QStringLiteral("white-balance"))
+    return fail("Base Image comparison click must toggle its adjustment group");
+  QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, curve);
+  QTest::qWait(QGuiApplication::styleHints()->mousePressAndHoldInterval() + 100);
+  compare_groups = host->property("compareGroups").toList();
+  if (compare_groups.size() != 1 || compare_groups.front().toString() != QStringLiteral("curves"))
+    return fail("Base Image comparison hold must temporarily isolate the held adjustment group");
+  QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, curve);
+  compare_groups = host->property("compareGroups").toList();
+  if (compare_groups.size() != 1 || compare_groups.front().toString() != QStringLiteral("white-balance"))
+    return fail("Base Image comparison release must restore the prior adjustment group");
+  QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, wb);
+  if (!host->property("compareGroups").toList().isEmpty())
+    return fail("Base Image comparison click must restore the edited group state");
   const auto capture = qEnvironmentVariable("PHOTO_EDITOR_SECTION_CAPTURE_PATH");
   if (!capture.isEmpty() && !window.grabWindow().save(capture)) return fail("Comparison capture failed");
   std::cout << "Native section comparison toggle, hold, release, cancel and collapsed Color Mix passed\n";

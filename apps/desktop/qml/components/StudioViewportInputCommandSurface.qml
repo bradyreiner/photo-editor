@@ -12,8 +12,8 @@ MouseArea {
     readonly property string pointerGrabPolicy: viewport.masked ? "defer-to-mask-overlay" : "viewport-pan-zoom"
     acceptedButtons: Qt.LeftButton
     hoverEnabled: true
-    preventStealing: false
-    cursorShape: workspace.pixelExactToolReady() || workspace.brushToolReady()
+    preventStealing: viewport.maskGestureKind.length > 0
+    cursorShape: workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
                  ? Qt.CrossCursor
                  : (workspace.spacePanActive || viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
     property real pressX: 0
@@ -40,12 +40,12 @@ MouseArea {
         }
         if (viewport.handleSamplingPointerPressed(mouse)) {
             mouse.accepted = true
-            cursorShape = workspace.maskLuminanceRangeSampling || workspace.pixelExactToolReady()
+            cursorShape = workspace.colorMixerImageDragActive || workspace.maskLuminanceRangeSampling || workspace.pixelExactToolReady()
                           ? Qt.CrossCursor
                           : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             return
         }
-        if (viewport.handleMaskPointerPressed(mouse)) {
+        if (viewport.handleMaskPointerPressed(mouse) || viewport.maskGestureKind.length > 0) {
             mouse.accepted = true
             cursorShape = Qt.CrossCursor
             return
@@ -80,7 +80,8 @@ MouseArea {
             mouse.accepted = true
             return
         }
-        if (viewport.handleMaskPointerMoved(mouse)) {
+        if (viewport.handleMaskPointerMoved(mouse, pressed) ||
+                (pressed && viewport.maskGestureKind.length > 0)) {
             mouse.accepted = true
             return
         }
@@ -100,18 +101,19 @@ MouseArea {
             return
         }
         if (viewport.handleSamplingPointerReleased(mouse)) {
-            cursorShape = workspace.pixelExactToolReady() || workspace.brushToolReady()
+            cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
                           ? Qt.CrossCursor
                           : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             return
         }
         viewport.handleMaskPointerReleased()
         workspace.finishPixelInspectorSampling()
-        cursorShape = workspace.pixelExactToolReady() || workspace.brushToolReady()
+        cursorShape = workspace.colorMixerImageDragActive || workspace.pixelExactToolReady() || workspace.brushToolReady()
                       ? Qt.CrossCursor
                       : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
     }
     onCanceled: {
+        viewport.handleSamplingPointerCanceled()
         if (workspace.maskLuminanceRangeSampling)
             previewController.cancelActiveLuminanceRangeSample()
         viewport.handleMaskPointerReleased()

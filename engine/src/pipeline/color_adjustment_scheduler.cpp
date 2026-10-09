@@ -1,12 +1,14 @@
 #include "color_adjustment_scheduler.h"
+#include "photo_editor/pipeline/cpu_work_scheduler.h"
 
 #include <algorithm>
 #include <condition_variable>
 #include <cstddef>
-#include <deque>
 #include <exception>
+#include <list>
 #include <memory>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -17,6 +19,17 @@ namespace {
 
 thread_local bool g_parallel_worker_active = false;
 
+class ParallelWorkScope final {
+ public:
+  ParallelWorkScope() : previous_(g_parallel_worker_active) {
+    g_parallel_worker_active = true;
+  }
+  ~ParallelWorkScope() { g_parallel_worker_active = previous_; }
+
+ private:
+  bool previous_;
+};
+
 class ColorAdjustmentScheduler final {
  public:
   ColorAdjustmentScheduler() {
@@ -25,7 +38,13 @@ class ColorAdjustmentScheduler final {
     const auto worker_count = hardware_threads > 1 ? hardware_threads - 1 : 0;
     workers_.reserve(worker_count);
     for (auto worker_index = 0U; worker_index < worker_count; ++worker_index) {
-      workers_.emplace_back([this]() { workerLoop(); });
+      try {
+        workers_.emplace_back([this]() { workerLoop(); });
+      } catch (const std::system_error&) {
+        // Keep the successfully created workers (or use the serial path). A
+        // partially constructed vector of joinable threads cannot be unwound.
+        break;
+      }
     }
   }
 
@@ -56,57 +75,36 @@ class ColorAdjustmentScheduler final {
     }
 
     const auto item_count = static_cast<std::size_t>(count);
-    const auto maximum_task_count =
-        std::max<std::size_t>(1, workers_.size() + 1);
+    const auto maximum_task_count = workers_.size();
     const auto task_count = std::min<std::size_t>(
         maximum_task_count,
         std::max<std::size_t>(
             1,
             (item_count + kMinimumItemsPerTask - 1) /
                 kMinimumItemsPerTask));
-    if (task_count <= 1) {
-      runSerial(count, work);
-      return;
-    }
-
     auto batch = std::make_shared<BatchState>();
     batch->remaining = task_count;
-
+    // Allocate every task and copy every callable before publishing any work.
+    // If allocation throws, no worker can retain references to caller storage.
+    std::list<Task> pending_tasks;
+    for (std::size_t task_index = 0; task_index < task_count; ++task_index) {
+      const auto begin = item_count * task_index / task_count;
+      const auto end = item_count * (task_index + 1) / task_count;
+      pending_tasks.push_back(Task{
+          .begin = begin,
+          .end = end,
+          .work = work,
+          .batch = batch,
+      });
+    }
     {
       std::lock_guard lock(mutex_);
-      for (std::size_t task_index = 1; task_index < task_count; ++task_index) {
-        const auto begin = item_count * task_index / task_count;
-        const auto end = item_count * (task_index + 1) / task_count;
-        tasks_.push_back(Task{
-            .begin = begin,
-            .end = end,
-            .work = work,
-            .batch = batch,
-        });
-      }
+      tasks_.splice(tasks_.end(), pending_tasks);
     }
     work_available_.notify_all();
 
-    try {
-      const auto end = item_count / task_count;
-      for (std::size_t index = 0; index < end; ++index) {
-        work(static_cast<int>(index));
-      }
-    } catch (...) {
-      std::lock_guard batch_lock(batch->mutex);
-      if (batch->exception == nullptr) {
-        batch->exception = std::current_exception();
-      }
-    }
-
-    {
-      std::lock_guard batch_lock(batch->mutex);
-      --batch->remaining;
-      if (batch->remaining == 0) {
-        batch->completed.notify_one();
-      }
-    }
-
+    // Keep concurrent callers out of the CPU budget: only this fixed worker
+    // set runs parallel batches, leaving one hardware thread outside the pool.
     std::unique_lock batch_lock(batch->mutex);
     batch->completed.wait(
         batch_lock, [&batch]() { return batch->remaining == 0; });
@@ -134,6 +132,7 @@ class ColorAdjustmentScheduler final {
   };
 
   static void runSerial(int count, const std::function<void(int)>& work) {
+    const ParallelWorkScope scope;
     for (int index = 0; index < count; ++index) {
       work(index);
     }
@@ -154,7 +153,7 @@ class ColorAdjustmentScheduler final {
       }
 
       try {
-        g_parallel_worker_active = true;
+        const ParallelWorkScope scope;
         for (std::size_t index = task.begin; index < task.end; ++index) {
           task.work(static_cast<int>(index));
         }
@@ -164,7 +163,6 @@ class ColorAdjustmentScheduler final {
           task.batch->exception = std::current_exception();
         }
       }
-      g_parallel_worker_active = false;
 
       {
         std::lock_guard batch_lock(task.batch->mutex);
@@ -179,7 +177,7 @@ class ColorAdjustmentScheduler final {
   std::vector<std::thread> workers_;
   std::mutex mutex_;
   std::condition_variable work_available_;
-  std::deque<Task> tasks_;
+  std::list<Task> tasks_;
   bool stopping_ = false;
 };
 
@@ -193,6 +191,10 @@ ColorAdjustmentScheduler& color_adjustment_scheduler() {
 void run_color_adjustment_parallel_for(
     int count,
     const std::function<void(int)>& work) {
+  run_cpu_parallel_for(count, work);
+}
+
+void run_cpu_parallel_for(int count, const std::function<void(int)>& work) {
   color_adjustment_scheduler().run(count, work);
 }
 

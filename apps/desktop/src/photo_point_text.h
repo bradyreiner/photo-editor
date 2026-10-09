@@ -13,6 +13,7 @@ inline QPointF photo_text_origin(const QVariantMap& layer) {
 inline bool fit_photo_point_text(QVariantMap* layer) {
   const auto style = decode_photo_text_style(QJsonObject::fromVariantMap(layer->value("textTypography").toMap()));
   if (!style) return false;
+  if (!style->path_points.isEmpty()) return true;
   if (!style->point_text) return true;
   const auto geometry = measure_photo_point_text(layer->value("text").toString(), *style);
   if (!geometry.error.isEmpty()) return false;

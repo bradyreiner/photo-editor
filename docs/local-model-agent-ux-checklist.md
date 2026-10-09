@@ -352,7 +352,7 @@ Acceptance criteria:
 - [x] Use strict input and output schemas for every tool.
 - [x] Prefer structured tool output over long text output.
 - [x] Trim tool output before returning it to the model.
-- [x] Add timeouts, retry limits, and cancellation to every tool call.
+- [x] Preserve retry limits and cancellation for every tool call. Automatic work deadlines are disabled by default; model generation, visual review, MCP calls, and pending pixel jobs wait for completion or Stop. Explicit API timeout overrides remain available. See [unlimited-wait evidence](evidence/agent-unlimited-waits-2026-10-06/README.md).
 - [x] Require approval for:
   - [x] Commit.
   - [x] Export.
@@ -626,6 +626,6 @@ Acceptance criteria:
 - [x] The user still sees enough proof to trust the result.
 - [x] Durable agent memory is inspectable, local, editable, and redacted for sharing. The one-click Details proof exposes the local note count, vault, Obsidian, and safe-copy actions; the taste mirror supports project-local rename/forget controls without storing image bytes or source paths.
 - [x] The model receives retrieved memory packets, not the entire memory vault.
-- [x] MCP tools are exposed by run phase with strict schemas, approvals, timeouts, and audit logs.
+- [x] MCP tools are exposed by run phase with strict schemas, approvals, cancellation, and audit logs. Work deadlines are disabled by default.
 - [x] Advanced details are one click away, not always in the way.
 - [x] The product feels like an editing assistant, not an automation console. The visible loop is now choose a look, describe the outcome, review real samples, make changes, apply to all, inspect exceptions, and commit; diagnostics remain available without defining the normal workflow.

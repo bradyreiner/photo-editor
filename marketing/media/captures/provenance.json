@@ -1,0 +1,36 @@
+{
+  "status": "internal-review",
+  "captures": [
+    {
+      "id": "agent-ui",
+      "path": "media/captures/agent-plan-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical native UI fixture; no real model/executor proof",
+      "sha256": "f6f29fb99bf490674e89ddea6e6974a4753275a9c7f7b3ea26002a3ca4077b89"
+    },
+    {
+      "id": "boards-ui",
+      "path": "media/captures/edit-boards-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical native Edit boards fixture",
+      "sha256": "39b295e84726431070731e8af78605f3fa51926d4157fdb8921763788c001ecb"
+    },
+    {
+      "id": "timeline-ui",
+      "path": "media/captures/timeline-layout-fixture.png",
+      "kind": "capture",
+      "rights_status": "internal-review",
+      "proof_status": "pending",
+      "proof_refs": [],
+      "source": "Historical QML Timeline layout fixture",
+      "sha256": "ee45ceed7f561dae985cd6099cbbc1f8aa8e28f8be9d91b9e1ece919e4e3ba16"
+    }
+  ],
+  "note": "Historical development fixture previews only. Product results must be re-recorded and reviewed before final renders."
+}

@@ -9,7 +9,7 @@ InspectorSlider {
     property string targetSupport: "base-image,adjustment-layer"
     readonly property string targetSupportContract: workspace.adjustmentControlTargetSupportContract
     readonly property string targetSupportSignature: workspace.adjustmentControlTargetSupportSignature(targetSupport)
-    readonly property string studioAdjustmentSliderContract: "studio-adjustment-slider:v1|shared-inspector-slider:true|fixed-label:true|fixed-value:true|fixed-reset:true|modified-marker:true|double-click-reset:true|coalesced-drag:true|target-aware:true|disabled-reason:true|no-elide:true"
+    readonly property string studioAdjustmentSliderContract: "studio-adjustment-slider:v2|shared-inspector-slider:true|wide-rail:true|fixed-value:true|fixed-reset:true|modified-marker:false|double-click-reset:true|coalesced-drag:true|target-aware:true|disabled-reason:true|no-elide:true"
     readonly property string studioAdjustmentSliderSignature: studioAdjustmentSliderContract +
                                                              "|target-support:" + targetSupport +
                                                              "|target-supported:" + String(supportsActiveEditTarget) +

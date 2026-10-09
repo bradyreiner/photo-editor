@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
 #include <QtGlobal>
 
@@ -18,7 +19,10 @@
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QEvent>
+#include <QFutureWatcher>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -26,13 +30,49 @@
 #include <QJsonObject>
 #include <QImage>
 #include <QProcess>
+#include <QPromise>
 #include <QSet>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
 
 #include "timeline_document_controller.h"
+#include "timeline_asset_store.h"
+#include "job_store.h"
+#include "worker_queue_registry.h"
+#include <QDir>
+
+namespace photo_editor::desktop {
+struct TimelineHistoryTestAccess final {
+  static QJsonObject document(const TimelineDocumentController& controller) {
+    return controller.documentObject();
+  }
+
+  static quint64 workingSessionGeneration(
+      const TimelineDocumentController& controller) {
+    return controller.working_session_generation_;
+  }
+
+  static quint64 documentEditRevision(
+      const TimelineDocumentController& controller) {
+    return controller.document_edit_revision_;
+  }
+
+  static QFuture<bool> queueJournalEntry(
+      TimelineDocumentController& controller,
+      const QString& reason,
+      const QFuture<QJsonObject>& document) {
+    return controller.submitEditJournalEntry(reason, document);
+  }
+
+  static QFutureWatcher<bool>* editJournalWatcher(
+      TimelineDocumentController& controller) {
+    return &controller.edit_journal_watcher_;
+  }
+};
+}  // namespace photo_editor::desktop
 
 namespace {
 
@@ -42,6 +82,29 @@ int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
 }
+
+class JournalFutureGate final {
+ public:
+  explicit JournalFutureGate(QJsonObject document) : document_(std::move(document)) {
+    promise_.start();
+  }
+
+  ~JournalFutureGate() { release(); }
+
+  [[nodiscard]] QFuture<QJsonObject> future() const { return promise_.future(); }
+
+  void release() {
+    if (released_) return;
+    promise_.addResult(std::move(document_));
+    promise_.finish();
+    released_ = true;
+  }
+
+ private:
+  QPromise<QJsonObject> promise_;
+  QJsonObject document_;
+  bool released_ = false;
+};
 
 qint64 current_resident_bytes() {
 #if defined(Q_OS_MACOS)
@@ -102,6 +165,122 @@ QByteArray read_file(const QString& path) {
   return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
 }
 
+QJsonObject timeline_project_state(QJsonObject document) {
+  // updatedAt reflects serialization time and is deliberately excluded by the
+  // controller's durable timeline identity hash.
+  document.remove(QStringLiteral("updatedAt"));
+  return document;
+}
+
+QVector<QJsonObject> timeline_journal_documents(const QString& path) {
+  QVector<QJsonObject> documents;
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) return documents;
+  while (!file.atEnd()) {
+    const auto line = file.readLine().trimmed();
+    if (line.isEmpty()) continue;
+    QJsonParseError parse_error;
+    const auto parsed = QJsonDocument::fromJson(line, &parse_error);
+    if (parse_error.error == QJsonParseError::NoError && parsed.isObject()) {
+      const auto document = parsed.object().value(QStringLiteral("document")).toObject();
+      if (!document.isEmpty()) documents.push_back(document);
+    }
+  }
+  return documents;
+}
+
+QJsonObject timeline_recovery_candidate_document(const QVariantMap& candidate) {
+  const auto kind = candidate.value(QStringLiteral("kind")).toString();
+  const auto path = candidate.value(QStringLiteral("sourcePath")).toString();
+  if (path.isEmpty()) return {};
+  if (kind == QStringLiteral("autosave")) {
+    QJsonParseError error{};
+    const auto parsed = QJsonDocument::fromJson(read_file(path), &error);
+    return error.error == QJsonParseError::NoError && parsed.isObject()
+               ? parsed.object()
+               : QJsonObject{};
+  }
+  if (kind != QStringLiteral("journal")) return {};
+  const auto snapshots = timeline_journal_documents(path);
+  const auto valid_entry_count = candidate.value(QStringLiteral("validEntryCount")).toInt();
+  if (valid_entry_count <= 0 || valid_entry_count > snapshots.size()) return {};
+  return snapshots.at(valid_entry_count - 1);
+}
+
+bool timeline_journal_contains_snapshot(
+    const QString& path,
+    const QJsonObject& expected_document) {
+  for (const auto& document : timeline_journal_documents(path)) {
+    if (timeline_project_state(document) ==
+        timeline_project_state(expected_document)) return true;
+  }
+  return false;
+}
+
+bool timeline_journal_preserves_ordered_snapshots(
+    const QString& path,
+    const QJsonObject& earlier_document,
+    const QJsonObject& later_document) {
+  const auto documents = timeline_journal_documents(path);
+  const auto earlier_state = timeline_project_state(earlier_document);
+  const auto later_state = timeline_project_state(later_document);
+  for (auto earlier_index = 0; earlier_index < documents.size(); ++earlier_index) {
+    if (timeline_project_state(documents.at(earlier_index)) != earlier_state) continue;
+    for (auto later_index = earlier_index + 1; later_index < documents.size(); ++later_index) {
+      if (timeline_project_state(documents.at(later_index)) == later_state) return true;
+    }
+  }
+  return false;
+}
+
+bool wait_for_journal_snapshot(
+    TimelineDocumentController* controller,
+    const QString& path,
+    const QJsonObject& expected_document,
+    int timeout_ms = 10000) {
+  if (controller == nullptr) return false;
+
+  auto* watcher =
+      photo_editor::desktop::TimelineHistoryTestAccess::editJournalWatcher(*controller);
+  auto acknowledged = false;
+  const auto connection = QObject::connect(
+      watcher,
+      &QFutureWatcher<bool>::finished,
+      controller,
+      [&]() {
+        acknowledged = !watcher->isCanceled() && watcher->result() &&
+            timeline_journal_contains_snapshot(path, expected_document);
+      });
+  const auto has_durable_receipt = [&]() {
+    return watcher->future().isValid() && watcher->isFinished() &&
+        !watcher->isCanceled() && watcher->result() &&
+        timeline_journal_contains_snapshot(path, expected_document);
+  };
+  acknowledged = has_durable_receipt();
+  QElapsedTimer timeout;
+  timeout.start();
+  while (!acknowledged && timeout.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    acknowledged = has_durable_receipt();
+  }
+  QObject::disconnect(connection);
+  return acknowledged;
+}
+
+bool write_autosave_snapshot(const QString& canonical_path, const QJsonObject& document) {
+  const auto autosave_path = canonical_path + QStringLiteral(".autosave");
+  QFile file(autosave_path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+      file.write(QJsonDocument(document).toJson(QJsonDocument::Indented)) <= 0) {
+    return false;
+  }
+  file.close();
+  return file.open(QIODevice::ReadWrite) &&
+         file.setFileTime(
+             QDateTime::currentDateTime().addSecs(2),
+             QFileDevice::FileModificationTime);
+}
+
 bool run_process(const QString& program, const QStringList& arguments) {
   QProcess process;
   process.start(program, arguments);
@@ -135,6 +314,72 @@ bool wait_for_transcription(
     }
   }
   return false;
+}
+
+bool wait_for_recovery_open(
+    TimelineDocumentController* controller,
+    int timeout_ms = 10000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (controller != nullptr && controller->recoveryOpenInProgress() &&
+         timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  return controller != nullptr && !controller->recoveryOpenInProgress();
+}
+
+bool wait_for_source_integrity(TimelineDocumentController* controller, int timeout_ms = 10000) {
+  if (controller == nullptr) return false;
+  QElapsedTimer timer;
+  timer.start();
+  const auto integrity_is_ready = [controller]() {
+    const auto clip = controller->currentClip();
+    return clip.value(QStringLiteral("sourceIntegrityStatus")).toString() ==
+               QStringLiteral("verified") &&
+           clip.value(QStringLiteral("sourceContentSha256")).toString().size() == 64;
+  };
+  while (!integrity_is_ready() && timer.elapsed() < timeout_ms)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  if (integrity_is_ready()) return true;
+  const auto clip = controller->currentClip();
+  std::cerr << "source-integrity fixture timed out: status="
+            << clip.value(QStringLiteral("sourceIntegrityStatus")).toString().toStdString()
+            << " hash_bytes="
+            << clip.value(QStringLiteral("sourceContentSha256")).toString().size()
+            << " file=" << clip.value(QStringLiteral("filePath")).toString().toStdString()
+            << " controller_status=" << controller->status().toStdString() << '\n';
+  return false;
+}
+
+bool wait_for_recovery_candidates(
+    TimelineDocumentController* controller,
+    int timeout_ms = 10000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (controller != nullptr && controller->recoveryCandidatesLoading() &&
+         timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+  }
+  return controller != nullptr && !controller->recoveryCandidatesLoading();
+}
+
+bool wait_for_canceled_recovery_worker(
+    TimelineDocumentController* controller,
+    int timeout_ms = 10000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (controller != nullptr && timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    const auto* watcher = controller->findChild<QFutureWatcherBase*>(
+        QStringLiteral("timelineRecoveryOpenWatcher"), Qt::FindDirectChildrenOnly);
+    if (watcher == nullptr || !watcher->isRunning()) {
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      return true;
+    }
+  }
+  return controller != nullptr &&
+         controller->findChild<QFutureWatcherBase*>(
+             QStringLiteral("timelineRecoveryOpenWatcher"), Qt::FindDirectChildrenOnly) == nullptr;
 }
 
 QString wait_for_media_hover_frame(
@@ -211,14 +456,23 @@ int main(int argc, char** argv) {
   if (!workspace.isValid()) {
     return fail("recovery proof needs an isolated workspace");
   }
-  qputenv("HOME", workspace.path().toUtf8());
   qputenv("XDG_DATA_HOME", workspace.filePath(QStringLiteral("data")).toUtf8());
   qputenv("XDG_CACHE_HOME", workspace.filePath(QStringLiteral("cache")).toUtf8());
+  qputenv("PHOTO_EDITOR_CACHE_DIR", workspace.filePath(QStringLiteral("cache")).toUtf8());
   qputenv(
       "PHOTO_EDITOR_APP_DATA_ROOT",
       workspace.filePath(QStringLiteral("app-data")).toUtf8());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(
+      QSettings::IniFormat, QSettings::UserScope,
+      workspace.filePath(QStringLiteral("settings/user")));
+  QSettings::setPath(
+      QSettings::IniFormat, QSettings::SystemScope,
+      workspace.filePath(QStringLiteral("settings/system")));
   QApplication app(argc, argv);
   QStandardPaths::setTestModeEnabled(true);
+  const auto recovery_lifecycle_only =
+      QCoreApplication::arguments().contains(QStringLiteral("--recovery-lifecycle-only"));
 
   const auto still_path = workspace.filePath(QStringLiteral("source.jpg"));
   QFile still_file(still_path);
@@ -226,6 +480,980 @@ int main(int argc, char** argv) {
     return fail("recovery proof should create source media");
   }
   still_file.close();
+
+  // Save is independent of publishing; an active render consumes immutable
+  // bytes while later saves replace only the editable canonical project.
+  {
+    TimelineDocumentController target, pending;
+    target.createTimeline(QStringLiteral("Save without render"));
+    target.addClipFromGallery(QStringLiteral("photo:save"), still_path, QStringLiteral("Still"), 4.0, {});
+    const auto initial_jobs = photo_editor::desktop::loadPersistedJobRecords().size();
+    if (!target.saveTimeline() || photo_editor::desktop::loadPersistedJobRecords().size() != initial_jobs)
+      return fail("Plain Save must not enqueue a gallery render");
+    if (!target.saveTimeline(true)) return fail("Explicit publishing should enqueue a render");
+    const auto jobs = photo_editor::desktop::loadPersistedJobRecords();
+    const auto render = std::find_if(jobs.cbegin(), jobs.cend(), [&](const auto& job) {
+      return job.asset_id == target.timelineAssetId() && job.job_kind == QStringLiteral("timeline_render");
+    });
+    if (render == jobs.cend() || render->source_path == target.savedDocumentPath())
+      return fail("Gallery rendering must use an immutable snapshot");
+    const auto render_source = render->source_path;
+    const auto render_bytes = read_file(render_source);
+    target.addSequenceMarker(QStringLiteral("Edit during render"));
+    if (!target.flushEditJournal()) {
+      return fail("pre-save journal writes should settle before the async captured-revision fixture");
+    }
+    JournalFutureGate save_checkpoint_gate(
+        photo_editor::desktop::TimelineHistoryTestAccess::document(target));
+    const auto gated_checkpoint = photo_editor::desktop::TimelineHistoryTestAccess::queueJournalEntry(
+        target, QStringLiteral("save-gate"), save_checkpoint_gate.future());
+    if (!gated_checkpoint.isValid()) {
+      return fail("the deterministic save checkpoint gate should be queued");
+    }
+    auto save_completion_count = 0;
+    QObject::connect(
+        &target,
+        &TimelineDocumentController::timelineSaveCompleted,
+        &target,
+        [&](bool, const QString&, const QString&) { ++save_completion_count; });
+    if (!target.saveTimelineAsync()) return fail("Save should remain available with a queued render");
+    target.addSequenceMarker(QStringLiteral("Edit during asynchronous save"));
+    QElapsedTimer staged_canonical_timeout;
+    staged_canonical_timeout.start();
+    auto captured_canonical_staged = false;
+    while (target.timelineSaveInProgress() && staged_canonical_timeout.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto staged_document = QJsonDocument::fromJson(
+          read_file(target.savedDocumentPath())).object();
+      const auto staged_markers = staged_document.value(QStringLiteral("markers")).toArray();
+      captured_canonical_staged =
+          staged_markers.size() == 1 &&
+          staged_markers.first().toObject().value(QStringLiteral("label")).toString() ==
+              QStringLiteral("Edit during render");
+      if (captured_canonical_staged) break;
+    }
+    if (!captured_canonical_staged || !target.timelineSaveInProgress() ||
+        save_completion_count != 0) {
+      return fail(
+          "canonical save should finish while checkpoint is gated, without acknowledging completion");
+    }
+    save_checkpoint_gate.release();
+    QElapsedTimer save_timeout;
+    save_timeout.start();
+    while (target.timelineSaveInProgress() && save_timeout.elapsed() < 5000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (target.timelineSaveInProgress() || target.dirty() || save_completion_count != 1 ||
+        read_file(render_source) != render_bytes ||
+        read_file(target.savedDocumentPath()) == render_bytes)
+      return fail("Saving newer edits must leave queued render bytes unchanged");
+    if (target.sequenceMarkers().size() != 2) {
+      return fail("the controller should retain both edits while the save completes");
+    }
+    QFile saved_target_file(target.savedDocumentPath());
+    QFile target_journal_file(target.editJournalPath());
+    if (!saved_target_file.open(QIODevice::ReadOnly) ||
+        !target_journal_file.open(QIODevice::ReadOnly)) {
+      return fail("async save and recovery journal should both remain readable");
+    }
+    auto saved_target_document = QJsonDocument::fromJson(saved_target_file.readAll()).object();
+    saved_target_file.close();
+    const auto persisted_markers = saved_target_document.value(QStringLiteral("markers")).toArray();
+    QSet<QString> persisted_marker_labels;
+    for (const auto& marker_value : persisted_markers) {
+      persisted_marker_labels.insert(
+          marker_value.toObject().value(QStringLiteral("label")).toString());
+    }
+    const QSet<QString> expected_marker_labels{
+        QStringLiteral("Edit during render"),
+        QStringLiteral("Edit during asynchronous save")};
+    if (persisted_markers.size() != 2 || persisted_marker_labels != expected_marker_labels) {
+      return fail("canonical save should persist both markers from the captured and newer revisions");
+    }
+    saved_target_document.remove(QStringLiteral("updatedAt"));
+    auto latest_journal_document = QJsonObject{};
+    auto captured_revision_journaled = false;
+    while (!target_journal_file.atEnd()) {
+      const auto entry_document = QJsonDocument::fromJson(
+          target_journal_file.readLine().trimmed());
+      if (!entry_document.isObject()) continue;
+      const auto entry = entry_document.object();
+      auto journal_document = entry.value(QStringLiteral("document")).toObject();
+      if (journal_document.isEmpty()) continue;
+      journal_document.remove(QStringLiteral("updatedAt"));
+      latest_journal_document = journal_document;
+
+      QSet<QString> journaled_marker_labels;
+      const auto journaled_markers = journal_document.value(QStringLiteral("markers")).toArray();
+      for (const auto& marker_value : journaled_markers) {
+        journaled_marker_labels.insert(
+            marker_value.toObject().value(QStringLiteral("label")).toString());
+      }
+      if (journaled_markers.size() == 1 &&
+          journaled_marker_labels == QSet<QString>{QStringLiteral("Edit during render")}) {
+        captured_revision_journaled = true;
+      }
+    }
+    target_journal_file.close();
+    if (!captured_revision_journaled || latest_journal_document.isEmpty() ||
+        latest_journal_document != saved_target_document) {
+      return fail(
+          "the async save must journal its captured revision and finish with the exact canonical revision");
+    }
+
+    TimelineDocumentController failed_save;
+    failed_save.createTimeline(QStringLiteral("Failed Canonical Save"));
+    failed_save.addClipFromGallery(
+        QStringLiteral("photo:failed-save"), still_path, QStringLiteral("Still"), 4.0, {});
+    failed_save.addSequenceMarker(QStringLiteral("Latest durable save revision"));
+    const auto documents_root = workspace.filePath(QStringLiteral("app-data/timelines/documents"));
+    const auto timeline_id = failed_save.timelineAssetId().mid(QStringLiteral("timeline:").size());
+    const auto blocked_canonical_path = QDir(documents_root).filePath(
+        timeline_id + QStringLiteral(".json"));
+    if (timeline_id.isEmpty() || !QDir().mkpath(blocked_canonical_path)) {
+      return fail("failed-save fixture should block only the canonical document path");
+    }
+    JournalFutureGate failed_save_checkpoint_gate(
+        photo_editor::desktop::TimelineHistoryTestAccess::document(failed_save));
+    const auto failed_gate_checkpoint =
+        photo_editor::desktop::TimelineHistoryTestAccess::queueJournalEntry(
+            failed_save, QStringLiteral("save-failure-gate"),
+            failed_save_checkpoint_gate.future());
+    if (!failed_gate_checkpoint.isValid()) {
+      return fail("the deterministic failed-save checkpoint gate should be queued");
+    }
+    auto failed_save_completion_count = 0;
+    QObject::connect(
+        &failed_save,
+        &TimelineDocumentController::timelineSaveCompleted,
+        &failed_save,
+        [&](bool, const QString&, const QString&) { ++failed_save_completion_count; });
+    if (!failed_save.saveTimelineAsync()) {
+      return fail("failed-save fixture should start with its canonical path blocked");
+    }
+    QElapsedTimer failed_save_gate_timeout;
+    failed_save_gate_timeout.start();
+    while (failed_save.timelineSaveInProgress() &&
+           failed_save_completion_count == 0 &&
+           failed_save_gate_timeout.elapsed() < 150) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    if (!failed_save.timelineSaveInProgress() || failed_save_completion_count != 0) {
+      return fail("failed canonical save must not complete before its checkpoint is durable");
+    }
+    failed_save_checkpoint_gate.release();
+    QElapsedTimer failed_save_timeout;
+    failed_save_timeout.start();
+    while (failed_save.timelineSaveInProgress() && failed_save_timeout.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    bool failed_revision_recoverable = false;
+    const auto failed_save_journal = failed_save.editJournalPath();
+    for (const auto& candidate_value : failed_save.recoveryCandidates()) {
+      const auto candidate = candidate_value.toMap();
+      failed_revision_recoverable |=
+          candidate.value(QStringLiteral("sourcePath")).toString() == failed_save_journal &&
+          candidate.value(QStringLiteral("markerCount")).toInt() == 1;
+    }
+    const auto failed_save_was_reported =
+        failed_save.status().contains(QStringLiteral("Unable to save the timeline document"));
+    if (failed_save.timelineSaveInProgress() || failed_save_completion_count != 1 ||
+        !failed_save.dirty() ||
+        !failed_save_was_reported || !failed_revision_recoverable) {
+      return fail("a failed canonical async save must leave its exact revision durably recoverable");
+    }
+    if (!QDir(blocked_canonical_path).removeRecursively()) {
+      return fail("failed-save fixture should remove its test-owned canonical blocker");
+    }
+
+    pending.createTimeline(QStringLiteral("Pending replacement"));
+    pending.addClipFromGallery(QStringLiteral("photo:pending"), still_path, QStringLiteral("Still"), 4.0, {});
+    if (!pending.flushEditJournal()) return fail("Replacement fixture needs a validated checkpoint");
+    const auto old_journal = pending.editJournalPath();
+    pending.addSequenceMarker(QStringLiteral("Latest pending edit"));
+    if (pending.loadTimeline(workspace.filePath(QStringLiteral("missing-replacement.json"))) ||
+        pending.editJournalPath() != old_journal || pending.sequenceMarkers().size() != 1)
+      return fail("An unavailable replacement must leave the active document and pending edits intact");
+    if (!pending.loadTimeline(target.savedDocumentPath())) return fail("A valid replacement should load");
+    bool newest_recoverable = false;
+    for (const auto& value : pending.recoveryCandidates()) {
+      const auto row = value.toMap();
+      newest_recoverable |= row.value(QStringLiteral("sourcePath")) == old_journal &&
+                            row.value(QStringLiteral("markerCount")).toInt() == 1;
+    }
+    if (!newest_recoverable) return fail("Replacement before the timer fires must preserve the newest edit");
+
+    const auto markers_before_new = pending.sequenceMarkers().size();
+    pending.addSequenceMarker(QStringLiteral("Pending before New"));
+    const auto before_new_journal = pending.editJournalPath();
+    pending.createTimeline(QStringLiteral("New project"));
+    bool new_recoverable = false;
+    for (const auto& value : pending.recoveryCandidates()) {
+      const auto row = value.toMap();
+      new_recoverable |= row.value(QStringLiteral("sourcePath")) == before_new_journal &&
+                        row.value(QStringLiteral("markerCount")).toInt() == markers_before_new + 1;
+    }
+    if (!new_recoverable) return fail("New Timeline must preserve pending edits in the replaced project");
+
+    pending.addClipFromGallery(QStringLiteral("photo:blocked"), still_path, QStringLiteral("Still"), 4.0, {});
+    const auto blocked_journal = pending.editJournalPath();
+    if (!QDir().mkpath(blocked_journal)) return fail("Checkpoint failure fixture should block the journal path");
+    if (pending.loadTimeline(target.savedDocumentPath()) || pending.editJournalPath() != blocked_journal)
+      return fail("Replacement must refuse to discard edits when checkpoint persistence fails");
+    pending.closeTimeline();
+    if (!pending.hasActiveTimeline()) return fail("Close must preserve the document after a checkpoint failure");
+    if (!QDir().rmdir(blocked_journal)) return fail("Checkpoint failure fixture should restore writable storage");
+    if (!pending.flushEditJournal()) return fail("A failed checkpoint must be retryable");
+
+    QFile crash_tail(blocked_journal);
+    if (!crash_tail.open(QIODevice::WriteOnly | QIODevice::Append) || crash_tail.write("{partial") <= 0)
+      return fail("Cached-head corruption fixture should append a crash tail");
+    crash_tail.close();
+    const auto damaged_bytes = read_file(blocked_journal);
+    pending.addSequenceMarker(QStringLiteral("After damaged tail"));
+    if (!pending.flushEditJournal()) return fail("A changed journal must revalidate and preserve the damaged bytes");
+    const auto archives = QDir(QFileInfo(blocked_journal).absolutePath()).entryInfoList(
+        {QFileInfo(blocked_journal).fileName() + QStringLiteral(".damaged-*")}, QDir::Files);
+    if (archives.size() != 1 || read_file(archives.first().absoluteFilePath()) != damaged_bytes)
+      return fail("Checkpointing after a damaged tail must retain the original journal byte for byte");
+
+    using photo_editor::desktop::WorkerQueueRegistry;
+    pending.setPhotoWorkIntent(true, true, QStringLiteral("photo:focused"));
+    pending.setBackgroundWorkIntent(false, false, {});
+    if (!WorkerQueueRegistry::shouldDefer(QStringLiteral("proxy"), QStringLiteral("timeline"), {}) ||
+        WorkerQueueRegistry::userIntentSnapshot().value(QStringLiteral("surface")) != QStringLiteral("edit"))
+      return fail("Hidden Timeline callbacks must preserve foreground photo editing priority");
+    pending.setPhotoWorkIntent(true, false, QStringLiteral("photo:focused"));
+    if (WorkerQueueRegistry::shouldDefer(QStringLiteral("proxy"), QStringLiteral("timeline"), {}))
+      return fail("Background work should resume after photo preview interaction finishes");
+    pending.setPhotoWorkIntent(false, false, {});
+  }
+
+  // A save can finish after the user opens same-ID recoverable work. Its
+  // canonical snapshot remains a legitimate saved version, but completion must
+  // not mark the newly opened working session clean or chain-save it over that
+  // canonical version. Save result rows also must retain unrelated recoveries.
+  {
+    TimelineDocumentController raced, unrelated;
+    raced.createTimeline(QStringLiteral("Same-ID recovery save race"));
+    raced.addClipFromGallery(
+        QStringLiteral("photo:recovery-race"), still_path,
+        QStringLiteral("Still"), 4.0, {});
+    if (!wait_for_source_integrity(&raced))
+      return fail("same-ID recovery fixture should settle its source fingerprint before capturing the exact saved revision");
+    raced.addSequenceMarker(QStringLiteral("Recoverable state"));
+    if (!raced.saveTimeline())
+      return fail("same-ID recovery race should establish a saved base document");
+    const auto recovered_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced);
+    raced.addSequenceMarker(QStringLiteral("Explicitly saved state"));
+    if (!raced.saveTimeline() ||
+        !write_autosave_snapshot(raced.savedDocumentPath(), recovered_document)) {
+      return fail("same-ID recovery race should create a distinct older autosave");
+    }
+
+    unrelated.createTimeline(QStringLiteral("Unrelated recent recovery"));
+    unrelated.addClipFromGallery(
+        QStringLiteral("photo:unrelated-recovery"), still_path,
+        QStringLiteral("Still"), 4.0, {});
+    if (!wait_for_source_integrity(&unrelated))
+      return fail("unrelated recovery fixture should settle its source fingerprint before capturing its exact saved revision");
+    unrelated.addSequenceMarker(QStringLiteral("Unrelated recoverable state"));
+    const auto unrelated_recovery =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(unrelated);
+    unrelated.addSequenceMarker(QStringLiteral("Unrelated saved state"));
+    if (!unrelated.saveTimeline() ||
+        !write_autosave_snapshot(unrelated.savedDocumentPath(), unrelated_recovery)) {
+      return fail("Recents preservation fixture should create an unrelated autosave recovery");
+    }
+
+    QString recovery_candidate_id;
+    for (const auto& value : raced.recoveryCandidates()) {
+      const auto candidate = value.toMap();
+      if (candidate.value(QStringLiteral("sourcePath")).toString() ==
+          raced.savedDocumentPath() + QStringLiteral(".autosave")) {
+        recovery_candidate_id = candidate.value(QStringLiteral("candidateId")).toString();
+        break;
+      }
+    }
+    QString unrelated_candidate_id;
+    for (const auto& value : raced.recoveryCandidates()) {
+      const auto candidate = value.toMap();
+      if (candidate.value(QStringLiteral("sourcePath")).toString() ==
+          unrelated.savedDocumentPath() + QStringLiteral(".autosave")) {
+        unrelated_candidate_id = candidate.value(QStringLiteral("candidateId")).toString();
+        break;
+      }
+    }
+    if (recovery_candidate_id.isEmpty() || unrelated_candidate_id.isEmpty()) {
+      return fail("same-ID and unrelated autosave recoveries should be discoverable");
+    }
+
+    // Explicit candidate opens are keyed by durable candidate identity and do
+    // not depend on which single recovery row Recents currently surfaces.
+    const auto canonical_before_explicit_reopen = read_file(raced.savedDocumentPath());
+    const auto stored_autosave_document = QJsonDocument::fromJson(
+        read_file(raced.savedDocumentPath() + QStringLiteral(".autosave"))).object();
+    TimelineDocumentController explicit_candidate_reopen;
+    auto explicit_completion_count = 0;
+    auto explicit_completion_succeeded = false;
+    QObject::connect(
+        &explicit_candidate_reopen,
+        &TimelineDocumentController::recoveryOpenCompleted,
+        &explicit_candidate_reopen,
+        [&](const QString&, bool succeeded) {
+          ++explicit_completion_count;
+          explicit_completion_succeeded = succeeded;
+        });
+    const auto explicit_open_admitted =
+        explicit_candidate_reopen.openRecoveryCandidate(recovery_candidate_id);
+    const auto explicit_open_settled = explicit_open_admitted &&
+        wait_for_recovery_open(&explicit_candidate_reopen);
+    const auto explicitly_reopened_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(
+            explicit_candidate_reopen);
+    const auto explicit_canonical_bytes_preserved =
+        read_file(raced.savedDocumentPath()) == canonical_before_explicit_reopen;
+    if (!explicit_open_settled || explicit_completion_count != 1 ||
+        !explicit_completion_succeeded || !explicit_candidate_reopen.dirty() ||
+        explicit_candidate_reopen.sequenceMarkers().size() != 1 ||
+        stored_autosave_document != recovered_document ||
+        timeline_project_state(explicitly_reopened_document) !=
+            timeline_project_state(recovered_document) ||
+        explicitly_reopened_document.value(QStringLiteral("timelineId")) !=
+            recovered_document.value(QStringLiteral("timelineId")) ||
+        explicitly_reopened_document.value(QStringLiteral("createdAt")) !=
+            recovered_document.value(QStringLiteral("createdAt")) ||
+        !explicit_canonical_bytes_preserved) {
+      const auto expected_document_hash = QCryptographicHash::hash(
+          QJsonDocument(recovered_document).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha256).toHex();
+      const auto actual_document_hash = QCryptographicHash::hash(
+          QJsonDocument(explicitly_reopened_document).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha256).toHex();
+      QSet<QString> snapshot_keys;
+      for (const auto& key : recovered_document.keys()) snapshot_keys.insert(key);
+      for (const auto& key : explicitly_reopened_document.keys()) snapshot_keys.insert(key);
+      std::cerr << "explicit recovery candidate diagnostic: candidate="
+                << recovery_candidate_id.toStdString()
+                << " admitted=" << explicit_open_admitted
+                << " settled=" << explicit_open_settled
+                << " completion_count=" << explicit_completion_count
+                << " completed_success=" << explicit_completion_succeeded
+                << " status=" << explicit_candidate_reopen.status().toStdString()
+                << " dirty=" << explicit_candidate_reopen.dirty()
+                << " marker_count=" << explicit_candidate_reopen.sequenceMarkers().size()
+                << " expected_document_sha256=" << expected_document_hash.toStdString()
+                << " actual_document_sha256=" << actual_document_hash.toStdString()
+                << " canonical_preserved=" << explicit_canonical_bytes_preserved << '\n';
+      for (const auto& key : snapshot_keys) {
+        if (recovered_document.value(key) != explicitly_reopened_document.value(key)) {
+          const auto expected_value = QJsonDocument(QJsonObject{{key, recovered_document.value(key)}})
+                                          .toJson(QJsonDocument::Compact);
+          const auto actual_value = QJsonDocument(QJsonObject{{key, explicitly_reopened_document.value(key)}})
+                                        .toJson(QJsonDocument::Compact);
+          std::cerr << "  snapshot field differs: " << key.toStdString()
+                    << " expected=" << expected_value.constData()
+                    << " actual=" << actual_value.constData() << '\n';
+        }
+      }
+      return fail("directly opening the explicit autosave candidate should restore its exact one-marker document without changing saved bytes");
+    }
+
+    raced.refreshRecentTimelines();
+    QElapsedTimer recent_rows_timeout;
+    recent_rows_timeout.start();
+    while (raced.recentTimelinesLoading() && recent_rows_timeout.elapsed() < 5000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    const auto recent_rows_before_save = raced.recentTimelineRecords();
+    const auto unrelated_row_before_save = std::any_of(
+        recent_rows_before_save.cbegin(), recent_rows_before_save.cend(),
+        [&unrelated_candidate_id](const QVariant& value) {
+          return value.toMap().value(QStringLiteral("recoveryCandidateId")).toString() ==
+                 unrelated_candidate_id;
+        });
+    if (!unrelated_row_before_save)
+      return fail("Recents should contain the unrelated recovery before the save race");
+
+    JournalFutureGate checkpoint_gate(
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced));
+    const auto gated_checkpoint =
+        photo_editor::desktop::TimelineHistoryTestAccess::queueJournalEntry(
+            raced, QStringLiteral("same-id-save-race-gate"), checkpoint_gate.future());
+    if (!gated_checkpoint.isValid() || !raced.saveTimelineAsync()) {
+      return fail("same-ID save race should start behind a deterministic checkpoint gate");
+    }
+
+    QElapsedTimer canonical_commit_timeout;
+    canonical_commit_timeout.start();
+    while (canonical_commit_timeout.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+      const auto saved = QJsonDocument::fromJson(read_file(raced.savedDocumentPath())).object();
+      if (saved.value(QStringLiteral("markers")).toArray().size() == 2) break;
+    }
+    const auto save_in_progress_before = raced.timelineSaveInProgress();
+    const auto recovery_open_before = raced.recoveryOpenInProgress();
+    const auto dirty_before_rejected_open = raced.dirty();
+    const auto markers_before_rejected_open = raced.sequenceMarkers();
+    const auto document_before_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced);
+    const auto document_state_before_rejected_open =
+        timeline_project_state(document_before_rejected_open);
+    const auto session_before_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::workingSessionGeneration(raced);
+    const auto revision_before_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::documentEditRevision(raced);
+    const auto canonical_bytes_before_rejected_open =
+        read_file(raced.savedDocumentPath());
+
+    const auto recovery_open_accepted =
+        raced.openRecoveryCandidate(recovery_candidate_id);
+    const auto save_in_progress_after = raced.timelineSaveInProgress();
+    const auto recovery_open_after = raced.recoveryOpenInProgress();
+    const auto dirty_after_rejected_open = raced.dirty();
+    const auto markers_after_rejected_open = raced.sequenceMarkers();
+    const auto document_after_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced);
+    const auto document_state_after_rejected_open =
+        timeline_project_state(document_after_rejected_open);
+    const auto session_after_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::workingSessionGeneration(raced);
+    const auto revision_after_rejected_open =
+        photo_editor::desktop::TimelineHistoryTestAccess::documentEditRevision(raced);
+    const auto canonical_bytes_after_rejected_open =
+        read_file(raced.savedDocumentPath());
+    const auto rejected_open_left_state_unchanged =
+        !recovery_open_accepted && !recovery_open_before && !recovery_open_after &&
+        dirty_after_rejected_open == dirty_before_rejected_open &&
+        markers_after_rejected_open == markers_before_rejected_open &&
+        document_state_after_rejected_open == document_state_before_rejected_open &&
+        session_after_rejected_open == session_before_rejected_open &&
+        revision_after_rejected_open == revision_before_rejected_open &&
+        canonical_bytes_after_rejected_open == canonical_bytes_before_rejected_open;
+    if (!save_in_progress_before || !save_in_progress_after ||
+        markers_before_rejected_open.size() != 2 ||
+        !rejected_open_left_state_unchanged) {
+      std::cerr << "same-ID Save/recovery rejection predicates: save_before="
+                << save_in_progress_before << " save_after=" << save_in_progress_after
+                << " open_accepted=" << recovery_open_accepted
+                << " recovery_open_before=" << recovery_open_before
+                << " recovery_open_after=" << recovery_open_after
+                << " dirty_before=" << dirty_before_rejected_open
+                << " dirty_after=" << dirty_after_rejected_open
+                << " markers_before=" << markers_before_rejected_open.size()
+                << " markers_after=" << markers_after_rejected_open.size()
+                << " doc_hash_before="
+                << hash_object(document_state_before_rejected_open).toStdString()
+                << " doc_hash_after="
+                << hash_object(document_state_after_rejected_open).toStdString()
+                << " session_before=" << session_before_rejected_open
+                << " session_after=" << session_after_rejected_open
+                << " revision_before=" << revision_before_rejected_open
+                << " revision_after=" << revision_after_rejected_open
+                << " canonical_bytes_unchanged="
+                << (canonical_bytes_after_rejected_open ==
+                    canonical_bytes_before_rejected_open)
+                << " status=" << raced.status().toStdString() << '\n';
+      checkpoint_gate.release();
+      return fail("recovery must refuse to open while an async Save is mutating canonical state");
+    }
+    checkpoint_gate.release();
+    QElapsedTimer save_completion_timeout;
+    save_completion_timeout.start();
+    while (raced.timelineSaveInProgress() && save_completion_timeout.elapsed() < 10000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QElapsedTimer recent_refresh_timeout;
+    recent_refresh_timeout.start();
+    while (raced.recentTimelinesLoading() && recent_refresh_timeout.elapsed() < 10000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+    if (raced.timelineSaveInProgress() || raced.dirty() ||
+        !raced.openRecoveryCandidate(recovery_candidate_id) ||
+        !raced.recoveryOpenInProgress() || raced.saveTimelineAsync() ||
+        !raced.recoveryOpenInProgress() || !wait_for_recovery_open(&raced) ||
+        !raced.dirty() || raced.sequenceMarkers().size() != 1 ||
+        timeline_project_state(photo_editor::desktop::TimelineHistoryTestAccess::document(raced)) !=
+            timeline_project_state(recovered_document)) {
+      return fail("the verified same-ID recovery should open as dirty work after Save completes");
+    }
+    recent_refresh_timeout.restart();
+    while (raced.recentTimelinesLoading() && recent_refresh_timeout.elapsed() < 10000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+    const auto canonical_after_save =
+        QJsonDocument::fromJson(read_file(raced.savedDocumentPath())).object();
+    const auto canonical_markers = canonical_after_save.value(QStringLiteral("markers")).toArray();
+    const auto marker_labels = [&canonical_markers]() {
+      QSet<QString> labels;
+      for (const auto& marker : canonical_markers)
+        labels.insert(marker.toObject().value(QStringLiteral("label")).toString());
+      return labels;
+    }();
+    const auto recent_rows_after_save = raced.recentTimelineRecords();
+    const auto unrelated_row_after_save = std::any_of(
+        recent_rows_after_save.cbegin(), recent_rows_after_save.cend(),
+        [&unrelated_candidate_id](const QVariant& value) {
+          return value.toMap().value(QStringLiteral("recoveryCandidateId")).toString() ==
+                 unrelated_candidate_id;
+        });
+    if (raced.timelineSaveInProgress() || !raced.dirty() ||
+        raced.sequenceMarkers().size() != 1 || canonical_markers.size() != 2 ||
+        !marker_labels.contains(QStringLiteral("Recoverable state")) ||
+        !marker_labels.contains(QStringLiteral("Explicitly saved state")) ||
+        !unrelated_row_after_save) {
+      return fail("stale save completion must preserve the current recovery, canonical bytes, and unrelated Recents rows");
+    }
+
+    const auto canonical_bytes_after_save = read_file(raced.savedDocumentPath());
+    raced.addSequenceMarker(QStringLiteral("Unsaved current session before recovery"));
+    const auto dirty_checkpoint_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced);
+    if (!raced.flushEditJournal())
+      return fail("the dirty-session replacement fixture should have a durable current snapshot");
+    JournalFutureGate recovery_checkpoint_gate(
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced));
+    const auto recovery_checkpoint_gate_future =
+        photo_editor::desktop::TimelineHistoryTestAccess::queueJournalEntry(
+            raced, QStringLiteral("recovery-checkpoint-gate"),
+            recovery_checkpoint_gate.future());
+    if (!recovery_checkpoint_gate_future.isValid() ||
+        !raced.openRecoveryCandidate(recovery_candidate_id)) {
+      return fail("recovery replacement should begin its async read while the current dirty checkpoint is gated");
+    }
+    QElapsedTimer checkpoint_status_timeout;
+    checkpoint_status_timeout.start();
+    while (!raced.status().contains(QStringLiteral("checkpoint before opening")) &&
+           raced.recoveryOpenInProgress() && checkpoint_status_timeout.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    if (!raced.recoveryOpenInProgress() ||
+        !raced.status().contains(QStringLiteral("checkpoint before opening"))) {
+      recovery_checkpoint_gate.release();
+      return fail("recovery replacement should expose its pending durable checkpoint state");
+    }
+    auto heartbeat_count = 0;
+    QTimer event_loop_heartbeat;
+    event_loop_heartbeat.setInterval(5);
+    QObject::connect(&event_loop_heartbeat, &QTimer::timeout, [&heartbeat_count]() {
+      ++heartbeat_count;
+    });
+    event_loop_heartbeat.start();
+    QElapsedTimer heartbeat_duration;
+    heartbeat_duration.start();
+    while (heartbeat_duration.elapsed() < 100)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    event_loop_heartbeat.stop();
+    if (heartbeat_count < 5 || !raced.recoveryOpenInProgress() ||
+        !raced.dirty() || raced.sequenceMarkers().size() != 2 ||
+        read_file(raced.savedDocumentPath()) != canonical_bytes_after_save) {
+      recovery_checkpoint_gate.release();
+      return fail("a gated dirty-session checkpoint should leave the event loop, current work, and saved bytes responsive");
+    }
+    recovery_checkpoint_gate.release();
+    if (!wait_for_recovery_open(&raced) || !raced.dirty() ||
+        raced.sequenceMarkers().size() != 1 ||
+        read_file(raced.savedDocumentPath()) != canonical_bytes_after_save) {
+      return fail("the verified recovery should replace dirty work only after its current-session checkpoint commits");
+    }
+    const auto applied_recovery_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(raced);
+    const auto journal_path_after_recovery = raced.editJournalPath();
+    if (!timeline_journal_contains_snapshot(
+            journal_path_after_recovery, dirty_checkpoint_document)) {
+      return fail("the replaced two-marker working snapshot must remain in the append-only journal history");
+    }
+
+    auto* recovery_state_journal_watcher =
+        photo_editor::desktop::TimelineHistoryTestAccess::editJournalWatcher(raced);
+    const auto recovery_checkpoint_is_durable_and_ordered = [&]() {
+      if (!recovery_state_journal_watcher->future().isValid() ||
+          !recovery_state_journal_watcher->isFinished() ||
+          recovery_state_journal_watcher->isCanceled() ||
+          !recovery_state_journal_watcher->result()) {
+        return false;
+      }
+      return timeline_journal_preserves_ordered_snapshots(
+          journal_path_after_recovery,
+          dirty_checkpoint_document,
+          recovered_document);
+    };
+    auto recovery_state_checkpoint_acknowledged = false;
+    const auto journal_ack_connection = QObject::connect(
+        recovery_state_journal_watcher,
+        &QFutureWatcher<bool>::finished,
+        &raced,
+        [&]() {
+          recovery_state_checkpoint_acknowledged =
+              recovery_checkpoint_is_durable_and_ordered();
+        });
+    // The autosave timer may have completed the journal write before this
+    // observer was connected. Consume an already-finished acknowledgement too.
+    recovery_state_checkpoint_acknowledged =
+        recovery_checkpoint_is_durable_and_ordered();
+    QElapsedTimer recovery_state_checkpoint_timeout;
+    recovery_state_checkpoint_timeout.start();
+    while (!recovery_state_checkpoint_acknowledged &&
+           recovery_state_checkpoint_timeout.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    QObject::disconnect(journal_ack_connection);
+    if (!recovery_state_checkpoint_acknowledged ||
+        !timeline_journal_preserves_ordered_snapshots(
+            journal_path_after_recovery,
+            dirty_checkpoint_document,
+            recovered_document)) {
+      const auto raw_snapshots = timeline_journal_documents(journal_path_after_recovery);
+      const auto has_replaced_snapshot = timeline_journal_contains_snapshot(
+          journal_path_after_recovery, dirty_checkpoint_document);
+      const auto ordered_snapshots = timeline_journal_preserves_ordered_snapshots(
+          journal_path_after_recovery, dirty_checkpoint_document, recovered_document);
+      const auto journal_bytes = read_file(journal_path_after_recovery);
+      const auto normalized_expected_recovery = timeline_project_state(recovered_document);
+      const auto normalized_applied_recovery =
+          timeline_project_state(applied_recovery_document);
+      QSet<QString> expected_recovery_keys;
+      for (const auto& key : normalized_expected_recovery.keys())
+        expected_recovery_keys.insert(key);
+      for (const auto& key : normalized_applied_recovery.keys())
+        expected_recovery_keys.insert(key);
+      QStringList applied_recovery_difference_keys;
+      for (const auto& key : expected_recovery_keys) {
+        if (normalized_expected_recovery.value(key) != normalized_applied_recovery.value(key))
+          applied_recovery_difference_keys.push_back(key);
+      }
+      if (qEnvironmentVariableIsSet("LOOKSY_KEEP_TIMELINE_TEST_WORKSPACE")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "  preserved recovery diagnostic workspace="
+                  << workspace.path().toStdString() << '\n';
+      }
+      std::cerr << "recovery checkpoint acknowledgement diagnostic: future_valid="
+                << recovery_state_journal_watcher->future().isValid()
+                << " watcher_running=" << recovery_state_journal_watcher->isRunning()
+                << " watcher_finished=" << recovery_state_journal_watcher->isFinished()
+                << " watcher_canceled=" << recovery_state_journal_watcher->isCanceled()
+                << " watcher_result="
+                << (recovery_state_journal_watcher->isFinished() &&
+                            !recovery_state_journal_watcher->isCanceled()
+                        ? recovery_state_journal_watcher->result()
+                        : false)
+                << " raw_snapshot_count=" << raw_snapshots.size()
+                << " preserved_two_marker_snapshot=" << has_replaced_snapshot
+                << " ordered_two_to_one_marker_snapshots=" << ordered_snapshots
+                << " dirty_checkpoint_markers="
+                << dirty_checkpoint_document.value(QStringLiteral("markers")).toArray().size()
+                << " recovered_markers="
+                << recovered_document.value(QStringLiteral("markers")).toArray().size()
+                << " applied_matches_expected="
+                << (normalized_applied_recovery == normalized_expected_recovery)
+                << " applied_state_sha256=" << hash_object(normalized_applied_recovery).toStdString()
+                << " expected_state_sha256=" << hash_object(normalized_expected_recovery).toStdString()
+                << " applied_difference_keys="
+                << applied_recovery_difference_keys.join(QLatin1Char(',')).toStdString()
+                << " journal_bytes=" << journal_bytes.size()
+                << " journal_sha256="
+                << QString::fromLatin1(QCryptographicHash::hash(
+                       journal_bytes, QCryptographicHash::Sha256).toHex()).toStdString()
+                << '\n';
+      for (auto index = 0; index < raw_snapshots.size(); ++index) {
+        const auto normalized_snapshot = timeline_project_state(raw_snapshots.at(index));
+        QSet<QString> snapshot_keys;
+        for (const auto& key : normalized_snapshot.keys()) snapshot_keys.insert(key);
+        for (const auto& key : normalized_expected_recovery.keys()) snapshot_keys.insert(key);
+        QStringList difference_keys;
+        for (const auto& key : snapshot_keys) {
+          if (normalized_snapshot.value(key) != normalized_expected_recovery.value(key))
+            difference_keys.push_back(key);
+        }
+        std::cerr << "  journal_snapshot[" << index << "] markers="
+                  << normalized_snapshot.value(QStringLiteral("markers")).toArray().size()
+                  << " state_sha256=" << hash_object(normalized_snapshot).toStdString()
+                  << " matches_recovered="
+                  << (normalized_snapshot == normalized_expected_recovery)
+                  << " differs_from_recovered="
+                  << difference_keys.join(QLatin1Char(',')).toStdString() << '\n';
+      }
+      return fail("the selected recovered working state should checkpoint after, and preserve, the replaced dirty snapshot");
+    }
+
+    TimelineDocumentController canceled_same_id_open;
+    if (!canceled_same_id_open.loadTimeline(raced.savedDocumentPath()))
+      return fail("the cancellation fixture should load the exact saved project first");
+    const auto same_timeline_id = canceled_same_id_open.timelineAssetId();
+    if (!canceled_same_id_open.openRecoveryCandidate(recovery_candidate_id) ||
+        !canceled_same_id_open.recoveryOpenInProgress()) {
+      return fail("same-ID recovery should enter pending state before cancellation");
+    }
+    canceled_same_id_open.cancelRecoveryOpen();
+    const auto canceled_reload_succeeded =
+        canceled_same_id_open.loadTimeline(raced.savedDocumentPath());
+    const auto recovery_open_cleared_after_reload =
+        !canceled_same_id_open.recoveryOpenInProgress();
+    const auto canceled_worker_settled =
+        wait_for_canceled_recovery_worker(&canceled_same_id_open);
+    const auto canceled_reload_document =
+        photo_editor::desktop::TimelineHistoryTestAccess::document(
+            canceled_same_id_open);
+    const auto canceled_reload_clip = canceled_same_id_open.currentClip();
+    const auto canceled_reload_canonical_preserved =
+        read_file(raced.savedDocumentPath()) == canonical_bytes_after_save;
+    if (!canceled_reload_succeeded || !recovery_open_cleared_after_reload ||
+        !canceled_worker_settled ||
+        canceled_same_id_open.timelineAssetId() != same_timeline_id ||
+        canceled_same_id_open.dirty() ||
+        canceled_same_id_open.sequenceMarkers().size() != 2 ||
+        !canceled_reload_canonical_preserved) {
+      if (qEnvironmentVariableIsSet("LOOKSY_KEEP_TIMELINE_TEST_WORKSPACE")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "  preserved recovery diagnostic workspace="
+                  << workspace.path().toStdString() << '\n';
+      }
+      std::cerr << "canceled recovery reload diagnostic: reload_succeeded="
+                << canceled_reload_succeeded
+                << " open_cleared=" << recovery_open_cleared_after_reload
+                << " worker_settled=" << canceled_worker_settled
+                << " expected_timeline_id=" << same_timeline_id.toStdString()
+                << " actual_timeline_id="
+                << canceled_same_id_open.timelineAssetId().toStdString()
+                << " dirty=" << canceled_same_id_open.dirty()
+                << " marker_count=" << canceled_same_id_open.sequenceMarkers().size()
+                << " document_state_sha256="
+                << hash_object(timeline_project_state(canceled_reload_document)).toStdString()
+                << " source_integrity_status="
+                << canceled_reload_clip.value(QStringLiteral("sourceIntegrityStatus")).toString().toStdString()
+                << " source_hash_bytes="
+                << canceled_reload_clip.value(QStringLiteral("sourceContentSha256")).toString().size()
+                << " canonical_bytes_preserved=" << canceled_reload_canonical_preserved
+                << " status=" << canceled_same_id_open.status().toStdString() << '\n';
+      return fail("a canceled same-ID open must not replace the reloaded saved generation or dirty canonical state");
+    }
+
+    TimelineDocumentController reopened_recovery;
+    reopened_recovery.refreshRecentTimelines();
+    QElapsedTimer reopen_recent_timeout;
+    reopen_recent_timeout.start();
+    while (reopened_recovery.recentTimelinesLoading() &&
+           reopen_recent_timeout.elapsed() < 5000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    const auto reopened_recent_rows = reopened_recovery.recentTimelineRecords();
+    // The surfaced identity is intentionally read from the current Recent row:
+    // journal IDs include the entry hash and may change as autosave/checkpoint
+    // entries are appended or deduplicated. The fixed autosave candidate above
+    // already proves direct-open identity against its exact stored snapshot.
+    QVariantMap surfaced_recovery;
+    for (const auto& row : reopened_recent_rows) {
+      const auto record = row.toMap();
+      if (record.value(QStringLiteral("timelineId")).toString() ==
+              raced.timelineAssetId().mid(QStringLiteral("timeline:").size()) &&
+          record.value(QStringLiteral("isRecovery")).toBool()) {
+        surfaced_recovery = record;
+        break;
+      }
+    }
+    auto reopen_completion_count = 0;
+    auto reopen_completed_successfully = false;
+    QString reopen_completed_candidate_id;
+    QObject::connect(
+        &reopened_recovery,
+        &TimelineDocumentController::recoveryOpenCompleted,
+        &reopened_recovery,
+        [&](const QString& candidate_id, bool succeeded) {
+          ++reopen_completion_count;
+          reopen_completed_candidate_id = candidate_id;
+          reopen_completed_successfully = succeeded;
+        });
+    QElapsedTimer exact_reopen_timer;
+    exact_reopen_timer.start();
+    const auto recent_candidate_id =
+        surfaced_recovery.value(QStringLiteral("recoveryCandidateId")).toString();
+    QVariantMap surfaced_candidate_metadata;
+    for (const auto& candidate_value : reopened_recovery.recoveryCandidates()) {
+      const auto candidate = candidate_value.toMap();
+      if (candidate.value(QStringLiteral("candidateId")).toString() ==
+          recent_candidate_id) {
+        surfaced_candidate_metadata = candidate;
+      }
+    }
+    const auto surfaced_candidate_document =
+        timeline_recovery_candidate_document(surfaced_candidate_metadata);
+    const auto surfaced_candidate_state =
+        timeline_project_state(surfaced_candidate_document);
+    const auto expected_recovered_state = timeline_project_state(recovered_document);
+    const auto surfaced_candidate_kind =
+        surfaced_candidate_metadata.value(QStringLiteral("kind")).toString();
+    const auto surfaced_candidate_path =
+        surfaced_candidate_metadata.value(QStringLiteral("sourcePath")).toString();
+    const auto surfaced_candidate_source_is_supported =
+        (surfaced_candidate_kind == QStringLiteral("autosave") &&
+         surfaced_candidate_path == raced.savedDocumentPath() + QStringLiteral(".autosave")) ||
+        (surfaced_candidate_kind == QStringLiteral("journal") &&
+         surfaced_candidate_path == journal_path_after_recovery);
+    const auto surfaced_candidate_matches_expected =
+        !surfaced_candidate_state.isEmpty() &&
+        surfaced_candidate_state == expected_recovered_state;
+    const auto reopen_admitted = !recent_candidate_id.isEmpty() &&
+        reopened_recovery.openRecoveryCandidate(recent_candidate_id);
+    const auto reopen_admission_ms = exact_reopen_timer.nsecsElapsed() / 1000000.0;
+    const auto reopen_settled = reopen_admitted && wait_for_recovery_open(&reopened_recovery);
+    const auto reopen_elapsed_ms = exact_reopen_timer.nsecsElapsed() / 1000000.0;
+    const auto reopened_markers = reopened_recovery.sequenceMarkers();
+    QSet<QString> reopened_marker_labels;
+    for (const auto& marker : reopened_markers)
+      reopened_marker_labels.insert(marker.toMap().value(QStringLiteral("label")).toString());
+    const auto canonical_bytes_preserved =
+        read_file(raced.savedDocumentPath()) == canonical_bytes_after_save;
+    const auto raw_journal_documents =
+        timeline_journal_documents(journal_path_after_recovery);
+    // A later canceled reload can append the saved canonical state again to
+    // this same-ID journal. Check that recovery appended its exact working
+    // snapshot after the replaced dirty snapshot, while the surfaced Recent
+    // candidate below proves which state is currently selected for reopen.
+    const auto journal_history_preserved =
+        timeline_journal_preserves_ordered_snapshots(
+            journal_path_after_recovery,
+            dirty_checkpoint_document,
+            recovered_document) &&
+        !raw_journal_documents.isEmpty();
+    const auto reopened_recovery_state = timeline_project_state(
+        photo_editor::desktop::TimelineHistoryTestAccess::document(reopened_recovery));
+    const auto surfaced_recent_snapshot_exact =
+        surfaced_candidate_source_is_supported && surfaced_candidate_matches_expected &&
+        surfaced_candidate_metadata.value(QStringLiteral("markerCount")).toInt() ==
+            surfaced_candidate_state.value(QStringLiteral("markers")).toArray().size() &&
+        reopened_recovery_state == surfaced_candidate_state;
+    const auto exact_recent_reopen =
+        !surfaced_recovery.isEmpty() &&
+        surfaced_candidate_metadata.value(QStringLiteral("candidateId")).toString() ==
+            recent_candidate_id &&
+        surfaced_recent_snapshot_exact &&
+        reopen_settled && reopen_completion_count == 1 &&
+        reopen_completed_successfully &&
+        reopen_completed_candidate_id == recent_candidate_id &&
+        reopened_recovery.dirty() && reopened_markers.size() == 1 &&
+        reopened_marker_labels == QSet<QString>{QStringLiteral("Recoverable state")} &&
+        reopened_recovery_state == expected_recovered_state &&
+        reopened_recovery.timelineAssetId() == raced.timelineAssetId() &&
+        photo_editor::desktop::TimelineHistoryTestAccess::document(
+            reopened_recovery).value(QStringLiteral("createdAt")) ==
+            recovered_document.value(QStringLiteral("createdAt")) &&
+        canonical_bytes_preserved && journal_history_preserved;
+    if (!exact_recent_reopen) {
+      if (qEnvironmentVariableIsSet("LOOKSY_KEEP_TIMELINE_TEST_WORKSPACE")) {
+        workspace.setAutoRemove(false);
+        std::cerr << "  preserved recovery diagnostic workspace="
+                  << workspace.path().toStdString() << '\n';
+      }
+      const auto canonical_hash = QCryptographicHash::hash(
+          read_file(raced.savedDocumentPath()), QCryptographicHash::Sha256).toHex();
+      const auto expected_canonical_hash = QCryptographicHash::hash(
+          canonical_bytes_after_save, QCryptographicHash::Sha256).toHex();
+      std::cerr << "recovery reopen diagnostic: surfaced_candidate="
+                << recent_candidate_id.toStdString()
+                << " recovery_kind="
+                << surfaced_candidate_metadata.value(QStringLiteral("kind")).toString().toStdString()
+                << " recovery_source="
+                << surfaced_candidate_path.toStdString()
+                << " recovery_marker_count="
+                << surfaced_candidate_metadata.value(QStringLiteral("markerCount")).toInt()
+                << " surfaced_snapshot_exact=" << surfaced_recent_snapshot_exact
+                << " surfaced_state_sha256=" << hash_object(surfaced_candidate_state).toStdString()
+                << " expected_state_sha256=" << hash_object(expected_recovered_state).toStdString()
+                << " raw_journal_documents=" << raw_journal_documents.size()
+                << " journal_latest_matches_expected="
+                << (!raw_journal_documents.isEmpty() &&
+                    timeline_project_state(raw_journal_documents.last()) == expected_recovered_state)
+                << " journal_latest_sha256="
+                << (raw_journal_documents.isEmpty()
+                        ? QString{} : hash_object(timeline_project_state(raw_journal_documents.last())))
+                       .toStdString()
+                << " preserved_two_marker_checkpoint="
+                << timeline_journal_contains_snapshot(
+                       journal_path_after_recovery, dirty_checkpoint_document)
+                << " ordered_checkpoint_history=" << journal_history_preserved
+                << " expected_recent_snapshot_exact=" << surfaced_candidate_matches_expected
+                << " admitted=" << reopen_admitted
+                << " settled=" << reopen_settled
+                << " completion_count=" << reopen_completion_count
+                << " completed_candidate=" << reopen_completed_candidate_id.toStdString()
+                << " completed_success=" << reopen_completed_successfully
+                << " status=" << reopened_recovery.status().toStdString()
+                << " dirty=" << reopened_recovery.dirty()
+                << " marker_count=" << reopened_markers.size()
+                << " elapsed_ms=" << reopen_elapsed_ms
+                << " admission_ms=" << reopen_admission_ms
+                << " canonical_sha256=" << canonical_hash.toStdString()
+                << " expected_sha256=" << expected_canonical_hash.toStdString()
+                << " canonical_preserved=" << canonical_bytes_preserved << '\n';
+      return fail("the recovered state should reopen exactly while preserving the explicit saved project bytes");
+    }
+
+    TimelineDocumentController checkpoint_failure;
+    checkpoint_failure.createTimeline(QStringLiteral("Recovery checkpoint failure"));
+    checkpoint_failure.addClipFromGallery(
+        QStringLiteral("photo:checkpoint-failure"), still_path,
+        QStringLiteral("Still"), 4.0, {});
+    checkpoint_failure.addSequenceMarker(QStringLiteral("Keep this dirty work open"));
+    const auto checkpoint_failure_timeline_id = checkpoint_failure.timelineAssetId();
+    if (!QDir().mkpath(checkpoint_failure.editJournalPath()) ||
+        !checkpoint_failure.openRecoveryCandidate(unrelated_candidate_id) ||
+        !wait_for_recovery_open(&checkpoint_failure) ||
+        !checkpoint_failure.hasActiveTimeline() || !checkpoint_failure.dirty() ||
+        checkpoint_failure.timelineAssetId() != checkpoint_failure_timeline_id ||
+        checkpoint_failure.sequenceMarkers().size() != 1 ||
+        !checkpoint_failure.status().contains(QStringLiteral("Your edits remain open"))) {
+      return fail("a failed async pre-replacement checkpoint must keep the current dirty timeline intact");
+    }
+  }
+
+  // Match the archived 128-clip / 40-checkpoint controller probe so the
+  // foreground API latency can be compared with its synchronous baseline.
+  {
+    TimelineDocumentController large_recovery;
+    large_recovery.createTimeline(QStringLiteral("Recovery latency fixture"));
+    for (auto index = 0; index < 128; ++index) {
+      large_recovery.addClipFromGallery(
+          QStringLiteral("photo:recovery-latency-%1").arg(index), still_path,
+          QStringLiteral("Still"), 4.0, {});
+    }
+    for (auto index = 0; index < 40; ++index) {
+      large_recovery.addSequenceMarker(QStringLiteral("Checkpoint %1").arg(index));
+      if (!large_recovery.flushEditJournal())
+        return fail("the matched recovery latency fixture should persist all 40 checkpoints");
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    large_recovery.refreshRecoveryCandidates();
+    const auto discovery_admission_ms = timer.nsecsElapsed() / 1000000.0;
+    if (!wait_for_recovery_candidates(&large_recovery))
+      return fail("asynchronous recovery discovery should complete for the matched fixture");
+    const auto recovery_rows =
+        large_recovery.property("recoveryCandidates").toList();
+    QString large_candidate_id;
+    for (const auto& value : recovery_rows) {
+      const auto row = value.toMap();
+      if (row.value(QStringLiteral("sourcePath")).toString() ==
+          large_recovery.editJournalPath()) {
+        large_candidate_id = row.value(QStringLiteral("candidateId")).toString();
+        break;
+      }
+    }
+    if (large_candidate_id.isEmpty())
+      return fail("the async recovery list should expose the large journal candidate");
+
+    TimelineDocumentController opening;
+    timer.restart();
+    const auto admitted = opening.openRecoveryCandidate(large_candidate_id);
+    const auto open_admission_ms = timer.nsecsElapsed() / 1000000.0;
+    if (!admitted || !wait_for_recovery_open(&opening) ||
+        !opening.hasActiveTimeline() || opening.sequenceMarkers().size() != 40 ||
+        discovery_admission_ms > 100.0 || open_admission_ms > 100.0) {
+      return fail("recovery discovery and open admission should stay responsive while the matched large fixture verifies");
+    }
+    std::cout << "timeline recovery foreground latency: clips=128 checkpoints=40 journal_bytes="
+              << QFileInfo(large_recovery.editJournalPath()).size()
+              << " discovery_admission_ms=" << discovery_admission_ms
+              << " open_admission_ms=" << open_admission_ms << '\n';
+  }
 
   TimelineDocumentController author;
   author.createTimeline(QStringLiteral("Crash-safe Cut"));
@@ -235,6 +1463,9 @@ int main(int argc, char** argv) {
       QStringLiteral("Opening"),
       4.0,
       QString{});
+  if (!wait_for_source_integrity(&author)) {
+    return fail("journal recovery should settle source integrity before saving its canonical snapshot");
+  }
   if (!author.saveTimeline()) {
     return fail("recovery proof should establish a last known-good project");
   }
@@ -307,13 +1538,123 @@ int main(int argc, char** argv) {
           QStringLiteral("original project remains untouched"))) {
     return fail("startup discovery should explain the latest valid snapshot before a damaged tail");
   }
-  const auto candidate_id = candidate.value(QStringLiteral("candidateId")).toString();
-  if (!recovery.openRecoveryCandidate(candidate_id) || !recovery.dirty() ||
+  const auto initial_candidate_id =
+      candidate.value(QStringLiteral("candidateId")).toString();
+  if (!recovery.openRecoveryCandidate(initial_candidate_id) ||
+      !wait_for_recovery_open(&recovery) || !recovery.dirty() ||
       recovery.sequenceMarkers().size() != 1 ||
       read_file(saved_path) != saved_before_recovery) {
     return fail("Open should recover the verified edit without changing the saved project");
   }
+  const auto opened_recovery_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::document(recovery);
+  if (!wait_for_journal_snapshot(&recovery, journal_path, opened_recovery_document)) {
+    return fail("the recovered working state should receive a successful durable journal acknowledgement");
+  }
 
+  const auto recent_rows = [](TimelineDocumentController& controller) {
+    controller.refreshRecentTimelines();
+    QElapsedTimer timeout;
+    timeout.start();
+    while (controller.recentTimelinesLoading() && timeout.elapsed() < 5000)
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    return controller.recentTimelineRecords();
+  };
+  const auto timeline_id = candidate.value(QStringLiteral("timelineId")).toString();
+  const auto initial_recent_rows = recent_rows(recovery);
+  QVariantMap surfaced_recovery;
+  for (const auto& value : initial_recent_rows) {
+    const auto row = value.toMap();
+    if (row.value(QStringLiteral("timelineId")).toString() == timeline_id &&
+        row.value(QStringLiteral("isRecovery")).toBool()) {
+      surfaced_recovery = row;
+      break;
+    }
+  }
+  const auto surfaced_candidate_id =
+      surfaced_recovery.value(QStringLiteral("recoveryCandidateId")).toString();
+  QVariantMap surfaced_candidate_metadata;
+  for (const auto& value : recovery.recoveryCandidates()) {
+    const auto metadata = value.toMap();
+    if (metadata.value(QStringLiteral("candidateId")).toString() == surfaced_candidate_id) {
+      surfaced_candidate_metadata = metadata;
+      break;
+    }
+  }
+  if (surfaced_candidate_id.isEmpty() || surfaced_candidate_metadata.isEmpty() ||
+      surfaced_candidate_metadata.value(QStringLiteral("sourcePath")).toString() != journal_path ||
+      surfaced_candidate_metadata.value(QStringLiteral("markerCount")).toInt() != 1) {
+    return fail("Recent should surface the durable current recovery candidate for this timeline");
+  }
+  auto recovered_in_recents = false;
+  // Force both timestamps into one second, with saved metadata lacking the
+  // recovery's fractional precision. Text sorting incorrectly puts Z first.
+  auto indexed_timelines = photo_editor::desktop::loadTimelineAssetRecords();
+  for (auto& record : indexed_timelines) {
+    if (record.document_path == saved_path)
+      record.updated_at = QDateTime::fromString(
+          surfaced_candidate_metadata.value(QStringLiteral("timestamp")).toString(),
+          Qt::ISODateWithMs)
+                              .toString(Qt::ISODate);
+  }
+  if (!photo_editor::desktop::saveTimelineAssetRecords(indexed_timelines))
+    return fail("The same-second Recents fixture should update its isolated index");
+  auto first_version_checked = false;
+  QString latest_recent_candidate_id;
+  for (const auto& value : recent_rows(recovery)) {
+    const auto row = value.toMap();
+    if (!first_version_checked && row.value(QStringLiteral("timelineId")) == timeline_id) {
+      first_version_checked = true;
+      if (!row.value(QStringLiteral("isRecovery")).toBool())
+        return fail("Recents should sort newer recovery ahead of a saved version without milliseconds");
+    }
+    if (row.value(QStringLiteral("timelineId")).toString() == timeline_id &&
+        row.value(QStringLiteral("isRecovery")).toBool()) {
+      recovered_in_recents = row.value(QStringLiteral("isRecovery")).toBool();
+      latest_recent_candidate_id =
+          row.value(QStringLiteral("recoveryCandidateId")).toString();
+    }
+  }
+  if (!recovered_in_recents || latest_recent_candidate_id != surfaced_candidate_id ||
+      read_file(saved_path) != saved_before_recovery)
+    return fail("Recent Timelines should expose recovery without rewriting the saved project");
+  // A fresh controller simulates a later app session. Recents cannot depend on
+  // the recovery dialog having been opened in the previous session.
+  TimelineDocumentController later_session;
+  recovered_in_recents = false;
+  QString later_session_candidate_id;
+  for (const auto& value : recent_rows(later_session)) {
+    const auto row = value.toMap();
+    if (row.value(QStringLiteral("timelineId")).toString() == timeline_id &&
+        row.value(QStringLiteral("isRecovery")).toBool()) {
+      recovered_in_recents = true;
+      later_session_candidate_id =
+          row.value(QStringLiteral("recoveryCandidateId")).toString();
+      break;
+    }
+  }
+  if (!recovered_in_recents || later_session_candidate_id.isEmpty() ||
+      !later_session.openRecoveryCandidate(later_session_candidate_id) ||
+      !wait_for_recovery_open(&later_session) ||
+      later_session.sequenceMarkers().size() != 1 || read_file(saved_path) != saved_before_recovery)
+    return fail("A later session should reopen the recovered state from Recents with saved bytes intact");
+  const auto later_session_document =
+      photo_editor::desktop::TimelineHistoryTestAccess::document(later_session);
+  if (!wait_for_journal_snapshot(&later_session, journal_path, later_session_document)) {
+    return fail("the state reopened from Recent should remain durably recoverable in the next session");
+  }
+  QString current_recovery_candidate_id;
+  for (const auto& value : recent_rows(later_session)) {
+    const auto row = value.toMap();
+    if (row.value(QStringLiteral("timelineId")).toString() == timeline_id &&
+        row.value(QStringLiteral("isRecovery")).toBool()) {
+      current_recovery_candidate_id =
+          row.value(QStringLiteral("recoveryCandidateId")).toString();
+      break;
+    }
+  }
+  if (current_recovery_candidate_id.isEmpty())
+    return fail("the reopened working state should remain available as the current Recent recovery");
   QFile damaged_project(saved_path);
   if (!damaged_project.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
       damaged_project.write("{damaged-project") <= 0) {
@@ -322,22 +1663,38 @@ int main(int argc, char** argv) {
   damaged_project.close();
 
   TimelineDocumentController copied;
-  if (!copied.restoreRecoveryCandidateAsCopy(candidate_id) ||
+  if (!copied.restoreRecoveryCandidateAsCopy(current_recovery_candidate_id) ||
       copied.savedDocumentPath() == saved_path ||
       !QFileInfo::exists(copied.savedDocumentPath()) ||
       !copied.timelineName().contains(QStringLiteral("Recovered Copy")) ||
       copied.sequenceMarkers().size() != 1) {
     return fail("Restore Copy should survive project corruption with a new durable identity");
   }
-  if (!copied.discardRecoveryCandidate(candidate_id)) {
+  if (!copied.discardRecoveryCandidate(current_recovery_candidate_id)) {
     return fail("Discard should archive the journal recovery");
   }
   for (const auto& value : copied.recoveryCandidates()) {
-    if (value.toMap().value(QStringLiteral("candidateId")).toString() == candidate_id) {
+    if (value.toMap().value(QStringLiteral("candidateId")).toString() == current_recovery_candidate_id) {
       return fail("discarded recovery should no longer be offered");
     }
   }
 
+  auto copy_in_recents = false;
+  for (const auto& value : recent_rows(copied)) {
+    const auto row = value.toMap();
+    if (row.value(QStringLiteral("recoveryCandidateId")).toString() == current_recovery_candidate_id)
+      return fail("Discarded recovery should disappear from Recent Timelines");
+    copy_in_recents |= row.value(QStringLiteral("documentPath")).toString() == copied.savedDocumentPath();
+  }
+  if (!copy_in_recents)
+    return fail("Restore Copy should immediately register a saved Recent Timeline");
+  // The registered no-argument test continues through media, editing, and
+  // delivery coverage. This mode ends after the complete Save/recovery,
+  // append-only checkpoint, Recent reopen, Restore Copy, and Discard contract.
+  if (recovery_lifecycle_only) {
+    std::cout << "timeline recovery lifecycle segment: passed\n";
+    return EXIT_SUCCESS;
+  }
   TimelineDocumentController recursive_compound_author;
   recursive_compound_author.createTimeline(QStringLiteral("Recursive Compound Guard"));
   recursive_compound_author.addClipFromGallery(
@@ -2228,6 +3585,13 @@ int main(int argc, char** argv) {
 
   stress_track_model.clear();
   QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+  // Warm allocation reuse across complete projections before measuring retained
+  // growth. A single cold projection does not establish steady allocation reuse.
+  for (int warmup = 0; warmup < 4; ++warmup) {
+    const auto warm_model = incremental.sequenceTracks();
+    if (warm_model.size() != kStressRuntimeTrackCount)
+      return fail("large-project projection warmup should remain complete");
+  }
   const auto rss_after_warm_projection = current_resident_bytes();
   for (auto repeat = 0; repeat < 4; ++repeat) {
     const auto repeated_model = incremental.sequenceTracks();

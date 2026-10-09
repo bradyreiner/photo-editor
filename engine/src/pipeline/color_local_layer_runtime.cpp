@@ -351,7 +351,9 @@ bool apply_color_layers_stage(
     const ColorAdjustmentState& state,
     RemovalQuality removal_quality,
     CancellationToken cancellation,
-    ColorAdjustmentTelemetry* telemetry) {
+    ColorAdjustmentTelemetry* telemetry,
+    bool input_finite_validated,
+    bool include_display_referred_text_layers) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() !=
           static_cast<std::size_t>(width) *
@@ -366,7 +368,12 @@ bool apply_color_layers_stage(
   // data while making the common exposure-only path effectively free.
   if (state.local_mask_sets.empty() && state.local_masks.empty() &&
       state.retouch_masks.empty() && state.photo_layers.empty() &&
+      (!include_display_referred_text_layers ||
+       state.display_referred_text_layers.empty()) &&
       !state.linear_mask_enabled && !state.radial_mask_enabled) {
+    if (input_finite_validated) {
+      return true;
+    }
     return std::ranges::all_of(
         *pixels,
         [](const ColorPixel& pixel) {
@@ -379,9 +386,13 @@ bool apply_color_layers_stage(
 
   const auto color_context =
       make_pipeline_color_context(state);
-  const auto edge_matte_source_pixels = *pixels;
+  // Only the legacy local-mask branch below reads this immutable edge source.
+  // Mask sets acquire their own source inside apply_local_adjustments_to_look_pixels.
+  // Content layers, legacy gradients and retouch do not consume this snapshot.
+  const auto needs_edge_matte_source = state.local_mask_sets.empty() && !state.local_masks.empty();
+  const auto edge_matte_source_pixels = needs_edge_matte_source ? *pixels : std::vector<ColorPixel>{};
   const EdgeAwareMatteContext edge_matte_source_context{
-      .pixels = &edge_matte_source_pixels,
+      .pixels = needs_edge_matte_source ? &edge_matte_source_pixels : nullptr,
       .width = width,
       .height = height,
   };
@@ -512,7 +523,7 @@ bool apply_color_layers_stage(
         }
       }
     });
-  } else {
+  } else if (state.linear_mask_enabled || state.radial_mask_enabled) {
     const auto gradient_radians =
         state.linear_mask_rotation * kPi / 180.0;
     const auto gradient_cosine =
@@ -758,6 +769,15 @@ bool apply_color_layers_stage(
   std::string layer_error;
   if (!apply_standard_photo_layers(pixels, width, height, color_context,
           state.color_pipeline.photographic_rendering_model, state.photo_layers, cancellation, &layer_error)) {
+    if (telemetry != nullptr) telemetry->failure_reason = layer_error;
+    return false;
+  }
+  if (include_display_referred_text_layers &&
+      !state.display_referred_text_layers.empty() &&
+      !apply_standard_photo_layers(
+          pixels, width, height, color_context,
+          state.color_pipeline.photographic_rendering_model,
+          state.display_referred_text_layers, cancellation, &layer_error)) {
     if (telemetry != nullptr) telemetry->failure_reason = layer_error;
     return false;
   }

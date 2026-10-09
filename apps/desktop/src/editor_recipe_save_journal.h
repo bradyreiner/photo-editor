@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor_recipe_save_queue.h"
+#include "edit_recipe_mask_encoding_cache.h"
 #include <QLockFile>
 #include <memory>
 
@@ -18,6 +19,12 @@ class EditorRecipeSaveJournal final {
   static QString currentAuthority();
 
  private:
+  struct SerializedSnapshot final {
+    QJsonValue value;
+    QByteArray bytes;
+  };
+  QHash<QString, QList<SerializedSnapshot>> serialization_cache_;
+  EditRecipeMaskEncodingCache mask_encoding_cache_;
   QString path_;
   QString authority_;
   std::unique_ptr<QLockFile> lock_;

@@ -16,6 +16,10 @@ inline QStringList automation_capability_names() {
 
 inline QString automation_capability_for_command(const QString& command) {
   static const QStringList read_commands{
+      QStringLiteral("app_list_commands"),
+      QStringLiteral("app_command_schema"),
+      QStringLiteral("app_inspect_command"),
+      QStringLiteral("photo_inspect_composition"),
       QStringLiteral("photo_live_status"),
       QStringLiteral("photo_search_edit_status"),
       QStringLiteral("photo_list_models"),
@@ -31,6 +35,14 @@ inline QString automation_capability_for_command(const QString& command) {
       QStringLiteral("photo_validate_batch"),
       QStringLiteral("photo_export_preflight"),
       QStringLiteral("photo_plan_bulk_edit"),
+      QStringLiteral("timeline_color_inspect"),
+      QStringLiteral("timeline_color_compare_open"),
+      QStringLiteral("timeline_scope_capture_request"),
+      QStringLiteral("timeline_scope_summary_inspect"),
+      QStringLiteral("timeline_source_color_metadata_inspect"),
+      QStringLiteral("timeline_color_grade_inspect"),
+      QStringLiteral("timeline_effects_inspect"),
+      QStringLiteral("timeline_playback_performance_inspect"),
   };
   if (read_commands.contains(command)) {
     return QStringLiteral("read");

@@ -8,15 +8,25 @@ namespace photo_editor::pipeline {
 namespace {
 
 [[nodiscard]] bool color_lut_shape_valid(const ColorLut3D& lut) {
-  if (lut.size < 2) {
-    return false;
-  }
-  const auto size = static_cast<std::size_t>(lut.size);
-  if (size > std::numeric_limits<std::size_t>::max() / size ||
-      size * size > std::numeric_limits<std::size_t>::max() / size) {
-    return false;
-  }
-  return lut.table.size() == size * size * size;
+  const auto valid_3d = [&lut] {
+    if (lut.size == 0) return lut.table.empty();
+    if (lut.size < 2) return false;
+    const auto size = static_cast<std::size_t>(lut.size);
+    if (size > std::numeric_limits<std::size_t>::max() / size ||
+        size * size > std::numeric_limits<std::size_t>::max() / size) {
+      return false;
+    }
+    return lut.table.size() == size * size * size;
+  }();
+  const auto valid_1d = lut.shaper_size == 0
+                            ? lut.shaper_table.empty()
+                            : lut.shaper_size >= 2 && lut.shaper_size <= 65536 &&
+                                  lut.shaper_table.size() ==
+                                      static_cast<std::size_t>(lut.shaper_size) &&
+                                  std::isfinite(lut.shaper_input_range[0]) &&
+                                  std::isfinite(lut.shaper_input_range[1]) &&
+                                  lut.shaper_input_range[1] > lut.shaper_input_range[0];
+  return (lut.size > 0 || lut.shaper_size > 0) && valid_3d && valid_1d;
 }
 
 [[nodiscard]] double signed_power(double value, double exponent) {
@@ -42,6 +52,16 @@ namespace {
       return signed_power(value, 2.2);
     case TransferFunction::Gamma24:
       return signed_power(value, 2.4);
+    case TransferFunction::Bt709: {
+      constexpr auto alpha = 1.099;
+      constexpr auto beta = 0.018;
+      const auto magnitude = std::abs(value);
+      const auto decoded = magnitude < 4.5 * beta
+                               ? magnitude / 4.5
+                               : std::pow((magnitude + alpha - 1.0) / alpha,
+                                          1.0 / 0.45);
+      return std::copysign(decoded, value);
+    }
     case TransferFunction::Bt2020: {
       constexpr auto alpha = 1.09929682680944;
       constexpr auto beta = 0.018053968510807;
@@ -80,6 +100,16 @@ namespace {
       return signed_power(value, 1.0 / 2.2);
     case TransferFunction::Gamma24:
       return signed_power(value, 1.0 / 2.4);
+    case TransferFunction::Bt709: {
+      constexpr auto alpha = 1.099;
+      constexpr auto beta = 0.018;
+      const auto magnitude = std::abs(value);
+      const auto encoded = magnitude <= beta
+                               ? 4.5 * magnitude
+                               : alpha * std::pow(magnitude, 0.45) -
+                                     (alpha - 1.0);
+      return std::copysign(encoded, value);
+    }
     case TransferFunction::Bt2020: {
       constexpr auto alpha = 1.09929682680944;
       constexpr auto beta = 0.018053968510807;
@@ -128,7 +158,35 @@ namespace {
 [[nodiscard]] ColorPixel apply_lut_unchecked(
     const ColorLut3D& lut,
     const ColorPixel& pixel,
-    bool unit_domain) {
+    bool unit_domain,
+    bool tetrahedral) {
+  auto lut_pixel = pixel;
+  if (lut.shaper_size > 0) {
+    const auto sample_channel = [&](double value, auto ColorPixel::*channel) {
+      const auto normalized = clamp_unit(
+          (value - lut.shaper_input_range[0]) /
+          (lut.shaper_input_range[1] - lut.shaper_input_range[0]));
+      const auto position = normalized * static_cast<double>(lut.shaper_size - 1);
+      const auto lower = static_cast<std::size_t>(position);
+      const auto upper = std::min(
+          lower + 1U, static_cast<std::size_t>(lut.shaper_size - 1));
+      const auto fraction = position - static_cast<double>(lower);
+      return std::lerp(
+          static_cast<double>(lut.shaper_table[lower].*channel),
+          static_cast<double>(lut.shaper_table[upper].*channel),
+          fraction);
+    };
+    lut_pixel = ColorPixel{
+        .red = static_cast<float>(sample_channel(pixel.red, &ColorPixel::red)),
+        .green = static_cast<float>(sample_channel(pixel.green, &ColorPixel::green)),
+        .blue = static_cast<float>(sample_channel(pixel.blue, &ColorPixel::blue)),
+        .alpha = pixel.alpha,
+    };
+  }
+  if (lut.size == 0) {
+    return lut_pixel;
+  }
+
   const auto size = lut.size;
   const auto size_minus_1 = static_cast<double>(size - 1);
   const auto normalize_channel = [&](double value, int channel) {
@@ -143,9 +201,9 @@ namespace {
     return clamp_unit((value - min_value) / (max_value - min_value));
   };
 
-  const auto rf = normalize_channel(pixel.red, 0) * size_minus_1;
-  const auto gf = normalize_channel(pixel.green, 1) * size_minus_1;
-  const auto bf = normalize_channel(pixel.blue, 2) * size_minus_1;
+  const auto rf = normalize_channel(lut_pixel.red, 0) * size_minus_1;
+  const auto gf = normalize_channel(lut_pixel.green, 1) * size_minus_1;
+  const auto bf = normalize_channel(lut_pixel.blue, 2) * size_minus_1;
   const auto ri = std::min(static_cast<int>(rf), size - 2);
   const auto gi = std::min(static_cast<int>(gf), size - 2);
   const auto bi = std::min(static_cast<int>(bf), size - 2);
@@ -172,7 +230,37 @@ namespace {
   const auto& c110 = table[next_r + next_g];
   const auto& c111 = table[next_r + next_g + next_b];
 
-  const auto lerp3 = [&](auto ColorPixel::*channel) {
+  const auto sample_channel = [&](auto ColorPixel::*channel) {
+    if (tetrahedral) {
+      if (fr > fg) {
+        if (fg > fb) {
+          return (1.0 - fr) * c000.*channel +
+                 (fr - fg) * c100.*channel +
+                 (fg - fb) * c110.*channel + fb * c111.*channel;
+        }
+        if (fr > fb) {
+          return (1.0 - fr) * c000.*channel +
+                 (fr - fb) * c100.*channel +
+                 (fb - fg) * c101.*channel + fg * c111.*channel;
+        }
+        return (1.0 - fb) * c000.*channel +
+               (fb - fr) * c001.*channel +
+               (fr - fg) * c101.*channel + fg * c111.*channel;
+      }
+      if (fb > fg) {
+        return (1.0 - fb) * c000.*channel +
+               (fb - fg) * c001.*channel +
+               (fg - fr) * c011.*channel + fr * c111.*channel;
+      }
+      if (fb > fr) {
+        return (1.0 - fg) * c000.*channel +
+               (fg - fb) * c010.*channel +
+               (fb - fr) * c011.*channel + fr * c111.*channel;
+      }
+      return (1.0 - fg) * c000.*channel +
+             (fg - fr) * c010.*channel +
+             (fr - fb) * c110.*channel + fb * c111.*channel;
+    }
     const auto c00 = c000.*channel * (1.0 - fb) + c001.*channel * fb;
     const auto c01 = c010.*channel * (1.0 - fb) + c011.*channel * fb;
     const auto c10 = c100.*channel * (1.0 - fb) + c101.*channel * fb;
@@ -183,15 +271,21 @@ namespace {
   };
 
   auto result = ColorPixel{
-      .red = static_cast<float>(lerp3(&ColorPixel::red)),
-      .green = static_cast<float>(lerp3(&ColorPixel::green)),
-      .blue = static_cast<float>(lerp3(&ColorPixel::blue)),
-      .alpha = pixel.alpha,
+      .red = static_cast<float>(sample_channel(&ColorPixel::red)),
+      .green = static_cast<float>(sample_channel(&ColorPixel::green)),
+      .blue = static_cast<float>(sample_channel(&ColorPixel::blue)),
+      .alpha = lut_pixel.alpha,
   };
 
-  const auto red_green_diff = std::abs(pixel.red - pixel.green);
-  const auto green_blue_diff = std::abs(pixel.green - pixel.blue);
-  const auto red_blue_diff = std::abs(pixel.red - pixel.blue);
+  if (tetrahedral) {
+    return result;
+  }
+
+  // Remove only interpolation noise from an already-neutral LUT result.
+  // Neutral input may intentionally map to a tinted shadow or color wash.
+  const auto red_green_diff = std::abs(result.red - result.green);
+  const auto green_blue_diff = std::abs(result.green - result.blue);
+  const auto red_blue_diff = std::abs(result.red - result.blue);
   const auto max_channel_diff =
       std::max(red_green_diff, std::max(green_blue_diff, red_blue_diff));
   if (max_channel_diff < 1e-9) {
@@ -206,11 +300,30 @@ namespace {
 
 }  // namespace
 
+double decode_color_transfer_function(
+    double encoded_value,
+    TransferFunction transfer) {
+  return decode_lut_transfer(encoded_value, transfer);
+}
+
+double encode_color_transfer_function(
+    double linear_value,
+    TransferFunction transfer) {
+  return encode_lut_transfer(linear_value, transfer);
+}
+
 ColorPixel apply_lut(const ColorLut3D& lut, const ColorPixel& pixel) {
   if (!lut.valid || !color_lut_shape_valid(lut)) {
     return pixel;
   }
-  return apply_lut_unchecked(lut, pixel, lut_has_unit_domain(lut));
+  return apply_lut_unchecked(lut, pixel, lut_has_unit_domain(lut), false);
+}
+
+ColorPixel apply_lut_tetrahedral(const ColorLut3D& lut, const ColorPixel& pixel) {
+  if (!lut.valid || !color_lut_shape_valid(lut)) {
+    return pixel;
+  }
+  return apply_lut_unchecked(lut, pixel, lut_has_unit_domain(lut), true);
 }
 
 ColorPixel apply_user_luts_to_pixel(

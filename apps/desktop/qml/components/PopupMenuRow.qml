@@ -8,6 +8,7 @@ Button {
     required property int index
     required property var modelData
     property var previousItem: ({})
+    property string objectNamePrefix: ""
     property color accent: theme.focusRing
     property int labelMaxLines: 2
     property int tooltipTimeout: 3200
@@ -19,7 +20,7 @@ Button {
     readonly property string disabledFallbackReason: "Unavailable in the current state."
     readonly property string itemDisabledReason: modelData.enabled === false
                                                 ? String(modelData.disabledReason || modelData.reason || disabledFallbackReason)
-                                                : String(modelData.disabledReason || modelData.reason || "")
+                                                : ""
     readonly property bool itemChecked: modelData.checked === true
     readonly property bool itemDanger: modelData.danger === true || modelData.destructive === true
     readonly property bool previousDanger: previousItem && (previousItem.danger === true || previousItem.destructive === true)
@@ -27,13 +28,13 @@ Button {
     readonly property string itemTooltip: !enabled && itemDisabledReason.length > 0
                                           ? itemLabel + " - " + itemDisabledReason
                                           : String(modelData.tooltip || itemLabel)
-    readonly property int rowMinimumHeight: theme.scaled(32)
+    readonly property int rowMinimumHeight: theme.controlHeightDense
     readonly property int rowPreferredHeight: theme.menuItemHeight
     readonly property int menuIconColumnWidth: theme.scaled(16)
     readonly property int menuShortcutColumnWidth: theme.scaled(72)
-    readonly property string popupMenuRowContract: "popup-menu-row:v3|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true"
+    readonly property string popupMenuRowContract: "popup-menu-row:v3|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true|role:menu-item"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|label-wrap:true|description-wrap:true|disabled-wrap:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true|full-label-available:true"
-    readonly property string menuGeometryContract: "popup-menu-row-geometry:v1|min-height:32|preferred-height:34|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:" +
+    readonly property string menuGeometryContract: "popup-menu-row-geometry:v2|min-height:dense-token|preferred-height:menu-token|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:" +
                                                    String(root.labelMaxLines)
 
     signal activated(string key)
@@ -49,12 +50,20 @@ Button {
     enabled: modelData.enabled !== false
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
+    objectName: root.objectNamePrefix.length > 0
+                ? root.objectNamePrefix + "Item" + index
+                : ""
     Accessible.name: itemLabel
     Accessible.description: itemDisabledReason.length > 0 ? itemDisabledReason : itemDescription
-    ToolTip.visible: hovered && itemTooltip.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: tooltipTimeout
-    ToolTip.text: itemTooltip
+    Accessible.role: Accessible.MenuItem
+    Accessible.checked: itemChecked
+    AppToolTip {
+        targetItem: root
+        visible: root.hovered && root.itemTooltip.length > 0
+        delay: 350
+        timeout: root.tooltipTimeout
+        text: root.itemTooltip
+    }
     onActiveFocusChanged: if (activeFocus) focusIndexRequested(index)
     onClicked: activated(itemKey)
 
@@ -78,17 +87,16 @@ Button {
         }
     }
 
-    background: Rectangle {
-        radius: theme.radiusControl
-        color: !root.enabled
-               ? "transparent"
-               : root.down
-                 ? theme.alpha(root.accent, 0.16)
-                 : root.hovered
-                   ? theme.alpha(theme.glassLift, 0.28)
-                   : "transparent"
-        border.width: root.visualFocus ? 2 : 0
-        border.color: theme.alpha(theme.focusRing, 0.9)
+    background: CommandButtonSurface {
+        cornerRadius: theme.radiusControl
+        hovered: root.hovered
+        pressed: root.down
+        selected: root.itemChecked
+        interactiveEnabled: root.enabled
+        fillColor: theme.commandFill(root.itemDanger ? "danger" : "secondary", root.itemChecked,
+                                     root.hovered, root.down, root.enabled, true)
+        borderWidth: theme.commandBorderWidth(root.visualFocus)
+        borderColor: root.visualFocus ? theme.focusRing : theme.controlEdge
     }
 
     contentItem: ColumnLayout {
@@ -109,8 +117,8 @@ Button {
             AppIcon {
                 Layout.preferredWidth: root.menuIconColumnWidth
                 Layout.preferredHeight: root.menuIconColumnWidth
-                name: root.itemChecked ? "check" : (root.itemIcon.length > 0 ? root.itemIcon : "menu")
-                color: root.itemDanger ? theme.error : (root.itemChecked ? root.accent : theme.textMuted)
+                name: root.itemChecked ? "check" : root.itemIcon
+                color: root.itemDanger ? theme.error : (root.itemChecked ? theme.selectionAccent : !root.enabled ? theme.textFaint : theme.textMuted)
             }
 
             ColumnLayout {
@@ -127,7 +135,7 @@ Button {
                              : theme.textMain
                     font.family: theme.fontUi
                     font.pixelSize: theme.typeControl
-                    font.weight: root.itemChecked ? Font.DemiBold : Font.Medium
+                    font.weight: theme.weightControl
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: root.labelMaxLines
                     elide: Text.ElideNone
@@ -141,7 +149,7 @@ Button {
                     text: root.itemDescription
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: theme.typeLabel
+                    font.pixelSize: theme.typeCaption
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone
@@ -154,7 +162,7 @@ Button {
                     text: root.itemDisabledReason
                     color: theme.alpha(theme.textMuted, 0.88)
                     font.family: theme.fontUi
-                    font.pixelSize: theme.typeLabel
+                    font.pixelSize: theme.typeCaption
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     maximumLineCount: 2
                     elide: Text.ElideNone
@@ -165,9 +173,9 @@ Button {
             Text {
                 visible: root.itemShortcut.length > 0
                 text: root.itemShortcut
-                color: theme.alpha(theme.textMuted, 0.72)
+                color: theme.textMuted
                 font.family: theme.fontMono
-                font.pixelSize: theme.typeLabel
+                font.pixelSize: theme.typeCaption
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
                 maximumLineCount: 1

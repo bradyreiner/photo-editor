@@ -39,6 +39,10 @@ Item {
     readonly property real handleVisualSize: 14
     readonly property real handleHitSize: 30
     readonly property real edgeHandleLength: 38
+    readonly property var visualHandleNames: [
+        "topLeft", "topRight", "bottomLeft", "bottomRight",
+        "top", "bottom", "left", "right"
+    ]
     readonly property rect normalizedRect: normalizedCropRect()
     readonly property rect cropScreenRect: Qt.rect(
         imageX + normalizedRect.x * imageWidth,
@@ -637,24 +641,17 @@ Item {
     }
 
     Repeater {
-        model: [
-            visualHandleRect("topLeft"),
-            visualHandleRect("topRight"),
-            visualHandleRect("bottomLeft"),
-            visualHandleRect("bottomRight"),
-            visualHandleRect("top"),
-            visualHandleRect("bottom"),
-            visualHandleRect("left"),
-            visualHandleRect("right")
-        ]
+        model: root.visible ? root.visualHandleNames : []
 
         delegate: Rectangle {
-            required property var modelData
+            required property string modelData
+            objectName: "cropVisualHandle_" + modelData
+            readonly property rect visualRect: root.visualHandleRect(modelData)
 
-            x: modelData.x
-            y: modelData.y
-            width: modelData.width
-            height: modelData.height
+            x: visualRect.x
+            y: visualRect.y
+            width: visualRect.width
+            height: visualRect.height
             radius: width > height ? height / 2 : width / 2
             color: "#e8edf2"
             border.width: 1

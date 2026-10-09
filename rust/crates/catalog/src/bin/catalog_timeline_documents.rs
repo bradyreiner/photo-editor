@@ -1,5 +1,3 @@
-use std::env;
-
 use photo_catalog::{
     run_catalog_helper, AppRuntimePaths, CatalogRepository, CatalogRuntime,
     PersistedTimelineDocument,
@@ -10,10 +8,10 @@ pub(crate) fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments: Vec<String> = env::args().collect();
-    let command = arguments.get(1).map(String::as_str).unwrap_or("list");
-
     let catalog = CatalogRuntime::open(&AppRuntimePaths::from_env()).await?;
+
+    let arguments = photo_catalog::helper_arguments::read_helper_arguments()?;
+    let command = arguments.get(1).map(String::as_str).unwrap_or("list");
 
     match command {
         "list" => {

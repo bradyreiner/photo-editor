@@ -8,11 +8,29 @@
       "model": "qwen3-vl:32b",
       "vision": true,
       "status": "available",
-      "requestTimeoutMs": 120000,
+      "requestTimeoutMs": -1,
       "contextWindow": 12288,
       "maxImageEdge": 768,
       "toolCallPlanning": false,
       "description": "Local Ollama vision model for agent photo review, planning, and tool-guided edits."
+    },
+    {
+      "id": "ollama-qwen36-35b",
+      "name": "Qwen3.6 35B (existing Ollama)",
+      "backend": "ollama",
+      "runtime": "external",
+      "endpoint": "http://127.0.0.1:11434",
+      "model": "qwen3.6:35b",
+      "vision": true,
+      "status": "unavailable",
+      "existingOllamaCandidate": true,
+      "requestTimeoutMs": -1,
+      "contextWindow": 8192,
+      "maxImageEdge": 768,
+      "planningImageEdge": 768,
+      "planningMaxOutputTokens": 1536,
+      "toolCallPlanning": true,
+      "description": "Fast local vision and typed tool planning using the installed Ollama model. Check the connection before editing."
     }
   ]
 }

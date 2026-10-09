@@ -9,6 +9,9 @@ Popup {
     required property var theme
     required property var timelineDocument
     required property var currentClip
+    property bool docked: false
+    property Item workspaceHost: null
+    property bool inspectorContentLoadReady: false
     property var audioTracks: []
     property var trackMeterState: ({})
     property var masterMeter: ({})
@@ -19,6 +22,7 @@ Popup {
     property var dialogueCleanupDraft: ({})
     property bool dialogueCleanupAuditionOriginal: false
     property bool dialogueCleanupAdvancedVisible: false
+    readonly property bool compactDockHeader: docked && width < theme.scaled(620)
     readonly property var channelModeKeys: [
         "source", "mono-left", "mono-right", "dual-mono", "stereo", "downmix-stereo"
     ]
@@ -32,6 +36,7 @@ Popup {
     signal resetMetersRequested()
     signal reducedMotionRequested(bool enabled)
     signal syncExternalAudioRequested()
+    signal dockCloseRequested()
 
     function meterForTrack(trackId) {
         return trackMeterState[String(trackId || "")] || ({
@@ -200,14 +205,32 @@ Popup {
         return value === undefined || value === null ? Number(fallbackValue) : Number(value)
     }
 
-    modal: true
-    focus: true
-    width: Math.min(theme.scaled(1180), parent ? parent.width - theme.space24 * 2 : theme.scaled(1180))
-    height: Math.min(theme.scaled(680), parent ? parent.height - theme.space24 * 2 : theme.scaled(680))
-    x: parent ? (parent.width - width) / 2 : 0
-    y: parent ? Math.max(theme.space24, (parent.height - height) / 2) : 0
-    padding: theme.panelPaddingStandard
-    closePolicy: Popup.CloseOnEscape
+    function triggerHeaderTool(key) {
+        if (key === "sync-external") {
+            syncExternalAudioRequested()
+        } else if (key === "duck-gentle" || key === "duck-standard"
+                   || key === "duck-strong" || key === "duck-regenerate") {
+            const amount = key === "duck-gentle" ? -6
+                         : key === "duck-strong" ? -18 : -12
+            timelineDocument.generateDialogueDuckingAutomation(amount, 0.12, 0.35)
+        } else if (key === "static-meters") {
+            reducedMotionRequested(!reducedMotion)
+        } else if (key === "reset-meters") {
+            resetMetersRequested()
+        }
+    }
+
+    parent: docked && workspaceHost ? workspaceHost : Overlay.overlay
+    modal: !docked
+    focus: !docked
+    width: docked && workspaceHost ? workspaceHost.width
+           : Math.min(theme.scaled(1180), parent ? parent.width - theme.space24 * 2 : theme.scaled(1180))
+    height: docked && workspaceHost ? workspaceHost.height
+            : Math.min(theme.scaled(680), parent ? parent.height - theme.space24 * 2 : theme.scaled(680))
+    x: docked ? 0 : parent ? (parent.width - width) / 2 : 0
+    y: docked ? 0 : parent ? Math.max(theme.space24, (parent.height - height) / 2) : 0
+    padding: docked ? theme.panelPaddingCompact : theme.panelPaddingStandard
+    closePolicy: docked ? Popup.NoAutoClose : Popup.CloseOnEscape
 
     background: PopupSurface {
         fillColor: theme.alpha(theme.glassBase, 0.98)
@@ -226,14 +249,16 @@ Popup {
                 spacing: theme.space2
 
                 Label {
+                    objectName: "timelineStudioAudioMixerTitle"
                     text: "Audio Mixer"
                     color: theme.textStrong
                     font.family: theme.fontUi
-                    font.pixelSize: theme.typeDialogTitle
+                    font.pixelSize: root.compactDockHeader ? theme.typeSection : theme.typeDialogTitle
                     font.weight: Font.DemiBold
                 }
 
                 Label {
+                    visible: !root.compactDockHeader
                     text: "Clip, track, submix, and master controls · meters show dBFS, dBTP, RMS, and LUFS"
                     color: theme.textMuted
                     font.family: theme.fontUi
@@ -243,6 +268,7 @@ Popup {
 
             ActionButton {
                 objectName: "timelineExternalAudioSyncButton"
+                visible: !root.compactDockHeader
                 text: "Sync External"
                 iconName: "audio"
                 compact: true
@@ -254,6 +280,7 @@ Popup {
 
             MenuButton {
                 objectName: "timelineDialogueDuckingMenu"
+                visible: !root.compactDockHeader
                 text: "Auto Duck"
                 iconName: "audio"
                 compact: true
@@ -274,6 +301,7 @@ Popup {
 
             FilterChip {
                 objectName: "timelineAudioMeterReducedMotionToggle"
+                visible: !root.compactDockHeader
                 text: "Static meters"
                 active: root.reducedMotion
                 iconName: "pause"
@@ -283,6 +311,7 @@ Popup {
 
             ActionButton {
                 objectName: "timelineResetAudioMetersButton"
+                visible: !root.compactDockHeader
                 text: "Reset Meters"
                 iconName: "reset"
                 compact: true
@@ -294,8 +323,37 @@ Popup {
                 iconName: "close"
                 showText: false
                 compact: true
-                tooltipText: "Close mixer"
-                onClicked: root.close()
+                tooltipText: root.docked ? "Return to the Edit workspace"
+                                         : "Close mixer"
+                onClicked: {
+                    root.close()
+                    if (root.docked)
+                        root.dockCloseRequested()
+                }
+            }
+
+            MenuButton {
+                objectName: "timelineAudioDockToolsMenu"
+                visible: root.compactDockHeader
+                text: "Tools"
+                iconName: "settings"
+                compact: true
+                primaryOpensMenu: true
+                menuWidth: 270
+                menuItems: [
+                    {"key": "sync-external", "label": "Sync External Audio",
+                     "enabled": root.timelineDocument.selectedClipCount === 2},
+                    {"key": "duck-gentle", "label": "Auto Duck · Gentle · −6 dB"},
+                    {"key": "duck-standard", "label": "Auto Duck · Standard · −12 dB"},
+                    {"key": "duck-strong", "label": "Auto Duck · Strong · −18 dB"},
+                    {"key": "duck-regenerate", "label": "Regenerate Ducking · Preserve Manual",
+                     "separatorBefore": true},
+                    {"key": "static-meters", "label": root.reducedMotion
+                     ? "Enable Animated Meters" : "Use Static Meters",
+                     "separatorBefore": true},
+                    {"key": "reset-meters", "label": "Reset Meters"}
+                ]
+                onMenuItemTriggered: function(key) { root.triggerHeaderTool(key) }
             }
         }
 
@@ -349,15 +407,18 @@ Popup {
         }
 
         ScrollView {
+            id: mixerStripsScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            contentHeight: availableHeight
-            ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+            contentHeight: root.docked
+                           ? Math.max(availableHeight, theme.scaled(620))
+                           : availableHeight
+            ScrollBar.vertical.policy: root.docked ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
             ScrollBar.horizontal.policy: ScrollBar.AsNeeded
 
             RowLayout {
-                height: parent.height
+                height: mixerStripsScroll.contentHeight
                 spacing: theme.space8
 
                 Rectangle {
@@ -576,7 +637,9 @@ Popup {
 
                             TimelineAudioMeter {
                                 Layout.alignment: Qt.AlignHCenter
-                                Layout.fillHeight: true
+                                Layout.fillHeight: false
+                                Layout.minimumHeight: theme.scaled(180)
+                                Layout.preferredHeight: theme.scaled(220)
                                 theme: root.theme
                                 meter: root.meterForTrack(trackStrip.modelData.trackId)
                                 reducedMotion: root.reducedMotion
@@ -646,6 +709,7 @@ Popup {
                             }
 
                             ToneComboBox {
+                                accessibleLabel: qsTr("Track audio bus")
                                 Layout.fillWidth: true
                                 model: ["Main", "Dialogue", "Music", "SFX"]
                                 currentIndex: Math.max(0, model.indexOf(

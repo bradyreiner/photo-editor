@@ -7,9 +7,13 @@
 #include "mask_outline_tracing.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 
 #include <QMetaType>
+#include <QPointF>
+#include <QVector>
 
 namespace photo_editor::desktop {
 namespace {
@@ -30,6 +34,67 @@ double map_double_value(
     const QString& key,
     double fallback) {
   return map.contains(key) ? map.value(key).toDouble() : fallback;
+}
+
+QVector<QPointF> clip_polygon_to_unit_box(QVector<QPointF> polygon) {
+  enum class Axis { X, Y };
+  struct ClipEdge final {
+    Axis axis;
+    double boundary;
+    bool keep_greater;
+  };
+  constexpr std::array<ClipEdge, 4> edges{{
+      {Axis::X, 0.0, true}, {Axis::X, 1.0, false},
+      {Axis::Y, 0.0, true}, {Axis::Y, 1.0, false}}};
+  const auto coordinate = [](const QPointF& point, Axis axis) {
+    return axis == Axis::X ? point.x() : point.y();
+  };
+  for (const auto& edge : edges) {
+    if (polygon.isEmpty())
+      break;
+    QVector<QPointF> clipped;
+    clipped.reserve(polygon.size() + 2);
+    auto previous = polygon.last();
+    auto previous_coordinate = coordinate(previous, edge.axis);
+    auto previous_inside = edge.keep_greater
+        ? previous_coordinate >= edge.boundary
+        : previous_coordinate <= edge.boundary;
+    for (const auto& current : polygon) {
+      const auto current_coordinate = coordinate(current, edge.axis);
+      const auto current_inside = edge.keep_greater
+          ? current_coordinate >= edge.boundary
+          : current_coordinate <= edge.boundary;
+      if (current_inside != previous_inside) {
+        const auto denominator = current_coordinate - previous_coordinate;
+        if (std::abs(denominator) > std::numeric_limits<double>::epsilon()) {
+          const auto t = (edge.boundary - previous_coordinate) / denominator;
+          const auto intersection = previous + (current - previous) * t;
+          clipped.append(edge.axis == Axis::X
+              ? QPointF(edge.boundary, intersection.y())
+              : QPointF(intersection.x(), edge.boundary));
+        }
+      }
+      if (current_inside)
+        clipped.append(current);
+      previous = current;
+      previous_coordinate = current_coordinate;
+      previous_inside = current_inside;
+    }
+    polygon = std::move(clipped);
+  }
+  return polygon;
+}
+
+QVariantList normalized_points(const QVector<QPointF>& points) {
+  QVariantList path;
+  path.reserve(points.size());
+  for (const auto& point : points) {
+    QVariantMap map;
+    map.insert(QStringLiteral("x"), clamp_unit(point.x()));
+    map.insert(QStringLiteral("y"), clamp_unit(point.y()));
+    path.append(map);
+  }
+  return path;
 }
 
 }  // namespace
@@ -85,7 +150,10 @@ QVariantList traced_outline_paths_for_brush_strokes(const QVariantMap& mask) {
   }
   const auto data = raster_mask.value(QStringLiteral("segmentationData")).toByteArray();
   return traced_outline_paths_for_alpha_mask_with_edge_padding(
-      data, raster_size.width(), raster_size.height());
+      data,
+      raster_size.width(),
+      raster_size.height(),
+      map_bool_value(mask, QStringLiteral("pixelSelection"), false));
 }
 
 QVariantList outline_paths_for_mask(const QVariantMap& mask) {
@@ -100,29 +168,31 @@ QVariantList outline_paths_for_mask(const QVariantMap& mask) {
     const auto radians = map_double_value(mask, QStringLiteral("rotation"), 0.0) * M_PI / 180.0;
     const auto cosine = std::cos(radians);
     const auto sine = std::sin(radians);
-    const auto append_point = [&](QVariantList* path, double local_x, double local_y) {
-      QVariantMap point;
-      point.insert(QStringLiteral("x"), clamp_unit(center_x + local_x * cosine - local_y * sine));
-      point.insert(QStringLiteral("y"), clamp_unit(center_y + local_x * sine + local_y * cosine));
-      path->append(point);
+    const auto transform_point = [&](double local_x, double local_y) {
+      return QPointF(
+          center_x + local_x * cosine - local_y * sine,
+          center_y + local_x * sine + local_y * cosine);
     };
 
-    QVariantList outline;
+    QVector<QPointF> outline_points;
     if (kind == QStringLiteral("rectangle")) {
-      append_point(&outline, -radius_x, -radius_y);
-      append_point(&outline, radius_x, -radius_y);
-      append_point(&outline, radius_x, radius_y);
-      append_point(&outline, -radius_x, radius_y);
+      outline_points.append(transform_point(-radius_x, -radius_y));
+      outline_points.append(transform_point(radius_x, -radius_y));
+      outline_points.append(transform_point(radius_x, radius_y));
+      outline_points.append(transform_point(-radius_x, radius_y));
     } else {
-      constexpr auto kEllipseOutlineSegments = 72;
+      constexpr auto kEllipseOutlineSegments = 384;
+      outline_points.reserve(kEllipseOutlineSegments);
       for (auto index = 0; index < kEllipseOutlineSegments; ++index) {
         const auto angle =
             (static_cast<double>(index) / kEllipseOutlineSegments) * M_PI * 2.0;
-        append_point(&outline, std::cos(angle) * radius_x, std::sin(angle) * radius_y);
+        outline_points.append(transform_point(
+            std::cos(angle) * radius_x, std::sin(angle) * radius_y));
       }
     }
+    outline_points = clip_polygon_to_unit_box(std::move(outline_points));
     QVariantList outline_paths;
-    append_outline_path(&outline_paths, outline);
+    append_outline_path(&outline_paths, normalized_points(outline_points));
     return outline_paths;
   }
   if (kind == QStringLiteral("polygon") || kind == QStringLiteral("lasso")) {
@@ -130,7 +200,8 @@ QVariantList outline_paths_for_mask(const QVariantMap& mask) {
     append_outline_path(&outline_paths, mask.value(QStringLiteral("polygonPoints")).toList());
     return outline_paths;
   }
-  if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask)) {
+  if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask) &&
+      !brush_mask_has_source_dependent_outline(mask)) {
     const auto traced_brush_outlines = traced_outline_paths_for_brush_strokes(mask);
     if (!traced_brush_outlines.isEmpty()) {
       return traced_brush_outlines;
@@ -147,7 +218,10 @@ QVariantList outline_paths_for_mask(const QVariantMap& mask) {
   if ((is_raster_mask_kind(kind) || kind == QStringLiteral("brush")) &&
       valid_segmentation_payload(segmentation_data, segmentation_width, segmentation_height)) {
     const auto traced_outlines = traced_outline_paths_for_alpha_mask_with_edge_padding(
-        segmentation_data, segmentation_width, segmentation_height);
+        segmentation_data,
+        segmentation_width,
+        segmentation_height,
+        map_bool_value(mask, QStringLiteral("pixelSelection"), false));
     if (!traced_outlines.isEmpty()) {
       return traced_outlines;
     }
@@ -177,19 +251,25 @@ QVariantList clean_canvas_outline_paths_for_mask(const QVariantMap& mask) {
   const auto segmentation_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
   const auto segmentation_height = mask.value(QStringLiteral("segmentationHeight")).toInt();
   if (valid_segmentation_payload(segmentation_data, segmentation_width, segmentation_height)) {
-    if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask)) {
+    if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask) &&
+      !brush_mask_has_source_dependent_outline(mask)) {
       const auto traced_brush_outlines = traced_outline_paths_for_brush_strokes(mask);
       if (!traced_brush_outlines.isEmpty()) {
         return traced_brush_outlines;
       }
     }
     const auto traced_outlines =
-        traced_outline_paths_for_alpha_mask(segmentation_data, segmentation_width, segmentation_height);
+        traced_outline_paths_for_alpha_mask(
+            segmentation_data,
+            segmentation_width,
+            segmentation_height,
+            map_bool_value(mask, QStringLiteral("pixelSelection"), false));
     if (!traced_outlines.isEmpty()) {
       return traced_outlines;
     }
   }
-  if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask)) {
+  if (kind == QStringLiteral("brush") && !mask_selection_refinement_active(mask) &&
+      !brush_mask_has_source_dependent_outline(mask)) {
     const auto fast_brush_outlines = fast_outline_paths_for_brush_mask(mask);
     if (!fast_brush_outlines.isEmpty()) {
       return fast_brush_outlines;
@@ -253,17 +333,34 @@ QVariantList first_outline_path_only(const QVariantList& outline_paths) {
 }
 
 double normalized_outline_path_area(const QVariantList& path) {
-  if (path.size() < 3 || !variant_value_is_outline_point(path.first())) {
+  if (path.size() < 3) {
     return 0.0;
   }
   auto twice_area = 0.0;
   for (auto index = 0; index < path.size(); ++index) {
+    if (!variant_value_is_outline_point(path.at(index)) ||
+        !variant_value_is_outline_point(path.at((index + 1) % path.size()))) {
+      return 0.0;
+    }
     const auto current = path.at(index).toMap();
     const auto next = path.at((index + 1) % path.size()).toMap();
-    const auto current_x = clamp_unit(current.value(QStringLiteral("x")).toDouble());
-    const auto current_y = clamp_unit(current.value(QStringLiteral("y")).toDouble());
-    const auto next_x = clamp_unit(next.value(QStringLiteral("x")).toDouble());
-    const auto next_y = clamp_unit(next.value(QStringLiteral("y")).toDouble());
+    bool current_x_ok = false;
+    bool current_y_ok = false;
+    bool next_x_ok = false;
+    bool next_y_ok = false;
+    const auto current_x_value = current.value(QStringLiteral("x")).toDouble(&current_x_ok);
+    const auto current_y_value = current.value(QStringLiteral("y")).toDouble(&current_y_ok);
+    const auto next_x_value = next.value(QStringLiteral("x")).toDouble(&next_x_ok);
+    const auto next_y_value = next.value(QStringLiteral("y")).toDouble(&next_y_ok);
+    if (!current_x_ok || !current_y_ok || !next_x_ok || !next_y_ok ||
+        !std::isfinite(current_x_value) || !std::isfinite(current_y_value) ||
+        !std::isfinite(next_x_value) || !std::isfinite(next_y_value)) {
+      return 0.0;
+    }
+    const auto current_x = clamp_unit(current_x_value);
+    const auto current_y = clamp_unit(current_y_value);
+    const auto next_x = clamp_unit(next_x_value);
+    const auto next_y = clamp_unit(next_y_value);
     twice_area += current_x * next_y - next_x * current_y;
   }
   return std::abs(twice_area) * 0.5;
@@ -274,41 +371,47 @@ QVariantList filter_minor_composite_outline_paths(
     OutlineNoiseFilterStats* stats) {
   if (stats != nullptr) {
     stats->input_path_count = static_cast<int>(outline_paths.size());
-    stats->output_path_count = static_cast<int>(outline_paths.size());
+    stats->output_path_count = 0;
+    stats->largest_area = 0.0;
+    stats->minimum_secondary_area = 0.0;
+    stats->applied = false;
   }
-  if (outline_paths.size() <= 1 || variant_value_is_outline_point(outline_paths.first())) {
+  if (outline_paths.isEmpty()) {
     return outline_paths;
   }
 
-  QVector<double> path_areas;
-  path_areas.reserve(outline_paths.size());
-  auto largest_area = 0.0;
-  for (const auto& path_value : outline_paths) {
-    const auto area = normalized_outline_path_area(path_value.toList());
-    path_areas.append(area);
-    largest_area = std::max(largest_area, area);
-  }
-  if (largest_area <= 0.0) {
-    return first_outline_path_only(outline_paths);
+  const auto flat_path = variant_value_is_outline_point(outline_paths.first());
+  const auto input_path_count = flat_path ? 1 : static_cast<int>(outline_paths.size());
+  QVector<QVariantList> paths;
+  paths.reserve(input_path_count);
+  if (flat_path) {
+    paths.append(outline_paths);
+  } else {
+    for (const auto& value : outline_paths)
+      paths.append(value.toList());
   }
 
-  constexpr auto kMinimumSecondaryAreaRatio = 0.04;
-  constexpr auto kMinimumSecondaryAreaNormalized = 0.0025;
-  const auto minimum_secondary_area =
-      std::max(kMinimumSecondaryAreaNormalized, largest_area * kMinimumSecondaryAreaRatio);
   QVariantList filtered_paths;
-  for (auto index = 0; index < outline_paths.size(); ++index) {
-    if (index == 0 || path_areas.at(index) >= minimum_secondary_area) {
-      filtered_paths.append(outline_paths.at(index));
+  auto largest_area = 0.0;
+  for (const auto& path : paths) {
+    const auto area = normalized_outline_path_area(path);
+    if (area <= std::numeric_limits<double>::epsilon())
+      continue;
+    largest_area = std::max(largest_area, area);
+    if (flat_path) {
+      filtered_paths = path;
+    } else {
+      filtered_paths.append(QVariant::fromValue(path));
     }
   }
-  if (filtered_paths.isEmpty()) {
-    filtered_paths.append(outline_paths.first());
-  }
+
   if (stats != nullptr) {
-    stats->output_path_count = static_cast<int>(filtered_paths.size());
+    stats->input_path_count = input_path_count;
+    stats->output_path_count = flat_path
+        ? (filtered_paths.isEmpty() ? 0 : 1)
+        : static_cast<int>(filtered_paths.size());
     stats->largest_area = largest_area;
-    stats->minimum_secondary_area = minimum_secondary_area;
+    stats->minimum_secondary_area = 0.0;
     stats->applied = stats->output_path_count != stats->input_path_count;
   }
   return filtered_paths;

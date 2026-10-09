@@ -125,6 +125,16 @@ ColorAdjustmentState exposure_only_benchmark_state() {
   return state;
 }
 
+ColorAdjustmentState geometry_only_benchmark_state() {
+  ColorAdjustmentState state;
+  configure_metal_compatible_color_pipeline(&state);
+  state.lens_distortion = 28.0;
+  state.chromatic_aberration = 12.0;
+  state.perspective_vertical = 8.0;
+  state.transform_rotation = 3.0;
+  return state;
+}
+
 ColorAdjustmentState spatial_texture_only_benchmark_state() {
   auto state = simple_global_benchmark_state();
   state.texture = 32.0;
@@ -154,6 +164,7 @@ struct ScenarioResult final {
   double adjustment_spatial_haze_blur_avg_ms = 0.0;
   double adjustment_spatial_apply_avg_ms = 0.0;
   double adjustment_post_color_avg_ms = 0.0;
+  double adjustment_geometry_avg_ms = 0.0;
   double adjustment_detail_avg_ms = 0.0;
   double adjustment_detail_oklab_avg_ms = 0.0;
   double adjustment_detail_sharpen_avg_ms = 0.0;
@@ -228,6 +239,7 @@ ScenarioResult run_scenario(
   std::vector<double> spatial_haze_blur_samples;
   std::vector<double> spatial_apply_samples;
   std::vector<double> post_color_samples;
+  std::vector<double> geometry_samples;
   std::vector<double> detail_samples;
   std::vector<double> detail_oklab_samples;
   std::vector<double> detail_sharpen_samples;
@@ -253,6 +265,7 @@ ScenarioResult run_scenario(
   spatial_haze_blur_samples.reserve(static_cast<std::size_t>(iterations));
   spatial_apply_samples.reserve(static_cast<std::size_t>(iterations));
   post_color_samples.reserve(static_cast<std::size_t>(iterations));
+  geometry_samples.reserve(static_cast<std::size_t>(iterations));
   detail_samples.reserve(static_cast<std::size_t>(iterations));
   detail_oklab_samples.reserve(static_cast<std::size_t>(iterations));
   detail_sharpen_samples.reserve(static_cast<std::size_t>(iterations));
@@ -292,6 +305,7 @@ ScenarioResult run_scenario(
     spatial_haze_blur_samples.push_back(static_cast<double>(telemetry.spatial_haze_blur_ms));
     spatial_apply_samples.push_back(static_cast<double>(telemetry.spatial_apply_ms));
     post_color_samples.push_back(static_cast<double>(telemetry.post_color_ms));
+    geometry_samples.push_back(static_cast<double>(telemetry.geometry_ms));
     detail_samples.push_back(static_cast<double>(telemetry.detail_ms));
     detail_oklab_samples.push_back(static_cast<double>(telemetry.detail_oklab_ms));
     detail_sharpen_samples.push_back(static_cast<double>(telemetry.detail_sharpen_ms));
@@ -344,6 +358,7 @@ ScenarioResult run_scenario(
             {QStringLiteral("adjustment_spatial_haze_blur_ms"), telemetry.spatial_haze_blur_ms},
             {QStringLiteral("adjustment_spatial_apply_ms"), telemetry.spatial_apply_ms},
             {QStringLiteral("adjustment_post_color_ms"), telemetry.post_color_ms},
+            {QStringLiteral("adjustment_geometry_ms"), telemetry.geometry_ms},
             {QStringLiteral("adjustment_detail_ms"), telemetry.detail_ms},
             {QStringLiteral("adjustment_detail_oklab_ms"), telemetry.detail_oklab_ms},
             {QStringLiteral("adjustment_detail_sharpen_ms"), telemetry.detail_sharpen_ms},
@@ -382,6 +397,8 @@ ScenarioResult run_scenario(
       summarize_samples(std::move(spatial_apply_samples)).avg_ms;
   result.adjustment_post_color_avg_ms =
       summarize_samples(std::move(post_color_samples)).avg_ms;
+  result.adjustment_geometry_avg_ms =
+      summarize_samples(std::move(geometry_samples)).avg_ms;
   result.adjustment_detail_avg_ms =
       summarize_samples(std::move(detail_samples)).avg_ms;
   result.adjustment_detail_oklab_avg_ms =
@@ -451,14 +468,20 @@ int main(int argc, char** argv) {
   const auto exposure_only = has_option(arguments, QStringLiteral("--exposure-only"));
   const auto spatial_texture_only =
       has_option(arguments, QStringLiteral("--spatial-texture-only"));
+  const auto geometry_only =
+      has_option(arguments, QStringLiteral("--geometry-only"));
   const auto state =
-      exposure_only
+      geometry_only
+          ? geometry_only_benchmark_state()
+          : exposure_only
           ? exposure_only_benchmark_state()
           : spatial_texture_only
           ? spatial_texture_only_benchmark_state()
           : (simple_global ? simple_global_benchmark_state() : benchmark_state());
   const auto state_name =
-      exposure_only
+      geometry_only
+          ? QStringLiteral("geometry-only")
+          : exposure_only
           ? QStringLiteral("exposure-only")
           : spatial_texture_only
           ? QStringLiteral("spatial-texture-only")
@@ -521,6 +544,8 @@ int main(int argc, char** argv) {
             {QStringLiteral("adjustment_spatial_apply_avg_ms"), result.adjustment_spatial_apply_avg_ms},
             {QStringLiteral("adjustment_post_color_avg_ms"),
              result.adjustment_post_color_avg_ms},
+            {QStringLiteral("adjustment_geometry_avg_ms"),
+             result.adjustment_geometry_avg_ms},
             {QStringLiteral("adjustment_detail_avg_ms"), result.adjustment_detail_avg_ms},
             {QStringLiteral("adjustment_detail_oklab_avg_ms"),
              result.adjustment_detail_oklab_avg_ms},

@@ -1,4 +1,5 @@
 import QtQuick
+import QtCore
 import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Layouts
@@ -14,17 +15,213 @@ Rectangle {
                 : "exportStudioWorkspace"
     color: "transparent"
     focus: true
+    readonly property bool pageContentReady: studioPageLoader.status === Loader.Ready
 
     Theme { id: theme }
+    Settings {
+        id: studioWorkspaceSettings
+        category: "StudioWorkspace-" + String(root.page || "default")
+        property string panelLayoutJson: ""
+        property string savedLayoutsJson: ""
+        property alias snapLayers: root.layerSnappingEnabled
+        property alias safeMargins: root.layerSafeMarginsEnabled
+    }
+    Settings {
+        id: libraryCullSettings
+        category: "LibraryCull"
+        property string resumeByShootJson: ""
+    }
+    property var libraryCullResumeByShoot: ({})
+    property bool libraryCullResumeLoaded: false
+    property string libraryCullResumeAssetId: ""
+    property string libraryCullPreviousMediaFilter: ""
+    Timer {
+        id: libraryCullResumeSaveTimer
+        interval: 500
+        repeat: false
+        onTriggered: {
+            if (!root.libraryCullResumeLoaded)
+                return
+            libraryCullSettings.resumeByShootJson = JSON.stringify(root.libraryCullResumeByShoot)
+        }
+    }
+
+    property bool workspaceSettingsReady: false
+    Timer {
+        id: workspaceSettingsSaveTimer
+        interval: 120
+        repeat: false
+        onTriggered: {
+            if (!root.workspaceSettingsReady)
+                return
+            studioWorkspaceSettings.panelLayoutJson = JSON.stringify({
+                librarySourcesPanelVisible: root.librarySourcesPanelVisible,
+                libraryInspectorPanelVisible: root.libraryInspectorPanelVisible,
+                editSidebarCollapsed: root.editSidebarCollapsed,
+                editFilmstripCollapsed: root.editFilmstripCollapsed,
+                editContextPanelVisible: root.editContextPanelVisible,
+                editInspectorPanelVisible: root.editInspectorPanelVisible,
+                editCreativeToolsVisible: root.editCreativeToolsVisible,
+                editCreativeToolsFloating: root.editCreativeToolsFloating,
+                editCreativeToolsHeight: root.editCreativeToolsHeight,
+                scopeDockVisible: root.scopeDockVisible,
+                exportPresetsPanelVisible: root.exportPresetsPanelVisible,
+                exportSettingsPanelVisible: root.exportSettingsPanelVisible,
+                focusEditLayoutEnabled: root.focusEditLayoutEnabled
+            })
+            studioWorkspaceSettings.savedLayoutsJson = JSON.stringify(root.savedWorkspaceLayouts)
+        }
+    }
+
+    function scheduleWorkspaceSettingsSave() {
+        if (workspaceSettingsReady)
+            workspaceSettingsSaveTimer.restart()
+    }
+
+    Component.onCompleted: Qt.callLater(function() {
+        let saved = null
+        try {
+            saved = JSON.parse(String(studioWorkspaceSettings.panelLayoutJson || ""))
+        } catch (error) {
+            saved = null
+        }
+        if (saved && typeof saved === "object") {
+            root.librarySourcesPanelVisible = saved.librarySourcesPanelVisible !== false
+            root.libraryInspectorPanelVisible = saved.libraryInspectorPanelVisible !== false
+            root.editSidebarCollapsed = saved.editSidebarCollapsed === true
+            root.editFilmstripCollapsed = saved.editFilmstripCollapsed === true
+            root.editContextPanelVisible = saved.editContextPanelVisible !== false
+            root.editInspectorPanelVisible = saved.editInspectorPanelVisible !== false
+            root.editCreativeToolsVisible = saved.editCreativeToolsVisible !== false
+            root.editCreativeToolsFloating = saved.editCreativeToolsFloating === true
+            root.editCreativeToolsHeight = root.clamp(Number(saved.editCreativeToolsHeight || 440), 200, 800)
+            if (saved.scopeDockVisible !== undefined)
+                root.scopeDockVisible = saved.scopeDockVisible === true
+            root.exportPresetsPanelVisible = saved.exportPresetsPanelVisible !== false
+            root.exportSettingsPanelVisible = saved.exportSettingsPanelVisible !== false
+            root.focusEditLayoutEnabled = saved.focusEditLayoutEnabled === true
+            // Display density is an application preference. Older workspace
+            // settings may still contain interfaceMode; leave it to the global
+            // preference migration in appShell.
+        }
+        try {
+            const layouts = JSON.parse(String(studioWorkspaceSettings.savedLayoutsJson || ""))
+            if (Array.isArray(layouts)) {
+                const namedLayouts = layouts.filter(function(layout) {
+                    return layout && typeof layout === "object" &&
+                           typeof layout.name === "string" && layout.name.trim().length > 0
+                }).slice(0, 12)
+                if (namedLayouts.length > 0)
+                    root.savedWorkspaceLayouts = namedLayouts
+            }
+        } catch (error) {
+            // Keep the built-in layouts when a stored value cannot be read.
+        }
+        root.workspaceSettingsReady = true
+    })
+
+    Connections {
+        target: root
+        function onLibrarySourcesPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onLibraryInspectorPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditSidebarCollapsedChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditFilmstripCollapsedChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditContextPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditInspectorPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditCreativeToolsVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditCreativeToolsFloatingChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onEditCreativeToolsHeightChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onScopeDockVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onExportPresetsPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onExportSettingsPanelVisibleChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onFocusEditLayoutEnabledChanged() { root.scheduleWorkspaceSettingsSave() }
+        function onSavedWorkspaceLayoutsChanged() { root.scheduleWorkspaceSettingsSave() }
+    }
     ThumbnailStateUtils { id: thumbnailStateUtils }
     PhotoLayerSnapshot { id: photoLayerSnapshot; controller: editorPreview }
     readonly property var photoLayerRows: photoLayerSnapshot.rows
+    readonly property var maskSetRows: editorPreview.maskSetCount > 0
+                                       ? editorPreview.maskSetSnapshot() : []
+    property int photoLayerHierarchyDropTargetIndex: -1
+    property int photoLayerReorderDropTargetIndex: -1
+    property bool photoLayerReorderDropAfter: false
+    property string editActionFeedback: ""
+    property var undoEditHandler: null
+    property var redoEditHandler: null
+    property bool canUndoEdit: editorPreview.canUndo
+    property bool canRedoEdit: editorPreview.canRedo
+    property string undoEditLabel: editorPreview.undoLabel
+    property string redoEditLabel: editorPreview.redoLabel
+
+    function undoEdit() {
+        if (!root.canUndoEdit) return
+        root.cancelEditHistoryHoverPreview()
+        if (root.undoEditHandler) root.undoEditHandler()
+        else editorPreview.undo()
+    }
+
+    function redoEdit() {
+        if (!root.canRedoEdit) return
+        root.cancelEditHistoryHoverPreview()
+        if (root.redoEditHandler) root.redoEditHandler()
+        else editorPreview.redo()
+    }
+    property bool editActionFeedbackError: false
+    property var recentlyPastedLayerIds: []
+    Timer {
+        id: editActionFeedbackTimer
+        interval: 3200
+        onTriggered: root.editActionFeedback = ""
+    }
+    Timer {
+        id: pastedLayerHighlightTimer
+        interval: 1400
+        onTriggered: root.recentlyPastedLayerIds = []
+    }
+    function showEditActionFeedback(message, failure) {
+        root.editActionFeedbackError = failure === true
+        root.editActionFeedback = message
+        editActionFeedbackTimer.restart()
+    }
 
     property var catalogAssets: null
     readonly property var editorPreviewController: editorPreview
     readonly property var studioTheme: theme
     readonly property var agentEditController: typeof agentEdit !== "undefined" ? agentEdit : null
+    readonly property var agentSessionController: typeof agentSession !== "undefined" ? agentSession : null
     readonly property bool hasAgentEditController: agentEditController !== null && agentEditController !== undefined
+
+    Connections {
+        target: root.agentSessionController
+        enabled: root.agentSessionController !== null && root.workspaceActive
+        function onExecutionRequested(snapshot) {
+            if (String(root.agentSessionController.stage || "") !== "executing")
+                return
+            root.agentTargetAssetIds = (snapshot.targetIds || []).slice(0)
+            root.agentPrompt = String(snapshot.prompt || "")
+            root.agentScopeMode = String((snapshot.context || ({})).scope || root.agentScopeMode)
+            root.agentResultVisible = false
+            root.agentApplyInProgress = true
+            if (root.agentTargetAssetIds.length > 0) {
+                const targetId = String(root.agentTargetAssetIds[0])
+                const selectedIds = catalogAssets ? (catalogAssets.selectedAssetIds || []) : []
+                if (catalogAssets && selectedIds.indexOf(targetId) < 0)
+                    catalogAssets.selectAssetById(targetId, true)
+                const targetAlreadyOpen = root.page === "edit" &&
+                        String(editorPreview.assetId || "") === targetId
+                if (!targetAlreadyOpen)
+                    root.assetActivated("edit")
+            } else if (root.page !== "edit") {
+                root.assetActivated("edit")
+            }
+        }
+        function onPreparedTargetResolved(assetId) {
+            root.agentTargetAssetIds = [String(assetId)]
+            if (catalogAssets)
+                catalogAssets.selectAssetById(String(assetId), true)
+            root.assetActivated("edit")
+        }
+    }
     readonly property var visualSearchController: typeof visualSearch !== "undefined" ? visualSearch : null
     readonly property var similaritySearchBinding: typeof similaritySearch !== "undefined" ? similaritySearch : null
     readonly property var similaritySearchController: similaritySearchBinding ? similaritySearchBinding.controller : null
@@ -113,10 +310,14 @@ Rectangle {
         }
     }
     property string page: "library"
+    property string openPhotoFilePath: ""
     property bool workspaceActive: true
     onWorkspaceActiveChanged: {
         if (root.page === "library" && !root.workspaceActive && root.similaritySearchBinding)
             root.similaritySearchBinding.cancel()
+        if (root.page === "library" && root.workspaceActive && root.catalogAssets
+                && typeof root.catalogAssets.refreshDocumentSourceExclusions === "function")
+            root.catalogAssets.refreshDocumentSourceExclusions()
     }
     Component.onDestruction: {
         if (root.page === "library" && root.similaritySearchBinding)
@@ -127,6 +328,18 @@ Rectangle {
     property int selectedMaskSetIndex: 0
     property int activePhotoLayerIndex: 0
     property var selectedPhotoLayerIndices: []
+    onSelectedPhotoLayerIndicesChanged: root.finishLayerNudge()
+    property var layerNudgeKeys: []
+    property bool layerNudgeRepeating: false
+    property double layerNudgeNextAtMs: 0
+    readonly property bool layerNudgeContextActive: root.workspaceActive && root.visible &&
+        root.page === "edit" && ["adjust", "layers", "text", "shapes"].indexOf(root.editTool) >= 0 &&
+        !editorPreview.compareMode && !root.editBoardSwitchBusy &&
+        root.selectedEditTargetScope() !== "base-image" && !root.shortcutTextInputActive() &&
+        root.movablePhotoLayerSelection().some(function(index) {
+            return root.photoLayerHasDirectTransform(root.photoLayerRows[index] || ({}))
+        })
+    onLayerNudgeContextActiveChanged: if (!layerNudgeContextActive) root.finishLayerNudge()
     property int photoLayerSelectionAnchorIndex: -1
     property int inlineRenamingPhotoLayerIndex: -1
     property string inlinePhotoLayerRenameOriginal: ""
@@ -157,11 +370,12 @@ Rectangle {
     readonly property string adjustmentControlTargetSupportContract: "adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only"
     readonly property string targetAwareAdjustmentCommandRouterContract: "target-aware-adjustment-command-router:v3|commands:numeric,string,boolean,preset,reset,curve|routes:base-image->global,adjustment-layer->photo-layer-recipe,selection->linked-adjustment-layer,multi-photo->explicit-batch-sync|blocked:unsupported-photo-layer,retouch-mask,locked-layer,unsupported-control|scope-normalized:true|write-gated:true|curve-guarded:true|no-global-fallback:true"
     readonly property string targetRoutingMatrixContract: "target-routing-matrix:v1|families:raw,white-balance,light,color,color-grading,tone-curve,presence,detail,lens-transform,crop,preset|targets:base-image,photo-layer,adjustment-layer,selection,multi-photo|single-edit:base-image+adjustment-layer+selection|raw-crop:base-image-only|photo-layer:properties-only|multi-photo:explicit-batch-sync-only|unsupported:disabled-with-reason|silent-no-op:false"
+    readonly property string adjustmentIntentNavigationContract: "adjustment-intent-navigation:v1|options:all,light,color,detail|color-order:white-balance,color,color-grading,tone-curve,advanced-color|search:composes:true|all-accessible:true|target-preserved:true"
     readonly property string studioCommandSemanticsContract: "studio-command-semantics:v2|apply:commit-or-generate-result|done:exit-tool-state-to-layers|cancel:abort-pending-work|close:panel-or-dialog-only|selection:smart-brush-shape-retouch-unified|retouch:apply-before-commit-done-after-commit|brush:stroke-release-commits-done-exits-to-layers|crop:done-exits-crop-editing|polygon:done-completes-selection-cancel-discards-unfinished|diagnostics:close-panel-only"
     readonly property string studioSecondaryActionSemanticsContract: "studio-secondary-actions:v1|generic-label:More|specific-meaning:tooltip-and-menu-items|batch:more|presets:more|queue:more|layer-actions:more|primary-split-actions:descriptive|destructive:menu-or-confirmation"
     readonly property string studioDestructiveActionPolicyContract: "studio-destructive-actions:v1|primary-surface:false|default-layer-row:false|secondary-surface:More-or-properties|menu-order:destructive-last|role:destructive|confirmation:when-needed|inline-exception:blocking-retry-only"
     readonly property string studioAdvancedControlDisclosureContract: "studio-advanced-disclosure:v1|brush:inspector-and-more|retouch:more-or-mode-menu|experimental:hidden-disabled|light:collapsed-rolloff-levels-zones|advanced-color:collapsed-specialist-tools|diagnostics:details-only"
-    readonly property string colorControlDomainDisclosureContract: "color-control-domain-disclosure:v1|light:scene-referred|tone-curve:display-referred|color:look-space|color-grading:look-space|full-registry:diagnostics"
+    readonly property string colorControlDomainDisclosureContract: "color-control-domain-disclosure:v2|light:scene-referred-before-output|levels:scene-luminance-input|tone-curve:display-referred|color:look-space-after-curves|grading:look-space-after-selective-color|header-tooltip:accessible|renderer:recipe-model-and-upgrade-availability"
     readonly property string renderingUpgradeWorkflowContract: "rendering-upgrade:v2|explicit:true|preview:side-by-side|recipe-mutation-before-apply:false|apply:undoable|cancel:restores-current|legacy:supported|target:aces2-ocio-v1|transition:preserve-legacy-direct-luminance-v1"
     readonly property string studioLayerTerminologyContract: "studio-layer-terminology:v1|stack-object:Layer|subtypes:specific-only-when-needed|adjustment-layer-visible:false|photo-layer-visible:false|selection-linked-layer:Linked Layer"
     property bool studioReducedMotionOverride: false
@@ -197,18 +411,36 @@ Rectangle {
     property bool editCollectionsExpanded: true
     property bool editUtilitiesExpanded: true
     property bool editSidebarCollapsed: false
+    property bool editFilmstripCollapsed: false
     property bool editContextPanelVisible: true
     property bool editInspectorPanelVisible: true
+    property bool editCreativeToolsVisible: true
+    property bool photoLayerDetailsExpanded: false
+    property bool editCreativeToolsFloating: false
+    property real editCreativeToolsHeight: 440
+    readonly property var creativeToolLayer: currentPhotoLayerData()
+    readonly property string creativeToolKind: editTool === "paint" ? "paint"
+        : editTool === "eraser" ? "eraser"
+        : editTool === "shapes" ? "shapes"
+        : brushToolReady() ? "brush"
+        : ["masks", "pixel-brush", "pixel-select", "brush"].indexOf(editTool) >= 0 ? "selection"
+        : editTool === "text" ? "text"
+        : editTool === "layers" && String(creativeToolLayer.kind || "") === "text" ? "text"
+        : editTool === "layers" && Object.keys(creativeToolLayer.shapeDefinition || ({})).length > 0 ? "shape-properties" : ""
+    readonly property bool creativeToolsActive: page === "edit" && workspaceActive && editingChromeVisible &&
+        editCreativeToolsVisible && editorPreview.hasAsset && !editorPreview.compareMode && creativeToolKind.length > 0
+    readonly property bool selectionPanelActive: creativeToolKind === "selection" || maskRefinementSessionActive
+    readonly property bool editRightSidebarActive: editInspectorPanelActive || (creativeToolsActive && !editCreativeToolsFloating)
     property bool compareInspectorVisible: false
     property bool exportPresetsPanelVisible: true
     property bool exportSettingsPanelVisible: true
-    property string interfaceMode: "pro"
     property bool fullScreenEditingEnabled: false
     property bool focusEditLayoutEnabled: false
     property bool responsiveSmallDisplayPanelsActive: false
     property bool lightAdvancedToneExpanded: false
     property bool maskAdvancedDetailsExpanded: false
-    property bool lightLevelsExpanded: false
+    property bool selectionRefineToolsExpanded: false
+    property bool curveParametricExpanded: false
     property bool lightZonesExpanded: false
     property bool cropTransformExpanded: false
     property bool cropLiquifyExpanded: false
@@ -234,28 +466,43 @@ Rectangle {
     property string studioPresetSearchText: ""
     property string studioPresetCategoryFilter: "All"
     property string studioPresetPackFilter: "All"
+    property string studioPresetLibraryTab: "All"
+    property int studioPresetLibraryRevision: 0
     property bool studioPresetFavoritesOnly: false
+    property var studioPresetScopeSelection: ["tone", "color", "detail"]
+    property string studioPresetCreateSource: "base-image"
+    property string studioPresetCreateMode: "capture"
+    property string studioPresetCreateFeedback: ""
+    property bool studioPresetCreateFeedbackError: false
     property string studioPresetImportFolder: ""
     property string studioPresetExportFolder: ""
     property string studioPresetPreviewRecipeJson: ""
     property var savedWorkspaceLayouts: [
         {
             name: "Default",
+            editCreativeToolsVisible: true,
+            editCreativeToolsFloating: false,
             librarySourcesPanelVisible: true,
             libraryInspectorPanelVisible: true,
             editSidebarCollapsed: false,
             editContextPanelVisible: true,
             editInspectorPanelVisible: true,
+            editFilmstripCollapsed: false,
+            scopeDockVisible: false,
             exportPresetsPanelVisible: true,
             exportSettingsPanelVisible: true
         },
         {
             name: "Focus",
+            editCreativeToolsVisible: false,
+            editCreativeToolsFloating: false,
             librarySourcesPanelVisible: false,
             libraryInspectorPanelVisible: false,
             editSidebarCollapsed: false,
             editContextPanelVisible: false,
             editInspectorPanelVisible: false,
+            editFilmstripCollapsed: true,
+            scopeDockVisible: false,
             exportPresetsPanelVisible: false,
             exportSettingsPanelVisible: false
         }
@@ -313,7 +560,16 @@ Rectangle {
 
     Connections {
         target: editorPreview
+        function onPhotoLayerClipboardOperationFinished(operation, count, error) {
+            const message = operation === "copy"
+                ? (count === 1 ? qsTr("1 layer copied") : qsTr("%1 layers copied").arg(count))
+                : (count === 1 ? qsTr("1 layer pasted") : qsTr("%1 layers pasted").arg(count))
+            root.showEditActionFeedback(error.length ? error : message, error.length > 0)
+        }
+        function onPresetsChanged() { root.studioPresetLibraryRevision += 1 }
         function onAssetChanged() {
+            root.recentlyPastedLayerIds = []
+            root.cancelEditHistoryHoverPreview(false)
             root.cancelEditCompletion()
             root.maskRefinementSessionActive = false
             root.maskShapeEditTransactionActive = false
@@ -331,6 +587,7 @@ Rectangle {
             root.logPreviewFailurePresented("preview")
             if (root.editCompletionPending) editCompletionSettle.restart()
         }
+        function onHistoryChanged() { root.cancelEditHistoryHoverPreview() }
     }
 
     Binding {
@@ -366,6 +623,9 @@ Rectangle {
     property bool scopeShowGrid: true
     property bool scopeLogHistogram: false
     property bool largeScopesMode: false
+    property string scopePreviousInspectorTab: "adjust"
+    property bool layerSnappingEnabled: true
+    property bool layerSafeMarginsEnabled: false
     property bool scopeDockVisible: false
     property string scopeDockPosition: "right"
     property int selectedToneWheel: 1
@@ -378,6 +638,8 @@ Rectangle {
     property bool originalHoldActive: false
     property bool originalHoldOwnedCompareMode: false
     property string originalHoldPreviousSourceMode: "auto"
+    property bool compareEditGroupHoldActive: false
+    property var compareEditGroupHoldPreviousGroups: []
     readonly property string comparisonUxContract: "comparison-ux:v1|hold:B-and-toolbar|sources:original-external-named-snapshot|layouts:split-wipe-side-by-side|labels:before-after-source|viewport:sync-zoom-pan|release:edited-full-resolution|recipe-history:immutable"
     property real compareSplitPosition: 0.5
     property real synchronizedZoom: 1.0
@@ -396,12 +658,18 @@ Rectangle {
     property bool zoneMapOverlayEnabled: false
     property bool developerDiagnosticsEnabled: false
     property bool diagnosticsPanelOpen: false
-    readonly property string developerDiagnosticsMenuContract: "developer-diagnostics-menu:v2|developer-mode-gated:true|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false"
+    readonly property string developerDiagnosticsMenuContract: "developer-diagnostics-menu:v3|image-inspection:user-accessible|advanced-details:developer-mode-gated|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false"
     property bool pixelInspectorSamplingActive: false
     property bool maskColorRangeSampling: false
     property bool maskLuminanceRangeSampling: false
     property bool maskDepthRangeSampling: false
+    property bool colorMixerImageDragActive: false
+    property real colorMixerDragStartX: 0
+    property real colorMixerDragStartY: 0
+    property real colorMixerDragStartHue: 0
+    property real colorMixerDragStartSaturation: 0
     property bool objectPickArmed: false
+    property bool objectPickBoxMode: false
     property bool objectPickCreateNew: false
     property string objectPickMode: "selection"
     property bool polygonDrawArmed: false
@@ -489,6 +757,10 @@ Rectangle {
     readonly property string layerMaskActivationLatencyContract: "layer-mask-activation-latency:v2|panel-first:true|outline-trace:next-event-loop|delay-ms:0|no-click-frame-outline-getter:true"
     readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
     property string editInspectorTab: "adjust"
+    property int pendingEditHistoryPreviewIndex: -1
+    property string pendingEditHistoryPreviewAssetId: ""
+    property int activeEditHistoryPreviewIndex: -1
+    readonly property string editHistoryHoverPreviewContract: "edit-history-hover-preview:v1|dwell-ms:120|leave:immediate-clear|cancel:hidden-workspace-page-asset-restore|current-or-nonrestorable:ignored"
     property var batchSyncGroups: ["tone", "color"]
     readonly property var batchSyncGroupOptions: [
         { key: "raw", label: "RAW" },
@@ -504,6 +776,7 @@ Rectangle {
     property string selectedEditLayer: "adjustments"
     property string editAdjustmentFilterText: ""
     property bool adjustmentSearchVisible: false
+    property string activeAdjustmentIntent: "all"
     property string editHistorySnapshotDraft: ""
     property var editInspectorScrollHandle: null
     property string exportDestination: "/Volumes/Exports"
@@ -512,8 +785,88 @@ Rectangle {
 
     onEditInspectorTabChanged: {
         editorPreview.clearSectionComparison()
+        if (root.editInspectorTab !== "history")
+            root.cancelEditHistoryHoverPreview()
         if (root.layersOnlyFocusMode && root.editInspectorTab !== "layers")
             root.layersOnlyFocusMode = false
+    }
+
+    function editHistoryPreviewContextActive() {
+        return root.page === "edit" && root.workspaceActive && root.visible &&
+               root.editInspectorPanelVisible && root.editInspectorTab === "history" &&
+               editorPreview.hasAsset
+    }
+
+    function queueEditHistoryHoverPreview(index) {
+        if (!root.editHistoryPreviewContextActive() || index < 0)
+            return
+        root.pendingEditHistoryPreviewIndex = index
+        root.pendingEditHistoryPreviewAssetId = String(editorPreview.assetId || "")
+        editHistoryHoverPreviewTimer.restart()
+    }
+
+    function clearEditHistoryHoverPreviewForRow(index) {
+        if (root.pendingEditHistoryPreviewIndex === index) {
+            if (editHistoryHoverPreviewTimer) editHistoryHoverPreviewTimer.stop()
+            root.pendingEditHistoryPreviewIndex = -1
+            root.pendingEditHistoryPreviewAssetId = ""
+        }
+        if (root.activeEditHistoryPreviewIndex === index) {
+            root.activeEditHistoryPreviewIndex = -1
+            editorPreview.setEditHistoryPreviewIndex(-1)
+        }
+    }
+
+    function cancelEditHistoryHoverPreview(clearControllerPreview) {
+        const hadPreviewContext = root.pendingEditHistoryPreviewIndex >= 0 ||
+                                  root.activeEditHistoryPreviewIndex >= 0
+        if (editHistoryHoverPreviewTimer) editHistoryHoverPreviewTimer.stop()
+        root.pendingEditHistoryPreviewIndex = -1
+        root.pendingEditHistoryPreviewAssetId = ""
+        root.activeEditHistoryPreviewIndex = -1
+        if (clearControllerPreview !== false && hadPreviewContext && editorPreview.hasAsset)
+            editorPreview.setEditHistoryPreviewIndex(-1)
+    }
+
+    Connections {
+        target: root
+        function onWorkspaceActiveChanged() {
+            if (!root.workspaceActive) root.cancelEditHistoryHoverPreview()
+        }
+        function onPageChanged() {
+            if (root.page !== "edit") root.cancelEditHistoryHoverPreview()
+        }
+        function onVisibleChanged() {
+            if (!root.visible) root.cancelEditHistoryHoverPreview()
+        }
+        function onEditInspectorPanelVisibleChanged() {
+            if (!root.editInspectorPanelVisible) root.cancelEditHistoryHoverPreview()
+        }
+    }
+
+    Timer {
+        id: editHistoryHoverPreviewTimer
+        objectName: "editHistoryHoverPreviewTimer"
+        interval: 120
+        repeat: false
+        onTriggered: {
+            const previewIndex = root.pendingEditHistoryPreviewIndex
+            const assetId = root.pendingEditHistoryPreviewAssetId
+            root.pendingEditHistoryPreviewIndex = -1
+            root.pendingEditHistoryPreviewAssetId = ""
+            if (previewIndex < 0 || !root.editHistoryPreviewContextActive() ||
+                assetId !== String(editorPreview.assetId || ""))
+                return
+            const rows = editorPreview.editHistoryEntries || []
+            const rowStillPreviewable = rows.some(function(row) {
+                return Number(row.index) === previewIndex &&
+                       row.current !== true && row.restorable === true
+            })
+            if (!rowStillPreviewable)
+                return
+            if (editorPreview.setEditHistoryPreviewIndex(previewIndex))
+                root.activeEditHistoryPreviewIndex = previewIndex
+        }
     }
 
     Timer {
@@ -629,15 +982,292 @@ Rectangle {
             width: 300
             spacing: 8
 
-            TextField {
+            ToneTextField {
                 id: activeMaskRenameShortcutField
                 objectName: "activeMaskRenameShortcutField"
+                accessibleLabel: "Selected mask name"
                 Layout.fillWidth: true
                 text: root.activeMaskRenameDraft
                 selectByMouse: true
                 placeholderText: "Selection name"
                 onTextChanged: root.activeMaskRenameDraft = text
                 onAccepted: activeMaskRenameDialog.accept()
+            }
+        }
+    }
+
+    Dialog {
+        id: workspaceLayoutSaveDialog
+        objectName: "workspaceLayoutSaveDialog"
+        title: "Save Workspace Layout"
+        modal: true
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        anchors.centerIn: parent
+        padding: theme.space16
+        implicitWidth: 388
+        header: null
+        footer: null
+        background: Rectangle {
+            radius: theme.radius8
+            color: theme.surfaceTop
+            border.width: 1
+            border.color: theme.lineSoft
+        }
+        onOpened: {
+            workspaceLayoutNameField.forceActiveFocus()
+            workspaceLayoutNameField.selectAll()
+        }
+        onClosed: root.forceActiveFocus()
+        onAccepted: root.saveWorkspaceLayout(workspaceLayoutNameField.text)
+
+        contentItem: ColumnLayout {
+            width: 356
+            spacing: theme.space12
+
+            Label {
+                Layout.fillWidth: true
+                text: "Save workspace layout"
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeTitle
+                font.weight: Font.DemiBold
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Save which panels are visible in this workspace."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeBody
+                wrapMode: Text.Wrap
+            }
+            ToneTextField {
+                id: workspaceLayoutNameField
+                objectName: "workspaceLayoutNameField"
+                accessibleLabel: "Workspace layout name"
+                Layout.fillWidth: true
+                text: "Custom layout"
+                selectByMouse: true
+                placeholderText: "Layout name"
+                onAccepted: {
+                    if (root.canSaveWorkspaceLayoutName(text))
+                        workspaceLayoutSaveDialog.accept()
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.space8
+
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Cancel"
+                    tone: "secondary"
+                    onClicked: workspaceLayoutSaveDialog.reject()
+                }
+                ActionButton {
+                    text: "Save layout"
+                    tone: "primary"
+                    enabled: root.canSaveWorkspaceLayoutName(workspaceLayoutNameField.text)
+                    disabledReason: "Enter a unique name other than Default or Focus."
+                    onClicked: workspaceLayoutSaveDialog.accept()
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: studioPresetCreateDialog
+        objectName: "studioPresetCreateDialog"
+        title: studioPresetCreateMode === "duplicate" ? "Copy selected preset" : "Create custom preset"
+        modal: true
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        anchors.centerIn: parent
+        padding: theme.space16
+        implicitWidth: Math.min(460, parent ? parent.width - theme.space16 * 2 : 460)
+        header: null
+        footer: null
+        background: Rectangle {
+            radius: theme.radius8
+            color: theme.surfaceTop
+            border.width: 1
+            border.color: theme.lineSoft
+        }
+        onOpened: {
+            studioPresetCreateFeedback = ""
+            if (studioPresetDraftName.trim().length === 0 || studioPresetDraftName === root.studioCurrentPresetName())
+                studioPresetDraftName = root.studioPresetCreateMode === "duplicate"
+                        ? root.uniqueStudioPresetCopyName(root.studioCurrentPresetName())
+                        : root.uniqueStudioPresetName("My Preset")
+            studioPresetCreateNameField.forceActiveFocus()
+            studioPresetCreateNameField.selectAll()
+        }
+
+        contentItem: ColumnLayout {
+            width: Math.min(428, studioPresetCreateDialog.width - theme.space16 * 2)
+            spacing: theme.space12
+
+            Label {
+                Layout.fillWidth: true
+                text: root.studioPresetCreateMode === "duplicate" ? "Start from a library look" : "Create a custom preset"
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeTitle
+                font.weight: Font.DemiBold
+            }
+            Label {
+                Layout.fillWidth: true
+                text: root.studioPresetCreateMode === "duplicate"
+                      ? "Copy “" + root.studioCurrentPresetName() + "” into your custom library without applying it to the photo."
+                      : "Save the adjustments you have now as a reusable look."
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeCaption
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.space8
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    Label { text: "Name"; color: theme.textMuted; font.pixelSize: theme.typeMicro; font.family: theme.fontMono }
+                    ToneTextField {
+                        id: studioPresetCreateNameField
+                        objectName: "studioPresetNameField"
+                        Layout.fillWidth: true
+                        placeholderText: "e.g. Soft Window Light"
+                        text: root.studioPresetDraftName
+                        onTextEdited: root.studioPresetDraftName = text
+                        onAccepted: {
+                            if (root.submitStudioPresetCreator(false))
+                                studioPresetCreateDialog.close()
+                            else
+                                forceActiveFocus()
+                        }
+                    }
+                }
+                ColumnLayout {
+                    Layout.preferredWidth: 148
+                    spacing: 4
+                    Label { text: "Pack"; color: theme.textMuted; font.pixelSize: theme.typeMicro; font.family: theme.fontMono }
+                    ToneTextField {
+                        objectName: "studioPresetPackField"
+                        Layout.fillWidth: true
+                        placeholderText: "My Presets"
+                        text: root.studioPresetDraftPack
+                        onTextEdited: root.studioPresetDraftPack = text
+                        onAccepted: {
+                            if (root.submitStudioPresetCreator(false))
+                                studioPresetCreateDialog.close()
+                            else
+                                studioPresetCreateNameField.forceActiveFocus()
+                        }
+                    }
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 5
+                visible: root.studioPresetCreateMode === "capture"
+                Label { text: "Capture from"; color: theme.textMuted; font.pixelSize: theme.typeMicro; font.family: theme.fontMono }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    MiniButton {
+                        objectName: "studioPresetCaptureBaseButton"
+                        Layout.fillWidth: true
+                        text: "Base image"
+                        role: "segmented"
+                        active: root.studioPresetCreateSource === "base-image"
+                        onClicked: root.setStudioPresetCreateSource("base-image")
+                    }
+                    MiniButton {
+                        objectName: "studioPresetCaptureLayerButton"
+                        Layout.fillWidth: true
+                        text: "Selected layer"
+                        role: "segmented"
+                        active: root.studioPresetCreateSource === "selected-layer"
+                        enabled: root.activeAdjustmentLayerIndex() >= 0
+                        tooltip: enabled ? "Capture the selected adjustment layer's settings." : "Select an adjustment layer first."
+                        onClicked: root.setStudioPresetCreateSource("selected-layer")
+                    }
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 5
+                visible: root.studioPresetCreateMode === "capture"
+                Label { text: "Include adjustments"; color: theme.textMuted; font.pixelSize: theme.typeMicro; font.family: theme.fontMono }
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 5
+                    Repeater {
+                        model: ["raw", "tone", "color", "crop", "detail"]
+                        MiniButton {
+                            required property string modelData
+                            text: modelData === "raw" ? "Raw" : modelData.charAt(0).toUpperCase() + modelData.slice(1)
+                            role: "segmented"
+                            active: root.studioPresetScopeSelection.indexOf(modelData) >= 0
+                            enabled: root.studioPresetCreateSource === "base-image" || (modelData !== "raw" && modelData !== "crop")
+                            tooltip: enabled ? "Include this adjustment group." : "Raw and crop adjustments are only available from the base image."
+                            onClicked: root.toggleStudioPresetScope(modelData)
+                        }
+                    }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: root.studioPresetScopeSelection.length === 0
+                    text: "Choose at least one adjustment group to save."
+                    color: theme.warningAccent
+                    font.family: theme.fontUi
+                    font.pixelSize: theme.typeMicro
+                    wrapMode: Text.WordWrap
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.studioPresetCreateFeedback.length > 0
+                text: root.studioPresetCreateFeedback
+                color: root.studioPresetCreateFeedbackError ? theme.signalRed : root.mint
+                font.family: theme.fontUi
+                font.pixelSize: theme.typeMicro
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Item { Layout.fillWidth: true }
+                MiniButton {
+                    objectName: "studioPresetCreateCancelButton"
+                    text: "Cancel"
+                    role: "secondary"
+                    onClicked: studioPresetCreateDialog.close()
+                }
+                MiniButton {
+                    objectName: "studioSavePresetButton"
+                    text: root.studioPresetCreateMode === "duplicate" ? "Create copy" : "Save as new"
+                    role: "primary"
+                    enabled: (root.studioPresetCreateMode === "duplicate" || editorPreview.hasAsset) && root.studioPresetDraftName.trim().length > 0 && root.studioPresetDraftPack.trim().length > 0 && (root.studioPresetCreateMode === "duplicate" || (root.studioPresetScopeSelection.length > 0 && (root.studioPresetCreateSource !== "selected-layer" || root.activeAdjustmentLayerIndex() >= 0)))
+                    onClicked: {
+                        if (root.createStudioPreset(false))
+                            studioPresetCreateDialog.close()
+                    }
+                }
+                MiniButton {
+                    objectName: "studioUpdateSelectedPresetButton"
+                    text: "Update selected"
+                    role: "secondary"
+                    visible: root.studioPresetCreateMode === "capture" && editorPreview.isUserPreset(root.studioCurrentPresetName())
+                    enabled: editorPreview.hasAsset && root.studioCurrentPresetName().length > 0 && root.studioPresetDraftPack.trim().length > 0 && root.studioPresetScopeSelection.length > 0 && (root.studioPresetCreateSource !== "selected-layer" || root.activeAdjustmentLayerIndex() >= 0)
+                    tooltip: "Replace the selected custom preset with these settings."
+                    onClicked: {
+                        root.studioPresetDraftName = root.studioCurrentPresetName()
+                        if (root.createStudioPreset(true))
+                            studioPresetCreateDialog.close()
+                    }
+                }
             }
         }
     }
@@ -662,13 +1292,132 @@ Rectangle {
 
     NumberAnimation on selectionOutlinePhase {
         from: 0
-        to: 24
+        to: 14
         duration: 900
         loops: Animation.Infinite
         running: root.selectionOutlineAnimationEnabled
     }
 
     signal assetActivated(string destination)
+    signal newCanvasRequested()
+    property bool allowAddBoards: true
+    property bool editBoardMode: false
+    property var editBoardController: null
+    signal editBoardPhotoTextLinkRequested(string layerId, var boardIds)
+    signal editBoardPhotoTextDetachRequested(string layerId)
+    property var editBoardModel: []
+    property int editBoardIndex: 0
+    property int selectedEditBoardIndex: editBoardIndex
+    onEditBoardIndexChanged: selectedEditBoardIndex = editBoardIndex
+    function selectEditBoard(index) {
+        if (index >= 0 && index < editBoardModel.length)
+            selectedEditBoardIndex = index
+    }
+    readonly property var activeEditBoard: editBoardModel[editBoardIndex] || ({})
+    readonly property int activeEditBoardSpan: Math.max(1, Number(activeEditBoard.imageSpanCount || 1))
+    readonly property string editBoardSharedScope: {
+        if (!editBoardMode || activeEditBoardSpan <= 1)
+            return ""
+        const first = Number(activeEditBoard.imageSpanStart || 0) + 1
+        return qsTr("Shared image and layers · Boards %1–%2").arg(first).arg(first + activeEditBoardSpan - 1)
+    }
+    property string editBoardDocumentId: ""
+    property string editBoardDocumentName: ""
+    property string editBoardSaveState: ""
+    property string editBoardSaveError: ""
+    property bool editBoardCanAdd: true
+    property bool editBoardExportBusy: false
+    property bool editBoardSwitchBusy: false
+    signal editBoardSelected(int index)
+    signal editBoardAddRequested(bool extendCurrent)
+    signal editBoardActionRequested(int index, string operation)
+    signal editBoardImageDropRequested(int index, string fileUrl, string operation)
+    signal editBoardMoveRequested(int index, int insertionIndex)
+    signal editBoardSaveRequested()
+    property string libraryCollection: "images"
+    readonly property var libraryWorkflowController: typeof libraryWorkflow !== "undefined" ? libraryWorkflow : null
+    readonly property var libraryJobQueue: typeof jobQueue !== "undefined" ? jobQueue : null
+    signal reviewImportedRequested()
+    property bool libraryDestinationRestored: false
+    function restoreLibraryDestination() {
+        if (libraryDestinationRestored || !libraryWorkflowController || page !== "library") return
+        const destination = String(libraryWorkflowController.activeDestination || "all-images")
+        if (destination === "recent-imports") applyLibraryWorkflowFilters({importDateFilter: "7d"})
+        else if (destination.startsWith("project:")) applyLibraryWorkflowFilters({projectFilter: destination.slice(8)})
+        else if (destination.startsWith("saved-search:")) {
+            const id = destination.slice(13)
+            for (const search of libraryWorkflowController.savedSearches) {
+                if (String(search.id) === id) applyLibraryWorkflowFilters(search.filters || ({}))
+            }
+        } else if (destination.startsWith("import:")) {
+            if (!libraryJobQueue || libraryJobQueue.jobCount === 0) return
+            openLibraryImportSession(destination.slice(7))
+        }
+        libraryDestinationRestored = true
+    }
+    Connections {
+        target: root.libraryJobQueue
+        function onJobsChanged() { root.restoreLibraryDestination() }
+    }
+    function libraryWorkflowFilters() {
+        return {
+            searchFilter: catalogAssets.searchFilter, projectFilter: catalogAssets.projectFilter,
+            importDateFilter: catalogAssets.importDateFilter, importSessionFrom: catalogAssets.importSessionFromFilter,
+            importSessionTo: catalogAssets.importSessionToFilter, captureYearFilter: catalogAssets.captureYearFilter,
+            cameraFilter: catalogAssets.cameraFilter, captureDateFromFilter: catalogAssets.captureDateFromFilter,
+            captureDateToFilter: catalogAssets.captureDateToFilter, mediaTypeFilter: catalogAssets.mediaTypeFilter,
+            reviewFilter: catalogAssets.reviewFilter, availabilityFilter: catalogAssets.availabilityFilter,
+            minimumRatingFilter: catalogAssets.minimumRatingFilter, sortOrder: catalogAssets.sortOrder
+        }
+    }
+    function applyLibraryWorkflowFilters(filters) {
+        root.clearLibrarySearch()
+        catalogAssets.clearFilters()
+        root.libraryCollection = "images"
+        const defaults = libraryWorkflowFilters()
+        for (const key of Object.keys(defaults)) {
+            if (key === "importSessionFrom" || key === "importSessionTo") continue
+            if (filters[key] !== undefined) catalogAssets[key] = filters[key]
+        }
+        catalogAssets.setImportSessionFilter(String(filters.importSessionFrom || ""), String(filters.importSessionTo || ""))
+        root.librarySearchDraftText = String(filters.searchFilter || "")
+    }
+    function openLibraryImportSession(jobId) {
+        const sessions = jobQueue ? jobQueue.jobsForCenter("catalog_import") : []
+        for (const session of sessions) {
+            if (String(session.jobId) !== String(jobId) || session.status !== "Completed") continue
+            const start = new Date(String(session.createdAt || "")).getTime()
+            const end = new Date(String(session.updatedAt || session.createdAt || "")).getTime()
+            if (!isFinite(start) || !isFinite(end)) return
+            applyLibraryWorkflowFilters({ importSessionFrom: new Date(Math.floor(start / 1000) * 1000).toISOString(),
+                                          importSessionTo: new Date(Math.ceil(end / 1000) * 1000).toISOString() })
+            return
+        }
+    }
+    function reviewLatestImport() {
+        root.importModeOpen = false
+        root.libraryCollection = "images"
+        const session = jobQueue ? jobQueue.latestJobForKind("catalog_import") : ({})
+        if (session.jobId && session.status === "Completed") openLibraryImportSession(session.jobId)
+        else { root.clearLibrarySearch(); catalogAssets.clearFilters() }
+        catalogAssets.refresh()
+        root.reviewImportedRequested()
+    }
+    Connections {
+        target: root.libraryWorkflowController
+        function onAllImagesRequested() { root.applyLibraryWorkflowFilters({}) }
+        function onRecentImportsRequested() { root.applyLibraryWorkflowFilters({ importDateFilter: "7d" }) }
+        function onProjectRequested(name) { root.applyLibraryWorkflowFilters({ projectFilter: name }) }
+        function onImportSessionRequested(jobId) { root.openLibraryImportSession(jobId) }
+        function onSavedSearchRequested(id, filters) { root.applyLibraryWorkflowFilters(filters) }
+    }
+    readonly property bool libraryBoardsOpen: libraryCollection === "boards"
+    readonly property bool libraryDocumentsOpen: libraryCollection !== "images"
+    signal timelineDocumentActivated(string documentPath, string recoveryCandidateId)
+    signal newTimelineRequested()
+    signal boardDocumentActivated(string documentId)
+    signal newBoardsRequested()
+    signal addBoardsRequested()
     signal projectActivated(string destination, string projectName)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
     signal presetManagementRequested(string action)
@@ -684,12 +1433,19 @@ Rectangle {
     readonly property color dimText: theme.textMuted
     readonly property color faintText: theme.textFaint
     readonly property string studioPaletteContract: "studio-palette:v2|surfaces:shared-neutral-graphite|accent:editorial-champagne|brand-coral:identity-only|hardcoded-blue-panels:false"
-    readonly property bool compactMode: interfaceMode === "clean" || interfaceMode === "compact"
-    readonly property bool inspectMode: interfaceMode === "inspect"
+    readonly property string interfaceDensity: String(appShell.interfaceDensity || "balanced")
+    // Keep older workspace commands readable while density is owned globally.
+    readonly property string interfaceMode: interfaceDensity === "comfortable" ? "inspect"
+                                            : interfaceDensity === "compact" ? "compact" : "pro"
+    readonly property bool compactMode: interfaceDensity === "compact"
+    readonly property bool inspectMode: interfaceDensity === "comfortable"
     readonly property bool libraryImportActive: page === "library" && importModeOpen
+    readonly property bool libraryCullModeActive: page === "library" && !libraryDocumentsOpen &&
+                                                   !importModeOpen && catalogViewMode === "cull"
     readonly property bool editingChromeVisible: !fullScreenEditingEnabled && !focusEditLayoutEnabled
     readonly property bool smallDisplayMode: width > 0 && width < 1120
-    readonly property bool libraryToolbarTight: width > 0 && width < 1360
+    readonly property bool libraryToolbarTight: width > 0 && (width < 1360 ||
+                                                 (root.libraryWorkflowController && !root.libraryWorkflowController.navigationCollapsed))
     readonly property int libraryMainMinimumWidth: libraryToolbarTight ? 360 : 520
     readonly property int libraryGalleryScrollbarGutter: 14
     readonly property int librarySourcesPanelWidth: width > 0 && width < 1180 ? 156 : (compactMode ? 168 : 184)
@@ -700,8 +1456,27 @@ Rectangle {
         const preferred = compactMode ? 278 : (libraryToolbarTight ? 286 : 316)
         return Math.round(root.clamp(preferred, 252, Math.max(252, availableForInspector)))
     }
-    readonly property int editContextPanelWidth: compactMode ? 210 : 246
-    readonly property int editInspectorPanelWidth: smallDisplayMode || compactMode ? 356 : (inspectMode ? 480 : 420)
+    readonly property int editCanvasMinimumWidth: theme.scaled(360)
+    readonly property int editToolRailColumnWidth: Math.max(theme.scaled(44), theme.railButtonSizeCompact + theme.scaled(4))
+    readonly property int editPanelWidthBudget: Math.max(0, width - editCanvasMinimumWidth
+                                                       - (editingChromeVisible ? editToolRailColumnWidth + theme.space8 : 0)
+                                                       - (editContextPanelActive ? 8 : 0)
+                                                       - (editRightSidebarActive ? 8 : 0))
+    readonly property int editContextPanelWidth: {
+        const preferred = theme.scaled(scopeDockActive("left") ? 304 : (compactMode ? 210 : 246))
+        if (!editContextPanelActive || width <= 0)
+            return preferred
+        const minimum = theme.scaled(scopeDockActive("left") ? 224 : 180)
+        const inspectorMinimum = editRightSidebarActive ? theme.scaled(280) : 0
+        return Math.round(Math.max(minimum, Math.min(preferred, editPanelWidthBudget - inspectorMinimum)))
+    }
+    readonly property int editInspectorPanelWidth: {
+        const preferred = theme.scaled(smallDisplayMode || compactMode ? 356 : (inspectMode ? 480 : 420))
+        if (!editRightSidebarActive || width <= 0)
+            return preferred
+        const contextWidth = editContextPanelActive ? editContextPanelWidth : 0
+        return Math.round(Math.max(theme.scaled(280), Math.min(preferred, editPanelWidthBudget - contextWidth)))
+    }
     readonly property bool maskWorkActive: editTool === "masks" ||
                                            brushToolReady() ||
                                            (editTool === "pixel-brush" &&
@@ -724,6 +1499,10 @@ Rectangle {
                                                 && editTool !== "compare"
                                                 && !activeCanvasToolChromeReduced
                                                 && !root.scopeLargeActive()
+    readonly property bool editInspectorPanelActive: editingChromeVisible && editInspectorPanelVisible
+                                                  && (editTool !== "compare" || compareInspectorVisible)
+                                                  && !scopeLargeActive()
+                                                  && !(editInspectorTab === "scopes" && scopeDockPosition !== "right")
     readonly property int exportPresetsPanelWidth: compactMode ? 258 : 306
     readonly property int exportSettingsPanelWidth: compactMode ? 294 : 342
     readonly property var editRecipeArchitectureCapabilityRegistry: [
@@ -1012,8 +1791,11 @@ Rectangle {
 
         const key = root.libraryGalleryAspectKey(index, thumbnailSource, knownAssetId)
         const nextRatio = root.clamp(width / height, 0.28, 4.5)
-        const currentRatio = Number(root.libraryGalleryAspectRatios[key] || 0)
-        if (Math.abs(currentRatio - nextRatio) < 0.001)
+        const currentRatio = root.libraryGalleryAspectRatio(index, thumbnailSource, knownAssetId)
+        // Cached and regenerated thumbnails can round either dimension by a
+        // pixel. That is not a new aspect ratio and must not rebuild the rows.
+        const roundingTolerance = (1 + currentRatio) / height
+        if (Math.abs(currentRatio - nextRatio) <= Math.max(0.001, roundingTolerance))
             return
 
         const ratios = {}
@@ -1135,12 +1917,15 @@ Rectangle {
     }
 
     function clearTransientMaskTools() {
+        if (editorPreview.brushStrokeActive)
+            editorPreview.endActiveBrushStroke()
         root.endMaskShapeEditTransaction()
         if (root.maskRefinementSessionActive) {
             root.maskRefinementSessionActive = false
             editorPreview.endCoalescedEdit()
         }
         objectPickArmed = false
+        objectPickBoxMode = false
         objectPickCreateNew = false
         objectPickMode = "selection"
         polygonDrawArmed = false
@@ -1696,23 +2481,56 @@ Rectangle {
     function adjustmentGroupSearchText(groupKey) {
         const searchable = {
             "white-balance": "white balance temp temperature tint sample neutral kelvin",
-            "light": "light basic tone exposure brightness contrast highlights shadows whites blacks hdr local filmic levels zone mapping gamma",
+            "light": "light basic tone exposure brightness contrast highlights shadows whites blacks hdr local filmic zone mapping",
+            "levels": "levels input black white gamma histogram endpoints midtones",
             "tone-curve": "tone curve point curve rgb luma red green blue parametric shadows darks lights highlights matte filmic rolloff",
             "color": "color vibrance saturation",
+            "color-mix": "color mix hsl hsv lch oklab hue saturation luminance selective channels",
+            "color-grading": "color grading shadows midtones highlights three-way balance look space split toning",
             "presence": "presence texture clarity dehaze",
             "detail": "detail sharpening sharpen masking luminance noise reduction color noise reduction lens distortion vignette chromatic aberration",
             "raw": "raw exposure boost shadow highlight recovery lens correction detail camera profile",
-            "advanced-color": "advanced color mix hsl hsv lch oklab hue luminance selective channel mixer black white color replace skin tone harmony split toning grading",
+            "advanced-color": "advanced specialist color channel mixer black white color replace skin tone harmony",
             "presets": "preset presets look pack style custom looksy built in apply save"
         }
         return String(searchable[groupKey] || groupKey).toLowerCase()
     }
 
+    function adjustmentIntentGroupKeys(intent) {
+        const key = String(intent || "all").trim().toLowerCase()
+        if (key === "light")
+            return ["light", "raw", "levels", "tone-curve"]
+        if (key === "color")
+            return ["white-balance", "color", "color-mix", "color-grading", "advanced-color"]
+        if (key === "detail")
+            return ["presence", "detail", "lens-transform"]
+        return ["white-balance", "light", "raw", "levels", "tone-curve", "color", "color-mix", "color-grading",
+                "advanced-color", "presence", "detail", "lens-transform"]
+    }
+
+    function normalizedAdjustmentGroupKey(groupKey) {
+        const key = String(groupKey || "").trim().toLowerCase()
+        return key === "lens" ? "lens-transform" : key
+    }
+
+    function adjustmentIntentForGroup(groupKey) {
+        const key = normalizedAdjustmentGroupKey(groupKey)
+        if (["white-balance", "color", "color-mix", "color-grading", "advanced-color",
+             "hsl", "grading", "lut"].indexOf(key) >= 0)
+            return "color"
+        if (["presence", "detail", "lens-transform"].indexOf(key) >= 0)
+            return "detail"
+        return "light"
+    }
+
     function adjustmentGroupMatches(groupKey) {
+        const key = normalizedAdjustmentGroupKey(groupKey)
+        if (adjustmentIntentGroupKeys(activeAdjustmentIntent).indexOf(key) < 0)
+            return false
         const needle = editAdjustmentFilterNeedle()
         if (needle.length === 0)
             return true
-        return adjustmentGroupSearchText(groupKey).indexOf(needle) >= 0
+        return adjustmentGroupSearchText(key).indexOf(needle) >= 0
     }
 
     function adjustmentGroupFilterText(groupKey) {
@@ -1721,6 +2539,8 @@ Rectangle {
             return "white balance"
         if (key === "tone-curve")
             return "tone curve"
+        if (key === "color-grading")
+            return "color grading"
         if (key === "hsl")
             return "hsl"
         if (key === "grading")
@@ -1772,10 +2592,16 @@ Rectangle {
     }
 
     function studioPresetLibraryNames() {
+        // Invokable catalog queries need an explicit notify dependency.
+        const revision = studioPresetLibraryRevision
         const names = editorPreview.searchPresetNames(studioPresetSearchText).slice()
         const filtered = []
         for (let index = 0; index < names.length; ++index) {
             const name = names[index]
+            if (studioPresetLibraryTab === "Favorites" && !editorPreview.isPresetFavorite(name))
+                continue
+            if (studioPresetLibraryTab === "My Presets" && !editorPreview.isUserPreset(name))
+                continue
             if (studioPresetFavoritesOnly && !editorPreview.isPresetFavorite(name))
                 continue
             if (studioPresetCategoryFilter !== "All" && editorPreview.presetCategoryName(name) !== studioPresetCategoryFilter)
@@ -1879,15 +2705,123 @@ Rectangle {
     }
 
     function saveStudioPreset() {
-        const name = studioPresetDraftName.trim()
-        if (name.length === 0)
+        studioPresetCreateMode = "capture"
+        studioPresetCreateSource = root.activeAdjustmentLayerIndex() >= 0 ? "selected-layer" : "base-image"
+        if (studioPresetCreateSource === "selected-layer")
+            setStudioPresetCreateSource("selected-layer")
+        if (!editorPreview.isUserPreset(root.studioCurrentPresetName()))
+            studioPresetDraftPack = "User Presets"
+        studioPresetCreateFeedback = ""
+        studioPresetCreateDialog.open()
+        return true
+    }
+
+    function openStudioPresetCreator() {
+        return saveStudioPreset()
+    }
+
+    function submitStudioPresetCreator(updateSelected) {
+        return createStudioPreset(updateSelected === true)
+    }
+
+    function openStudioPresetDuplicateDialog() {
+        if (studioCurrentPresetName().length === 0)
             return false
-        const pack = studioPresetDraftPack.trim().length > 0 ? studioPresetDraftPack.trim() : "User Presets"
-        if (editorPreview.savePresetToPack(name, pack, true)) {
-            selectStudioPreset(name)
-            return true
+        studioPresetCreateMode = "duplicate"
+        studioPresetDraftName = uniqueStudioPresetCopyName(studioCurrentPresetName())
+        studioPresetDraftPack = editorPreview.presetPackName(studioCurrentPresetName()) || "User Presets"
+        studioPresetCreateFeedback = ""
+        studioPresetCreateDialog.open()
+        return true
+    }
+
+    function uniqueStudioPresetCopyName(sourceName) {
+        const base = String(sourceName || "My Preset").trim() || "My Preset"
+        return uniqueStudioPresetName(base + " Copy")
+    }
+
+    function uniqueStudioPresetName(base) {
+        let candidate = base
+        let suffix = 2
+        while (editorPreview.presetNames.indexOf(candidate) >= 0) {
+            candidate = base + " " + suffix
+            ++suffix
         }
-        return false
+        return candidate
+    }
+
+    function toggleStudioPresetScope(group) {
+        const next = studioPresetScopeSelection.slice()
+        const index = next.indexOf(group)
+        if (index >= 0)
+            next.splice(index, 1)
+        else
+            next.push(group)
+        studioPresetScopeSelection = next
+    }
+
+    function setStudioPresetCreateSource(source) {
+        studioPresetCreateSource = source
+        if (source === "selected-layer") {
+            studioPresetScopeSelection = studioPresetScopeSelection.filter(function(group) {
+                return group === "tone" || group === "color" || group === "detail"
+            })
+        }
+    }
+
+    function createStudioPreset(updateSelected) {
+        let name = studioPresetDraftName.trim()
+        const pack = studioPresetDraftPack.trim()
+        if (updateSelected) {
+            const selectedName = root.studioCurrentPresetName()
+            if (selectedName.length === 0 || !editorPreview.isUserPreset(selectedName)) {
+                studioPresetCreateFeedback = "Choose a custom preset before updating it."
+                studioPresetCreateFeedbackError = true
+                return false
+            }
+            name = selectedName
+        }
+        if (name.length === 0) {
+            studioPresetCreateFeedback = "Add a name for this preset."
+            studioPresetCreateFeedbackError = true
+            return false
+        }
+        if (pack.length === 0) {
+            studioPresetCreateFeedback = "Add a pack name."
+            studioPresetCreateFeedbackError = true
+            return false
+        }
+        if (studioPresetCreateMode === "capture" && studioPresetScopeSelection.length === 0) {
+            studioPresetCreateFeedback = "Choose at least one adjustment group."
+            studioPresetCreateFeedbackError = true
+            return false
+        }
+        let result = null
+        if (studioPresetCreateMode === "duplicate") {
+            result = editorPreview.duplicatePreset(root.studioCurrentPresetName(), name, pack)
+        } else {
+            const layerIndex = studioPresetCreateSource === "selected-layer" ? root.activeAdjustmentLayerIndex() : -1
+            if (studioPresetCreateSource === "selected-layer" && layerIndex < 0) {
+                studioPresetCreateFeedback = "Select an adjustment layer before capturing its settings."
+                studioPresetCreateFeedbackError = true
+                return false
+            }
+            result = editorPreview.saveCustomPreset(name, pack, studioPresetScopeSelection, layerIndex, updateSelected)
+        }
+        if (!result || result.ok !== true) {
+            studioPresetCreateFeedback = result && result.error ? String(result.error) : "Could not save this preset."
+            studioPresetCreateFeedbackError = true
+            return false
+        }
+        selectStudioPreset(String(result.name || name))
+        studioPresetLibraryTab = "My Presets"
+        studioPresetSearchText = ""
+        studioPresetCategoryFilter = "All"
+        studioPresetPackFilter = "All"
+        studioPresetFavoritesOnly = false
+        studioPresetCreateFeedback = updateSelected ? "Preset updated." : "Preset saved to " + String(result.pack || pack) + "."
+        studioPresetCreateFeedbackError = false
+        return true
     }
 
     function toggleStudioPresetFavorite(name) {
@@ -2049,7 +2983,7 @@ Rectangle {
     }
 
     function filteredAdjustmentGroupKeys() {
-        const keys = ["white-balance", "light", "tone-curve", "color", "presence", "detail", "raw", "advanced-color"]
+        const keys = adjustmentIntentGroupKeys(activeAdjustmentIntent)
         return keys.filter(function(key) {
             return adjustmentGroupMatches(key) && (key !== "raw" || editorPreview.rawControlsAvailable)
         })
@@ -2064,6 +2998,7 @@ Rectangle {
 
     function editAdjustmentFilterSignature() {
         return "query:" + editAdjustmentFilterNeedle()
+                + "|intent:" + activeAdjustmentIntent
                 + "|count:" + filteredAdjustmentGroupKeys().length
                 + "|groups:" + filteredAdjustmentGroupKeys().join(",")
     }
@@ -2238,7 +3173,7 @@ Rectangle {
     }
 
     function customizablePanelSignature() {
-        const items = [
+        return [
             librarySourcesPanelVisible,
             libraryInspectorPanelVisible,
             editContextPanelVisible && !editSidebarCollapsed,
@@ -2254,21 +3189,24 @@ Rectangle {
         editSidebarCollapsed = false
         editContextPanelVisible = true
         editInspectorPanelVisible = true
+        editCreativeToolsVisible = true
+        editCreativeToolsFloating = false
         exportPresetsPanelVisible = true
         exportSettingsPanelVisible = true
     }
 
-    function setInterfaceMode(mode) {
+    function setInterfaceDensity(mode) {
         const cleanMode = String(mode || "").trim().toLowerCase()
-        if (cleanMode !== "clean" && cleanMode !== "pro" && cleanMode !== "inspect" && cleanMode !== "compact")
+        if (["comfortable", "balanced", "compact"].indexOf(cleanMode) < 0)
             return false
-        interfaceMode = cleanMode === "clean" ? "compact" : cleanMode
-        return true
+        appShell.interfaceDensity = cleanMode
+        return String(appShell.interfaceDensity || "balanced") === cleanMode
     }
 
-    function toggleInterfaceMode() {
-        interfaceMode = compactMode ? "pro" : "compact"
-        return interfaceMode
+    function setInterfaceMode(mode) {
+        const key = String(mode || "").trim().toLowerCase()
+        const legacyModes = { clean: "compact", pro: "balanced", inspect: "comfortable" }
+        return setInterfaceDensity(legacyModes[key] || key)
     }
 
     function setFullScreenEditing(enabled) {
@@ -2296,7 +3234,7 @@ Rectangle {
 
     function responsivePanelSignature() {
         return [
-            interfaceMode,
+            interfaceDensity,
             responsiveSmallDisplayPanelsActive,
             librarySourcesPanelVisible,
             libraryInspectorPanelVisible,
@@ -2312,7 +3250,7 @@ Rectangle {
         const widthValue = Number(availableWidth || width || 0)
         if (widthValue > 0 && widthValue < 1120)
             return "small-collapsed"
-        return compactMode ? "compact" : (inspectMode ? "inspect" : "pro")
+        return interfaceDensity
     }
 
     function responsivePanelDensitySignature(availableWidth) {
@@ -2320,7 +3258,7 @@ Rectangle {
         return [
             "w:" + widthValue,
             "mode:" + responsivePanelDensityMode(widthValue),
-            "interface:" + interfaceMode,
+            "density:" + interfaceDensity,
             "small:" + String(widthValue > 0 && widthValue < 1120),
             "active:" + String(responsiveSmallDisplayPanelsActive),
             "library:" + librarySourcesPanelWidth + "/" + libraryInspectorPanelWidth,
@@ -2343,7 +3281,6 @@ Rectangle {
         if (widthValue <= 0)
             return false
         if (widthValue < 1120) {
-            interfaceMode = "compact"
             responsiveSmallDisplayPanelsActive = true
             librarySourcesPanelVisible = false
             libraryInspectorPanelVisible = false
@@ -2356,7 +3293,6 @@ Rectangle {
         }
 
         if (responsiveSmallDisplayPanelsActive) {
-            interfaceMode = "pro"
             responsiveSmallDisplayPanelsActive = false
             resetCustomizablePanels()
             return true
@@ -2377,6 +3313,11 @@ Rectangle {
             editSidebarCollapsed: editSidebarCollapsed,
             editContextPanelVisible: editContextPanelVisible,
             editInspectorPanelVisible: editInspectorPanelVisible,
+            editCreativeToolsVisible: editCreativeToolsVisible,
+            editCreativeToolsFloating: editCreativeToolsFloating,
+            editCreativeToolsHeight: editCreativeToolsHeight,
+            editFilmstripCollapsed: editFilmstripCollapsed,
+            scopeDockVisible: scopeDockVisible,
             exportPresetsPanelVisible: exportPresetsPanelVisible,
             exportSettingsPanelVisible: exportSettingsPanelVisible
         }
@@ -2390,14 +3331,30 @@ Rectangle {
         editSidebarCollapsed = layout.editSidebarCollapsed === true
         editContextPanelVisible = layout.editContextPanelVisible !== false
         editInspectorPanelVisible = layout.editInspectorPanelVisible !== false
+        editCreativeToolsVisible = layout.editCreativeToolsVisible !== false
+        editCreativeToolsFloating = layout.editCreativeToolsFloating === true
+        editCreativeToolsHeight = root.clamp(Number(layout.editCreativeToolsHeight || 440), 200, 800)
+        editFilmstripCollapsed = layout.editFilmstripCollapsed === true
+        scopeDockVisible = layout.scopeDockVisible === true
         exportPresetsPanelVisible = layout.exportPresetsPanelVisible !== false
         exportSettingsPanelVisible = layout.exportSettingsPanelVisible !== false
         return true
     }
 
+    function canSaveWorkspaceLayoutName(name) {
+        const cleanName = String(name || "").trim()
+        if (cleanName.length === 0 || cleanName === "Default" || cleanName === "Focus")
+            return false
+        for (let i = 0; i < savedWorkspaceLayouts.length; ++i) {
+            if (String(savedWorkspaceLayouts[i].name || "") === cleanName)
+                return true
+        }
+        return savedWorkspaceLayouts.length < 12
+    }
+
     function saveWorkspaceLayout(name) {
         const cleanName = String(name || "").trim()
-        if (cleanName.length === 0)
+        if (!canSaveWorkspaceLayoutName(cleanName))
             return false
 
         const nextLayout = currentWorkspaceLayoutState(cleanName)
@@ -2426,6 +3383,156 @@ Rectangle {
 
     function savedWorkspaceLayoutNames() {
         return savedWorkspaceLayouts.map(function(layout) { return String(layout.name || "") })
+    }
+
+    function deleteWorkspaceLayout(name) {
+        const cleanName = String(name || "").trim()
+        if (cleanName.length === 0 || cleanName === "Default" || cleanName === "Focus")
+            return false
+        const layouts = savedWorkspaceLayouts.filter(function(layout) {
+            return String(layout.name || "") !== cleanName
+        })
+        if (layouts.length === savedWorkspaceLayouts.length)
+            return false
+        savedWorkspaceLayouts = layouts
+        return true
+    }
+
+    function activeWorkspaceLayoutName() {
+        const current = currentWorkspaceLayoutState("")
+        const keys = ["librarySourcesPanelVisible", "libraryInspectorPanelVisible",
+                      "editSidebarCollapsed", "editContextPanelVisible",
+                      "editInspectorPanelVisible", "editCreativeToolsVisible", "editCreativeToolsFloating", "editCreativeToolsHeight", "editFilmstripCollapsed",
+                      "scopeDockVisible", "exportPresetsPanelVisible",
+                      "exportSettingsPanelVisible"]
+        for (let i = 0; i < savedWorkspaceLayouts.length; ++i) {
+            const layout = savedWorkspaceLayouts[i]
+            if (keys.every(function(key) {
+                return layout[key] === undefined || layout[key] === current[key]
+            }))
+                return String(layout.name || "")
+        }
+        return ""
+    }
+
+    function openWorkspaceLayoutSaveDialog() {
+        const activeName = activeWorkspaceLayoutName()
+        workspaceLayoutNameField.text = activeName && activeName !== "Default" && activeName !== "Focus"
+                                        ? activeName : "Custom layout"
+        workspaceLayoutSaveDialog.open()
+    }
+
+    function workspaceLayoutMenuItems() {
+        const items = [
+            { key: "show-all", label: "Show main panels", icon: "grid" },
+            { key: "focus", label: "Focus on content", icon: "fullscreen" }
+        ]
+        if (page === "library") {
+            items.push({ key: "sources", label: "Sources", icon: "panel-left", checked: librarySourcesPanelVisible })
+            items.push({ key: "inspector", label: "Inspector", icon: "panel-right", checked: libraryInspectorPanelVisible })
+            items.push({ key: "grid-view", label: "Grid view", icon: "grid", checked: catalogViewMode === "grid" })
+            items.push({ key: "survey-view", label: "Survey view", icon: "survey", checked: catalogViewMode === "survey" })
+            items.push({ key: "cull-view", label: "Cull photos", icon: "check", checked: catalogViewMode === "cull" })
+            items.push({ key: "sort:imported-desc", label: "Sort: newest imports", icon: "clock", checked: catalogAssets.sortOrder === "imported-desc", separatorBefore: true })
+            items.push({ key: "sort:capture-asc", label: "Sort: capture time", icon: "clock", checked: catalogAssets.sortOrder === "capture-asc" })
+            items.push({ key: "sort:capture-desc", label: "Sort: newest captures", icon: "clock", checked: catalogAssets.sortOrder === "capture-desc" })
+            items.push({ key: "sort:filename-asc", label: "Sort: filename", icon: "image", checked: catalogAssets.sortOrder === "filename-asc" })
+            items.push({ key: "sort:rating-desc", label: "Sort: highest rating", icon: "star", checked: catalogAssets.sortOrder === "rating-desc" })
+            items.push({ key: "analyze-duplicates", label: catalogAssets.duplicateAnalysisBusy ? "Cancel duplicate analysis" : "Find exact duplicates", icon: "copy", separatorBefore: true })
+            items.push({ key: "confirmed-duplicates", label: "Show exact duplicates", icon: "copy", enabled: catalogAssets.confirmedDuplicateGroupCount > 0, checked: catalogAssets.reviewFilter === "confirmed-duplicates" })
+        } else if (page === "edit") {
+            items.push({ key: "context", label: "Library panel", icon: "panel-left", checked: editContextPanelVisible && !editSidebarCollapsed })
+            items.push({ key: "inspector", label: "Inspector", icon: "panel-right", checked: editInspectorPanelVisible })
+            items.push({ key: "tools", label: "Tool controls", icon: "adjust", checked: editCreativeToolsVisible })
+            items.push({ key: "filmstrip", label: "Filmstrip", icon: "grid", checked: !editFilmstripCollapsed })
+            items.push({ key: "scopes", label: "Scopes", icon: "scope", checked: scopeDockVisible })
+            items.push({ key: "snap-layers", label: "Snap layers to guides", icon: "geometry", checked: layerSnappingEnabled,
+                         tooltip: "Snap to centers, edges and board seams. Hold Alt while dragging to move freely.", separatorBefore: true })
+            items.push({ key: "safe-margins", label: "Show 5% safe margins", icon: "geometry", checked: layerSafeMarginsEnabled })
+            items.push({ key: "density:comfortable", label: "Comfortable density", icon: "density",
+                         checked: interfaceDensity === "comfortable", separatorBefore: true,
+                         tooltip: "Use larger controls and more breathing room." })
+            items.push({ key: "density:balanced", label: "Balanced density", icon: "density",
+                         checked: interfaceDensity === "balanced",
+                         tooltip: "Use the standard control size and spacing." })
+            items.push({ key: "density:compact", label: "Compact density", icon: "density",
+                         checked: interfaceDensity === "compact",
+                         tooltip: "Fit more controls into each panel." })
+        }
+        if (page === "library" || page === "edit") {
+            const activeName = activeWorkspaceLayoutName()
+            for (let i = 0; i < savedWorkspaceLayouts.length; ++i) {
+                const name = String(savedWorkspaceLayouts[i].name || "")
+                items.push({ key: "layout:" + name, label: name, icon: "grid",
+                             checked: name === activeName, separatorBefore: i === 0 })
+            }
+            items.push({ key: "save-layout", label: "Save current layout…", icon: "save",
+                         separatorBefore: true,
+                         enabled: savedWorkspaceLayouts.length < 12 ||
+                                  (activeName.length > 0 && activeName !== "Default" &&
+                                   activeName !== "Focus"),
+                         disabledReason: "Twelve saved layouts is the limit." })
+            if (activeName && activeName !== "Default" && activeName !== "Focus")
+                items.push({ key: "delete-layout:" + activeName,
+                             label: "Delete “" + activeName + "”", icon: "close", danger: true })
+        }
+        return items
+    }
+
+    function handleWorkspaceLayoutMenu(key) {
+        if (key === "save-layout") {
+            openWorkspaceLayoutSaveDialog()
+        } else if (String(key).indexOf("delete-layout:") === 0) {
+            deleteWorkspaceLayout(String(key).slice(14))
+        } else if (String(key).indexOf("layout:") === 0) {
+            applyWorkspaceLayout(String(key).slice(7))
+        } else if (key === "show-all") {
+            if (page === "library") {
+                librarySourcesPanelVisible = true
+                libraryInspectorPanelVisible = true
+            } else if (page === "edit") {
+                editSidebarCollapsed = false
+                editContextPanelVisible = true
+                editInspectorPanelVisible = true
+                editCreativeToolsVisible = true
+                editFilmstripCollapsed = false
+            }
+        } else if (key === "focus") {
+            if (page === "library") {
+                librarySourcesPanelVisible = false
+                libraryInspectorPanelVisible = false
+            } else if (page === "edit") {
+                editContextPanelVisible = false
+                editInspectorPanelVisible = false
+                editCreativeToolsVisible = false
+                editFilmstripCollapsed = true
+                scopeDockVisible = false
+            }
+        } else if (page === "library") {
+            if (key === "sources") librarySourcesPanelVisible = !librarySourcesPanelVisible
+            else if (key === "inspector") libraryInspectorPanelVisible = !libraryInspectorPanelVisible
+            else if (key === "grid-view") setLibraryReviewView("grid")
+            else if (key === "survey-view") setLibraryReviewView("survey")
+            else if (key === "cull-view") setLibraryReviewView("cull")
+            else if (String(key).startsWith("sort:")) catalogAssets.sortOrder = String(key).slice(5)
+            else if (key === "analyze-duplicates") {
+                if (catalogAssets.duplicateAnalysisBusy) catalogAssets.cancelDuplicateAnalysis()
+                else catalogAssets.analyzeDuplicates()
+            }
+            else if (key === "confirmed-duplicates") catalogAssets.reviewFilter = "confirmed-duplicates"
+        } else if (page === "edit") {
+            if (String(key).indexOf("density:") === 0)
+                setInterfaceDensity(String(key).slice(8))
+            else if (key === "context") {
+                editContextPanelVisible = !editContextPanelVisible
+                if (editContextPanelVisible) editSidebarCollapsed = false
+            } else if (key === "inspector") editInspectorPanelVisible = !editInspectorPanelVisible
+            else if (key === "tools") editCreativeToolsVisible = !editCreativeToolsVisible
+            else if (key === "filmstrip") editFilmstripCollapsed = !editFilmstripCollapsed
+            else if (key === "scopes") toggleScopesDock(scopeDockPosition === "right" ? "bottom" : scopeDockPosition)
+            else if (key === "snap-layers") layerSnappingEnabled = !layerSnappingEnabled
+            else if (key === "safe-margins") layerSafeMarginsEnabled = !layerSafeMarginsEnabled
+        }
     }
 
     function assetCount() {
@@ -2780,7 +3887,18 @@ Rectangle {
         return (catalogAssets.selectedAssetIds || []).slice(0)
     }
 
-    function runAgentDraftForScope(scope, instructions) {
+    AgentWorkspaceTouchResolver { id: agentWorkspaceTouchResolver }
+    function agentWorkspaceTouchTarget(event, parameterKey) {
+        return agentWorkspaceTouchResolver.resolve(
+                    event,
+                    parameterKey,
+                    studioPageLoader.item,
+                    agentWorkspaceOverlay,
+                    root.editViewportHandle,
+                    root)
+    }
+
+    function runAgentDraftForScope(scope, instructions, keepAgentScreenOpen) {
         if (!root.hasAgentEditController)
             return ({ ok: false, errors: ["The agent is not available."] })
         if (root.agentEditController.draftActive) {
@@ -2792,7 +3910,7 @@ Rectangle {
         if (root.agentTargetAssetIds.length > 0)
             catalogAssets.selectAssetById(String(root.agentTargetAssetIds[0]), true)
         root.assetActivated("edit")
-        if (agentRunDialogLoader.item && agentRunDialogLoader.item.visible)
+        if (!keepAgentScreenOpen && agentRunDialogLoader.item && agentRunDialogLoader.item.visible)
             agentRunDialogLoader.item.close()
         root.agentResultVisible = false
         root.agentApplyInProgress = true
@@ -2912,7 +4030,7 @@ Rectangle {
 
     function maskSetForAgentMaskId(maskId) {
         const resolvedId = String(maskId || "")
-        const sets = editorPreview.maskSets || []
+        const sets = root.maskSetRows
         for (let setIndex = 0; setIndex < sets.length; ++setIndex) {
             const maskSet = sets[setIndex] || ({})
             const sources = maskSet.sources || []
@@ -3734,6 +4852,12 @@ Rectangle {
         return systemHealthItems().length
     }
 
+    function visibleSystemHealthItems() {
+        return systemHealthItems().filter(function(item) {
+            return root.developerDiagnosticsEnabled || item.state !== "OK"
+        })
+    }
+
     function maskRuntimeTrustSignature() {
         return "selection:" + editorPreview.smartSelectionRuntimeLabel +
                 "|selectionModel:" + String(Boolean(editorPreview.aiSmartSelectionAvailable)) +
@@ -3761,7 +4885,7 @@ Rectangle {
     function healthStateColor(state) {
         if (state === "OK")
             return theme.success
-        if (state === "Busy" || state === "CPU")
+        if (state === "Busy" || state === "CPU" || state === "Warn")
             return theme.warning
         if (state === "Error")
             return theme.error
@@ -3931,22 +5055,24 @@ Rectangle {
             root.editContextPanelVisible = true
         }
         if (root.scopeDockPosition === "right") {
+            if (root.editInspectorTab !== "scopes")
+                root.scopePreviousInspectorTab = root.editInspectorTab
             root.editInspectorTab = "scopes"
             root.editInspectorPanelVisible = true
         } else if (root.editInspectorTab === "scopes") {
-            root.editInspectorTab = "adjust"
+            root.editInspectorTab = root.scopePreviousInspectorTab
         }
     }
 
     function openScopesDock(positionName) {
-        root.activateEditInspectorTab("scopes", root.normalizedScopeDockPosition(positionName))
+        root.setScopeDockPosition(positionName)
     }
 
     function closeScopesDock() {
         root.scopeDockVisible = false
         root.largeScopesMode = false
         if (root.editInspectorTab === "scopes")
-            root.editInspectorTab = "adjust"
+            root.editInspectorTab = root.scopePreviousInspectorTab
     }
 
     function toggleScopesDock(positionName) {
@@ -4011,6 +5137,26 @@ Rectangle {
         if (model === "aces2-hellwig-jmh-v1")
             return "ACES 2 · Legacy Prototype"
         return "Legacy · Bounded OKLCH"
+    }
+
+    function colorControlDomainHelpText(groupKey) {
+        const rendererLabel = root.renderingModelLabel(editorPreview.currentPhotographicRenderingModel)
+        const rendererContext = " Recipe renderer: " + rendererLabel +
+                ". Open Info > Rendering for the recipe model and upgrade availability."
+        switch (String(groupKey || "")) {
+        case "light":
+            return "Scene-referred. Light controls shape scene luminance before output rendering." + rendererContext
+        case "levels":
+            return "Scene-referred. Levels remap scene luminance before the display curve." + rendererContext
+        case "tone-curve":
+            return "Display-referred. Tone Curve follows scene tone and precedes creative color styling." + rendererContext
+        case "color":
+            return "Look-space. Color controls shape creative channel and perceptual color after tone curves." + rendererContext
+        case "color-grading":
+            return "Look-space. Three-way Color Grading follows selective color styling." + rendererContext
+        default:
+            return ""
+        }
     }
 
     function proofingStatusSignature() {
@@ -4774,11 +5920,6 @@ Rectangle {
             return
         }
         if (tab === "scopes") {
-            editorPreview.compareMode = false
-            editorPreview.cropEditing = false
-            root.clearTransientToolStateFor("adjust")
-            root.editTool = "adjust"
-            root.editInspectorTab = "adjust"
             root.setScopeDockPosition(scopePosition !== undefined
                                       ? scopePosition
                                       : (root.scopeDockPosition === "right" ? "bottom" : root.scopeDockPosition))
@@ -4837,6 +5978,164 @@ Rectangle {
         return catalogAssets.assetAt(index)
     }
 
+    function loadLibraryCullResume() {
+        if (libraryCullResumeLoaded)
+            return
+        let parsed = {}
+        try {
+            const candidate = JSON.parse(String(libraryCullSettings.resumeByShootJson || "{}"))
+            if (candidate && typeof candidate === "object" && !Array.isArray(candidate))
+                parsed = candidate
+        } catch (error) {
+            parsed = {}
+        }
+        const clean = {}
+        const keys = Object.keys(parsed)
+        for (let index = Math.max(0, keys.length - 64); index < keys.length; ++index) {
+            const key = String(keys[index] || "")
+            const value = String(parsed[keys[index]] || "")
+            if (key.length > 0 && value.length > 0)
+                clean[key] = value
+        }
+        libraryCullResumeByShoot = clean
+        libraryCullResumeLoaded = true
+    }
+
+    function libraryCullResumeScope(asset) {
+        if (!asset || !asset.assetId)
+            return ""
+        let project = String(catalogAssets && catalogAssets.projectFilter || "all")
+        if (project === "all") {
+            const projectNames = Array.isArray(asset.projectNames) ? asset.projectNames.slice().sort() : []
+            project = projectNames.length > 0 ? projectNames.join(",") : "unassigned"
+        }
+        const captureDate = String(asset.captureDate || "")
+        const isoDate = captureDate.match(/^\d{4}-\d{2}-\d{2}/)
+        const namedDate = captureDate.match(/(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}/i)
+        let shoot = isoDate ? isoDate[0] : namedDate ? namedDate[0] : captureDate.trim()
+        if (shoot.length === 0) {
+            const parts = String(asset.filePath || "").split("/").filter(function(part) { return part.length > 0 })
+            shoot = parts.length >= 2 ? parts.slice(-3, -1).join("/") : "undated"
+        }
+        return project + "|" + shoot
+    }
+
+    function libraryCullSelectedContext() {
+        if (!catalogAssets || catalogAssets.selectedIndex < 0)
+            return ({})
+        const projectSummary = String(catalogAssets.selectedProjectSummary || "")
+        return {
+            assetId: String(catalogAssets.selectedAssetId || ""),
+            captureDate: String(catalogAssets.selectedCaptureDate || ""),
+            filePath: String(catalogAssets.selectedFilePath || ""),
+            projectNames: projectSummary.length > 0 ? projectSummary.split(", ") : []
+        }
+    }
+
+    function setLibraryReviewView(mode) {
+        const nextMode = String(mode || "grid")
+        if (!catalogAssets) {
+            catalogViewMode = nextMode === "cull" ? "grid" : nextMode
+            return
+        }
+        if (nextMode === "cull") {
+            if (catalogViewMode === "cull") {
+                root.forceActiveFocus()
+                return
+            }
+            loadLibraryCullResume()
+            libraryCullPreviousMediaFilter = String(catalogAssets.mediaTypeFilter || "all")
+            catalogAssets.mediaTypeFilter = "photos"
+            const selected = libraryCullSelectedContext()
+            const scope = libraryCullResumeScope(selected)
+            libraryCullResumeAssetId = scope.length > 0
+                    ? String(libraryCullResumeByShoot[scope] || "") : ""
+            catalogViewMode = "cull"
+            root.forceActiveFocus()
+            return
+        }
+        if (catalogViewMode === "cull" && libraryCullPreviousMediaFilter.length > 0 &&
+                catalogAssets.mediaTypeFilter === "photos") {
+            catalogAssets.mediaTypeFilter = libraryCullPreviousMediaFilter
+        }
+        libraryCullPreviousMediaFilter = ""
+        catalogViewMode = nextMode === "survey" ? "survey" : "grid"
+        root.forceActiveFocus()
+    }
+
+    function rememberLibraryCullPosition() {
+        if (!libraryCullModeActive || !libraryCullResumeLoaded || !catalogAssets ||
+                catalogAssets.selectedIndex < 0)
+            return
+        const asset = libraryCullSelectedContext()
+        const assetId = String(asset.assetId || "")
+        const scope = libraryCullResumeScope(asset)
+        if (assetId.length === 0 || scope.length === 0)
+            return
+        const next = {}
+        const keys = Object.keys(libraryCullResumeByShoot || ({}))
+        for (let index = 0; index < keys.length; ++index)
+            if (keys[index] !== scope)
+                next[keys[index]] = libraryCullResumeByShoot[keys[index]]
+        next[scope] = assetId
+        const nextKeys = Object.keys(next)
+        for (let index = 0; index < nextKeys.length - 64; ++index)
+            delete next[nextKeys[index]]
+        libraryCullResumeByShoot = next
+        libraryCullResumeAssetId = assetId
+        libraryCullResumeSaveTimer.restart()
+    }
+
+    function resumeLibraryCullPosition() {
+        if (!catalogAssets || libraryCullResumeAssetId.length === 0)
+            return false
+        const resumed = catalogAssets.selectAssetById(libraryCullResumeAssetId, true)
+        if (resumed)
+            root.forceActiveFocus()
+        return resumed
+    }
+
+    function nextLibraryCullAssetId() {
+        if (!catalogAssets || catalogAssets.selectedIndex < 0 ||
+                catalogAssets.selectedIndex + 1 >= catalogAssets.assetCount)
+            return ""
+        const next = catalogAssets.galleryAssetAt(catalogAssets.selectedIndex + 1)
+        return String(next.assetId || "")
+    }
+
+    function applyLibraryCullAction(action, rating) {
+        if (!catalogAssets || catalogAssets.selectedIndex < 0)
+            return
+        const kind = String(action || "")
+        const nextAssetId = kind === "pick" || kind === "reject" || kind === "rating" || kind === "clear"
+                ? nextLibraryCullAssetId() : ""
+        if (kind === "pick")
+            catalogAssets.toggleSelectedPick()
+        else if (kind === "reject")
+            catalogAssets.toggleSelectedReject()
+        else if (kind === "rating")
+            catalogAssets.setSelectedRating(Math.max(0, Math.min(5, Number(rating))))
+        else if (kind === "clear")
+            catalogAssets.clearSelectedCullState()
+        if (nextAssetId.length > 0 && Boolean(appShell.cullingAutoAdvance)) {
+            Qt.callLater(function() {
+                if (catalogAssets)
+                    catalogAssets.selectAssetById(nextAssetId)
+            })
+        }
+    }
+
+    function toggleLibraryCullUnmarkedFilter() {
+        if (!catalogAssets)
+            return
+        if (catalogAssets.reviewFilter === "unmarked") {
+            catalogAssets.reviewFilter = "all"
+        } else {
+            catalogAssets.minimumRatingFilter = 0
+            catalogAssets.reviewFilter = "unmarked"
+        }
+    }
+
     function assetName(index) {
         const asset = assetAt(index)
         const path = String(asset.filePath || "")
@@ -4849,7 +6148,9 @@ Rectangle {
     }
 
     function assetThumb(index) {
-        const asset = assetAt(index)
+        if (catalogAssets && index === catalogAssets.selectedIndex)
+            return catalogAssets.selectedThumbnailSource
+        const asset = catalogAssets ? catalogAssets.galleryAssetAt(index) : ({})
         const thumb = String(asset.thumbnailSource || "")
         if (thumb.length > 0)
             return thumb
@@ -4857,8 +6158,7 @@ Rectangle {
     }
 
     function assetThumbCacheable(index) {
-        const asset = assetAt(index)
-        return String(asset.thumbnailSource || "").length > 0
+        return assetThumb(index).length > 0
     }
 
     function assetRating(index) {
@@ -4917,8 +6217,6 @@ Rectangle {
             return "Photos"
         if (catalogAssets.mediaTypeFilter === "videos")
             return "Videos"
-        if (catalogAssets.mediaTypeFilter === "timelines")
-            return "Timelines"
         return "All Media"
     }
 
@@ -4991,8 +6289,6 @@ Rectangle {
         root.searchText = ""
         if (catalogAssets)
             catalogAssets.searchFilter = ""
-        if (librarySearchInput)
-            librarySearchInput.forceInputFocus()
     }
 
     function clearLibraryFilters() {
@@ -5023,6 +6319,7 @@ Rectangle {
 
     Connections {
         target: catalogAssets
+        function onSelectedIndexChanged() { root.rememberLibraryCullPosition() }
         function onFiltersChanged() {
             if (!librarySearchDebounceTimer.running &&
                     root.librarySearchDraftText !== String(catalogAssets.searchFilter || "")) {
@@ -5068,7 +6365,7 @@ Rectangle {
     }
 
     function cycleMediaFilter() {
-        const values = ["all", "photos", "videos", "timelines"]
+        const values = ["all", "photos", "videos"]
         const next = (values.indexOf(catalogAssets.mediaTypeFilter) + 1) % values.length
         catalogAssets.mediaTypeFilter = values[next]
     }
@@ -5096,14 +6393,13 @@ Rectangle {
         return [
             { key: "all", label: "All Media", icon: "media", checked: catalogAssets.mediaTypeFilter === "all" },
             { key: "photos", label: "Photos", icon: "media", checked: catalogAssets.mediaTypeFilter === "photos" },
-            { key: "videos", label: "Videos", icon: "timeline", checked: catalogAssets.mediaTypeFilter === "videos" },
-            { key: "timelines", label: "Timelines", icon: "timeline", checked: catalogAssets.mediaTypeFilter === "timelines" }
+            { key: "videos", label: "Videos", icon: "video", checked: catalogAssets.mediaTypeFilter === "videos" }
         ]
     }
 
     function handleMediaFilterMenu(key) {
         const value = String(key || "all")
-        catalogAssets.mediaTypeFilter = ["all", "photos", "videos", "timelines"].indexOf(value) >= 0 ? value : "all"
+        catalogAssets.mediaTypeFilter = ["all", "photos", "videos"].indexOf(value) >= 0 ? value : "all"
     }
 
     function projectFilterMenuItems() {
@@ -5337,8 +6633,33 @@ Rectangle {
             editorPreview.endSectionComparisonHold()
     }
 
-    onSelectedEditTargetChanged: editorPreview.clearSectionComparison()
-    onActivePhotoLayerIndexChanged: editorPreview.clearSectionComparison()
+    function holdCompareEditGroup(groupKey, held) {
+        const normalizedGroup = String(groupKey || "").trim()
+        if (held) {
+            if (root.compareEditGroupHoldActive || normalizedGroup.length === 0)
+                return false
+            root.compareEditGroupHoldPreviousGroups = editorPreview.compareAdjustmentGroups.slice(0)
+            root.compareEditGroupHoldActive = true
+            editorPreview.compareAdjustmentGroups = [normalizedGroup]
+            return true
+        }
+        if (!root.compareEditGroupHoldActive)
+            return false
+        const previousGroups = root.compareEditGroupHoldPreviousGroups.slice(0)
+        root.compareEditGroupHoldPreviousGroups = []
+        root.compareEditGroupHoldActive = false
+        editorPreview.compareAdjustmentGroups = previousGroups
+        return true
+    }
+
+    onSelectedEditTargetChanged: {
+        root.holdCompareEditGroup("", false)
+        editorPreview.clearSectionComparison()
+    }
+    onActivePhotoLayerIndexChanged: {
+        root.holdCompareEditGroup("", false)
+        editorPreview.clearSectionComparison()
+    }
 
     function compareEditGroupActive(groupKey) {
         return editorPreview.compareAdjustmentGroups.indexOf(groupKey) >= 0
@@ -5356,6 +6677,8 @@ Rectangle {
     }
 
     function selectedName() {
+        if (root.page === "edit" && root.openPhotoFilePath.length > 0)
+            return root.openPhotoFilePath.split("/").pop()
         if (catalogAssets.selectedFilePath.length > 0) {
             const parts = catalogAssets.selectedFilePath.split("/")
             return parts.length > 0 ? parts[parts.length - 1] : catalogAssets.selectedFilePath
@@ -5483,7 +6806,7 @@ Rectangle {
                     String(asset.mediaType || "photo"),
                     assetName(index),
                     sourcePath,
-                    editorPreview.previewSource,
+                    editorPreview.assetId === String(asset.assetId || "") ? editorPreview.previewSource : "",
                     String(asset.adjustmentPatchJson || catalogAssets.selectedAdjustmentPatchJson || ""),
                     exportPresets[selectedPresetIndex].name,
                     exportDestination)
@@ -5495,7 +6818,8 @@ Rectangle {
     }
 
     function maskToolKeepsActiveMask(toolName) {
-        if (toolName === "masks" || toolName === "brush" || toolName === "retouch")
+        if (toolName === "masks" || toolName === "brush" || toolName === "retouch" ||
+                toolName === "paint" || toolName === "eraser")
             return true
         return (toolName === "adjust" || toolName === "layers") &&
                 root.selectedEditTargetMaskSetId().length > 0
@@ -5575,6 +6899,10 @@ Rectangle {
         const nextTool = String(toolName || "").trim()
         if (nextTool.length === 0)
             return
+        if (nextTool === "scopes") {
+            root.toggleScopesDock(root.scopeDockPosition === "right" ? "bottom" : root.scopeDockPosition)
+            return
+        }
         if (root.page === "edit" && root.workspaceActive) {
             root.pendingEditToolTransitionName = nextTool
             root.editToolTransitionTitle = "Switching to " + root.editToolDisplayName(nextTool)
@@ -5587,12 +6915,11 @@ Rectangle {
     }
 
     function applyEditToolActivation(toolName) {
-        root.beginEditToolSwitch(toolName)
         if (toolName === "scopes") {
             root.toggleScopesDock(root.scopeDockPosition === "right" ? "bottom" : root.scopeDockPosition)
-            root.finishEditToolTransitionSoon()
             return
         }
+        root.beginEditToolSwitch(toolName)
         root.clearTransientToolStateFor(toolName)
         if (toolName === "presets" || toolName === "info") {
             root.activateEditInspectorTab(toolName)
@@ -5605,6 +6932,8 @@ Rectangle {
             return
         }
         root.editTool = toolName
+        if (["paint", "eraser", "shapes", "text", "brush", "masks", "pixel-brush", "pixel-select"].indexOf(toolName) >= 0)
+            root.editCreativeToolsVisible = true
         if (toolName === "adjust") {
             root.selectedEditLayer = "adjustments"
             root.editInspectorTab = "adjust"
@@ -5630,13 +6959,19 @@ Rectangle {
             root.finishEditToolTransitionSoon()
             return
         }
-        if (toolName === "paint") {
+        if (toolName === "paint" || toolName === "eraser") {
             editorPreview.compareMode = false
             editorPreview.cropEditing = false
             root.editInspectorTab = "layers"
             const layer = root.currentPhotoLayerData()
-            if ((String(layer.kind || "") !== "pixel" || Object.keys(layer.shapeDefinition || ({})).length > 0) &&
-                    editorPreview.addPaintLayer())
+            if (toolName === "eraser" && root.selectedEditTargetScope() === "base-image") {
+                root.finishEditToolTransitionSoon()
+                return
+            }
+            if (String(layer.kind || "") === "pixel" &&
+                    (toolName === "eraser" || Object.keys(layer.shapeDefinition || ({})).length === 0))
+                root.setActivePhotoLayerSelection(root.normalizedActivePhotoLayerIndex(), false)
+            else if (toolName === "paint" && editorPreview.addPaintLayer())
                 root.setActivePhotoLayerSelection(0, false)
             root.finishEditToolTransitionSoon()
             return
@@ -5691,6 +7026,7 @@ Rectangle {
     function editToolDisplayName(toolName) {
         const tool = String(toolName || "").toLowerCase()
         if (tool === "paint") return "Paint"
+        if (tool === "eraser") return "Eraser"
         if (tool === "shapes") return "Shapes"
         if (tool === "text")
             return "Text"
@@ -5793,6 +7129,7 @@ Rectangle {
     function editToolVariant(toolName) {
         const tool = String(toolName || "")
         if (tool === "paint") return "pixels"
+        if (tool === "eraser") return "erase pixels"
         if (tool === "shapes") return "draw"
         if (tool === "text")
             return "paragraph"
@@ -5827,7 +7164,7 @@ Rectangle {
             return "crop"
         if (tool === "masks" || tool === "brush" || tool === "pixel-brush" || tool === "retouch")
             return "adjust"
-        if (tool === "layers" || tool === "text" || tool === "paint" || tool === "shapes")
+        if (tool === "layers" || tool === "text" || tool === "paint" || tool === "eraser" || tool === "shapes")
             return "layers"
         if (tool === "presets" || tool === "scopes" || tool === "info")
             return tool
@@ -5862,7 +7199,7 @@ Rectangle {
             return editorPreview.cropEditing ? "active" : "armed"
         if (tool === "retouch")
             return editorPreview.activeMaskToolRole === "retouch" ? "armed" : "inactive"
-        if (tool === "compare" || tool === "layers" || tool === "adjust" || tool === "paint" || tool === "shapes")
+        if (tool === "compare" || tool === "layers" || tool === "adjust" || tool === "paint" || tool === "eraser" || tool === "shapes")
             return "armed"
         return "inactive"
     }
@@ -5922,7 +7259,7 @@ Rectangle {
             lifecycle.commit = "auto-commit-value-change"
             lifecycle.cancel = "reset-control-or-undo"
             lifecycle.errorState = "show-control-error-inline"
-        } else if (tool === "paint") {
+        } else if (tool === "paint" || tool === "eraser") {
             lifecycle.primaryAction = "paint-or-erase-layer-pixels"
             lifecycle.feedback = "live-layer-preview-and-brush-cursor"
             lifecycle.commit = "stroke-release-commits"
@@ -5999,30 +7336,45 @@ Rectangle {
                "|error:" + lifecycle.errorState
     }
 
+    function configuredEditToolShortcut(actionId, fallbackKey) {
+        const windowObject = root.Window.window
+        let fallback = "Ctrl+Alt+" + String(fallbackKey || "")
+        if (windowObject && typeof windowObject.primaryAltShortcut === "function")
+            fallback = windowObject.primaryAltShortcut(String(fallbackKey || ""))
+        if (windowObject && typeof windowObject.configuredShortcut === "function")
+            return windowObject.configuredShortcut(String(actionId || ""), fallback)
+        return appShell.shortcutSequence(String(actionId || ""), fallback)
+    }
+
     function editToolModel() {
         const tools = [
-            { id: "adjust", label: "Adjust", icon: "adjust", shortcut: "A", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "adjustInspectorTabButton", railObjectName: "editRailAdjustButton", tooltip: "Adjust light, color, detail, lens, and transform controls." },
-            { id: "presets", label: "Presets", icon: "swatch", shortcut: "P", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "presetsInspectorTabButton", railObjectName: "editRailPresetsButton", primaryTool: false, tooltip: "Open saved looks and preset packs." },
-            { id: "masks", label: "Selection", icon: "smart-select", shortcut: "M", family: "Selection", railGroup: "Selection", category: "Local", railObjectName: "editRailSelectionButton", tooltip: "Create selections, paint brush refinements, or retouch repairs from one canvas workflow." },
-            { id: "paint", label: "Paint", icon: "brush-tool", family: "Paint", railGroup: "Paint", category: "Graphics", railObjectName: "editRailPaintButton", tooltip: "Paint color or erase pixels on a transparent paint layer." },
-            { id: "shapes", label: "Shapes", icon: "geometry", shortcut: "U", family: "Shapes", railGroup: "Shapes", category: "Graphics", railObjectName: "editRailShapesButton", tooltip: "Draw editable rectangles, ellipses, lines, and arrows." },
+            { id: "adjust", label: "Adjust", icon: "adjust", shortcutAction: "tool-adjust", shortcutFallback: "A", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "adjustInspectorTabButton", railObjectName: "editRailAdjustButton", tooltip: "Adjust light, color, detail, lens, and transform controls." },
+            { id: "presets", label: "Presets", icon: "swatch", shortcut: "", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "presetsInspectorTabButton", railObjectName: "editRailPresetsButton", primaryTool: false, tooltip: "Open saved looks and preset packs." },
+            { id: "masks", label: "Selection", icon: "smart-select", shortcutAction: "tool-masks", shortcutFallback: "M", family: "Selection", railGroup: "Selection", category: "Local", railObjectName: "editRailSelectionButton", tooltip: "Create selections, paint brush refinements, or retouch repairs from one canvas workflow." },
+            { id: "paint", label: "Paint", icon: "brush-tool", shortcutAction: "tool-brush", shortcutFallback: "B", family: "Paint", railGroup: "Paint", category: "Graphics", railObjectName: "editRailPaintButton", tooltip: "Paint color or erase pixels on a transparent paint layer." },
+            { id: "eraser", label: "Eraser", icon: "erase-tool", shortcut: "", family: "Paint", railGroup: "Paint", category: "Graphics", railObjectName: "editRailEraserButton", tooltip: "Erase pixels on the selected paint or pixel layer with independent size, hardness, opacity, and flow." },
+            { id: "shapes", label: "Shapes", icon: "shape-tool", shortcut: "", family: "Shapes", railGroup: "Shapes", category: "Graphics", railObjectName: "editRailShapesButton", tooltip: "Draw editable rectangles, ellipses, lines, and arrows." },
             { id: "text", label: "Text", icon: "text", shortcut: "T", family: "Text", railGroup: "Text", category: "Graphics", railObjectName: "editRailTextButton", tooltip: "Click or drag a paragraph text box, then type on the canvas." },
-            { id: "crop", label: "Crop", icon: "crop", shortcut: "C", family: "Crop", railGroup: "Crop", category: "Geometry", objectName: "cropInspectorTabButton", railObjectName: "editRailCropButton", tooltip: "Crop, straighten, and transform the photo." },
-            { id: "compare", label: "Compare", icon: "compare", shortcut: "\\", family: "View", railGroup: "View", category: "View", railObjectName: "editRailCompareButton", tooltip: "Compare before and after views." },
-            { id: "scopes", label: "Scopes", icon: "scope", shortcut: "S", family: "View", railGroup: "View", category: "View", objectName: "scopesInspectorTabButton", railObjectName: "editRailScopesButton", primaryTool: false, tooltip: "Open histogram, waveform, and analysis scopes." },
-            { id: "export", label: "Export", icon: "export", shortcut: "E", family: "Export", railGroup: "Export", category: "Delivery", railObjectName: "editRailExportButton", primaryTool: false, tooltip: "Send the current work to Export." }
+            { id: "crop", label: "Crop", icon: "crop", shortcutAction: "tool-crop", shortcutFallback: "C", family: "Crop", railGroup: "Crop", category: "Geometry", objectName: "cropInspectorTabButton", railObjectName: "editRailCropButton", tooltip: "Crop, straighten, and transform the photo." },
+            { id: "compare", label: "Compare", icon: "compare", shortcutAction: "tool-compare", shortcutFallback: "P", family: "View", railGroup: "View", category: "View", railObjectName: "editRailCompareButton", topRail: true, tooltip: "Compare before and after views." },
+            { id: "scopes", label: "Scopes", icon: "scope", shortcut: "", family: "View", railGroup: "View", category: "View", objectName: "scopesInspectorTabButton", railObjectName: "editRailScopesButton", topRail: true, primaryTool: false, tooltip: "Open histogram, waveform, and analysis scopes." },
+            { id: "export", label: "Export", icon: "export", shortcutAction: "tool-export", shortcutFallback: "E", family: "Export", railGroup: "Export", category: "Delivery", railObjectName: "editRailExportButton", primaryTool: false, tooltip: "Send the current work to Export." }
         ]
         return tools.map(function(tool) {
             const disabledReason = root.editToolDisabledReason(tool.id)
             const lifecycle = root.editToolLifecycle(tool.id)
+            const shortcut = tool.shortcutAction
+                    ? root.configuredEditToolShortcut(tool.shortcutAction, tool.shortcutFallback)
+                    : String(tool.shortcut || "")
             return {
                 id: tool.id,
                 label: tool.label,
                 icon: tool.icon,
-                shortcut: tool.shortcut,
+                shortcut: shortcut,
                 category: tool.category,
                 family: tool.family,
                 railGroup: tool.railGroup,
+                topRail: tool.topRail === true,
                 railObjectName: String(tool.railObjectName || ""),
                 primaryTool: tool.primaryTool !== false,
                 tooltip: String(tool.tooltip || ""),
@@ -6544,8 +7896,7 @@ Rectangle {
         const filmstripCount = root.editingChromeVisible &&
                                !root.activeCanvasToolChromeReduced &&
                                !root.scopeDockActive("bottom") ? 1 : 0
-        const diagnosticsCount = root.developerDiagnosticsEnabled &&
-                                 root.diagnosticsPanelOpen &&
+        const diagnosticsCount = root.diagnosticsPanelOpen &&
                                  !root.maskWorkActive &&
                                  !primaryHud ? 1 : 0
         return "studio-visible-surface-counts:v1" +
@@ -6634,7 +7985,8 @@ Rectangle {
             return root.finishSelectionWorkflow()
         }
         if (root.objectPickArmed && editorPreview.smartSelectPreviewActive) {
-            editorPreview.acceptSmartSelectPreview(root.objectPickMode, root.objectPickCreateNew)
+            const outcome = editorPreview.acceptSmartSelectPreview(root.objectPickMode, root.objectPickCreateNew)
+            if (outcome === "error") return false
             return root.finishSelectionWorkflow()
         }
         if (root.activePolygonShortcutReady())
@@ -6880,13 +8232,14 @@ Rectangle {
     }
 
     function switchMaskTargetFromShortcut(delta) {
-        if (!root.targetShortcutContextActive(true) || editorPreview.maskSetCount <= 0)
+        const maskSets = root.maskSetRows
+        const count = maskSets.length
+        if (!root.targetShortcutContextActive(true) || count <= 0)
             return false
-        const count = editorPreview.maskSetCount
         const direction = Number(delta || 0) < 0 ? -1 : 1
         let currentIndex = -1
         for (let index = 0; index < count; ++index) {
-            if (root.maskSetActive(editorPreview.maskSets[index] || ({}))) {
+            if (root.maskSetActive(maskSets[index] || ({}))) {
                 currentIndex = index
                 break
             }
@@ -6894,7 +8247,7 @@ Rectangle {
         if (currentIndex < 0)
             currentIndex = Math.max(0, Math.min(count - 1, root.selectedMaskSetIndex))
         const nextIndex = (Math.max(0, currentIndex) + direction + count) % count
-        root.selectMaskSetAndLayer(editorPreview.maskSets[nextIndex] || ({}), false)
+        root.selectMaskSetAndLayer(maskSets[nextIndex] || ({}), false)
         return true
     }
 
@@ -7203,11 +8556,13 @@ Rectangle {
         const kind = String(kindName || "").trim().toLowerCase()
         root.clearTransientMaskTools()
         root.editTool = "masks"
-        root.editInspectorTab = "adjust"
+        root.editInspectorTab = "layers"
         editorPreview.compareMode = false
         editorPreview.cropEditing = false
         editorPreview.maskPreviewMode = "overlay"
         if (kind === "object") {
+            if (root.maskCreationOperation === "intersect" || root.maskCreationOperation === "replace")
+                root.maskCreationOperation = "add"
             root.objectPickArmed = true
             root.objectPickCreateNew = true
             root.objectPickMode = "selection"
@@ -7218,13 +8573,13 @@ Rectangle {
         if (editorPreview.hasActiveMask)
             editorPreview.activeMaskOperation = root.maskCreationOperation
         if (layerIndex >= 0)
-            root.editInspectorTab = "adjust"
+            root.editInspectorTab = "layers"
     }
 
     function createGeneratedSelectionSource(kindName) {
         root.clearTransientMaskTools()
         root.editTool = "masks"
-        root.editInspectorTab = "adjust"
+        root.editInspectorTab = "layers"
         editorPreview.compareMode = false
         editorPreview.cropEditing = false
         editorPreview.maskPreviewMode = "overlay"
@@ -7233,7 +8588,7 @@ Rectangle {
         if (editorPreview.hasActiveMask)
             editorPreview.activeMaskOperation = root.maskCreationOperation
         if (layerIndex >= 0)
-            root.editInspectorTab = "adjust"
+            root.editInspectorTab = "layers"
     }
 
     function startMaskBrushSource(operationName) {
@@ -7383,6 +8738,12 @@ Rectangle {
     function retouchSelectionMenuItems() {
         return [
             {
+                key: "remove-item",
+                label: "Remove an item",
+                icon: "smart-select",
+                tooltip: "Select a specific item with a click or box, then fill it from surrounding pixels."
+            },
+            {
                 key: "retouch-remove",
                 label: "Retouch Remove",
                 icon: "erase-tool",
@@ -7460,7 +8821,7 @@ Rectangle {
         const railCreationSurfaces = railVisible ? 1 : 0
         const visibleRailEntries = 4
         return "selection-creation-surfaces:v2" +
-               "|owner:left-rail" +
+               "|owner:top-tool-rail" +
                "|rail:" + String(railVisible) +
                "|rail-expanded:" + String(railExpanded) +
                "|rail-creation-surfaces:" + String(railCreationSurfaces) +
@@ -7475,7 +8836,10 @@ Rectangle {
     }
 
     function handleMaskToolMenuAction(key) {
-        if (key === "subject" || key === "sky" || key === "background") {
+        if (key === "remove-item") {
+            root.createMaskSource("object")
+            root.objectPickMode = "remove"
+        } else if (key === "subject" || key === "sky" || key === "background") {
             root.createGeneratedSelectionSource(key)
         } else if (key === "object" || key === "linear" || key === "radial" ||
                    key === "ellipse" || key === "rectangle" || key === "luminance" ||
@@ -7743,7 +9107,7 @@ Rectangle {
     function selectedMaskHeaderActive() {
         return editorPreview.hasActiveMask &&
                (root.activeEditTargetScope() === "mask" || root.editTargetCanShowMask()) &&
-               (root.editInspectorTab === "adjust" || root.editInspectorTab === "layers")
+               root.editInspectorTab === "adjust"
     }
 
     function selectedMaskHeaderSignature() {
@@ -7972,10 +9336,10 @@ Rectangle {
     }
 
     function brushPageVisibilitySignature() {
-        return "brush-page:v3|one-hud:" + String(root.brushToolReady()) +
-               "|visible:mode-status-tuning-done" +
-               "|collapsed:size-drag-field-buttons" +
-               "|tuning:menu-size-flow-hard" +
+        return "brush-page:v4|one-hud:" + String(root.brushToolReady()) +
+               "|visible:add-erase-size-field-horizontal-tuning-options-done" +
+               "|precision:size-percent-field" +
+               "|tuning:inline-size-hardness-flow" +
                "|advanced:inspector-density-opacity-more-pressure-reset" +
                "|diagnostic-size-hidden:true" +
                "|context-panel:hidden-by-default" +
@@ -8343,6 +9707,10 @@ Rectangle {
             }
         ]
         if (inpaintMode) {
+            const texture = String(editorPreview.inpaintPrompt || "")
+            items.push({ key: "texture-auto", label: "Fill texture: automatic", checked: texture.length === 0, separatorBefore: true, enabled: !committed, tooltip: "Reconstruct the surrounding image texture. This does not generate objects from text." })
+            items.push({ key: "texture-smooth", label: "Fill texture: smooth", checked: texture === "smooth", enabled: !committed, tooltip: "Reduce texture in the reconstructed area." })
+            items.push({ key: "texture-detail", label: "Fill texture: detailed", checked: texture === "texture detail", enabled: !committed, tooltip: "Preserve more surrounding texture in the reconstructed area." })
             items.push({
                            key: "regenerate",
                            label: committed ? "Regenerate Patch" : "Regenerate Preview",
@@ -8434,7 +9802,9 @@ Rectangle {
     }
 
     function handleRetouchHudMoreMenuAction(key) {
-        if (key === "before-after") {
+        if (key === "texture-auto" || key === "texture-smooth" || key === "texture-detail") {
+            editorPreview.inpaintPrompt = key === "texture-auto" ? "" : key === "texture-smooth" ? "smooth" : "texture detail"
+        } else if (key === "before-after") {
             editorPreview.retouchBeforeAfterEnabled = !editorPreview.retouchBeforeAfterEnabled
         } else if (key === "regenerate") {
             if (editorPreview.activeMaskCommitted)
@@ -8665,9 +10035,8 @@ Rectangle {
         if (layer === null || layer === undefined)
             return root.photoLayerBlendModes()
         const kind = String(layer && layer.kind !== undefined ? layer.kind : "").trim().toLowerCase()
-        if (kind === "group")
-            return ["normal"]
         if (kind === "adjustment" || kind === "fill" || kind === "pixel" ||
+                kind === "group" ||
                 kind === "text" || kind === "source")
             return root.photoLayerBlendModes()
         return ["normal"]
@@ -8874,9 +10243,7 @@ Rectangle {
     function placeSourceLayer(sourceUrl) {
         if (!editorPreview.addSourceLayer(String(sourceUrl), ""))
             return false
-        root.setActivePhotoLayerSelection(0, false)
-        root.editInspectorTab = "layers"
-        return true
+        return root.setActivePhotoLayer(0)
     }
 
     function handleLayerAddMenuAction(key) {
@@ -8890,15 +10257,25 @@ Rectangle {
         } else if (key === "adjustment") {
             root.addAdjustmentLayerForCurrentTarget()
         } else if (key === "fill") {
-            editorPreview.addFillLayer("#808080", "")
+            if (editorPreview.addFillLayer("#808080", ""))
+                root.setActivePhotoLayer(0)
         } else if (key === "text") {
-            editorPreview.addTextLayer("Text", "")
+            if (editorPreview.addTextLayer("Text", ""))
+                root.setActivePhotoLayer(0)
         } else if (key === "paragraph") {
             root.activateEditTool("text")
         } else if (key === "source") {
             sourceLayerDialog.open()
         } else if (key === "group") {
-            editorPreview.addLayerGroup("")
+            const selected = root.normalizedPhotoLayerSelection()
+            if (selected.length === 0) {
+                if (editorPreview.addLayerGroup(""))
+                    root.setActivePhotoLayer(0)
+            } else {
+                const first = Math.min.apply(null, selected)
+                if (editorPreview.groupPhotoLayers(selected, ""))
+                    root.setActivePhotoLayer(first)
+            }
         }
     }
 
@@ -8954,8 +10331,7 @@ Rectangle {
                                            layerIndex,
                                            root.activeMaskSetData(),
                                            editorPreview.activeMaskIndex)
-                root.activateEditTool("adjust")
-                return true
+                return root.setActivePhotoLayer(layerIndex)
             }
         }
         if (!editorPreview.addAdjustmentLayer(""))
@@ -8963,9 +10339,7 @@ Rectangle {
         // New layers are prepended. Resolve the target again immediately so a
         // previously selected photo layer cannot leave index 0 carrying a
         // stale `photo-layer` scope while it now contains an adjustment layer.
-        root.setActivePhotoLayerSelection(0, false)
-        root.activateEditTool("adjust")
-        return true
+        return root.setActivePhotoLayer(0)
     }
 
     function layerVisibilityStateMenuItems() {
@@ -9016,6 +10390,177 @@ Rectangle {
         }
     }
 
+    function photoLayerCanMoveIntoGroup(layerIndex, groupIndex) {
+        const rows = root.photoLayerRows || []
+        const sourceIndex = Math.floor(Number(layerIndex))
+        const targetIndex = Math.floor(Number(groupIndex))
+        if (sourceIndex < 0 || sourceIndex >= rows.length ||
+                targetIndex < 0 || targetIndex >= rows.length || sourceIndex === targetIndex)
+            return false
+        const source = rows[sourceIndex] || ({})
+        const target = rows[targetIndex] || ({})
+        if (source.locked === true || target.locked === true ||
+                String(target.kind || "") !== "group")
+            return false
+        const sourceId = String(source.id || "")
+        const targetId = String(target.id || "")
+        if (sourceId.length === 0 || targetId.length === 0 ||
+                String(source.parentId || "") === targetId)
+            return false
+        let parentId = targetId
+        let guard = 0
+        while (parentId.length > 0 && guard < rows.length) {
+            if (parentId === sourceId)
+                return false
+            const parentIndex = root.photoLayerIndexForId(parentId)
+            if (parentIndex < 0)
+                break
+            parentId = String((rows[parentIndex] || ({})).parentId || "")
+            ++guard
+        }
+        return true
+    }
+
+    function photoLayerCanMoveOutOfGroup(layerIndex) {
+        const rows = root.photoLayerRows || []
+        const sourceIndex = Math.floor(Number(layerIndex))
+        if (sourceIndex < 0 || sourceIndex >= rows.length)
+            return false
+        const source = rows[sourceIndex] || ({})
+        const parentId = String(source.parentId || "")
+        if (parentId.length === 0 || source.locked === true)
+            return false
+        const parentIndex = root.photoLayerIndexForId(parentId)
+        if (parentIndex < 0)
+            return false
+        const parent = rows[parentIndex] || ({})
+        if (String(parent.kind || "") !== "group" || parent.locked === true)
+            return false
+        const destinationParentId = String(parent.parentId || "")
+        if (destinationParentId.length === 0)
+            return true
+        const destinationIndex = root.photoLayerIndexForId(destinationParentId)
+        if (destinationIndex < 0)
+            return false
+        const destination = rows[destinationIndex] || ({})
+        return String(destination.kind || "") === "group"
+                && destination.locked !== true
+    }
+
+    function photoLayerGroupDropTargetAtPointer(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater) {
+        if (!pointerItem || !rowsRepeater)
+            return -1
+        const pointer = pointerItem.mapToItem(root, pointerX, pointerY)
+        for (let index = 0; index < rowsRepeater.count; ++index) {
+            if (!root.photoLayerCanMoveIntoGroup(sourceIndex, index))
+                continue
+            const row = rowsRepeater.itemAt(index)
+            if (!row || !row.visible)
+                continue
+            const topLeft = row.mapToItem(root, 0, 0)
+            if (pointer.x >= topLeft.x && pointer.x <= topLeft.x + row.width &&
+                    pointer.y >= topLeft.y + row.height * 0.2 &&
+                    pointer.y <= topLeft.y + row.height * 0.8)
+                return index
+        }
+        return -1
+    }
+
+    function photoLayerDragDestination(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater) {
+        const none = { groupIndex: -1, markerIndex: -1, after: false, offset: 0 }
+        if (!pointerItem || !rowsRepeater || sourceIndex < 0 ||
+                (root.photoLayerRows[sourceIndex] || ({})).locked === true)
+            return none
+        const groupIndex = root.photoLayerGroupDropTargetAtPointer(
+                    sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater)
+        if (groupIndex >= 0)
+            return { groupIndex: groupIndex, markerIndex: -1, after: false, offset: 0 }
+        const pointer = pointerItem.mapToItem(root, pointerX, pointerY)
+        const rows = root.photoLayerRows || []
+        const parentId = String((rows[sourceIndex] || ({})).parentId || "")
+        const siblings = []
+        for (let index = 0; index < rows.length; ++index)
+            if (String((rows[index] || ({})).parentId || "") === parentId)
+                siblings.push(index)
+        const sourcePosition = siblings.indexOf(sourceIndex)
+        if (sourcePosition < 0)
+            return none
+        let destination = siblings.length - 1
+        for (let position = 0; position < siblings.length; ++position) {
+            const index = siblings[position]
+            const row = rowsRepeater.itemAt(index)
+            if (index === sourceIndex || !row || !row.visible)
+                continue
+            const middle = row.mapToItem(root, 0, row.height / 2)
+            if (pointer.y < middle.y) {
+                destination = position - (position > sourcePosition ? 1 : 0)
+                break
+            }
+        }
+        if (destination === sourcePosition)
+            return none
+        let markerIndex = siblings[destination]
+        const after = destination > sourcePosition
+        if (after && String((rows[markerIndex] || ({})).kind || "") === "group") {
+            // Moving below a group inserts after its entire subtree.
+            const groupId = String(rows[markerIndex].id || "")
+            for (let index = markerIndex + 1; index < rows.length; ++index) {
+                let ancestorId = String((rows[index] || ({})).parentId || "")
+                let guard = 0
+                while (ancestorId.length > 0 && ancestorId !== groupId && guard++ < rows.length) {
+                    const ancestorIndex = root.photoLayerIndexForId(ancestorId)
+                    ancestorId = ancestorIndex >= 0 ? String(rows[ancestorIndex].parentId || "") : ""
+                }
+                const row = rowsRepeater.itemAt(index)
+                if (ancestorId === groupId && row && row.visible)
+                    markerIndex = index
+            }
+        }
+        return { groupIndex: -1, markerIndex: markerIndex, after: after,
+                 offset: destination - sourcePosition }
+    }
+
+    function clearPhotoLayerDropIndicator() {
+        root.photoLayerHierarchyDropTargetIndex = -1
+        root.photoLayerReorderDropTargetIndex = -1
+    }
+
+    function updatePhotoLayerHierarchyDropTarget(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater) {
+        const destination = root.photoLayerDragDestination(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater)
+        root.photoLayerHierarchyDropTargetIndex = destination.groupIndex
+        root.photoLayerReorderDropAfter = destination.after
+        root.photoLayerReorderDropTargetIndex = destination.markerIndex
+    }
+
+    function finishPhotoLayerDrag(sourceIndex, sourceRow, pointerItem, pointerX, pointerY, dragProxy, rowsRepeater) {
+        if (!sourceRow.reorderDragActive) {
+            root.clearPhotoLayerDropIndicator()
+            dragProxy.y = 0
+            return false
+        }
+        const destination = root.photoLayerDragDestination(sourceIndex, pointerItem, pointerX, pointerY, rowsRepeater)
+        const groupIndex = destination.groupIndex
+        const offset = destination.offset
+        const sourceId = String((root.photoLayerRows[sourceIndex] || ({})).id || "")
+        const groupId = groupIndex >= 0
+                        ? String((root.photoLayerRows[groupIndex] || ({})).id || "") : ""
+        root.clearPhotoLayerDropIndicator()
+        dragProxy.y = 0
+        sourceRow.reorderDragActive = false
+        if (groupIndex >= 0 && editorPreview.movePhotoLayerIntoGroup(sourceIndex, groupIndex)) {
+            const expandedGroupIndex = root.photoLayerIndexForId(groupId)
+            if (expandedGroupIndex >= 0)
+                editorPreview.setPhotoLayerGroupExpanded(expandedGroupIndex, true)
+            const movedLayerIndex = root.photoLayerIndexForId(sourceId)
+            if (movedLayerIndex >= 0)
+                root.setActivePhotoLayerSelection(movedLayerIndex, false)
+            return true
+        }
+        if (offset !== 0)
+            return root.movePhotoLayerPreservingSelection(sourceIndex, offset)
+        return false
+    }
+
     function layerRowMenuItems(layerIndex, layer) {
         const validIndex = Math.floor(Number(layerIndex))
         const locked = layer && layer.locked === true
@@ -9024,9 +10569,16 @@ Rectangle {
         const clipped = layer && layer.clippingMask === true
         const hasMask = layer && layer.hasLayerMask === true
         const layerKind = String(layer && layer.kind !== undefined ? layer.kind : "")
+        const isNested = String(layer && layer.parentId || "").length > 0
         const canMoveUp = validIndex > 0 && !locked
         const canMoveDown = validIndex >= 0 && validIndex < editorPreview.photoLayerCount - 1 && !locked
-        return [
+        const items = [
+            { key: "copy-layers", label: "Copy Layer", icon: "source",
+              enabled: validIndex >= 0 && !editorPreview.photoLayerClipboardBusy && !editorPreview.photoPaintBusy },
+            { key: "paste-layers", label: "Paste Layers", icon: "source",
+              enabled: editorPreview.hasCopiedPhotoLayers && !editorPreview.photoLayerClipboardBusy && !editorPreview.photoPaintBusy },
+            { key: "paste-layers-in-place", label: "Paste Layers in Place", icon: "source",
+              enabled: editorPreview.hasCopiedPhotoLayers && !editorPreview.photoLayerClipboardBusy && !editorPreview.photoPaintBusy },
             {
                 key: "relink-source",
                 label: "Relink Image…",
@@ -9044,6 +10596,13 @@ Rectangle {
                 checked: root.photoLayerSelected(validIndex),
                 disabledReason: "Layer is no longer available.",
                 tooltip: "Select this layer as the active edit target."
+            },
+            {
+                key: "properties",
+                label: "Layer Properties…",
+                icon: "layers",
+                enabled: validIndex >= 0,
+                tooltip: "Show opacity, blend mode and advanced properties for this layer."
             },
             {
                 key: "toggle-visible",
@@ -9103,6 +10662,31 @@ Rectangle {
                 tooltip: "Show transform handles for this layer."
             },
             {
+                key: "erase-selection-pixels",
+                label: "Erase Pixels in Selection",
+                icon: "delete",
+                enabled: validIndex >= 0 && !locked && layerKind === "pixel" && editorPreview.hasActiveMask,
+                tooltip: "Erase selected pixels on this layer. Undo restores them."
+            },
+            {
+                key: "copy-selection-pixels",
+                label: "Create Cutout Layer from Selection",
+                icon: "source",
+                enabled: validIndex >= 0 && !locked && editorPreview.hasActiveMask &&
+                         ["pixel", "text", "source", "fill"].indexOf(layerKind) >= 0,
+                disabledReason: "Select a mask and an unlocked content layer.",
+                tooltip: "Copy this layer through the active selection, intersecting any existing layer mask."
+            },
+            {
+                key: "copy-selection-pixels-independent",
+                label: "Create Independent Cutout from Layer",
+                icon: "source",
+                enabled: validIndex >= 0 && !locked && editorPreview.hasActiveMask &&
+                         ["pixel", "text", "source", "fill"].indexOf(layerKind) >= 0,
+                disabledReason: "Select a mask and an unlocked content layer.",
+                tooltip: "Rasterize this layer through the active selection and its existing masks into independent pixels."
+            },
+            {
                 key: "duplicate-with-masks",
                 label: "Duplicate With Selections",
                 icon: "source",
@@ -9140,12 +10724,58 @@ Rectangle {
                 tooltip: "Move this layer down."
             },
             {
+                key: "move-out-of-group",
+                label: "Move Out of Group",
+                icon: "group",
+                visible: isNested,
+                enabled: root.photoLayerCanMoveOutOfGroup(validIndex),
+                separatorBefore: true,
+                disabledReason: locked
+                    ? "Unlock the layer before changing its group."
+                    : "Unlock the current or destination group before moving this layer.",
+                tooltip: "Move this layer or group up one level in the layer hierarchy."
+            },
+            {
                 key: "export",
                 label: "Export Layer",
                 icon: "export",
                 enabled: false,
                 disabledReason: "Choose a destination before exporting a single layer.",
                 tooltip: "Layer export needs a destination picker before it can be run here."
+            },
+            {
+                key: "use-selection-mask", label: "Use Active Selection as Mask", icon: "masks",
+                separatorBefore: true,
+                enabled: validIndex >= 0 && !locked && ["adjustment", "group"].indexOf(layerKind) < 0 &&
+                         editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch",
+                disabledReason: locked ? "Unlock the layer first." : "Select a mask and a content layer."
+            },
+            {
+                key: "erase-background", label: "Erase Background", icon: "erase-tool",
+                enabled: validIndex >= 0 && !locked && ["adjustment", "group"].indexOf(layerKind) < 0,
+                disabledReason: "Choose an unlocked content layer."
+            },
+            {
+                key: "copy-adjustments", label: "Copy Adjustments", icon: "source",
+                visible: layerKind === "adjustment", separatorBefore: true, enabled: validIndex >= 0
+            },
+            {
+                key: "paste-adjustments", label: "Paste Adjustments", icon: "insert",
+                visible: layerKind === "adjustment", enabled: !locked && editorPreview.hasCopiedPhotoLayerAdjustments,
+                disabledReason: locked ? "Unlock the layer first." : "Copy layer adjustments first."
+            },
+            {
+                key: "paste-base-adjustments", label: "Paste Base Image Adjustments", icon: "media",
+                visible: layerKind === "adjustment", enabled: !locked
+            },
+            {
+                key: "preview-adjustments", label: layer && layer.adjustmentsPreviewBypassed === true ? "Show Adjustments" : "Preview Before Adjustments", icon: "compare",
+                visible: layerKind === "adjustment", enabled: layer && layer.hasNonNeutralAdjustments === true
+            },
+            {
+                key: "sync-adjustments", label: "Sync Adjustments to Selected Layers", icon: "effects",
+                visible: layerKind === "adjustment" && root.normalizedPhotoLayerSelection().length > 1,
+                enabled: root.selectedAdjustmentLayerIndices(validIndex).length > 0
             },
             {
                 key: "delete",
@@ -9157,14 +10787,33 @@ Rectangle {
                 disabledReason: locked ? "Unlock the layer before deleting it." : "Layer is no longer available.",
                 tooltip: "Delete this layer."
             }
-        ].filter(function(item) { return item.visible !== false })
+        ]
+        let firstGroupChoice = true
+        if (validIndex >= 0 && !locked) {
+            for (let groupIndex = 0; groupIndex < editorPreview.photoLayerCount; ++groupIndex) {
+                if (!root.photoLayerCanMoveIntoGroup(validIndex, groupIndex))
+                    continue
+                const group = root.photoLayerRows[groupIndex] || ({})
+                const groupName = String(group.displayName || group.name || "Layer Group")
+                items.splice(items.length - 2, 0, {
+                    key: "move-into-group:" + String(group.id),
+                    label: "Move Into " + groupName,
+                    icon: "group",
+                    separatorBefore: firstGroupChoice,
+                    tooltip: "Move this layer and its children into the selected group."
+                })
+                firstGroupChoice = false
+            }
+        }
+        return items.filter(function(item) { return item.visible !== false })
     }
 
     function layerStackAcceptanceSignature() {
-        return "layer-stack-acceptance:v2" +
+        return "layer-stack-acceptance:v3" +
                "|select:pointer-modifiers-keyboard" +
                "|rename:inline-f2-properties" +
                "|reorder:drag-keyboard-menu" +
+               "|hierarchy:drag-into-group-cycle-safe-highlight-expand" +
                "|visibility:toggle-and-state" +
                "|opacity:fixed-readout" +
                "|mask-select:inspector-context" +
@@ -9181,6 +10830,11 @@ Rectangle {
     }
 
     function handleLayerRowMenuAction(key, layerIndex, layer) {
+        if (key === "copy-layers") { root.copyLayers([layerIndex]); return }
+        if (key === "paste-layers" || key === "paste-layers-in-place") {
+            root.pasteLayers(key === "paste-layers-in-place")
+            return
+        }
         if (key === "relink-source") {
             if (!layer || layer.kind !== "source" || layer.locked === true)
                 return
@@ -9191,10 +10845,46 @@ Rectangle {
         const index = Math.floor(Number(layerIndex))
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return
-        if (key === "edit") {
+        if (key === "move-out-of-group") {
+            const layerId = String((root.photoLayerRows[index] || ({})).id || "")
+            if (root.photoLayerCanMoveOutOfGroup(index)
+                    && editorPreview.movePhotoLayerOutOfGroup(index)) {
+                const movedIndex = root.photoLayerIndexForId(layerId)
+                if (movedIndex >= 0)
+                    root.setActivePhotoLayerSelection(movedIndex, false)
+            }
+        } else if (String(key).indexOf("move-into-group:") === 0) {
+            const groupId = String(key).substring("move-into-group:".length)
+            const groupIndex = root.photoLayerIndexForId(groupId)
+            const layerId = String((root.photoLayerRows[index] || ({})).id || "")
+            if (root.photoLayerCanMoveIntoGroup(index, groupIndex) &&
+                    editorPreview.movePhotoLayerIntoGroup(index, groupIndex)) {
+                const movedIndex = root.photoLayerIndexForId(layerId)
+                if (movedIndex >= 0)
+                    root.setActivePhotoLayerSelection(movedIndex, false)
+            }
+        } else if (key === "properties") {
+            root.setActivePhotoLayerSelection(index, false)
+            root.editInspectorTab = "layers"
+            Qt.callLater(function() { root.photoLayerDetailsExpanded = true })
+        } else if (key === "edit") {
             root.editPhotoLayerInspectorTarget(index)
+        } else if (key === "use-selection-mask") {
+            root.useActiveSelectionAsLayerMask(index, false)
+        } else if (key === "erase-background") {
+            root.startLayerBackgroundEraser(index)
+        } else if (key === "copy-adjustments") {
+            editorPreview.copyPhotoLayerAdjustments(index)
+        } else if (key === "paste-adjustments") {
+            editorPreview.pastePhotoLayerAdjustments(index)
+        } else if (key === "paste-base-adjustments") {
+            editorPreview.pasteGlobalAdjustmentsToPhotoLayer(index)
+        } else if (key === "preview-adjustments") {
+            editorPreview.setPhotoLayerAdjustmentsPreviewBypassed(index, !(layer && layer.adjustmentsPreviewBypassed === true))
+        } else if (key === "sync-adjustments") {
+            editorPreview.syncPhotoLayerAdjustments(index, root.selectedAdjustmentLayerIndices(index))
         } else if (key === "toggle-visible") {
-            editorPreview.setPhotoLayerEnabled(index, !((layer && layer.enabled === false)))
+            editorPreview.setPhotoLayerEnabled(index, layer && layer.enabled === false)
         } else if (key === "toggle-lock") {
             editorPreview.setPhotoLayerLocked(index, !(layer && layer.locked === true))
         } else if (key === "toggle-solo") {
@@ -9210,6 +10900,12 @@ Rectangle {
             root.setActivePhotoLayer(index)
         } else if (key === "toggle-text-controls") {
             root.expandedTextLayerIndex = root.expandedTextLayerIndex === index ? -1 : index
+        } else if (key === "erase-selection-pixels") {
+            editorPreview.erasePixelsFromSelection(index)
+        } else if (key === "copy-selection-pixels") {
+            if (editorPreview.copyPixelsFromSelection(index)) root.setActivePhotoLayerSelection(0, false)
+        } else if (key === "copy-selection-pixels-independent") {
+            if (editorPreview.copyPixelsFromSelection(index, true)) root.setActivePhotoLayerSelection(0, false)
         } else if (key === "duplicate" || key === "duplicate-with-masks") {
             editorPreview.duplicatePhotoLayerWithMasks(index)
         } else if (key === "duplicate-without-masks") {
@@ -9237,6 +10933,8 @@ Rectangle {
         const orderCount = Math.max(0, Math.floor(Number(combineOrderCount)))
         const nested = parentIndex >= 0
         return [
+            { key: "copy-pixels", label: "Copy Linked Pixels from Selection", icon: "copy", enabled: hasSources, tooltip: "Create a copy that follows later base-photo edits and keeps this selection editable." },
+            { key: "copy-independent", label: "Create Independent Cutout", icon: "copy", enabled: hasSources, tooltip: "Render the developed base now and bake this selection into a self-contained pixel layer." },
             { key: "edit-mask", label: "Edit Selection", icon: "select", checked: root.maskSetActive(maskSet), tooltip: "Edit this selection on the canvas." },
             { key: "edit-layer", label: linkedIndex >= 0 ? "Edit Layer" : "Create Layer", icon: "adjust", separatorBefore: true, tooltip: linkedIndex >= 0 ? "Edit the linked layer." : "Create and edit a layer for this selection." },
             { key: "toggle-preview", label: previewBypassed ? "Show Preview" : "Preview Before Selection", icon: "compare", enabled: maskId.length > 0 && hasSources, disabledReason: "This selection has no source preview yet.", checked: previewBypassed, tooltip: previewBypassed ? "Show this selection in preview." : "Preview before this selection." },
@@ -9250,7 +10948,13 @@ Rectangle {
         const action = String(key || "")
         const parentIndex = Math.floor(Number(parentLayerIndex))
         const orderIndex = Math.floor(Number(combineOrderIndex))
-        if (action === "edit-mask") {
+        if (action === "copy-pixels") {
+            if (editorPreview.selectMaskSet(String(maskSet.id)) && editorPreview.copyPixelsFromSelection())
+                root.setActivePhotoLayerSelection(0, false)
+        } else if (action === "copy-independent") {
+            if (editorPreview.selectMaskSet(String(maskSet.id)) && editorPreview.copyPixelsFromSelection(-1, true))
+                root.setActivePhotoLayerSelection(0, false)
+        } else if (action === "edit-mask") {
             root.selectMaskSetAndLayer(maskSet, false)
         } else if (action === "edit-layer") {
             root.selectMaskSetAndLayer(maskSet, true)
@@ -9337,8 +11041,9 @@ Rectangle {
         if (validLayerIndex >= 0)
             root.activePhotoLayerIndex = validLayerIndex
         if (nextScope === "mask") {
-            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-                const candidate = editorPreview.maskSets[index] || ({})
+            const maskSets = root.maskSetRows
+            for (let index = 0; index < maskSets.length; ++index) {
+                const candidate = maskSets[index] || ({})
                 if ((maskSetId.length > 0 && String(candidate.id || "").trim() === maskSetId) ||
                         (maskSetId.length === 0 && maskSetName.length > 0 && String(candidate.name || "").trim() === maskSetName)) {
                     root.selectedMaskSetIndex = index
@@ -9371,6 +11076,80 @@ Rectangle {
             selected.push(normalizedIndex)
         }
         return selected
+    }
+
+    function canCopyLayers() {
+        return page === "edit" && editorPreview.hasAsset && !root.editBoardSwitchBusy && !editorPreview.photoLayerClipboardBusy &&
+               !editorPreview.photoPaintBusy && !root.shortcutTextInputActive() &&
+               (root.selectedEditTargetScope() === "base-image" || root.normalizedPhotoLayerSelection().length > 0)
+    }
+
+    function copySelectedLayers() {
+        if (!root.canCopyLayers()) return false
+        return root.copyLayers(root.selectedEditTargetScope() === "base-image" ? [-1] : root.normalizedPhotoLayerSelection())
+    }
+
+    function copyLayers(indices) {
+        if (!editorPreview.copyPhotoLayers(indices)) return false
+        root.showEditActionFeedback(qsTr("Copying layers…"), false)
+        editActionFeedbackTimer.stop()
+        return true
+    }
+
+    function pasteLayers(inPlace) {
+        if (root.shortcutTextInputActive() || root.editBoardSwitchBusy) return false
+        const identities = editorPreview.pastePhotoLayers(Math.max(0, root.normalizedActivePhotoLayerIndex()), inPlace)
+        if (!identities.length) return false
+        const layers = editorPreview.photoLayers
+        const indices = []
+        for (let i = 0; i < layers.length; ++i)
+            if (identities.indexOf(String(layers[i].id)) >= 0) indices.push(i)
+        if (indices.length) {
+            root.setActivePhotoLayerSelection(indices[0], false)
+            root.selectedPhotoLayerIndices = indices
+        }
+        root.recentlyPastedLayerIds = identities
+        pastedLayerHighlightTimer.restart()
+        const primary = layers[indices[0]] || ({})
+        const kind = String(primary.kind || "")
+        const compatible = ["adjust", "layers"].indexOf(root.editTool) >= 0 ||
+            (root.editTool === "text" && kind === "text") || (root.editTool === "shapes" && (kind === "shape" || Object.keys(primary.shapeDefinition || ({})).length > 0)) ||
+            (["paint", "eraser"].indexOf(root.editTool) >= 0 && kind === "pixel" && Object.keys(primary.shapeDefinition || ({})).length === 0)
+        if (!compatible) {
+            root.editInspectorTab = "layers"
+            root.activateEditTool("layers")
+        }
+        return true
+    }
+
+    function addDroppedImageLayer(fileUrl) {
+        const editViewport = root.editViewportHandle
+        if (root.editBoardSwitchBusy || !editorPreview.hasAsset || !editViewport ||
+            !(editViewport.paintedContentWidth > 0 && editViewport.paintedContentHeight > 0)) return false
+        editorPreview.beginCoalescedEdit()
+        const added = editorPreview.addSourceLayer(fileUrl)
+        if (added) {
+            const layer = editorPreview.photoLayers[0]
+            const sourceW = editorPreview.sourceImageWidth
+            const sourceH = editorPreview.sourceImageHeight
+            const sx = editViewport.paintedContentWidth / sourceW
+            const sy = editViewport.paintedContentHeight / sourceH
+            const tileW = editViewport.boardUnitWidth * editViewport.zoom / sx
+            const tileH = editViewport.boardUnitHeight * editViewport.zoom / sy
+            const tileX = (editViewport.imageFrameX + (root.editBoardIndex - editViewport.imageSpanStart) * editViewport.boardUnitWidth * editViewport.zoom - editViewport.paintedContentX) / sx
+            const tileY = (editViewport.imageFrameY - editViewport.paintedContentY) / sy
+            const scale = Math.max(0.05, Math.min(32, Math.min(tileW / layer.pixelWidth, tileH / layer.pixelHeight) * 0.8))
+            editorPreview.setPhotoLayerTransform(0, Math.round(tileX + (tileW - layer.pixelWidth * scale) / 2),
+                Math.round(tileY + (tileH - layer.pixelHeight * scale) / 2), scale, 0)
+            root.setActivePhotoLayerSelection(0, false)
+            root.recentlyPastedLayerIds = [String(layer.id)]
+            pastedLayerHighlightTimer.restart()
+            root.editInspectorTab = "layers"
+            root.activateEditTool("layers")
+            root.showEditActionFeedback(qsTr("Image layer added"), false)
+        } else root.showEditActionFeedback(editorPreview.status, true)
+        editorPreview.endCoalescedEdit()
+        return added
     }
 
     function photoLayerIdentityAt(layerIndex) {
@@ -9592,18 +11371,109 @@ Rectangle {
                 targets.join(",")
     }
 
+    function selectedLayerGeometry() {
+        const selected = root.normalizedPhotoLayerSelection()
+        const result = []
+        for (let index of selected) {
+            const layer = root.photoLayerRows[index] || ({})
+            if (layer.locked === true || String(layer.parentId || "").length > 0 ||
+                String(layer.kind || "") === "group" || !root.photoLayerHasDirectTransform(layer))
+                return []
+            const scale = Number(layer.scale || 1)
+            const width = Number(layer.pixelWidth || 0) * scale
+            const height = Number(layer.pixelHeight || 0) * scale
+            if (!(width > 0 && height > 0)) return []
+            const radians = Number(layer.rotation || 0) * Math.PI / 180
+            const extentX = Math.abs(Math.cos(radians)) * width + Math.abs(Math.sin(radians)) * height
+            const extentY = Math.abs(Math.sin(radians)) * width + Math.abs(Math.cos(radians)) * height
+            result.push({ index: index, layer: layer, cx: Number(layer.x || 0) + width / 2,
+                          cy: Number(layer.y || 0) + height / 2, width: extentX, height: extentY })
+        }
+        return result
+    }
+
+    function layerAlignmentMenuItems() {
+        const count = root.selectedLayerGeometry().length
+        const reason = qsTr("Select unlocked text, shape or pixel layers outside a group.")
+        return [
+            { key: "left", label: "Align left edges" }, { key: "center-x", label: "Align horizontal centers" },
+            { key: "right", label: "Align right edges" }, { key: "top", label: "Align top edges" },
+            { key: "center-y", label: "Align vertical centers" }, { key: "bottom", label: "Align bottom edges" },
+            { key: "distribute-x", label: "Distribute horizontal spacing", separatorBefore: true },
+            { key: "distribute-y", label: "Distribute vertical spacing" }
+        ].map(function(item) {
+            const distribute = item.key.indexOf("distribute") === 0
+            item.enabled = count >= (distribute ? 3 : 2)
+            item.disabledReason = distribute ? qsTr("Select at least three unlocked content layers outside a group.") : reason
+            item.tooltip = distribute ? qsTr("Keep the outer layers in place and make the gaps equal.") : qsTr("Align selected layers to one another.")
+            return item
+        })
+    }
+
+    function alignSelectedLayers(operation) {
+        const layers = root.selectedLayerGeometry()
+        const horizontal = ["left", "right", "center-x", "distribute-x"].indexOf(operation) >= 0
+        const distribute = operation.indexOf("distribute-") === 0
+        if (layers.length < (distribute ? 3 : 2)) return false
+        if (["left", "right", "center-x", "top", "bottom", "center-y", "distribute-x", "distribute-y"].indexOf(operation) < 0) return false
+        const center = horizontal ? "cx" : "cy"
+        const extent = horizontal ? "width" : "height"
+        let start = Infinity
+        let end = -Infinity
+        let total = 0
+        for (let item of layers) {
+            start = Math.min(start, item[center] - item[extent] / 2)
+            end = Math.max(end, item[center] + item[extent] / 2)
+            total += item[extent]
+        }
+        if (distribute) {
+            layers.sort(function(a, b) {
+                return (a[center] - a[extent] / 2) - (b[center] - b[extent] / 2)
+            })
+            start = layers[0][center] - layers[0][extent] / 2
+            end = layers[layers.length - 1][center] + layers[layers.length - 1][extent] / 2
+        }
+        const gap = (end - start - total) / (layers.length - 1)
+        let position = start
+        let changed = false
+        editorPreview.beginCoalescedEdit()
+        for (let i = 0; i < layers.length; ++i) {
+            const item = layers[i]
+            let target = (start + end) / 2
+            if (distribute) {
+                target = position + item[extent] / 2
+                position += item[extent] + gap
+                if (i === 0 || i === layers.length - 1) continue
+            } else if (operation === "left" || operation === "top") target = start + item[extent] / 2
+            else if (operation === "right" || operation === "bottom") target = end - item[extent] / 2
+            const dx = horizontal ? target - item.cx : 0
+            const dy = horizontal ? 0 : target - item.cy
+            changed = editorPreview.setPhotoLayerTransform(item.index, Math.round(Number(item.layer.x || 0) + dx),
+                Math.round(Number(item.layer.y || 0) + dy), Number(item.layer.scale || 1), Number(item.layer.rotation || 0)) || changed
+        }
+        editorPreview.endCoalescedEdit()
+        return changed
+    }
+
     function selectedPhotoLayerBatchMenuItems(activeLayerIndex, activeLayer) {
         const targets = root.selectedPhotoLayerBatchTargets(true, -1)
         const selectedCount = root.normalizedPhotoLayerSelection().length
         const hasBatch = targets.length > 0
         const activeLayerValid = activeLayerIndex >= 0 && activeLayerIndex < editorPreview.photoLayerCount
         return [
-            { key: "hide-selected", label: "Hide selected", icon: "media", enabled: hasBatch },
-            { key: "show-selected", label: "Show selected", icon: "media", enabled: hasBatch },
+            {
+                key: "ungroup-selected",
+                label: "Ungroup selected group",
+                icon: "layers",
+                enabled: activeLayerValid && String(activeLayer.kind || "") === "group",
+                disabledReason: "Select a group row first."
+            },
+            { key: "hide-selected", label: "Hide selected", icon: "hidden", enabled: hasBatch },
+            { key: "show-selected", label: "Show selected", icon: "visible", enabled: hasBatch },
             { key: "lock-selected", label: "Lock selected", icon: "lock", enabled: hasBatch },
-            { key: "unlock-selected", label: "Unlock selected", icon: "lock", enabled: hasBatch },
-            { key: "duplicate-selected", label: "Duplicate selected with masks", icon: "source", enabled: hasBatch },
-            { key: "duplicate-selected-without-masks", label: "Duplicate selected without masks", icon: "source", enabled: hasBatch },
+            { key: "unlock-selected", label: "Unlock selected", icon: "unlock", enabled: hasBatch },
+            { key: "duplicate-selected", label: "Duplicate selected with masks", icon: "copy", enabled: hasBatch },
+            { key: "duplicate-selected-without-masks", label: "Duplicate selected without masks", icon: "copy", enabled: hasBatch },
             {
                 key: "match-active-opacity",
                 label: "Match active opacity",
@@ -9647,6 +11517,7 @@ Rectangle {
         const targets = root.selectedPhotoLayerBatchTargets(true, -1)
         if (targets.length === 0)
             return false
+        const activeLayerValid = activeLayerIndex >= 0 && activeLayerIndex < editorPreview.photoLayerCount
         let changed = false
         const applyUnlocked = function(callback) {
             for (let index = 0; index < targets.length; ++index) {
@@ -9692,6 +11563,10 @@ Rectangle {
             root.selectedPhotoLayerIndices = root.normalizedActivePhotoLayerIndex() >= 0
                     ? [root.normalizedActivePhotoLayerIndex()]
                     : []
+        } else if (key === "ungroup-selected" && activeLayerValid) {
+            changed = editorPreview.ungroupPhotoLayer(activeLayerIndex)
+            if (changed)
+                root.setActivePhotoLayerSelection(activeLayerIndex, false)
         }
         return changed
     }
@@ -9779,13 +11654,14 @@ Rectangle {
     }
 
     function layerKeyboardNavigationSignature() {
-        return "layer-keyboard-navigation:v2|up-down:select|enter:edit|f2:rename|space:visibility|shift:range-select|modifier-up-down:reorder|escape:base-focus"
+        return "layer-keyboard-navigation:v3|arrows:nudge-in-layer-tools|up-down:select-otherwise|enter:edit|f2:rename|space:visibility|shift:range-select|modifier-up-down:reorder|escape:base-focus"
     }
 
     function handlePhotoLayerRowKey(event, layerIndex, layer) {
         const index = Math.floor(Number(layerIndex))
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return false
+        if (root.handleLayerNudgePress(event)) return true
         const key = event.key
         const modifiers = event.modifiers || 0
 	        const extendSelection = (modifiers & Qt.ShiftModifier) !== 0
@@ -9852,7 +11728,8 @@ Rectangle {
         if (index < 0)
             return -1
         const layer = root.photoLayerRows[index] || ({})
-        return String(layer.kind || "").trim().toLowerCase() === "adjustment" ? index : -1
+        const kind = String(layer.kind || "").trim().toLowerCase()
+        return ["adjustment", "pixel", "source"].indexOf(kind) >= 0 ? index : -1
     }
 
     function activeAdjustmentLayerData() {
@@ -9909,8 +11786,9 @@ Rectangle {
         const selectedMaskId = root.selectedEditTargetMaskSetId()
         const selectedMaskName = String(root.selectedEditTarget.maskSetName || "").trim()
         if (root.selectedEditTargetScope() === "mask") {
-            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-                const maskSet = editorPreview.maskSets[index] || ({})
+            const maskSets = root.maskSetRows
+            for (let index = 0; index < maskSets.length; ++index) {
+                const maskSet = maskSets[index] || ({})
                 if ((selectedMaskId.length > 0 && String(maskSet.id || "").trim() === selectedMaskId) ||
                         (selectedMaskId.length === 0 && selectedMaskName.length > 0 && String(maskSet.name || "").trim() === selectedMaskName))
                     return maskSet
@@ -9918,8 +11796,9 @@ Rectangle {
         }
         if (!editorPreview.hasActiveMask)
             return ({})
-        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-            const maskSet = editorPreview.maskSets[index] || ({})
+        const maskSets = root.maskSetRows
+        for (let index = 0; index < maskSets.length; ++index) {
+            const maskSet = maskSets[index] || ({})
             if (root.maskSetActive(maskSet))
                 return maskSet
         }
@@ -9994,15 +11873,24 @@ Rectangle {
         return layerName
     }
 
+    function editDocumentBreadcrumbText() {
+        if (!root.editBoardMode)
+            return ""
+        const board = root.activeEditBoard
+        const boardName = String(board.boardName || qsTr("Board %1").arg(root.editBoardIndex + 1))
+        const documentName = String(root.editBoardDocumentName || "").trim()
+        return documentName.length > 0 ? documentName + " / " + boardName : boardName
+    }
+
     function activeEditTargetModeLabel() {
         const scope = root.activeEditTargetScope()
         if (scope === "mask")
-            return "Selection"
+            return "Editing: Mask"
         if (scope === "adjustment-layer")
-            return "Layer"
+            return "Editing: Layer"
         if (scope === "photo-layer")
-            return "Layer"
-        return root.editInspectorTab === "presets" ? "Preset Target" : "Editing Base Image"
+            return "Editing: Layer"
+        return "Editing: Entire image"
     }
 
     function activeEditTargetBadgeText() {
@@ -10093,7 +11981,7 @@ Rectangle {
         const activeScope = root.activeEditTargetScope()
         if (targets.indexOf(activeScope) >= 0)
             return true
-        return activeScope === "mask" &&
+        return (activeScope === "mask" || activeScope === "photo-layer") &&
                targets.indexOf("adjustment-layer") >= 0 &&
                root.activeAdjustmentLayerIndex() >= 0
     }
@@ -10123,7 +12011,7 @@ Rectangle {
                     ? "This selection cannot receive this adjustment. Choose its linked layer or the base image."
                     : "This retouch selection has no adjustment recipe. Choose the base image or an adjustment layer."
         if (activeScope === "photo-layer" && targets.indexOf("photo-layer") < 0)
-            return "This control does not edit pixel layers. Choose the base image or add an adjustment layer."
+            return "Choose an image, pixel, or adjustment layer to edit its colors."
         if (activeScope === "adjustment-layer" && targets.indexOf("adjustment-layer") < 0)
             return "This control edits the Base Image only. Return to Base Image to use it."
         return "This control is not available for the current edit target."
@@ -10229,6 +12117,22 @@ Rectangle {
         return -1
     }
 
+    function maskSetLinkedLayerIndex(maskSet) {
+        const setId = root.maskSetId(maskSet)
+        const setName = String(maskSet && maskSet.name || "").trim()
+        for (let index = 0; index < editorPreview.photoLayerCount; ++index) {
+            const layer = root.photoLayerRows[index] || ({})
+            const layerSetIds = root.photoLayerMaskSetIds(layer)
+            if (setId.length > 0 && layerSetIds.indexOf(setId) >= 0)
+                return index
+            if ((setId.length === 0 || layerSetIds.length === 0) && setName.length > 0 &&
+                    root.photoLayerMaskSetNames(layer).indexOf(setName) >= 0) {
+                return index
+            }
+        }
+        return -1
+    }
+
     function photoLayerMaskSetIds(layer) {
         return root.normalizedPhotoLayerMaskSetValues(
                     layer,
@@ -10266,10 +12170,11 @@ Rectangle {
         const layer = root.photoLayerRows[normalizedLayerIndex] || ({})
         const orderedSetIds = root.photoLayerMaskSetIds(layer)
         const orderedSetNames = root.photoLayerMaskSetNames(layer)
+        const maskSets = root.maskSetRows
         const linked = []
         function appendMaskSet(targetId, targetName) {
-            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-                const maskSet = editorPreview.maskSets[index] || ({})
+            for (let index = 0; index < maskSets.length; ++index) {
+                const maskSet = maskSets[index] || ({})
                 const maskSetId = String(maskSet.id || "").trim()
                 const maskSetName = String(maskSet.name || "").trim()
                 const matches = (targetId.length > 0 && maskSetId === targetId) ||
@@ -10290,8 +12195,8 @@ Rectangle {
             appendMaskSet(orderIndex < orderedSetIds.length ? orderedSetIds[orderIndex] : "",
                           orderIndex < orderedSetNames.length ? orderedSetNames[orderIndex] : "")
         }
-        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-            const maskSet = editorPreview.maskSets[index] || ({})
+        for (let index = 0; index < maskSets.length; ++index) {
+            const maskSet = maskSets[index] || ({})
             if (root.adjustmentLayerIndexForMaskSet(maskSet) === normalizedLayerIndex)
                 appendMaskSet(String(maskSet.id || "").trim(), String(maskSet.name || "").trim())
         }
@@ -10335,9 +12240,10 @@ Rectangle {
 
     function unlinkedMaskSets() {
         const unlinked = []
-        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
-            const maskSet = editorPreview.maskSets[index] || ({})
-            if (root.adjustmentLayerIndexForMaskSet(maskSet) < 0)
+        const maskSets = root.maskSetRows
+        for (let index = 0; index < maskSets.length; ++index) {
+            const maskSet = maskSets[index] || ({})
+            if (root.maskSetLinkedLayerIndex(maskSet) < 0)
                 unlinked.push(maskSet)
         }
         return unlinked
@@ -10424,7 +12330,8 @@ Rectangle {
             return false
         const sourceIndex = editorPreview.activeMaskIndex
         root.deferMaskOutlineActivation()
-        let layerIndex = root.adjustmentLayerIndexForMaskSet(maskSet)
+        let layerIndex = showAdjustments ? root.adjustmentLayerIndexForMaskSet(maskSet)
+                                        : root.maskSetLinkedLayerIndex(maskSet)
         if (showAdjustments && layerIndex < 0)
             layerIndex = editorPreview.ensureActiveSelectionAdjustmentLayer()
         if (layerIndex >= 0 && (root.selectedPhotoLayerIndices.length !== 1 ||
@@ -11236,31 +13143,45 @@ Rectangle {
 
     function photoLayerHasDirectTransform(layer) {
         const kind = String(layer.kind || "").trim().toLowerCase()
+        // Groups composite their children into the sequence canvas before the
+        // group transform is applied, so their transform frame is canvas-sized.
+        if (kind === "group")
+            return true
         return (kind === "pixel" || kind === "text" || kind === "source") &&
                Number(layer.pixelWidth || 0) > 0 &&
                Number(layer.pixelHeight || 0) > 0
     }
 
     function photoLayerAtViewportPoint(viewportX, viewportY) {
+        const viewport = root.editViewportHandle
+        if (!viewport)
+            return -1
         const sourceWidth = Number(editorPreview.sourceImageWidth || 0)
         const sourceHeight = Number(editorPreview.sourceImageHeight || 0)
-        const paintedWidth = Number(editViewport.paintedContentWidth || 0)
-        const paintedHeight = Number(editViewport.paintedContentHeight || 0)
+        const paintedWidth = Number(viewport.paintedContentWidth || 0)
+        const paintedHeight = Number(viewport.paintedContentHeight || 0)
         if (sourceWidth <= 0 || sourceHeight <= 0 || paintedWidth <= 0 || paintedHeight <= 0 ||
-                viewportX < editViewport.paintedContentX ||
-                viewportX > editViewport.paintedContentX + paintedWidth ||
-                viewportY < editViewport.paintedContentY ||
-                viewportY > editViewport.paintedContentY + paintedHeight)
+                viewportX < viewport.paintedContentX ||
+                viewportX > viewport.paintedContentX + paintedWidth ||
+                viewportY < viewport.paintedContentY ||
+                viewportY > viewport.paintedContentY + paintedHeight)
             return -1
 
-        const sourceX = (viewportX - editViewport.paintedContentX) * sourceWidth / paintedWidth
-        const sourceY = (viewportY - editViewport.paintedContentY) * sourceHeight / paintedHeight
+        const sourceX = (viewportX - viewport.paintedContentX) * sourceWidth / paintedWidth
+        const sourceY = (viewportY - viewport.paintedContentY) * sourceHeight / paintedHeight
+        let fillIndex = -1
         for (let rowIndex = 0; rowIndex < editorPreview.photoLayerCount; ++rowIndex) {
             const layer = root.photoLayerRows[rowIndex] || ({})
             const layerIndex = Number(layer.flatIndex !== undefined ? layer.flatIndex : rowIndex)
             const kind = String(layer.kind || "").trim().toLowerCase()
-            const canvasHitLayer = root.photoLayerHasDirectTransform(layer) ||
-                                   kind === "fill" || kind === "adjustment"
+            if (layer.enabled === false || Number(layer.opacity !== undefined ? layer.opacity : 1) <= 0)
+                continue
+            if (kind === "fill" && fillIndex < 0)
+                fillIndex = layerIndex
+            // Color adjustments have no selectable object geometry. Let clicks
+            // reach the text, shape, or image underneath them.
+            const canvasHitLayer = kind !== "group" &&
+                                   root.photoLayerHasDirectTransform(layer)
             if (layer.enabled === false || !canvasHitLayer)
                 continue
             const bounds = editorPreview.photoLayerBounds(layerIndex) || ({})
@@ -11282,12 +13203,94 @@ Rectangle {
                     localY >= top && localY <= top + height)
                 return layerIndex
         }
-        return -1
+        return fillIndex
     }
 
-    function selectPhotoLayerAtViewportPoint(viewportX, viewportY) {
+    function selectPhotoLayerAtViewportPoint(viewportX, viewportY, modifiers) {
         const layerIndex = root.photoLayerAtViewportPoint(viewportX, viewportY)
-        return layerIndex >= 0 ? root.editPhotoLayerInspectorTarget(layerIndex) : false
+        if (layerIndex < 0) return false
+        if (Number(modifiers || 0) & (Qt.ControlModifier | Qt.MetaModifier | Qt.ShiftModifier))
+            return root.selectPhotoLayerWithModifiers(layerIndex, modifiers)
+        if (root.normalizedPhotoLayerSelection().indexOf(layerIndex) >= 0)
+            return root.setSelectedEditTarget(root.selectedLayerTargetScope(layerIndex), layerIndex, ({}), -1)
+        return root.setActivePhotoLayer(layerIndex)
+    }
+
+    function movablePhotoLayerSelection() {
+        const selected = root.normalizedPhotoLayerSelection()
+        const active = root.normalizedActivePhotoLayerIndex()
+        return selected.length > 0 ? selected : active >= 0 ? [active] : []
+    }
+
+    function movePhotoLayerSelection(deltaX, deltaY) {
+        return editorPreview.movePhotoLayersByPixels(root.movablePhotoLayerSelection(),
+                                                     Math.round(deltaX), Math.round(deltaY))
+    }
+
+    function nudgeArrowKey(key) {
+        return key === Qt.Key_Left || key === Qt.Key_Right || key === Qt.Key_Up || key === Qt.Key_Down
+    }
+
+    function handleLayerNudgePress(event) {
+        if (!root.nudgeArrowKey(event.key) || !root.layerNudgeContextActive ||
+                event.modifiers !== Qt.NoModifier) return false
+        event.accepted = true
+        if (event.isAutoRepeat || root.layerNudgeKeys.indexOf(event.key) >= 0) return true
+        // Layer rows can be recreated when their preview data refreshes.
+        // Keep the held gesture on the stable workspace focus owner.
+        root.forceActiveFocus()
+        if (root.layerNudgeKeys.length === 0) {
+            editorPreview.beginCoalescedEdit()
+            root.layerNudgeRepeating = false
+            root.layerNudgeNextAtMs = Date.now() + 250
+            layerNudgeTimer.start()
+        }
+        root.layerNudgeKeys = root.layerNudgeKeys.concat([event.key])
+        root.nudgeLayerKeys([event.key])
+        return true
+    }
+
+    function nudgeLayerKeys(keys, pixels) {
+        const step = pixels === undefined ? 1 : pixels
+        const dx = (keys.indexOf(Qt.Key_Right) >= 0 ? 1 : 0) - (keys.indexOf(Qt.Key_Left) >= 0 ? 1 : 0)
+        const dy = (keys.indexOf(Qt.Key_Down) >= 0 ? 1 : 0) - (keys.indexOf(Qt.Key_Up) >= 0 ? 1 : 0)
+        root.movePhotoLayerSelection(dx * step, dy * step)
+    }
+
+    function finishLayerNudge() {
+        layerNudgeTimer.stop()
+        if (root.layerNudgeKeys.length === 0) return
+        root.layerNudgeKeys = []
+        root.layerNudgeRepeating = false
+        editorPreview.endCoalescedEdit()
+    }
+
+    Timer {
+        id: layerNudgeTimer
+        objectName: "photoLayerNudgeTimer"
+        interval: root.layerNudgeRepeating ? 16 : 250
+        repeat: false
+        onTriggered: {
+            if (!root.layerNudgeContextActive) {
+                root.finishLayerNudge()
+                return
+            }
+            root.layerNudgeRepeating = true
+            // Keep pixel speed stable when a preview delays a timer callback.
+            // Bound catch-up so returning from a stalled frame cannot jump far.
+            const pixels = Math.max(1, Math.min(8, Math.floor((Date.now() - root.layerNudgeNextAtMs) / 16) + 1))
+            root.layerNudgeNextAtMs += pixels * 16
+            root.nudgeLayerKeys(root.layerNudgeKeys, pixels)
+            restart()
+        }
+    }
+
+    Connections {
+        target: root.Window.window
+        function onActiveChanged() {
+            if (!root.Window.window.active) root.finishLayerNudge()
+        }
+        function onActiveFocusItemChanged() { root.finishLayerNudge() }
     }
 
     function photoLayerIconName(layer) {
@@ -11328,6 +13331,42 @@ Rectangle {
         return "masks"
     }
 
+    function layerSnapTargets(viewport, horizontal) {
+        const sourceExtent = horizontal ? editorPreview.sourceImageWidth : editorPreview.sourceImageHeight
+        const imageStart = horizontal ? viewport.paintedContentX : viewport.paintedContentY
+        const imageExtent = horizontal ? viewport.paintedContentWidth : viewport.paintedContentHeight
+        if (!(sourceExtent > 0 && imageExtent > 0)) return []
+        const scale = imageExtent / sourceExtent
+        const targets = []
+        const add = function(pixel, label) { targets.push({ position: (pixel - imageStart) / scale, label: label }) }
+        if (root.editBoardMode) {
+            const first = Number(root.activeEditBoard.imageSpanStart || 0)
+            const count = root.activeEditBoardSpan
+            const start = horizontal ? viewport.imageFrameX : viewport.imageFrameY
+            const extent = (horizontal ? viewport.boardUnitWidth : viewport.boardUnitHeight) * viewport.zoom
+            const tiles = horizontal ? count : 1
+            for (let tile = 0; tile < tiles; ++tile) {
+                const offset = start + tile * extent
+                add(offset, horizontal && tile > 0 ? qsTr("Board seam") : qsTr("Board edge"))
+                add(offset + extent / 2, qsTr("Board %1 center").arg(horizontal ? first + tile + 1 : root.editBoardIndex + 1))
+                if (root.layerSafeMarginsEnabled) {
+                    add(offset + extent * 0.05, qsTr("Safe margin"))
+                    add(offset + extent * 0.95, qsTr("Safe margin"))
+                }
+            }
+            add(start + tiles * extent, qsTr("Board edge"))
+        } else {
+            add(imageStart, qsTr("Image edge"))
+            add(imageStart + imageExtent / 2, qsTr("Image center"))
+            add(imageStart + imageExtent, qsTr("Image edge"))
+            if (root.layerSafeMarginsEnabled) {
+                add(imageStart + imageExtent * 0.05, qsTr("Safe margin"))
+                add(imageStart + imageExtent * 0.95, qsTr("Safe margin"))
+            }
+        }
+        return targets
+    }
+
     function sourceCanvasWidthForLayers(layer) {
         const sourceWidth = Number(editorPreview.sourceImageWidth || 0)
         if (sourceWidth > 0)
@@ -11346,8 +13385,12 @@ Rectangle {
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return false
         root.setActivePhotoLayerSelection(index, false)
+        root.editInspectorPanelVisible = true
         root.editTool = "layers"
         root.editInspectorTab = "layers"
+        root.clearTransientMaskTools()
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
         return true
     }
 
@@ -11371,9 +13414,8 @@ Rectangle {
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return false
         root.setActivePhotoLayerSelection(index, false)
-        if (root.photoLayerKind(index) === "text")
-            photoLayerPropertiesPanel.detailsExpanded = true
-        if (root.photoLayerKind(index) === "adjustment") {
+        root.editInspectorPanelVisible = true
+        if (["adjustment", "pixel", "source"].indexOf(root.photoLayerKind(index)) >= 0) {
             root.activateEditTool("adjust")
         } else {
             root.editTool = "layers"
@@ -11385,12 +13427,9 @@ Rectangle {
     function openPhotoLayerInspector(index) {
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return false
-        if (root.photoLayerKind(index) === "adjustment") {
-            root.activateEditTool("adjust")
-        } else {
-            root.editTool = "layers"
-            root.editInspectorTab = "layers"
-        }
+        root.editInspectorPanelVisible = true
+        root.editTool = "layers"
+        root.editInspectorTab = "layers"
         return true
     }
 
@@ -11400,6 +13439,7 @@ Rectangle {
             return false
         root.setActivePhotoLayerSelection(index, false)
         root.activateEditTool("adjust")
+        root.activeAdjustmentIntent = root.adjustmentIntentForGroup(groupKey)
         root.selectedEditLayer = root.adjustmentGroupEditStack(groupKey)
         root.editTool = root.selectedEditLayer === "adjustments" ? "adjust" : root.selectedEditLayer
         root.editInspectorTab = "adjust"
@@ -11433,13 +13473,17 @@ Rectangle {
         return activeItem !== null && activeItem.text !== undefined && activeItem.cursorPosition !== undefined
     }
 
+    function finishCreativeInspectorEditing() {
+        if (root.libraryTextEntryFocused()) root.forceActiveFocus()
+    }
+
     Shortcut {
         objectName: "cancelActiveToolShortcut"
         sequence: "Esc"
         context: Qt.WindowShortcut
-        enabled: page === "edit" &&
+        enabled: root.workspaceActive && root.visible && (page === "edit" &&
                  !root.cancelActivePolygonShortcutReady &&
-                 (root.diagnosticsPanelOpen || root.editTool !== "adjust")
+                 (root.diagnosticsPanelOpen || root.editTool !== "adjust"))
         onActivated: root.cancelActiveTool()
     }
 
@@ -11447,16 +13491,32 @@ Rectangle {
         objectName: "libraryPickShortcut"
         sequence: "P"
         context: Qt.WindowShortcut
-        enabled: page === "library" && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0
-        onActivated: catalogAssets.toggleSelectedPick()
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0)
+        onActivated: root.applyLibraryCullAction("pick", 0)
     }
 
     Shortcut {
         objectName: "libraryRejectShortcut"
         sequence: "X"
         context: Qt.WindowShortcut
-        enabled: page === "library" && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0
-        onActivated: catalogAssets.toggleSelectedReject()
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0)
+        onActivated: root.applyLibraryCullAction("reject", 0)
+    }
+
+    Shortcut {
+        objectName: "libraryClearReviewShortcut"
+        sequence: "U"
+        context: Qt.WindowShortcut
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0)
+        onActivated: root.applyLibraryCullAction("clear", 0)
+    }
+
+    Shortcut {
+        objectName: "libraryZeroRatingShortcut"
+        sequence: "0"
+        context: Qt.WindowShortcut
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.selectedAssetId.length > 0)
+        onActivated: root.applyLibraryCullAction("rating", 0)
     }
 
     Instantiator {
@@ -11465,8 +13525,8 @@ Rectangle {
             required property int index
             sequence: String(index + 1)
             context: Qt.WindowShortcut
-            enabled: root.page === "library" && !root.importModeOpen && !root.libraryTextEntryFocused() && root.catalogAssets && root.catalogAssets.selectedAssetId.length > 0
-            onActivated: root.catalogAssets.setSelectedRating(index + 1)
+            enabled: root.workspaceActive && root.visible && root.page === "library" && !root.libraryDocumentsOpen && !root.importModeOpen && !root.libraryTextEntryFocused() && root.catalogAssets && root.catalogAssets.selectedAssetId.length > 0
+            onActivated: root.applyLibraryCullAction("rating", index + 1)
         }
     }
 
@@ -11474,7 +13534,7 @@ Rectangle {
         objectName: "libraryNextAssetShortcut"
         sequence: "Right"
         context: Qt.WindowShortcut
-        enabled: page === "library" && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.assetCount > 0
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.assetCount > 0)
         onActivated: catalogAssets.selectRelative(1)
     }
 
@@ -11482,7 +13542,7 @@ Rectangle {
         objectName: "libraryPreviousAssetShortcut"
         sequence: "Left"
         context: Qt.WindowShortcut
-        enabled: page === "library" && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.assetCount > 0
+        enabled: root.workspaceActive && root.visible && (page === "library" && !root.libraryDocumentsOpen && !importModeOpen && !root.libraryTextEntryFocused() && catalogAssets && catalogAssets.assetCount > 0)
         onActivated: catalogAssets.selectRelative(-1)
     }
 
@@ -11490,17 +13550,22 @@ Rectangle {
         objectName: "photoTextToolShortcut"
         sequence: "T"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && workspaceActive && editorPreview.hasAsset &&
+        enabled: root.workspaceActive && root.visible && (page === "edit" && workspaceActive && editorPreview.hasAsset &&
                  !root.libraryTextEntryFocused() && !(root.photoTextOverlayHandle && root.photoTextOverlayHandle.editing) &&
-                 !editorPreview.brushStrokeActive
+                 !editorPreview.brushStrokeActive)
         onActivated: root.activateEditTool("text")
     }
 
     Shortcut {
         objectName: "toggleFullScreenEditShortcut"
-        sequence: appShell.shortcutSequence("toggle-full-edit", "F")
+        sequence: {
+            const windowObject = root.Window.window
+            return windowObject && typeof windowObject.configuredShortcut === "function"
+                    ? windowObject.configuredShortcut("toggle-full-edit", "F")
+                    : appShell.shortcutSequence("toggle-full-edit", "F")
+        }
         context: Qt.WindowShortcut
-        enabled: page === "edit" && workspaceActive && !editorPreview.brushStrokeActive
+        enabled: root.workspaceActive && root.visible && (page === "edit" && workspaceActive && !editorPreview.brushStrokeActive)
         onActivated: root.toggleFullScreenEditing()
     }
 
@@ -11508,16 +13573,35 @@ Rectangle {
         objectName: "undoEditShortcut"
         sequence: "Ctrl+Z"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.canUndo
-        onActivated: editorPreview.undo()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.canUndoEdit)
+        onActivated: root.undoEdit()
     }
 
     Shortcut {
         objectName: "redoEditShortcut"
         sequence: "Ctrl+Shift+Z"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.canRedo
-        onActivated: editorPreview.redo()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.canRedoEdit)
+        onActivated: root.redoEdit()
+    }
+
+    Shortcut {
+        objectName: "copySelectionToLayerShortcut"
+        sequence: "Ctrl+J"
+        context: Qt.WindowShortcut
+        enabled: root.workspaceActive && root.visible && (page === "edit" && editorPreview.hasActiveMask &&
+                 editorPreview.activeMaskToolRole === "selection" && !root.shortcutTextInputActive())
+        onActivated: {
+            const layerIndex = root.normalizedActivePhotoLayerIndex()
+            const layer = layerIndex >= 0 ? editorPreview.photoLayers[layerIndex] : ({})
+            const useLayer = root.selectedEditTargetScope() !== "mask" &&
+                             root.selectedEditTargetScope() !== "base-image" &&
+                             ["pixel", "source", "text", "fill"].indexOf(String(layer.kind || "")) >= 0
+            if (editorPreview.copyPixelsFromSelection(useLayer ? layerIndex : -1)) {
+                root.setActivePhotoLayerSelection(0, false)
+                root.editInspectorTab = "layers"
+            }
+        }
     }
 
     readonly property bool cancelActivePolygonShortcutReady: root.activePolygonShortcutReady() &&
@@ -11532,7 +13616,7 @@ Rectangle {
         objectName: "polygonCancelShortcut"
         sequence: "Esc"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.cancelActivePolygonShortcutReady
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.cancelActivePolygonShortcutReady)
         onActivated: root.cancelActivePolygonDrawing()
     }
 
@@ -11540,7 +13624,7 @@ Rectangle {
         objectName: "polygonCompleteReturnShortcut"
         sequence: "Return"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.completeActivePolygonShortcutReady
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.completeActivePolygonShortcutReady)
         onActivated: root.completeActivePolygonSelection()
     }
 
@@ -11548,7 +13632,7 @@ Rectangle {
         objectName: "polygonCompleteEnterShortcut"
         sequence: "Enter"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.completeActivePolygonShortcutReady
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.completeActivePolygonShortcutReady)
         onActivated: root.completeActivePolygonSelection()
     }
 
@@ -11556,7 +13640,7 @@ Rectangle {
         objectName: "brushDoneReturnShortcut"
         sequence: "Return"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.brushShortcutContextActive())
         onActivated: root.finishActiveCanvasTool()
     }
 
@@ -11564,7 +13648,7 @@ Rectangle {
         objectName: "brushDoneEnterShortcut"
         sequence: "Enter"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.brushShortcutContextActive())
         onActivated: root.finishActiveCanvasTool()
     }
 
@@ -11572,7 +13656,7 @@ Rectangle {
         objectName: "lassoCompleteReturnShortcut"
         sequence: "Return"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete())
         onActivated: root.finishActiveCanvasTool()
     }
 
@@ -11580,7 +13664,7 @@ Rectangle {
         objectName: "lassoCompleteEnterShortcut"
         sequence: "Enter"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete())
         onActivated: root.finishActiveCanvasTool()
     }
 
@@ -11588,7 +13672,7 @@ Rectangle {
         objectName: "polygonRemoveLastPointBackspaceShortcut"
         sequence: "Backspace"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.removeLastPolygonPointShortcutReady
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.removeLastPolygonPointShortcutReady)
         onActivated: root.removeLastActivePolygonPointFromShortcut()
     }
 
@@ -11596,7 +13680,7 @@ Rectangle {
         objectName: "polygonRemoveLastPointDeleteShortcut"
         sequence: "Delete"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && root.removeLastPolygonPointShortcutReady
+        enabled: root.workspaceActive && root.visible && (page === "edit" && root.removeLastPolygonPointShortcutReady)
         onActivated: root.removeLastActivePolygonPointFromShortcut()
     }
 
@@ -11604,8 +13688,8 @@ Rectangle {
         objectName: "brushAddShortcut"
         sequence: "B"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
-                 !root.shortcutTextInputActive()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
+                 !root.shortcutTextInputActive())
         onActivated: root.setBrushPaintMode("add")
     }
 
@@ -11613,8 +13697,8 @@ Rectangle {
         objectName: "brushEraseShortcut"
         sequence: "E"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
-                 !root.shortcutTextInputActive()
+        enabled: root.workspaceActive && root.visible && (page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
+                 !root.shortcutTextInputActive())
         onActivated: root.setBrushPaintMode("subtract")
     }
 
@@ -11622,7 +13706,7 @@ Rectangle {
         objectName: "maskSelectMoveShortcut"
         sequence: "V"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.selectMaskMoveFromShortcut()
     }
 
@@ -11630,7 +13714,7 @@ Rectangle {
         objectName: "maskLassoShortcut"
         sequence: "L"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.startMaskLassoFromShortcut()
     }
 
@@ -11638,7 +13722,7 @@ Rectangle {
         objectName: "maskPolygonShortcut"
         sequence: "P"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.startMaskPolygonFromShortcut()
     }
 
@@ -11646,7 +13730,7 @@ Rectangle {
         objectName: "brushSizeDownShortcut"
         sequence: "["
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushSize(-0.02)
     }
 
@@ -11654,7 +13738,7 @@ Rectangle {
         objectName: "brushSizeUpShortcut"
         sequence: "]"
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushSize(0.02)
     }
 
@@ -11662,7 +13746,7 @@ Rectangle {
         objectName: "brushHardnessDownShortcut"
         sequence: "Shift+["
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushHardness(-0.08)
     }
 
@@ -11670,7 +13754,7 @@ Rectangle {
         objectName: "brushHardnessUpShortcut"
         sequence: "Shift+]"
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushHardness(0.08)
     }
 
@@ -11678,7 +13762,7 @@ Rectangle {
         objectName: "brushFlowDownShortcut"
         sequence: "Alt+["
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushFlow(-0.08)
     }
 
@@ -11686,7 +13770,7 @@ Rectangle {
         objectName: "brushFlowUpShortcut"
         sequence: "Alt+]"
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveBrushFlow(0.08)
     }
 
@@ -11694,7 +13778,7 @@ Rectangle {
         objectName: "brushDensityDownShortcut"
         sequence: "Ctrl+["
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveMaskDensity(-0.08)
     }
 
@@ -11702,7 +13786,7 @@ Rectangle {
         objectName: "brushDensityUpShortcut"
         sequence: "Ctrl+]"
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveMaskDensity(0.08)
     }
 
@@ -11710,7 +13794,7 @@ Rectangle {
         objectName: "brushOpacityDownShortcut"
         sequence: "Ctrl+Alt+["
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveMaskOpacity(-0.08)
     }
 
@@ -11718,7 +13802,7 @@ Rectangle {
         objectName: "brushOpacityUpShortcut"
         sequence: "Ctrl+Alt+]"
         context: Qt.WindowShortcut
-        enabled: root.brushShortcutContextActive()
+        enabled: root.workspaceActive && root.visible && (root.brushShortcutContextActive())
         onActivated: root.adjustActiveMaskOpacity(0.08)
     }
 
@@ -11726,7 +13810,7 @@ Rectangle {
         objectName: "maskCreateShortcut"
         sequence: "Ctrl+Shift+M"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.createMaskFromShortcut()
     }
 
@@ -11734,7 +13818,7 @@ Rectangle {
         objectName: "maskOperationAddShortcut"
         sequence: "Ctrl+Shift+A"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.setMaskOperationFromShortcut("add")
     }
 
@@ -11742,7 +13826,7 @@ Rectangle {
         objectName: "maskOperationSubtractShortcut"
         sequence: "Ctrl+Shift+S"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.setMaskOperationFromShortcut("subtract")
     }
 
@@ -11750,7 +13834,7 @@ Rectangle {
         objectName: "maskOperationIntersectShortcut"
         sequence: "Ctrl+Shift+I"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(false)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(false))
         onActivated: root.setMaskOperationFromShortcut("intersect")
     }
 
@@ -11758,9 +13842,9 @@ Rectangle {
         objectName: "maskInvertShortcut"
         sequence: "Ctrl+Shift+V"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(true) &&
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(true) &&
                  editorPreview.activeMaskToolRole !== "retouch" &&
-                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0)
         onActivated: root.invertActiveMaskFromShortcut()
     }
 
@@ -11768,7 +13852,7 @@ Rectangle {
         objectName: "maskOverlayShortcut"
         sequence: "Ctrl+Shift+O"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(true)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(true))
         onActivated: root.toggleActiveMaskOverlayFromShortcut()
     }
 
@@ -11776,7 +13860,7 @@ Rectangle {
         objectName: "maskOutlineShortcut"
         sequence: "Ctrl+Shift+U"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(true)
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(true))
         onActivated: root.toggleMaskOutlineFromShortcut()
     }
 
@@ -11784,7 +13868,7 @@ Rectangle {
         objectName: "layerTargetNextShortcut"
         sequence: "Ctrl+Shift+L"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0)
         onActivated: root.switchLayerTargetFromShortcut(1)
     }
 
@@ -11792,7 +13876,7 @@ Rectangle {
         objectName: "layerTargetPreviousShortcut"
         sequence: "Ctrl+Alt+Shift+L"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0)
         onActivated: root.switchLayerTargetFromShortcut(-1)
     }
 
@@ -11800,7 +13884,7 @@ Rectangle {
         objectName: "maskTargetNextShortcut"
         sequence: "Ctrl+Shift+K"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0)
         onActivated: root.switchMaskTargetFromShortcut(1)
     }
 
@@ -11808,7 +13892,7 @@ Rectangle {
         objectName: "maskTargetPreviousShortcut"
         sequence: "Ctrl+Alt+Shift+K"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0)
         onActivated: root.switchMaskTargetFromShortcut(-1)
     }
 
@@ -11816,11 +13900,12 @@ Rectangle {
         objectName: "baseImageTargetShortcut"
         sequence: "Ctrl+Shift+B"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true)
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true))
         onActivated: root.returnToBaseImageFromShortcut()
     }
 
     Keys.onPressed: function(event) {
+        if (root.handleLayerNudgePress(event)) return
         if (event.key === Qt.Key_Space &&
                 event.modifiers === Qt.NoModifier &&
                 !event.isAutoRepeat &&
@@ -11854,6 +13939,14 @@ Rectangle {
     }
 
     Keys.onReleased: function(event) {
+        if (root.nudgeArrowKey(event.key) && root.layerNudgeKeys.indexOf(event.key) >= 0) {
+            event.accepted = true
+            if (event.isAutoRepeat) return
+            const remaining = root.layerNudgeKeys.filter(function(key) { return key !== event.key })
+            if (remaining.length === 0) root.finishLayerNudge()
+            else root.layerNudgeKeys = remaining
+            return
+        }
         if (event.key === Qt.Key_Space &&
                 event.modifiers === Qt.NoModifier &&
                 !event.isAutoRepeat) {
@@ -11889,8 +13982,8 @@ Rectangle {
         objectName: "maskDeleteShortcut"
         sequence: "Delete"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(true) &&
-                 !root.removeLastPolygonPointShortcutReady
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(true) &&
+                 !root.removeLastPolygonPointShortcutReady)
         onActivated: root.deleteActiveMaskFromShortcut()
     }
 
@@ -11898,10 +13991,10 @@ Rectangle {
         objectName: "activeEditTargetDeleteShortcut"
         sequence: "Delete"
         context: Qt.WindowShortcut
-        enabled: root.targetShortcutContextActive(true) &&
+        enabled: root.workspaceActive && root.visible && (root.targetShortcutContextActive(true) &&
                  root.activeEditTargetScope() !== "base-image" &&
                  root.activeEditTargetScope() !== "mask" &&
-                 !root.removeLastPolygonPointShortcutReady
+                 !root.removeLastPolygonPointShortcutReady)
         onActivated: root.deleteActiveEditTargetFromShortcut()
     }
 
@@ -11909,8 +14002,8 @@ Rectangle {
         objectName: "maskRenameShortcut"
         sequence: "F2"
         context: Qt.WindowShortcut
-        enabled: root.maskShortcutContextActive(true) &&
-                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+        enabled: root.workspaceActive && root.visible && (root.maskShortcutContextActive(true) &&
+                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0)
         onActivated: root.renameActiveMaskFromShortcut()
     }
 
@@ -11995,6 +14088,14 @@ Rectangle {
             id: agentRunDialog
             anchors.fill: parent
             agentEditController: root.hasAgentEditController ? root.agentEditController : null
+            sessionController: root.agentSessionController
+            sessionContext: ({
+                targetIds: root.agentTargetIdsForScope(root.agentScopeMode),
+                scope: root.agentScopeMode,
+                projectId: catalogAssets ? String(catalogAssets.projectFilter || "all") : "all",
+                blankCanvas: root.agentTargetIdsForScope(root.agentScopeMode).length === 0,
+                selectedModelId: root.hasAgentEditController ? String(root.agentEditController.selectedModelId || "") : ""
+            })
             catalogModel: catalogAssets
             initialScopeMode: root.agentScopeMode
             confirmedTargetIds: root.searchEditWorkflow ? root.searchEditWorkflow.confirmedIds : []
@@ -12004,6 +14105,10 @@ Rectangle {
                 root.agentScopeMode = scopeMode
             }
             onRunRequested: root.runAgentWorkflowPrimaryAction()
+            onDraftRequested: function(scopeMode, instructions) {
+                root.runAgentDraftForScope(scopeMode, instructions, false)
+            }
+            onModelSetupRequested: agentModelSetupDialog.present()
             onTargetSelectionRequested: function(prompt, inspirationAssetIds, styleId) {
                 root.beginAgentTargetSelection(prompt, inspirationAssetIds, styleId)
             }
@@ -12017,10 +14122,54 @@ Rectangle {
 
 
     Loader {
+        id: studioPageLoader
+        objectName: "studioPageContentLoader"
         anchors.fill: parent
+        visible: status === Loader.Ready
         sourceComponent: root.page === "library" ? libraryPage
                          : root.page === "edit" ? editPage
                          : exportPage
+    }
+    Drawer {
+        id: libraryNavigationDrawer
+        objectName: "libraryNavigationDrawer"
+        edge: Qt.LeftEdge
+        width: Math.min(300, root.width - 40)
+        height: root.height
+        modal: true
+        contentItem: Loader {
+            active: libraryNavigationDrawer.position > 0
+            sourceComponent: LibraryNavigationPanel {
+                controller: root.libraryWorkflowController
+                projectNames: root.catalogAssets.projectNames
+                recentImportSessions: {
+                    if (!root.libraryJobQueue) return []
+                    root.libraryJobQueue.jobCount
+                    return root.libraryJobQueue.jobsForCenter("catalog_import")
+                }
+                currentFilters: root.libraryWorkflowFilters()
+                onCreateProjectRequested: function(name) { root.catalogAssets.createProject(name); root.catalogAssets.projectFilter = name; libraryNavigationDrawer.close() }
+            }
+        }
+        Connections {
+            target: root.libraryWorkflowController
+            function onActiveDestinationChanged() { libraryNavigationDrawer.close() }
+        }
+    }
+
+    Rectangle {
+        objectName: "studioPageLoadingSurface"
+        anchors.fill: parent
+        visible: !root.pageContentReady
+        color: theme.ink950
+
+        LooksyLoadingScene {
+            anchors.centerIn: parent
+            width: Math.max(100, Math.min(520, parent.width - 40, (parent.height - 100) * 1.5))
+            scene: "startup"
+            title: root.page === "edit" ? "Opening editor" : "Opening workspace"
+            active: !root.pageContentReady
+        }
     }
 
     Rectangle {
@@ -12105,7 +14254,7 @@ Rectangle {
         id: agentWorkspaceOverlay
         objectName: "agentWorkspaceOverlay"
         anchors.fill: parent
-        visible: root.agentWorkspaceVisible
+        visible: root.agentWorkspaceVisible && !root.agentRunDialogVisible
         enabled: visible
         z: 124
         agentEditController: root.agentEditController
@@ -12118,6 +14267,7 @@ Rectangle {
                 : (root.hasAgentEditController ? String(root.agentEditController.userInstructions || "") : "")
         inspectorWidth: root.editInspectorPanelVisible ? root.editInspectorPanelWidth : 0
         filmstripHeight: 88
+        targetResolver: function(event, parameterKey) { return root.agentWorkspaceTouchTarget(event, parameterKey) }
         reducedMotion: root.studioReducedMotion
         applyInProgress: root.agentApplyInProgress
         spatialTargetMode: root.agentSpatialTargetMode
@@ -12176,10 +14326,10 @@ Rectangle {
 
     StudioHealthStatusStrip {
         studioTheme: theme
-        healthItems: root.systemHealthItems()
+        healthItems: root.visibleSystemHealthItems()
         stateColor: function(state) { return root.healthStateColor(state) }
         hairlineStrong: root.hairlineStrong
-        visible: root.page !== "edit" && !root.libraryImportActive
+        visible: root.page !== "edit" && !root.libraryImportActive && healthItems.length > 0
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         anchors.bottomMargin: root.page === "edit" && root.editingChromeVisible
@@ -12202,6 +14352,21 @@ Rectangle {
 
         RowLayout {
             spacing: 0
+            LibraryNavigationPanel {
+                visible: !root.libraryDocumentsOpen && !root.importModeOpen && root.libraryWorkflowController !== null && root.width >= 1100
+                Layout.preferredWidth: visible ? implicitWidth : 0
+                Layout.fillHeight: true
+                Layout.margins: visible ? 12 : 0
+                controller: root.libraryWorkflowController
+                projectNames: root.catalogAssets.projectNames
+                recentImportSessions: {
+                    if (!jobQueue) return []
+                    jobQueue.jobCount; jobQueue.status
+                    return jobQueue.jobsForCenter("catalog_import")
+                }
+                currentFilters: root.libraryWorkflowFilters()
+                onCreateProjectRequested: function(name) { root.catalogAssets.createProject(name); root.catalogAssets.projectFilter = name }
+            }
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -12212,6 +14377,47 @@ Rectangle {
                 clip: true
 
                 RowLayout {
+                    visible: !root.importModeOpen
+                    Layout.fillWidth: true
+                    spacing: 6
+                    MiniButton {
+                        objectName: "libraryCompactNavigationButton"
+                        visible: root.width < 1100 && !root.libraryDocumentsOpen && root.libraryWorkflowController !== null
+                        role: "icon"
+                        iconName: "panel-left"
+                        tooltip: "Shoots, albums and saved searches"
+                        onClicked: libraryNavigationDrawer.open()
+                    }
+                    MiniButton { objectName: "libraryImagesCollectionButton"; text: "Images"; iconName: "image"; role: "segmented"; active: root.libraryCollection === "images"; onClicked: root.libraryCollection = "images" }
+                    MiniButton { objectName: "libraryCarouselsCollectionButton"; text: "Boards"; iconName: "carousel"; role: "segmented"; active: root.libraryBoardsOpen; onClicked: root.libraryCollection = "boards" }
+                    MiniButton { objectName: "libraryTimelinesCollectionButton"; text: "Timelines"; iconName: "timeline"; role: "segmented"; active: root.libraryCollection === "timelines"; onClicked: root.libraryCollection = "timelines" }
+                    Item { Layout.fillWidth: true }
+                }
+
+                Loader {
+                    active: root.libraryCollection === "timelines" && !root.importModeOpen
+                    visible: active
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    sourceComponent: SavedTimelinesLibrary {
+                        onOpenRequested: function(documentPath, recoveryCandidateId) { root.timelineDocumentActivated(documentPath, recoveryCandidateId) }
+                        onCreateRequested: root.newTimelineRequested()
+                    }
+                }
+
+                Loader {
+                    active: root.libraryBoardsOpen && !root.importModeOpen
+                    visible: active
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    sourceComponent: SavedBoardsLibrary {
+                        onOpenRequested: function(documentId) { root.boardDocumentActivated(documentId) }
+                        onCreateRequested: root.newBoardsRequested()
+                    }
+                }
+
+                RowLayout {
+                    visible: !root.libraryDocumentsOpen || root.importModeOpen
                     Layout.fillWidth: true
                     Layout.preferredHeight: 36
                     spacing: 6
@@ -12219,7 +14425,7 @@ Rectangle {
                     StudioTinyInput {
                         id: librarySearchInput
                         objectName: "studioLibrarySearchInput"
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
                         Layout.fillWidth: true
                         Layout.minimumWidth: root.libraryToolbarTight ? 132 : 180
                         Layout.preferredWidth: root.libraryToolbarTight ? 220 : 280
@@ -12251,7 +14457,7 @@ Rectangle {
                     }
                     MiniButton {
                         objectName: "libraryVisualSearchButton"
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
                         text: "AI Search"
                         role: "ghost"
                         active: root.visualSearchOpen
@@ -12267,7 +14473,7 @@ Rectangle {
                     }
                     LooksyAssistantDock {
                         objectName: "libraryAgentButton"
-                        visible: !root.importModeOpen && !root.agentTargetSelectionMode
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && !root.agentTargetSelectionMode
                         Layout.preferredWidth: 36
                         Layout.preferredHeight: 36
                         active: root.agentRunDialogVisible
@@ -12297,10 +14503,10 @@ Rectangle {
                     MenuButton {
                         objectName: "studioLibraryCompactFilterMenuButton"
                         primaryOpensMenu: true
-                        visible: !root.importModeOpen && root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.libraryToolbarTight
                         Layout.preferredWidth: 104
                         text: "Filters"
-                        iconName: "menu"
+                        iconName: "filter"
                         tone: "secondary"
                         accent: root.filtersActive() ? root.mint : root.dimText
                         compact: true
@@ -12317,7 +14523,7 @@ Rectangle {
                     MenuButton {
                         objectName: "studioLibraryMediaFilterMenuButton"
                         primaryOpensMenu: true
-                        visible: !root.importModeOpen && !root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && !root.libraryToolbarTight
                         Layout.preferredWidth: 108
                         text: root.mediaFilterLabel()
                         iconName: "media"
@@ -12334,7 +14540,7 @@ Rectangle {
                     MenuButton {
                         objectName: "studioLibraryProjectFilterMenuButton"
                         primaryOpensMenu: true
-                        visible: !root.importModeOpen && !root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && !root.libraryToolbarTight
                         Layout.preferredWidth: 126
                         text: root.projectFilterLabel()
                         iconName: "folder"
@@ -12351,7 +14557,7 @@ Rectangle {
                     MenuButton {
                         objectName: "studioLibraryTimeFilterMenuButton"
                         primaryOpensMenu: true
-                        visible: !root.importModeOpen && !root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && !root.libraryToolbarTight
                         Layout.preferredWidth: 104
                         text: root.timeFilterLabel()
                         iconName: "clock"
@@ -12368,7 +14574,7 @@ Rectangle {
                     MenuButton {
                         objectName: "studioLibraryReviewFilterMenuButton"
                         primaryOpensMenu: true
-                        visible: !root.importModeOpen && !root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && !root.libraryToolbarTight
                         Layout.preferredWidth: 118
                         text: root.reviewFilterLabel()
                         iconName: "star"
@@ -12384,7 +14590,7 @@ Rectangle {
                     }
                     MiniButton {
                         objectName: "studioLibraryClearFiltersButton"
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.filtersActive()
                         square: true
                         iconName: "close"
                         role: "icon"
@@ -12394,9 +14600,9 @@ Rectangle {
                         onClicked: root.clearLibraryFilters()
                     }
                     Label {
-                        visible: !root.importModeOpen && !root.libraryToolbarTight
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.width >= 1150
                         Layout.preferredWidth: 72
-                        text: root.formatInt(root.assetCount()) + " results"
+                        text: root.formatInt(root.assetCount()) + (root.assetCount() === 1 ? " result" : " results")
                         color: root.dimText
                         font.family: theme.fontUi
                         font.pixelSize: 11
@@ -12407,26 +14613,39 @@ Rectangle {
                     }
                     MiniButton {
                         objectName: "studioLibraryImportButton"
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
                         role: "primary"
                         text: catalogAssets.importing ? "Importing" : "Import"
-                        iconName: "folder"
+                        iconName: "import"
                         active: root.importModeOpen
                         enabled: !catalogAssets.busy || catalogAssets.importing
                         tooltip: root.importStatusText()
                         onClicked: root.startVaultImport()
                     }
                     Rectangle {
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
                         Layout.preferredWidth: 1
                         Layout.preferredHeight: 24
                         color: root.hairline
                     }
-                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "grid"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "grid"; tooltip: "Grid"; onClicked: root.catalogViewMode = "grid" }
-                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "survey"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "survey"; tooltip: "Survey"; onClicked: root.catalogViewMode = "survey" }
-                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "panel-right"; role: "icon"; accent: root.dimText; active: root.libraryInspectorPanelVisible; tooltip: "Inspector"; onClicked: root.libraryInspectorPanelVisible = !root.libraryInspectorPanelVisible }
+                    MiniButton { objectName: "studioLibraryGridButton"; visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.width >= 1100; square: true; iconName: "grid"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "grid"; tooltip: "Grid"; onClicked: root.setLibraryReviewView("grid") }
+                    MiniButton { objectName: "studioLibrarySurveyButton"; visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.width >= 1100; square: true; iconName: "survey"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "survey"; tooltip: "Survey"; onClicked: root.setLibraryReviewView("survey") }
+                    MiniButton { objectName: "studioLibraryCullButton"; visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.width >= 1100; square: true; iconName: "check"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "cull"; tooltip: "Cull photos"; onClicked: root.setLibraryReviewView("cull") }
+                    MenuButton {
+                        objectName: "libraryWorkspaceLayoutButton"
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
+                        compact: true
+                        showText: root.width >= 1100
+                        primaryOpensMenu: true
+                        iconName: "panel-right"
+                        text: "Layout"
+                        accessibleName: "Library layout"
+                        tooltipText: "Choose visible library panels"
+                        menuItems: root.workspaceLayoutMenuItems()
+                        onMenuItemTriggered: function(key) { root.handleWorkspaceLayoutMenu(key) }
+                    }
                     MiniButton {
-                        visible: !root.importModeOpen
+                        visible: !root.importModeOpen && !root.libraryDocumentsOpen
                         square: true
                         role: "icon"
                         iconName: "check"
@@ -12440,7 +14659,7 @@ Rectangle {
                 VisualSearchPanel {
                     objectName: "libraryVisualSearchPanel"
                     Layout.fillWidth: true
-                    visible: !root.importModeOpen && root.visualSearchOpen
+                    visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.visualSearchOpen
                     controller: root.activeVisualSearchController
                     similarityAvailable: Boolean(root.similaritySearchController && root.similaritySearchController.configured)
                     similarityStatus: root.similaritySearchController ? root.similaritySearchController.status : ""
@@ -12486,7 +14705,7 @@ Rectangle {
                 StatusChip {
                     objectName: "studioLibraryActiveSearchChip"
                     Layout.fillWidth: true
-                    visible: !root.importModeOpen && (root.librarySearchActive || root.librarySearchPending)
+                    visible: !root.importModeOpen && !root.libraryDocumentsOpen && (root.librarySearchActive || root.librarySearchPending)
                     text: root.librarySearchPending
                           ? "Search pending: " + root.librarySearchDraftText
                           : "Search active: " + String(catalogAssets.searchFilter || "")
@@ -12499,26 +14718,23 @@ Rectangle {
                     onActionTriggered: root.clearLibrarySearch()
                 }
 
-                Flickable {
+                ListView {
                     id: studioLibraryGalleryGrid
                     objectName: "studioLibraryGalleryGrid"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    visible: !root.importModeOpen && root.catalogViewMode === "grid" && root.assetCount() > 0
+                    visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.catalogViewMode === "grid" && root.assetCount() > 0
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     flickableDirection: Flickable.VerticalFlick
-                    contentWidth: galleryViewportWidth
-                    contentHeight: galleryRows.length > 0
-                                   ? galleryRows[galleryRows.length - 1].top + galleryRows[galleryRows.length - 1].height : 0
+                    orientation: ListView.Vertical
+                    model: galleryRows
+                    cacheBuffer: Math.max(300, height * 0.5)
+                    reuseItems: true
                     readonly property int galleryScrollbarGutter: Math.max(root.libraryGalleryScrollbarGutter,
                                                                             Math.ceil(Number(galleryVerticalScrollBar.implicitWidth || galleryVerticalScrollBar.width || 0)) + 2)
                     readonly property int galleryViewportWidth: root.libraryGalleryViewportWidth(width, galleryScrollbarGutter)
                     property var galleryRows: []
-                    readonly property int firstBufferedRow: rowAtOffset(Math.max(0, contentY - height * 0.5))
-                    readonly property int lastBufferedRow: rowAtOffset(contentY + height * 1.5)
-                    readonly property var visibleGalleryRows: visible
-                        ? galleryRows.slice(firstBufferedRow, lastBufferedRow + 1) : []
 
                     function rowAtOffset(offset) {
                         let low = 0
@@ -12536,6 +14752,26 @@ Rectangle {
                     ScrollBar.vertical: ScrollBar {
                         id: galleryVerticalScrollBar
                         policy: ScrollBar.AsNeeded
+                    }
+
+                    WheelHandler {
+                        objectName: "studioLibraryGalleryWheelHandler"
+                        target: null
+
+                        onWheel: function(event) {
+                            const pixelDelta = event.pixelDelta.y
+                            const angleDelta = event.angleDelta.y
+                            const delta = Math.abs(pixelDelta) > 0.01
+                                         ? pixelDelta
+                                         : angleDelta / 120 * 48
+                            if (Math.abs(delta) < 0.01)
+                                return
+                            const maximum = Math.max(0, studioLibraryGalleryGrid.contentHeight
+                                                       - studioLibraryGalleryGrid.height)
+                            studioLibraryGalleryGrid.contentY = Math.max(
+                                0, Math.min(maximum, studioLibraryGalleryGrid.contentY - delta))
+                            event.accepted = true
+                        }
                     }
 
                     function scheduleGalleryRowsRefresh() {
@@ -12614,40 +14850,30 @@ Rectangle {
                     onVisibleChanged: scheduleGalleryRowsRefresh()
                     onGalleryRowsChanged: updateVisibleAssetRange()
 
-                    Column {
-                        id: libraryGalleryRowsColumn
-                        y: studioLibraryGalleryGrid.galleryRows.length > 0
-                           ? studioLibraryGalleryGrid.galleryRows[studioLibraryGalleryGrid.firstBufferedRow].top : 0
+                    delegate: Row {
+                        id: galleryRow
+                        required property var modelData
                         width: studioLibraryGalleryGrid.galleryViewportWidth
+                        height: Math.max(1, Number(modelData.height || 0))
                         spacing: 0
 
                         Repeater {
-                            model: studioLibraryGalleryGrid.visibleGalleryRows
+                            model: galleryRow.modelData.items || []
 
-                            Row {
-                                id: galleryRow
+                            FocusScope {
+                                id: tileDelegate
+                                objectName: "libraryGalleryTile"
                                 required property var modelData
-                                width: studioLibraryGalleryGrid.galleryViewportWidth
-                                height: Math.max(1, Number(modelData.height || 0))
-                                spacing: 0
-
-                                Repeater {
-                                    model: galleryRow.modelData.items || []
-
-                                    FocusScope {
-                                        id: tileDelegate
-                                        objectName: "libraryGalleryTile"
-                                        required property var modelData
-                                        readonly property int assetIndex: Number(modelData.index || 0)
-                                        property int galleryDataRevision: 0
-                                        readonly property var galleryAsset: {
+                                readonly property int assetIndex: Number(modelData.index || 0)
+                                property int galleryDataRevision: 0
+                                readonly property var galleryAsset: {
                                             // Keep the binding live when row geometry/filtering
                                             // reuses a delegate for another model entry.
                                             const identity = modelData.assetId
                                             const revision = galleryDataRevision
                                             return identity && revision >= 0 ? catalogAssets.galleryAssetAt(assetIndex) : ({})
                                         }
-                                        readonly property string assetId: String(galleryAsset.assetId || "")
+                                readonly property string assetId: String(galleryAsset.assetId || "")
                                         readonly property string thumbnailSource: String(galleryAsset.thumbnailSource || "")
                                         readonly property string mediaType: String(galleryAsset.mediaType || "photo")
                                         readonly property string durationText: String(galleryAsset.durationText || "")
@@ -12686,32 +14912,26 @@ Rectangle {
                                                 anchors.fill: parent
                                                 source: tileDelegate.thumbnailSource
                                                 fillMode: Image.PreserveAspectFit
+                                                // Decode independently of the row geometry. Feeding
+                                                // painted dimensions back into layout causes resize /
+                                                // reload cycles as width and height change separately.
+                                                sourceSize: Qt.size(768, 768)
                                                 asynchronous: true
                                                 cache: tileDelegate.thumbnailSource.length > 0
                                                 visible: source.toString().length > 0
-                                                onStatusChanged: {
+                                                function recordSourceAspect() {
                                                     if (status === Image.Ready)
                                                         root.setLibraryGalleryAspectRatio(
                                                                     tileDelegate.assetIndex,
                                                                     tileDelegate.thumbnailSource,
-                                                                    paintedWidth,
-                                                                    paintedHeight, tileDelegate.assetId)
+                                                                    implicitWidth,
+                                                                    implicitHeight, tileDelegate.assetId)
                                                 }
-                                                onPaintedWidthChanged: {
-                                                    if (status === Image.Ready)
-                                                        root.setLibraryGalleryAspectRatio(
-                                                                    tileDelegate.assetIndex,
-                                                                    tileDelegate.thumbnailSource,
-                                                                    paintedWidth,
-                                                                    paintedHeight, tileDelegate.assetId)
-                                                }
-                                                onPaintedHeightChanged: {
-                                                    if (status === Image.Ready)
-                                                        root.setLibraryGalleryAspectRatio(
-                                                                    tileDelegate.assetIndex,
-                                                                    tileDelegate.thumbnailSource,
-                                                                    paintedWidth,
-                                                                    paintedHeight, tileDelegate.assetId)
+                                                onStatusChanged: if (status === Image.Ready) aspectDiscoveryTimer.restart()
+                                                Timer {
+                                                    id: aspectDiscoveryTimer
+                                                    interval: 0
+                                                    onTriggered: tileImage.recordSourceAspect()
                                                 }
                                             }
 
@@ -12807,22 +15027,33 @@ Rectangle {
                                                 anchors.right: parent.right
                                                 anchors.bottom: parent.bottom
                                                 anchors.margins: 8
-                                                visible: tileDelegate.mediaType !== "photo" && tileDelegate.durationText.length > 0
+                                                visible: tileDelegate.mediaType !== "photo"
                                                 radius: 3
                                                 color: theme.alpha(theme.ink950, 0.72)
                                                 border.width: theme.chromeBorderWidth
                                                 border.color: theme.alpha(theme.polar, 0.22)
-                                                implicitWidth: durationBadge.implicitWidth + 10
+                                                implicitWidth: durationBadge.implicitWidth + 12
                                                 implicitHeight: 20
                                                 z: 2
 
-                                                Label {
+                                                RowLayout {
                                                     id: durationBadge
                                                     anchors.centerIn: parent
-                                                    text: tileDelegate.durationText
-                                                    color: theme.textStrong
-                                                    font.family: theme.fontMono
-                                                    font.pixelSize: 9
+                                                    spacing: theme.space4
+                                                    MediaTypeIcon {
+                                                        mediaType: tileDelegate.mediaType
+                                                        color: theme.textStrong
+                                                        Layout.preferredWidth: theme.scaled(13)
+                                                        Layout.preferredHeight: theme.scaled(13)
+                                                    }
+                                                    Label {
+                                                        text: tileDelegate.durationText.length > 0 ? tileDelegate.durationText
+                                                              : tileDelegate.mediaType === "timeline" ? "Timeline"
+                                                              : tileDelegate.mediaType === "carousel" ? "Boards" : "Video"
+                                                        color: theme.textStrong
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: theme.typeMicro
+                                                    }
                                                 }
                                             }
 
@@ -12847,22 +15078,20 @@ Rectangle {
                                     }
                                 }
                             }
-                        }
-                    }
                 }
 
                 GridLayout {
                     id: librarySurvey
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    visible: !root.importModeOpen && root.catalogViewMode === "survey" && root.assetCount() > 0
+                    visible: !root.importModeOpen && !root.libraryDocumentsOpen && root.catalogViewMode === "survey" && root.assetCount() > 0
                     columns: width > 1200 ? 3 : 2
                     columnSpacing: 10
                     rowSpacing: 10
 
                     Repeater {
                         id: surveyAssetRepeater
-                        model: root.catalogAssets.surveyAssetCount(root.catalogAssets.selectedIndex, 6)
+                        model: librarySurvey.visible ? root.catalogAssets.surveyAssetCount(root.catalogAssets.selectedIndex, 6) : 0
                         Component.onCompleted: root.surveyAssetCount = count
                         onCountChanged: root.surveyAssetCount = count
 
@@ -12882,7 +15111,7 @@ Rectangle {
                             picked: Boolean(surveyAsset.picked)
                             rejected: Boolean(surveyAsset.rejected)
                             burstText: surveyAsset.burstSize && surveyAsset.burstSize > 1
-                                       ? ("B " + surveyAsset.burstPosition + "/" + surveyAsset.burstSize)
+                                       ? ((surveyAsset.burstTimeBased ? "Burst " : "Sequence ") + surveyAsset.burstPosition + "/" + surveyAsset.burstSize)
                                        : ""
                             onActivated: root.selectAsset(surveyAsset.visibleIndex)
                             onDoubleActivated: {
@@ -12893,23 +15122,81 @@ Rectangle {
                     }
                 }
 
-                StudioEmptyStateCard {
-                    studioTheme: theme
-                    hairline: root.hairline
-                    accentColor: root.mint
-                    dimText: root.dimText
+                Loader {
+                    objectName: "libraryCullViewLoader"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    active: !root.importModeOpen && !root.libraryDocumentsOpen &&
+                            root.catalogViewMode === "cull"
+                    visible: active
+                    sourceComponent: LibraryCullView {
+                        objectName: "libraryCullView"
+                        catalogAssets: root.catalogAssets
+                        autoAdvance: Boolean(appShell.cullingAutoAdvance)
+                        resumeAssetId: root.libraryCullResumeAssetId
+                        onReviewActionRequested: function(action) { root.applyLibraryCullAction(action, 0) }
+                        onRatingRequested: function(rating) { root.applyLibraryCullAction("rating", rating) }
+                        onClearReviewRequested: root.applyLibraryCullAction("clear", 0)
+                        onAssetSelected: function(index) { root.catalogAssets.selectIndex(index) }
+                        onAutoAdvanceToggleRequested: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
+                        onUnmarkedFilterToggleRequested: root.toggleLibraryCullUnmarkedFilter()
+                        onResumeRequested: root.resumeLibraryCullPosition()
+                    }
+                }
+
+                Item {
                     objectName: "libraryEmptyState"
-                    visible: !root.importModeOpen && root.assetCount() === 0
-                    iconName: catalogAssets.errorMessage.length > 0 ? "delete" : "library"
-                    title: root.libraryEmptyStateTitle()
-                    message: root.libraryEmptyStateMessage()
-                    error: catalogAssets.errorMessage.length > 0
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: !root.importModeOpen && !root.libraryDocumentsOpen &&
+                             root.catalogViewMode !== "cull" && root.assetCount() === 0
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(380, Math.max(1, parent.width - 48))
+                        spacing: 14
+
+                        LooksyLoadingScene {
+                            objectName: "studioLibraryLoadingScene"
+                            Layout.fillWidth: true
+                            scene: "library"
+                            active: catalogAssets.loading
+                            failed: !catalogAssets.loading && catalogAssets.errorMessage.length > 0
+                            title: catalogAssets.loading ? "Opening your library"
+                                  : catalogAssets.errorMessage.length > 0 ? "Unable to open your library"
+                                  : catalogAssets.totalAssetCount === 0 ? "Your library starts here" : "No matching photos"
+                            detail: catalogAssets.loading ? "Loading photos and saved edits."
+                                  : catalogAssets.errorMessage.length > 0 ? catalogAssets.errorMessage
+                                  : catalogAssets.totalAssetCount === 0 ? "Import your photos to begin."
+                                  : "Try another search or clear your filters."
+                        }
+                        ActionButton {
+                            objectName: "libraryEmptyStateAction"
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.topMargin: 10
+                            visible: !catalogAssets.loading
+                            text: catalogAssets.errorMessage.length > 0 ? "Try again"
+                                  : catalogAssets.totalAssetCount === 0 ? "Import photos" : "Clear filters"
+                            tone: "primary"
+                            onClicked: {
+                                if (catalogAssets.errorMessage.length > 0)
+                                    catalogAssets.refresh()
+                                else if (catalogAssets.totalAssetCount === 0)
+                                    root.importModeOpen = true
+                                else {
+                                    root.clearLibrarySearch()
+                                    catalogAssets.clearFilters()
+                                }
+                            }
+                        }
+                    }
                 }
 
                 ImportView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     visible: root.importModeOpen
+                    onReviewImportedRequested: root.reviewLatestImport()
                 }
             }
 
@@ -12917,7 +15204,8 @@ Rectangle {
 
             StudioPanel {
                 objectName: "libraryInspectorPanel"
-                visible: root.libraryInspectorPanelVisible && !root.importModeOpen
+                visible: root.libraryInspectorPanelVisible && !root.libraryDocumentsOpen && !root.importModeOpen &&
+                         root.catalogViewMode !== "cull" && root.assetCount() > 0
                 Layout.preferredWidth: visible ? root.libraryInspectorPanelWidth : 0
                 Layout.minimumWidth: visible ? root.libraryInspectorPanelWidth : 0
                 Layout.maximumWidth: visible ? root.libraryInspectorPanelWidth : 0
@@ -12935,10 +15223,20 @@ Rectangle {
                         width: libraryInspectorScroll.availableWidth
                         spacing: 12
 
-                        ImageViewport {
+                        Rectangle {
                             Layout.fillWidth: true
                             Layout.preferredHeight: root.libraryToolbarTight ? 112 : 126
-                            source: root.displayImageSource(0)
+                            color: theme.mediaCanvas
+                            clip: true
+
+                            Image {
+                                objectName: "libraryInspectorPreview"
+                                anchors.fill: parent
+                                source: catalogAssets.selectedThumbnailSource
+                                sourceSize: Qt.size(768, 768)
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                            }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -12974,8 +15272,8 @@ Rectangle {
                                             labelVisible: false
                                             role: "icon"
                                             active: catalogAssets.selectedRating >= index + 1
-                                            tooltip: text + " · click the current rating to clear"
-                                            onClicked: catalogAssets.setSelectedRating(catalogAssets.selectedRating === index + 1 ? 0 : index + 1)
+                                            tooltip: text + " · press 0 to clear the rating"
+                                            onClicked: root.applyLibraryCullAction("rating", index + 1)
                                         }
                                     }
                                 }
@@ -13039,11 +15337,31 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 6
-                            MiniButton { Layout.fillWidth: true; text: "Pick"; role: "secondary"; accent: root.dimText; active: catalogAssets.selectedPicked; onClicked: catalogAssets.toggleSelectedPick() }
-                            MiniButton { Layout.fillWidth: true; text: "Reject"; role: "secondary"; accent: root.dimText; active: catalogAssets.selectedRejected; onClicked: catalogAssets.toggleSelectedReject() }
-                            MiniButton { Layout.fillWidth: true; text: "Clear"; role: "secondary"; accent: root.dimText; onClicked: catalogAssets.clearSelectedCullState() }
+                            MiniButton { Layout.fillWidth: true; text: "Pick"; role: "secondary"; accent: root.dimText; active: catalogAssets.selectedPicked; onClicked: root.applyLibraryCullAction("pick", 0) }
+                            MiniButton { Layout.fillWidth: true; text: "Reject"; role: "secondary"; accent: root.dimText; active: catalogAssets.selectedRejected; onClicked: root.applyLibraryCullAction("reject", 0) }
+                            MiniButton { Layout.fillWidth: true; text: "Clear"; role: "secondary"; accent: root.dimText; onClicked: root.applyLibraryCullAction("clear", 0) }
                         }
-                        // Keyword entry returns when it has a durable catalog write path.
+                        LibraryMetadataPanel {
+                            Layout.fillWidth: true
+                            visible: catalogAssets.selectedMediaType === "photo"
+                            catalogModel: root.catalogAssets
+                        }
+                        LibraryDeliveryPanel {
+                            Layout.fillWidth: true
+                            jobQueue: root.libraryJobQueue
+                            assetIds: catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                                      ? catalogAssets.assetsForProject(catalogAssets.projectFilter).map(function(asset) { return asset.assetId })
+                                      : catalogAssets.selectedAssetIds
+                            onExportSelectedRequested: root.assetActivated("export")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: catalogAssets.duplicateAnalysisStatus.length > 0
+                            text: catalogAssets.duplicateAnalysisStatus
+                            color: theme.textMuted
+                            font.pixelSize: theme.typeCaption
+                            wrapMode: Text.WordWrap
+                        }
                     }
                 }
             }
@@ -13058,7 +15376,7 @@ Rectangle {
 
             Rectangle {
                 visible: root.editingChromeVisible
-                Layout.preferredWidth: 44
+                Layout.preferredWidth: root.editToolRailColumnWidth
                 Layout.fillHeight: true
                 color: theme.ink950
                 border.width: theme.chromeBorderWidth
@@ -13067,13 +15385,13 @@ Rectangle {
                 ToolRail {
                     objectName: "studioEditToolRail"
                     anchors.centerIn: parent
-                    tools: root.editToolModel()
+                    tools: root.editToolModel().filter(function(tool) { return tool.topRail !== true })
                     accent: root.mint
                     buttonSize: theme.railButtonSizeCompact
-                    spacing: 16
+                    spacing: theme.space2
                     menuWidth: 220
                     menusEnabled: false
-                    toolIconSize: 18
+                    toolIconSize: 20
                     switchSerial: root.toolSwitchSerial
                     onToolTriggered: function(tool) {
                         root.activateEditTool(tool.id)
@@ -13113,7 +15431,7 @@ Rectangle {
             StudioPanel {
                 objectName: "editContextPanel"
                 visible: root.editContextPanelActive
-                Layout.preferredWidth: visible ? (root.scopeDockActive("left") ? 304 : root.editContextPanelWidth) : 0
+                Layout.preferredWidth: visible ? root.editContextPanelWidth : 0
                 Layout.fillHeight: true
                 title: root.scopeDockActive("left") ? "Scopes" : "Library"
 
@@ -13172,8 +15490,6 @@ Rectangle {
                     }
                     Item { visible: !root.scopeDockActive("left"); Layout.fillHeight: true }
                     StudioRowRule { visible: !root.scopeDockActive("left") }
-                    Label { visible: !root.scopeDockActive("left"); text: "Storage"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
-                    ProgressBar { visible: !root.scopeDockActive("left"); Layout.fillWidth: true; value: catalogAssets.totalAssetCount > 0 ? Math.min(1, catalogAssets.assetCount / catalogAssets.totalAssetCount) : 0 }
                     Label {
                         visible: !root.scopeDockActive("left")
                         Layout.fillWidth: true
@@ -13192,16 +15508,17 @@ Rectangle {
 
                 GridLayout {
                     id: selectionContextToolbar
+                    parent: creativeSelectionContextHost
                     Layout.fillWidth: true
                     visible: root.editTool === "masks" || root.editTool === "pixel-brush" ||
                              root.editTool === "pixel-select" || (root.editTool === "brush" && !root.brushToolReady())
-                    columns: width >= 1060 && maskRefineToolbar.visible ? 2 : 1
+                    columns: 1
                     columnSpacing: 12
                     rowSpacing: 0
                 Rectangle {
                     id: maskCreationToolbar
                     objectName: "maskCreationToolbar"
-                    readonly property string sourceCreationContract: "selection-top-toolbar:v2|source-creation:false|combine:true|status:true|done:true|owner:left-rail"
+                    readonly property string sourceCreationContract: "selection-sidebar:v3|source-creation:false|combine:true|status:true|done:true|owner:creative-tools-panel"
                     visible: root.editTool === "masks" ||
                              root.editTool === "pixel-brush" ||
                              root.editTool === "pixel-select" ||
@@ -13261,8 +15578,8 @@ Rectangle {
 
                         MiniButton { objectName: "maskCombineAddButton"; text: "Add"; role: "segmented"; active: root.maskCreationOperation === "add"; tooltip: root.maskCreationOperationTooltip("add"); onClicked: root.setMaskCreationOperation("add") }
                         MiniButton { objectName: "maskCombineSubtractButton"; text: "Subtract"; role: "segmented"; active: root.maskCreationOperation === "subtract"; tooltip: root.maskCreationOperationTooltip("subtract"); onClicked: root.setMaskCreationOperation("subtract") }
-                        MiniButton { objectName: "maskCombineIntersectButton"; text: "Intersect"; role: "segmented"; active: root.maskCreationOperation === "intersect"; tooltip: root.maskCreationOperationTooltip("intersect"); onClicked: root.setMaskCreationOperation("intersect") }
-                        MiniButton { objectName: "maskCombineReplaceButton"; text: "Replace"; role: "segmented"; active: root.maskCreationOperation === "replace"; tooltip: root.maskCreationOperationTooltip("replace"); onClicked: root.setMaskCreationOperation("replace") }
+                        MiniButton { objectName: "maskCombineIntersectButton"; visible: !root.objectPickArmed; text: "Intersect"; role: "segmented"; active: root.maskCreationOperation === "intersect"; tooltip: root.maskCreationOperationTooltip("intersect"); onClicked: root.setMaskCreationOperation("intersect") }
+                        MiniButton { objectName: "maskCombineReplaceButton"; visible: !root.objectPickArmed; text: "Replace"; role: "segmented"; active: root.maskCreationOperation === "replace"; tooltip: root.maskCreationOperationTooltip("replace"); onClicked: root.setMaskCreationOperation("replace") }
                         MiniButton {
                             objectName: "maskDeleteEmptySelectionsButton"
                             text: "Delete Empty"
@@ -13286,14 +15603,14 @@ Rectangle {
                         MiniButton {
                             objectName: "maskActionRetryButton"
                             text: editorPreview.maskActionRetryLabel || "Retry"
-                            iconName: "reset"
+                            iconName: "retry"
                             role: "secondary"
                             visible: editorPreview.maskActionRetryAvailable
                             enabled: editorPreview.maskActionRetryAvailable
                             tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed selection or retouch action."
                             onClicked: editorPreview.retryLastMaskAction()
                         }
-                        MiniButton { objectName: "maskCreationDoneButton"; text: "Done"; role: "primary"; active: editorPreview.hasActiveMask; enabled: editorPreview.hasActiveMask; onClicked: root.finishSelectionWorkflow() }
+                        MiniButton { objectName: "maskCreationDoneButton"; text: editorPreview.smartSelectPreviewActive ? "Use selection" : "Done"; role: "primary"; active: editorPreview.hasActiveMask || editorPreview.smartSelectPreviewActive; enabled: editorPreview.hasActiveMask || editorPreview.smartSelectPreviewActive; onClicked: editorPreview.smartSelectPreviewActive && root.objectPickArmed ? root.finishActiveCanvasTool() : root.finishSelectionWorkflow() }
                         MiniButton {
                             objectName: "maskRefinementCancelButton"
                             text: "Cancel"
@@ -13320,6 +15637,7 @@ Rectangle {
 
                 Rectangle {
                     id: maskRefineToolbar
+                    parent: creativeSelectionRefineHost
                     objectName: "maskRefineToolbar"
                     visible: root.editTool === "masks" && root.studioMaskSupportsSelectionRefine()
                     Layout.fillWidth: true
@@ -13328,6 +15646,118 @@ Rectangle {
                     border.width: 0
                     border.color: root.hairline
                     radius: 4
+
+                    Popup {
+                        id: maskRefineOptions
+                        objectName: "maskRefineOptionsPopup"
+                        parent: Overlay.overlay
+                        x: Math.max(8, Math.min(parent.width - width - 8, maskRefineFlow.mapToItem(parent, 0, 0).x + 200))
+                        y: maskRefineFlow.mapToItem(parent, 0, maskRefineFlow.height).y + 8
+                        width: Math.min(340, parent.width - 16)
+                        padding: 12
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                        background: Rectangle {
+                            color: theme.surfaceTop
+                            radius: theme.radius8
+                            border.width: 1
+                            border.color: theme.controlEdge
+                        }
+                        contentItem: Flow {
+                            spacing: 6
+                    MiniButton {
+                        objectName: "maskRefineShowOriginalButton"
+                        text: "Original"
+                        iconName: "compare"
+                        role: "segmented"
+                        active: editorPreview.maskRefinementPreviewMode === "original"
+                        tooltip: "Preview the active selection before edge refinement without changing the recipe."
+                        onClicked: root.setStudioRefinementPreviewMode("original")
+                    }
+                    MiniButton {
+                        objectName: "maskRefineShowRefinedButton"
+                        text: "Refined"
+                        iconName: "target"
+                        role: "segmented"
+                        active: editorPreview.maskRefinementPreviewMode !== "original"
+                        tooltip: "Preview the active selection with current edge refinement."
+                        onClicked: root.setStudioRefinementPreviewMode("refined")
+                    }
+                    MiniButton {
+                        objectName: "maskRefineHighQualityPreviewButton"
+                        text: "HQ"
+                        iconName: "sparkles"
+                        role: "segmented"
+                        active: editorPreview.maskRefinementHighQualityPreview
+                        tooltip: "Use a higher-resolution selection refinement preview for expensive edge checks."
+                        onClicked: root.setStudioRefinementHighQualityPreview(!editorPreview.maskRefinementHighQualityPreview)
+                    }
+                    MiniButton {
+                        objectName: "maskFullResolutionPreviewButton"
+                        text: "Full"
+                        iconName: "maximize"
+                        role: "segmented"
+                        active: editorPreview.maskFullResolutionPreview
+                        tooltip: "Use the detailed selection preview without scheduling a full image render."
+                        onClicked: root.setStudioFullResolutionMaskPreview(!editorPreview.maskFullResolutionPreview)
+                    }
+                    MiniButton {
+                        objectName: "maskRefineEdgePreviewButton"
+                        visible: false
+                        text: "Edge"
+                        iconName: "focus-frame"
+                        role: "segmented"
+                        active: false
+                        enabled: false
+                        tooltip: "Show only the matte pixels changed by current refinement controls."
+                    }
+                    MiniButton {
+                        objectName: "maskRefineInvertButton"
+                        text: "Invert"
+                        iconName: "compare"
+                        role: "segmented"
+                        active: editorPreview.activeMaskSelectionInverted
+                        enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                        tooltip: "Invert the active selection result without creating a new component." + root.activeMaskDisabledTooltipSuffix()
+                        onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+                    }
+                    MiniButton {
+                        objectName: "maskRefineDuplicateButton"
+                        text: "Copy"
+                        iconName: "plus"
+                        role: "secondary"
+                        enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                        tooltip: "Copy only the active selection component with a new id and name." + root.activeMaskDisabledTooltipSuffix()
+                        onClicked: editorPreview.duplicateActiveMask()
+                    }
+                    MiniButton {
+                        objectName: "maskRefineDuplicateInvertButton"
+                        text: "Copy Inv"
+                        iconName: "compare"
+                        role: "secondary"
+                        enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                        tooltip: "Copy the active selection component, then invert the copy for background or opposite-region workflows." + root.activeMaskDisabledTooltipSuffix()
+                        onClicked: editorPreview.duplicateActiveMaskInverted()
+                    }
+                    MiniButton {
+                        objectName: "maskRefineDuplicateSetButton"
+                        text: "Copy All"
+                        iconName: "copy"
+                        role: "secondary"
+                        enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                        tooltip: "Copy the whole active selection group, including every component and adjustment." + root.activeMaskDisabledTooltipSuffix()
+                        onClicked: editorPreview.duplicateActiveMaskSet()
+                    }
+                    MiniButton {
+                        objectName: "maskRefineResetEdgeButton"
+                        text: "Reset"
+                        iconName: "reset"
+                        role: "secondary"
+                        enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                        tooltip: "Reset matte refinement while preserving the selection geometry and local adjustments." + root.activeMaskDisabledTooltipSuffix()
+                        onClicked: root.resetStudioSelectionEdge()
+                    }
+                        }
+                    }
 
                     Flow {
                         id: maskRefineFlow
@@ -13400,117 +15830,7 @@ Rectangle {
                             tooltip: "Preview quality, before and after, inversion, copy, and reset"
                             onClicked: maskRefineOptions.open()
                         }
-                        Popup {
-                            id: maskRefineOptions
-                            objectName: "maskRefineOptionsPopup"
-                            parent: Overlay.overlay
-                            x: Math.max(8, Math.min(parent.width - width - 8, maskRefineFlow.mapToItem(parent, 0, 0).x + 200))
-                            y: maskRefineFlow.mapToItem(parent, 0, maskRefineFlow.height).y + 8
-                            width: 340
-                            padding: 12
-                            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                            background: Rectangle {
-                                color: theme.surfaceTop
-                                radius: theme.radius8
-                                border.width: 1
-                                border.color: theme.controlEdge
-                            }
-                            contentItem: Flow {
-                                spacing: 6
-                        MiniButton {
-                            objectName: "maskRefineShowOriginalButton"
-                            text: "Original"
-                            iconName: "compare"
-                            role: "segmented"
-                            active: editorPreview.maskRefinementPreviewMode === "original"
-                            tooltip: "Preview the active selection before edge refinement without changing the recipe."
-                            onClicked: root.setStudioRefinementPreviewMode("original")
-                        }
-                        MiniButton {
-                            objectName: "maskRefineShowRefinedButton"
-                            text: "Refined"
-                            iconName: "target"
-                            role: "segmented"
-                            active: editorPreview.maskRefinementPreviewMode !== "original"
-                            tooltip: "Preview the active selection with current edge refinement."
-                            onClicked: root.setStudioRefinementPreviewMode("refined")
-                        }
-                        MiniButton {
-                            objectName: "maskRefineHighQualityPreviewButton"
-                            text: "HQ"
-                            iconName: "sparkles"
-                            role: "segmented"
-                            active: editorPreview.maskRefinementHighQualityPreview
-                            tooltip: "Use a higher-resolution selection refinement preview for expensive edge checks."
-                            onClicked: root.setStudioRefinementHighQualityPreview(!editorPreview.maskRefinementHighQualityPreview)
-                        }
-                        MiniButton {
-                            objectName: "maskFullResolutionPreviewButton"
-                            text: "Full"
-                            iconName: "maximize"
-                            role: "segmented"
-                            active: editorPreview.maskFullResolutionPreview
-                            tooltip: "Use the detailed selection preview without scheduling a full image render."
-                            onClicked: root.setStudioFullResolutionMaskPreview(!editorPreview.maskFullResolutionPreview)
-                        }
-                        MiniButton {
-                            objectName: "maskRefineEdgePreviewButton"
-                            visible: false
-                            text: "Edge"
-                            iconName: "focus-frame"
-                            role: "segmented"
-                            active: false
-                            enabled: false
-                            tooltip: "Show only the matte pixels changed by current refinement controls."
-                        }
-                        MiniButton {
-                            objectName: "maskRefineInvertButton"
-                            text: "Invert"
-                            iconName: "compare"
-                            role: "segmented"
-                            active: editorPreview.activeMaskSelectionInverted
-                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                            tooltip: "Invert the active selection result without creating a new component." + root.activeMaskDisabledTooltipSuffix()
-                            onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
-                        }
-                        MiniButton {
-                            objectName: "maskRefineDuplicateButton"
-                            text: "Copy"
-                            iconName: "plus"
-                            role: "secondary"
-                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                            tooltip: "Copy only the active selection component with a new id and name." + root.activeMaskDisabledTooltipSuffix()
-                            onClicked: editorPreview.duplicateActiveMask()
-                        }
-                        MiniButton {
-                            objectName: "maskRefineDuplicateInvertButton"
-                            text: "Copy Inv"
-                            iconName: "compare"
-                            role: "secondary"
-                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                            tooltip: "Copy the active selection component, then invert the copy for background or opposite-region workflows." + root.activeMaskDisabledTooltipSuffix()
-                            onClicked: editorPreview.duplicateActiveMaskInverted()
-                        }
-                        MiniButton {
-                            objectName: "maskRefineDuplicateSetButton"
-                            text: "Copy All"
-                            iconName: "copy"
-                            role: "secondary"
-                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                            tooltip: "Copy the whole active selection group, including every component and adjustment." + root.activeMaskDisabledTooltipSuffix()
-                            onClicked: editorPreview.duplicateActiveMaskSet()
-                        }
-                        MiniButton {
-                            objectName: "maskRefineResetEdgeButton"
-                            text: "Reset"
-                            iconName: "reset"
-                            role: "secondary"
-                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                            tooltip: "Reset matte refinement while preserving the selection geometry and local adjustments." + root.activeMaskDisabledTooltipSuffix()
-                            onClicked: root.resetStudioSelectionEdge()
-                        }
-                            }
-                        }
+
                         Label {
                             objectName: "maskRefineToolbarStatusLabel"
                             visible: false
@@ -13541,6 +15861,7 @@ Rectangle {
                 }
 
                 Rectangle {
+                    id: maskStackStrip
                     objectName: "maskStackStrip"
                     visible: false
                     Layout.fillWidth: true
@@ -13567,7 +15888,7 @@ Rectangle {
                         }
 
                         Repeater {
-                            model: editorPreview.maskSets
+                            model: maskStackStrip.visible ? root.maskSetRows : []
 
                             delegate: Rectangle {
                                 required property var modelData
@@ -13761,12 +16082,14 @@ Rectangle {
                     }
                     readonly property int toolbarCompactWidth: 1240
                     readonly property int toolbarTightWidth: 1000
-                    readonly property int toolbarStackWidth: editZoomToolbar.width + editActionToolbar.width + 36
+                    readonly property int documentActionsWidth: editNewCanvasButton.width + (editAddBoardsButton.visible ? editAddBoardsButton.width + 8 : 0)
+                    readonly property int toolbarStackWidth: editZoomToolbar.width + editActionToolbar.width + documentActionsWidth + 48
                     readonly property bool toolbarCompact: width < toolbarCompactWidth
                     readonly property bool toolbarTight: width < toolbarTightWidth
+                    readonly property bool toolbarOverflow: width < 720
                     readonly property bool toolbarStacked: width < toolbarStackWidth
-                    readonly property bool primaryCanvasHudActive: root.editTool === "crop" ||
-                                                                    root.brushToolReady() ||
+                    readonly property bool primaryCanvasHudActive: root.activeCanvasToolChipVisible() ||
+                                                                    root.editTool === "crop" ||
                                                                     (editorPreview.hasActiveMask &&
                                                                      editorPreview.activeMaskToolRole === "retouch" &&
                                                                      !editorPreview.compareMode)
@@ -13776,7 +16099,7 @@ Rectangle {
                     source: root.originalHoldActive
                             ? root.displayImageSource(-1)
                             : root.displayImageSource(0)
-                    resetKey: catalogAssets.selectedAssetId
+                    resetKey: root.editBoardMode ? "boards:" + root.editBoardDocumentId : editorPreview.assetId
                     masked: editorPreview.hasActiveMask &&
                             (root.editTool === "masks" || root.editTool === "brush" ||
                              root.editTool === "retouch" ||
@@ -13789,7 +16112,8 @@ Rectangle {
                     falseColorOverlayEnabled: true
                     gamutOverlayEnabled: true
                     zoneMapOverlayEnabled: true
-                    topChromeInset: root.editTool === "crop" && !editorPreview.compareMode
+                    topChromeInset: polygonToolHud.visible ? polygonToolHud.y + polygonToolHud.height + 12
+                                    : root.editTool === "crop" && !editorPreview.compareMode
                                     ? 58
                                     : ((root.brushToolReady() ||
                                         (editorPreview.hasActiveMask &&
@@ -13804,33 +16128,42 @@ Rectangle {
                         id: maskToolRail
                         objectName: "maskToolRail"
                         readonly property bool expanded: root.maskToolRailExpanded
-                        readonly property string layoutContract: "left-rail|icon-first|expandable:v1"
-                        readonly property bool compactLabelsHidden: !expanded
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.leftMargin: 10
-                        anchors.topMargin: 54
-                        width: expanded ? 206 : 46
-                        height: Math.max(0, Math.min(parent.height - 66, maskToolRailContent.implicitHeight + 14))
-                        visible: (root.editTool === "masks" || root.editTool === "brush" ||
-                                  root.editTool === "retouch") &&
+                        readonly property bool hosted: root.creativeToolKind === "selection"
+                        parent: hosted ? creativeSelectionMenusHost : editViewport
+                        Layout.fillWidth: hosted
+                        implicitWidth: maskToolRailContent.implicitWidth
+                        implicitHeight: maskToolRailContent.implicitHeight
+                        readonly property string layoutContract: "selection-tool-sources|right-panel:true|popover-menus:true|surface:transparent"
+                        readonly property bool compactLabelsHidden: !hosted
+                        anchors.left: hosted ? undefined : parent.left
+                        anchors.top: hosted ? undefined : parent.top
+                        anchors.leftMargin: root.brushToolReady() || editViewport.primaryCanvasHudActive
+                                            ? theme.space6
+                                            : editZoomToolbar.width + theme.space6
+                        anchors.topMargin: root.brushToolReady()
+                            ? Math.max(editZoomToolbar.y + editZoomToolbar.height,
+                                       editActionToolbar.y + editActionToolbar.height) + theme.space8
+                            : (editViewport.toolbarStacked ? 52 : 12)
+                        width: hosted ? parent.width : maskToolRailContent.implicitWidth
+                        height: maskToolRailContent.implicitHeight
+                        visible: (hosted || root.editTool === "brush" || root.editTool === "retouch") &&
                                  !editorPreview.compareMode
                         z: 30
-                        radius: theme.radius6
-                        color: theme.alpha(theme.surfaceTop, 0.96)
-                        border.width: 1
-                        border.color: theme.controlEdge
-                        clip: true
+                        radius: 0
+                        color: "transparent"
+                        border.width: 0
+                        clip: false
 
-                        ColumnLayout {
+                        GridLayout {
                             id: maskToolRailContent
+                            columns: maskToolRail.hosted ? 2 : 4
                             anchors.fill: parent
-                            anchors.margins: 7
-                            spacing: 6
+                            columnSpacing: theme.space4
+                            rowSpacing: theme.space4
 
                             MiniButton {
                                 objectName: "maskToolRailToggleButton"
-                                Layout.fillWidth: true
+                                visible: false
                                 text: maskToolRail.expanded ? "Collapse" : "Tools"
                                 iconName: maskToolRail.expanded ? "panel-left" : "menu"
                                 role: maskToolRail.expanded ? "segmented" : "icon"
@@ -13841,6 +16174,7 @@ Rectangle {
                             }
 
                             Rectangle {
+                                visible: false
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 1
                                 color: theme.alpha(root.lineColor, 0.62)
@@ -13848,7 +16182,7 @@ Rectangle {
 
                             Label {
                                 objectName: "maskToolRailSectionLabel"
-                                visible: maskToolRail.expanded
+                                visible: false
                                 Layout.fillWidth: true
                                 text: "Selection"
                                 color: root.dimText
@@ -13863,12 +16197,16 @@ Rectangle {
 
                             MenuButton {
                                 objectName: "maskSelectionMenuButton"
-                                visible: maskToolRail.expanded
-                                Layout.fillWidth: true
-                                text: "Smart Select"
+                                accessibleName: "Smart selection tools"
+                                Layout.fillWidth: maskToolRail.hosted
+                                Layout.preferredWidth: maskToolRail.hosted ? -1 : theme.iconButtonSizeCompact + theme.space4
+                                Layout.preferredHeight: Math.max(theme.controlHeightDense, theme.scaled(32))
+                                text: maskToolRail.hosted ? "Automatic" : ""
                                 iconName: "smart-select"
                                 compact: true
-                                menuItems: root.maskSelectionMenuItems()
+                                showText: maskToolRail.hosted
+                                primaryOpensMenu: true
+                                menuItems: maskToolRail.hosted ? root.maskSelectionMenuItems().filter(function(item) { return item.key !== "object" && item.key !== "subject" }) : root.maskSelectionMenuItems()
                                 tooltipText: "Create subject, object, sky, or background selections."
                                 onClicked: root.createGeneratedSelectionSource("subject")
                                 onMenuItemTriggered: function(key) { root.handleMaskToolMenuAction(key) }
@@ -13876,8 +16214,7 @@ Rectangle {
 
                             MiniButton {
                                 objectName: "maskSelectionFamilyButton"
-                                visible: !maskToolRail.expanded
-                                Layout.fillWidth: true
+                                visible: false
                                 text: "Smart"
                                 iconName: "smart-select"
                                 role: "icon"
@@ -13892,6 +16229,7 @@ Rectangle {
                             MiniButton { objectName: "maskSourceBackgroundButton"; visible: false; text: "Background"; tooltip: "Create a background selection by inverting the subject matte, not a separate background model."; onClicked: root.createGeneratedSelectionSource("background") }
 
                             Rectangle {
+                                visible: false
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 1
                                 color: theme.alpha(root.lineColor, 0.62)
@@ -13899,12 +16237,15 @@ Rectangle {
 
                             MenuButton {
                                 objectName: "maskBrushShapeMenuButton"
-                                visible: maskToolRail.expanded
-                                Layout.fillWidth: true
-                                text: "Brush / Shape"
+                                Layout.fillWidth: maskToolRail.hosted
+                                Layout.preferredWidth: maskToolRail.hosted ? -1 : theme.iconButtonSizeCompact + theme.space4
+                                Layout.preferredHeight: Math.max(theme.controlHeightDense, theme.scaled(32))
+                                text: maskToolRail.hosted ? "More tools" : ""
                                 iconName: "brush-tool"
                                 compact: true
-                                menuItems: root.maskBrushShapeMenuItems()
+                                showText: maskToolRail.hosted
+                                primaryOpensMenu: true
+                                menuItems: maskToolRail.hosted ? root.maskBrushShapeMenuItems().filter(function(item) { return ["brush-add", "lasso", "polygon", "rectangle", "ellipse", "pixel-brush-add"].indexOf(item.key) < 0 }) : root.maskBrushShapeMenuItems()
                                 tooltipText: "Create brush, lasso, polygon, gradient, or shape selections."
                                 onClicked: root.startMaskBrushSource("add")
                                 onMenuItemTriggered: function(key) { root.handleMaskToolMenuAction(key) }
@@ -13912,8 +16253,7 @@ Rectangle {
 
                             MiniButton {
                                 objectName: "maskBrushShapeFamilyButton"
-                                visible: !maskToolRail.expanded
-                                Layout.fillWidth: true
+                                visible: false
                                 text: "Brush"
                                 iconName: "brush-tool"
                                 role: "icon"
@@ -13935,11 +16275,14 @@ Rectangle {
 
                             MenuButton {
                                 objectName: "maskRangeMenuButton"
-                                visible: maskToolRail.expanded
-                                Layout.fillWidth: true
-                                text: "Range Selection"
+                                Layout.fillWidth: maskToolRail.hosted
+                                Layout.preferredWidth: maskToolRail.hosted ? -1 : theme.iconButtonSizeCompact + theme.space4
+                                Layout.preferredHeight: Math.max(theme.controlHeightDense, theme.scaled(32))
+                                text: maskToolRail.hosted ? "Range" : ""
                                 iconName: "scope"
                                 compact: true
+                                showText: maskToolRail.hosted
+                                primaryOpensMenu: true
                                 menuItems: root.maskRangeMenuItems()
                                 tooltipText: "Create luminance, color, or depth range selections."
                                 onClicked: root.createMaskSource("luminance")
@@ -13948,8 +16291,7 @@ Rectangle {
 
                             MiniButton {
                                 objectName: "maskRangeFamilyButton"
-                                visible: !maskToolRail.expanded
-                                Layout.fillWidth: true
+                                visible: false
                                 text: "Range"
                                 iconName: "scope"
                                 role: "icon"
@@ -13960,11 +16302,14 @@ Rectangle {
 
                             MenuButton {
                                 objectName: "maskRetouchMenuButton"
-                                visible: maskToolRail.expanded
-                                Layout.fillWidth: true
-                                text: "Retouch"
+                                Layout.fillWidth: maskToolRail.hosted
+                                Layout.preferredWidth: maskToolRail.hosted ? -1 : theme.iconButtonSizeCompact + theme.space4
+                                Layout.preferredHeight: Math.max(theme.controlHeightDense, theme.scaled(32))
+                                text: maskToolRail.hosted ? "Retouch" : ""
                                 iconName: "erase-tool"
                                 compact: true
+                                showText: maskToolRail.hosted
+                                primaryOpensMenu: true
                                 menuItems: root.retouchSelectionMenuItems()
                                 tooltipText: "Remove, heal, patch, clone, dust cleanup, or fix red eye."
                                 onClicked: root.startRetouchTool("remove")
@@ -13973,8 +16318,7 @@ Rectangle {
 
                             MiniButton {
                                 objectName: "maskRetouchFamilyButton"
-                                visible: !maskToolRail.expanded
-                                Layout.fillWidth: true
+                                visible: false
                                 text: "Retouch"
                                 iconName: "erase-tool"
                                 role: "icon"
@@ -13983,7 +16327,7 @@ Rectangle {
                                 onClicked: root.maskToolRailExpanded = true
                             }
 
-                            Item { Layout.fillHeight: true }
+                            Item { visible: false }
                         }
                     }
 
@@ -13995,10 +16339,12 @@ Rectangle {
                                                                  String(root.studioMotionFast) +
                                                                  "|fade:true|stable-geometry:true|interruptible:true"
                         anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.horizontalCenterOffset: -(editViewport.documentActionsWidth + 24) / 2
                         anchors.top: parent.top
                         anchors.topMargin: 12
-                        width: Math.min(parent.width - 24, activeCanvasToolChip.implicitWidth)
-                        visible: root.activeCanvasToolChipVisible()
+                        width: Math.min(parent.width - editNewCanvasButton.width - 48, activeCanvasToolChip.implicitWidth)
+                        visible: root.activeCanvasToolChipVisible() &&
+                                 !(root.creativeToolsActive && root.creativeToolKind === "selection")
                         opacity: visible ? 1.0 : 0.0
                         title: root.activeCanvasToolName()
                         subtitle: root.activeCanvasToolModeText()
@@ -14093,10 +16439,23 @@ Rectangle {
                         canvasHeight: root.sourceCanvasHeightForLayers(layerData)
                         layerX: Number(layerData.x || 0)
                         layerY: Number(layerData.y || 0)
-                        layerWidth: Number(layerData.pixelWidth || 0)
-                        layerHeight: Number(layerData.pixelHeight || 0)
+                        layerWidth: String(layerData.kind || "").trim().toLowerCase() === "group"
+                                    ? root.sourceCanvasWidthForLayers(layerData)
+                                    : Number(layerData.pixelWidth || 0)
+                        layerHeight: String(layerData.kind || "").trim().toLowerCase() === "group"
+                                     ? root.sourceCanvasHeightForLayers(layerData)
+                                     : Number(layerData.pixelHeight || 0)
                         layerScale: Number(layerData.scale || 1)
                         layerRotation: Number(layerData.rotation || 0)
+                        textBoxResize: String(layerData.kind || "").trim().toLowerCase() === "text"
+                        moveSelection: true
+                        snappingEnabled: root.layerSnappingEnabled && String(layerData.parentId || "").length === 0
+                        snapTargetsX: root.layerSnapTargets(editViewport, true)
+                        snapTargetsY: root.layerSnapTargets(editViewport, false)
+                        snapGuideBounds: root.editBoardMode
+                            ? Qt.rect(editViewport.imageFrameX, editViewport.imageFrameY,
+                                      editViewport.imageFrameWidth * editViewport.zoom, editViewport.boardUnitHeight * editViewport.zoom)
+                            : Qt.rect(imageX, imageY, imageWidth, imageHeight)
                         z: 20
                         onInteractionStarted: editorPreview.beginCoalescedEdit()
                         onInteractionFinished: editorPreview.endCoalescedEdit()
@@ -14104,12 +16463,20 @@ Rectangle {
                             if (layerIndex >= 0)
                                 editorPreview.setPhotoLayerTransform(layerIndex, x, y, scale, rotation)
                         }
-                        onLayerPickRequested: function(viewportX, viewportY) {
-                            root.selectPhotoLayerAtViewportPoint(viewportX, viewportY)
+                        onPositionEdited: function(x, y) {
+                            root.movePhotoLayerSelection(x - Number(layerData.x || 0), y - Number(layerData.y || 0))
+                        }
+                        onTextBoxEdited: function(x, y, width, height) {
+                            if (layerIndex >= 0)
+                                editorPreview.resizePhotoLayerTextBox(layerIndex, x, y, width, height)
+                        }
+                        onLayerPickRequested: function(viewportX, viewportY, modifiers) {
+                            root.selectPhotoLayerAtViewportPoint(viewportX, viewportY, modifiers)
                         }
                     }
 
                     MouseArea {
+                        id: photoLayerCanvasPicker
                         objectName: "photoLayerCanvasPicker"
                         anchors.fill: parent
                         z: 19
@@ -14119,20 +16486,54 @@ Rectangle {
                                  !root.spacePanActive &&
                                  !photoCanvasTextOverlay.editing
                         acceptedButtons: Qt.LeftButton
-                        onClicked: function(mouse) {
-                            root.selectPhotoLayerAtViewportPoint(mouse.x, mouse.y)
+                        property bool movingSelection: false
+                        property real lastSourceX: 0
+                        property real lastSourceY: 0
+                        onPressed: function(mouse) {
+                            root.forceActiveFocus()
+                            if (!root.selectPhotoLayerAtViewportPoint(mouse.x, mouse.y, mouse.modifiers)) return
+                            lastSourceX = mouse.x * editorPreview.sourceImageWidth / editViewport.paintedContentWidth
+                            lastSourceY = mouse.y * editorPreview.sourceImageHeight / editViewport.paintedContentHeight
+                            movingSelection = true
+                            editorPreview.beginCoalescedEdit()
                         }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed || !movingSelection) return
+                            const sourceX = mouse.x * editorPreview.sourceImageWidth / editViewport.paintedContentWidth
+                            const sourceY = mouse.y * editorPreview.sourceImageHeight / editViewport.paintedContentHeight
+                            const dx = Math.round(sourceX - lastSourceX)
+                            const dy = Math.round(sourceY - lastSourceY)
+                            if (root.movePhotoLayerSelection(dx, dy)) {
+                                lastSourceX += dx
+                                lastSourceY += dy
+                            }
+                        }
+                        function finishMove() {
+                            if (!movingSelection) return
+                            movingSelection = false
+                            editorPreview.endCoalescedEdit()
+                        }
+                        onReleased: finishMove()
+                        onCanceled: finishMove()
                     }
 
                     PhotoPaintOverlay {
+                        id: photoPaintOverlay
+                        objectName: "photoPaintOverlay"
                         anchors.fill: parent
+                        controlsParent: creativePaintControlsHost
+                        toolOptionsTopMargin: Math.max(editZoomToolbar.visible ? editZoomToolbar.y + editZoomToolbar.height : 0,
+                                                       editActionToolbar.visible ? editActionToolbar.y + editActionToolbar.height : 0) + theme.space8
                         z: 23
-                        active: root.editTool === "paint" && !editorPreview.compareMode
+                        active: (root.editTool === "paint" || root.editTool === "eraser") && !editorPreview.compareMode
+                        eraserTool: root.editTool === "eraser"
                         panActive: root.spacePanActive
                         controller: editorPreview
+                        clipSelection: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "selection"
                         documentId: editorPreview.assetId
-                        layerData: photoLayerTransformOverlay.layerData
-                        layerIndex: photoLayerTransformOverlay.layerIndex
+                        layerData: root.selectedEditTargetScope() === "base-image" ?
+                                   (eraserTool ? editorPreview.baseImageLayerData : ({})) : photoLayerTransformOverlay.layerData
+                        layerIndex: root.selectedEditTargetScope() === "base-image" ? -1 : photoLayerTransformOverlay.layerIndex
                         imageX: editViewport.paintedContentX
                         imageY: editViewport.paintedContentY
                         imageWidth: editViewport.paintedContentWidth
@@ -14147,6 +16548,7 @@ Rectangle {
 
                     PhotoShapeCreateOverlay {
                         id: photoShapeCreationOverlay
+                        controlsParent: creativeShapeControlsHost
                         objectName: "photoShapeCreateOverlay"
                         anchors.fill: parent
                         z: 23
@@ -14171,6 +16573,7 @@ Rectangle {
 
                     PhotoTextCreateOverlay {
                         id: photoTextCreationOverlay
+                        objectName: "photoTextCreationOverlay"
                         anchors.fill: parent
                         z: 23
                         active: root.editTool === "text" && !editorPreview.compareMode && !photoCanvasTextOverlay.editing
@@ -14180,13 +16583,10 @@ Rectangle {
                         imageHeight: editViewport.paintedContentHeight
                         canvasWidth: editorPreview.sourceImageWidth
                         canvasHeight: editorPreview.sourceImageHeight
-                        onPointRequested: function(x, y) {
-                            photoCanvasTextOverlay.beginCreation({x: x, y: y, width: 512, height: 128,
-                                pointText: true, canvasWidth: canvasWidth, canvasHeight: canvasHeight}, photoTextCreationOverlay)
-                        }
-                        onBoxRequested: function(x, y, width, height) {
-                            photoCanvasTextOverlay.beginCreation({x: x, y: y, width: width, height: height,
-                                canvasWidth: canvasWidth, canvasHeight: canvasHeight}, photoTextCreationOverlay)
+                        controlsParent: creativeTextControlsHost
+                        availableFonts: editorPreview.availablePhotoTextFonts()
+                        onTextRequested: function(request) {
+                            photoCanvasTextOverlay.beginCreation(request, photoTextCreationOverlay)
                         }
                     }
 
@@ -14241,7 +16641,9 @@ Rectangle {
                                 Label {
                                     objectName: "pixelInspectorCoordinateLabel"
                                     Layout.fillWidth: true
-                                    text: "PX " + pixelInspectorHud.inspector.pixelX + ", " + pixelInspectorHud.inspector.pixelY
+                                    text: pixelInspectorHud.inspector.pending === true
+                                          ? "Sampling pixel…"
+                                          : "PX " + pixelInspectorHud.inspector.pixelX + ", " + pixelInspectorHud.inspector.pixelY
                                     color: root.mint
                                     font.family: theme.fontMono
                                     font.pixelSize: 10
@@ -14268,7 +16670,9 @@ Rectangle {
                             Label {
                                 objectName: "pixelInspectorAfterLabel"
                                 Layout.fillWidth: true
-                                text: "After   " + root.pixelValueText(pixelInspectorHud.inspector.after)
+                                text: pixelInspectorHud.inspector.pending === true
+                                      ? "Reading current preview…"
+                                      : "After   " + root.pixelValueText(pixelInspectorHud.inspector.after)
                                 color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -14298,7 +16702,7 @@ Rectangle {
                         color: "transparent"
                         border.width: 2
                         border.color: root.mint
-                        radius: 3
+                        radius: 0
                         z: 21
                     }
 
@@ -14313,11 +16717,11 @@ Rectangle {
                         height: 36
                         radius: 3
                         visible: root.editTool === "crop" && !editorPreview.compareMode
-                        color: theme.surfaceTop
-                        border.width: theme.hairlineWidth
-                        border.color: theme.controlEdge
+                        color: "transparent"
+                        border.width: 0
+                        border.color: "transparent"
                         z: 22
-                        clip: true
+                        clip: false
 
                         RowLayout {
                             id: cropToolControls
@@ -14386,23 +16790,19 @@ Rectangle {
                     }
 
                     BrushToolHud {
+                        id: brushToolHud
                         objectName: "brushToolHud"
-                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
-                        readonly property string motionContract: "studio-tool-hud-motion:v1|surface:brush-tool-hud|duration:" +
-                                                                 String(root.studioMotionFast) +
-                                                                 "|fade:true|stable-geometry:true|interruptible:true"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.top: parent.top
-                        anchors.topMargin: 12
-                        width: Math.min(parent.width - 24, implicitWidth)
-                        visible: root.brushToolReady() && !editorPreview.compareMode
-                        opacity: visible ? 1.0 : 0.0
-                        z: 23
+                        embedded: true
+                        parent: creativeToolsPanel.contentItem
+                        Layout.fillWidth: true
+                        visible: root.creativeToolKind === "brush" && !root.maskRefinementSessionActive
                         operation: editorPreview.activeMaskOperation
-                        statusText: root.brushHudStatusText()
+                        statusText: editorPreview.brushStrokeActive ? root.latestBrushPressureText() : ""
                         brushPageContract: root.brushPageVisibilitySignature()
                         brushDefaultContract: root.brushDefaultSignature()
                         sizePercentText: root.brushSizePercentValueText()
+                        flowValue: editorPreview.activeMaskBrushFlow
+                        hardnessValue: editorPreview.activeMaskBrushHardness
                         sizeDragActive: root.brushHudSizeDragActive
                         modeMenuItems: root.brushHudModeMenuItems()
                         tuningMenuItems: root.brushQuickTuningMenuItems()
@@ -14426,6 +16826,8 @@ Rectangle {
                         onSizeDragPressed: function(sceneX) { root.beginBrushHudSizeDrag(sceneX) }
                         onSizeDragMoved: function(sceneX) { root.updateBrushHudSizeDrag(sceneX) }
                         onSizeDragReleased: root.endBrushHudSizeDrag()
+                        onFlowValueEdited: function(value) { editorPreview.activeMaskBrushFlow = root.clamp(value, 0.05, 1.0) }
+                        onHardnessValueEdited: function(value) { editorPreview.activeMaskBrushHardness = root.clamp(value, 0.0, 1.0) }
 
                         Behavior on opacity {
                             NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
@@ -14433,26 +16835,31 @@ Rectangle {
                     }
 
                     Rectangle {
+                        id: polygonToolHud
                         objectName: "polygonToolHud"
                         readonly property string hudContract: "specialized-tool-hud:v1|tool:polygon-lasso|point-actions:true|status-visible:true|commit-action:true|warning-state:true|subdued-chrome:true|no-elide:true|no-overlap:true"
-                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
+                        readonly property string commandPlacementContract: "selection-path-controls:v2|slot:right-panel|safe-width:true|point-actions:true"
                         readonly property string motionContract: "studio-tool-hud-motion:v1|surface:polygon-lasso-hud|duration:" +
                                                                  String(root.studioMotionFast) +
                                                                  "|fade:true|stable-geometry:true|interruptible:true"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.top: parent.top
-                        anchors.topMargin: 12
-                        width: Math.min(parent.width - 24, polygonToolControls.implicitWidth + 18)
-                        height: polygonToolControls.implicitHeight + 18
-                        radius: 3
+                        readonly property bool hosted: root.creativeToolKind === "selection"
+                        parent: hosted ? creativeSelectionPathHost : editViewport
+                        Layout.fillWidth: hosted
+                        implicitHeight: polygonToolControls.implicitHeight
+                        anchors.horizontalCenter: hosted ? undefined : parent.horizontalCenter
+                        anchors.top: hosted ? undefined : parent.top
+                        anchors.topMargin: activeCanvasToolChip.visible ? activeCanvasToolChip.y + activeCanvasToolChip.height + 8 : 12
+                        width: hosted ? parent.width : Math.min(parent.width - 24, polygonToolControls.implicitWidth)
+                        height: polygonToolControls.implicitHeight
+                        radius: 0
                         visible: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") &&
                                  !editorPreview.compareMode
                         opacity: visible ? 1.0 : 0.0
-                        color: theme.surfaceTop
-                        border.width: theme.hairlineWidth
-                        border.color: theme.controlEdge
+                        color: "transparent"
+                        border.width: 0
+                        border.color: "transparent"
                         z: 23
-                        clip: true
+                        clip: false
 
                         Behavior on opacity {
                             NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
@@ -14461,11 +16868,14 @@ Rectangle {
                         ColumnLayout {
                             id: polygonToolControls
                             anchors.centerIn: parent
+                            width: polygonToolHud.hosted ? parent.width : implicitWidth
                             spacing: 5
 
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: polygonToolHud.hosted ? 2 : 8
+                                columnSpacing: 6
+                                rowSpacing: 6
 
                                 Label {
                                     text: editorPreview.activeMaskKind === "lasso" ? "Lasso" : "Polygon"
@@ -14535,9 +16945,11 @@ Rectangle {
                                 }
                             }
 
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: polygonToolHud.hosted ? 2 : 8
+                                columnSpacing: 6
+                                rowSpacing: 6
                                 visible: editorPreview.activeMaskKind === "polygon" ||
                                          editorPreview.activeMaskKind === "lasso"
 
@@ -14711,7 +17123,7 @@ Rectangle {
                         color: theme.alpha(theme.ink950, 0.76)
                         border.width: theme.chromeBorderWidth
                         border.color: root.hairlineStrong
-                        z: 20
+                        z: 40
 
                         RowLayout {
                             id: zoomControls
@@ -14738,29 +17150,31 @@ Rectangle {
                                 tooltip: "Fill the preview area by cropping the visible edges."
                                 onClicked: editViewport.setFitMode("fill")
                             }
-                            MiniButton { objectName: "zoomStepButton"; text: Math.round(editViewport.zoom * 100) + "%"; iconName: "zoom"; role: "segmented"; labelVisible: false; tooltip: "Step preview zoom. Current zoom: " + Math.round(editViewport.zoom * 100) + "%."; onClicked: editViewport.setZoom(editViewport.nextInspectionZoom()) }
+                            MiniButton {
+                                objectName: "zoomStepButton"
+                                text: editorPreview.hasAsset
+                                      ? Math.round(editViewport.zoom / Math.max(0.0001, editViewport.oneToOneZoom) * 100) + "%"
+                                      : "Zoom"
+                                role: "segmented"
+                                labelVisible: true
+                                a11yName: "Preview zoom " + text
+                                enabled: editorPreview.hasAsset
+                                disabledReason: "Open a photo to inspect zoom."
+                                tooltip: "Zoom: " + text + " of source pixels. Click to step magnification."
+                                onClicked: editViewport.setZoom(editViewport.nextInspectionZoom())
+                            }
                             MiniButton { objectName: "zoomOutButton"; square: true; iconName: "minus"; role: "icon"; tooltip: "Zoom out."; onClicked: editViewport.zoomOut() }
                             MiniButton { objectName: "zoomInButton"; square: true; iconName: "plus"; role: "icon"; tooltip: "Zoom in."; onClicked: editViewport.zoomIn() }
                             MiniButton {
                                 objectName: "diagnosticsOverlayButton"
                                 readonly property string diagnosticsMenuContract: root.developerDiagnosticsMenuContract
-                                visible: root.developerDiagnosticsEnabled
                                 text: root.diagnosticsStatusText()
                                 iconName: "scope"
                                 role: "segmented"
                                 labelVisible: false
                                 active: root.diagnosticsPanelOpen || root.loupeEnabled || root.activeAnalysisOverlay().length > 0
-                                tooltip: "Open developer diagnostic overlays."
-                                onClicked: root.diagnosticsPanelOpen = root.developerDiagnosticsEnabled && !root.diagnosticsPanelOpen
-                            }
-                            MiniButton {
-                                objectName: "resetViewButton"
-                                text: "Reset"
-                                iconName: "reset"
-                                role: "segmented"
-                                labelVisible: false
-                                tooltip: "Reset preview zoom and framing."
-                                onClicked: editViewport.resetView()
+                                tooltip: "Inspect clipping, focus, gamut, and tonal zones."
+                                onClicked: root.diagnosticsPanelOpen = !root.diagnosticsPanelOpen
                             }
                         }
                     }
@@ -14780,11 +17194,11 @@ Rectangle {
                                     diagnosticsOverlayGrid.rowSpacing +
                                 contentSpacing + 34
                         radius: 3
-                        visible: root.developerDiagnosticsEnabled && root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive
+                        visible: root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive
                         color: theme.alpha(theme.ink950, 0.88)
                         border.width: theme.chromeBorderWidth
                         border.color: root.hairlineStrong
-                        z: 21
+                        z: 41
 
                         Item {
                             id: diagnosticsOverlayContent
@@ -14864,11 +17278,44 @@ Rectangle {
                         }
                     }
 
+                    MiniButton {
+                        id: editAddBoardsButton
+                        objectName: "editAddBoardsButton"
+                        anchors.right: editNewCanvasButton.left
+                        anchors.rightMargin: 8
+                        anchors.top: editNewCanvasButton.top
+                        height: 36
+                        z: 40
+                        text: "Add boards"
+                        iconName: "grid"
+                        visible: root.allowAddBoards && editorPreview.hasAsset
+                        enabled: !editorPreview.photoPaintBusy && !editorPreview.photoExportBusy
+                        tooltip: "Save this composition as the first board and add another canvas."
+                        onClicked: root.addBoardsRequested()
+                    }
+
+                    MiniButton {
+                        id: editNewCanvasButton
+                        objectName: "editNewCanvasButton"
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 12
+                        height: 36
+                        z: 40
+                        text: root.editBoardMode ? "New document" : "New Canvas"
+                        labelVisible: editViewport.width >= 800
+                        iconName: "plus"
+                        tooltip: root.editBoardMode ? "Start a separate document. Use the canvas plus to add a board here."
+                                                    : "Create a blank document for shapes, text, photos and paint."
+                        enabled: !catalogAssets.busy && !catalogAssets.blankCanvasBusy && !root.editBoardSwitchBusy
+                        onClicked: root.newCanvasRequested()
+                    }
+
                     Rectangle {
                         id: editActionToolbar
                         objectName: "editActionToolbar"
                         readonly property string toolGroupContract: "canvas-toolbar:v2|group:canvas-actions|baseline:top|stable-height:true|toolbar-buttons:mini-button|baseline-aligned:true|view-separated:true|panel-toggles:true|reference-actions:true|agent-access:abstract-light-presence|icon-repeatable:true|subdued-chrome:true|media-subordinate:true|no-history-buttons:true|no-overlap:true"
-                        anchors.right: parent.right
+                        anchors.right: editViewport.toolbarStacked ? parent.right : (editAddBoardsButton.visible ? editAddBoardsButton.left : editNewCanvasButton.left)
                         anchors.top: parent.top
                         anchors.margins: 12
                         anchors.topMargin: editViewport.toolbarStacked ? 54 : 12
@@ -14879,15 +17326,15 @@ Rectangle {
                         color: theme.alpha(theme.ink950, 0.76)
                         border.width: theme.chromeBorderWidth
                         border.color: root.hairlineStrong
-                        z: 20
+                        z: 40
 
                         RowLayout {
                             id: editActionControls
                             anchors.centerIn: parent
                             spacing: 6
 
-                            MiniButton { objectName: "referenceImageButton"; text: editorPreview.hasReferenceImage ? "Reference set" : "Reference"; iconName: "source"; role: "segmented"; labelVisible: false; active: editorPreview.hasReferenceImage; tooltip: root.complexToolTooltip("reference"); onClicked: referenceImageDialog.open() }
-                            MiniButton { objectName: "clearReferenceImageButton"; text: "Clear reference"; iconName: "reset"; role: "secondary"; labelVisible: false; visible: editorPreview.hasReferenceImage; tooltip: "Clear the reference image."; onClicked: editorPreview.clearReferenceImage() }
+                            MiniButton { objectName: "referenceImageButton"; text: editorPreview.hasReferenceImage ? "Reference set" : "Reference"; visible: !editViewport.toolbarOverflow; iconName: "source"; role: "segmented"; labelVisible: false; active: editorPreview.hasReferenceImage; tooltip: root.complexToolTooltip("reference"); onClicked: referenceImageDialog.open() }
+                            MiniButton { objectName: "clearReferenceImageButton"; text: "Clear reference"; iconName: "reset"; role: "secondary"; labelVisible: false; visible: editorPreview.hasReferenceImage && !editViewport.toolbarOverflow; tooltip: "Clear the reference image."; onClicked: editorPreview.clearReferenceImage() }
                             MiniButton {
                                 objectName: "originalHoldButton"
                                 text: "Original"
@@ -14899,8 +17346,44 @@ Rectangle {
                                 onPressedChanged: root.setOriginalHold(pressed)
                             }
                             MiniButton { objectName: "inspectorPanelToggleButton"; text: "Inspector panel"; iconName: "panel-right"; role: "segmented"; labelVisible: false; active: root.editInspectorPanelVisible; tooltip: root.complexToolTooltip("inspector-panel"); onClicked: root.editInspectorPanelVisible = !root.editInspectorPanelVisible }
-                            MiniButton { objectName: "interfaceDensityButton"; text: root.compactMode ? "Pro density" : "Compact density"; iconName: "density"; role: "segmented"; labelVisible: false; active: root.compactMode; tooltip: root.complexToolTooltip("compact-mode"); onClicked: root.toggleInterfaceMode() }
-                            MiniButton { objectName: "fullScreenEditButton"; text: root.fullScreenEditingEnabled ? "Exit full screen" : "Full screen"; iconName: "fullscreen"; role: "segmented"; labelVisible: false; active: root.fullScreenEditingEnabled; tooltip: root.complexToolTooltip("full-screen-edit"); onClicked: root.toggleFullScreenEditing() }
+                            MenuButton {
+                                objectName: "editWorkspaceLayoutButton"
+                                compact: true
+                                showText: false
+                                primaryOpensMenu: true
+                                iconName: "grid"
+                                text: "Layout"
+                                accessibleName: "Edit layout"
+                                tooltipText: "Choose visible edit panels"
+                                menuItems: root.workspaceLayoutMenuItems()
+                                onMenuItemTriggered: function(key) { root.handleWorkspaceLayoutMenu(key) }
+                            }
+                            MiniButton { objectName: "editRailScopesButton"; visible: !editViewport.toolbarOverflow; text: "Scopes"; iconName: "scope"; role: "segmented"; labelVisible: false; active: root.scopeDockVisible; tooltip: "Open or close the exposure and color scopes."; onClicked: root.activateEditTool("scopes") }
+                            MiniButton { objectName: "editRailCompareButton"; text: "Compare"; iconName: "compare"; role: "segmented"; labelVisible: false; active: root.editTool === "compare"; tooltip: "Compare before and after views · " + root.configuredEditToolShortcut("tool-compare", "P"); onClicked: root.activateEditTool("compare") }
+                            MiniButton { objectName: "fullScreenEditButton"; visible: !editViewport.toolbarOverflow; text: root.fullScreenEditingEnabled ? "Exit full screen" : "Full screen"; iconName: "fullscreen"; role: "segmented"; labelVisible: false; active: root.fullScreenEditingEnabled; tooltip: root.complexToolTooltip("full-screen-edit"); onClicked: root.toggleFullScreenEditing() }
+                            MenuButton {
+                                objectName: "editViewMoreButton"
+                                visible: editViewport.toolbarOverflow
+                                text: "More"
+                                iconName: "menu"
+                                compact: true
+                                showText: false
+                                primaryOpensMenu: true
+                                accessibleName: "More view options"
+                                tooltipText: "Reference image, scopes, and full screen."
+                                menuItems: [
+                                    { key: "reference", label: editorPreview.hasReferenceImage ? "Change reference image…" : "Choose reference image…", icon: "source" },
+                                    { key: "clear-reference", label: "Clear reference image", visible: editorPreview.hasReferenceImage, icon: "reset" },
+                                    { key: "scopes", label: "Scopes", checked: root.scopeDockVisible, icon: "scope" },
+                                    { key: "full-screen", label: "Full screen", checked: root.fullScreenEditingEnabled, icon: "fullscreen" }
+                                ].filter(function(item) { return item.visible !== false })
+                                onMenuItemTriggered: function(key) {
+                                    if (key === "reference") referenceImageDialog.open()
+                                    else if (key === "clear-reference") editorPreview.clearReferenceImage()
+                                    else if (key === "scopes") root.activateEditTool("scopes")
+                                    else if (key === "full-screen") root.toggleFullScreenEditing()
+                                }
+                            }
                         }
                     }
                 }
@@ -15163,7 +17646,7 @@ Rectangle {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
                                         Layout.preferredWidth: 1
-                                        source: root.displayImageSource(-1)
+                                        source: visible ? root.displayImageSource(-1) : ""
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
                                         cache: false
@@ -15179,7 +17662,7 @@ Rectangle {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
                                         Layout.preferredWidth: 1
-                                        source: root.displayImageSource(0)
+                                        source: visible ? root.displayImageSource(0) : ""
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
                                         cache: false
@@ -15241,7 +17724,7 @@ Rectangle {
                                 Image {
                                     id: beforeAfterBase
                                     anchors.fill: parent
-                                    source: root.displayImageSource(-1)
+                                    source: visible ? root.displayImageSource(-1) : ""
                                     fillMode: Image.PreserveAspectFit
                                     asynchronous: true
                                     cache: false
@@ -15259,7 +17742,7 @@ Rectangle {
                                     Image {
                                         width: beforeAfterSplitView.width
                                         height: beforeAfterSplitView.height
-                                        source: root.displayImageSource(0)
+                                        source: visible ? root.displayImageSource(0) : ""
                                         fillMode: Image.PreserveAspectFit
                                         asynchronous: true
                                         cache: false
@@ -15268,7 +17751,7 @@ Rectangle {
 
                                 Image {
                                     anchors.fill: parent
-                                    source: root.displayImageSource(0)
+                                    source: visible ? root.displayImageSource(0) : ""
                                     fillMode: Image.PreserveAspectFit
                                     asynchronous: true
                                     cache: false
@@ -15339,23 +17822,45 @@ Rectangle {
 
 	                Rectangle {
 	                    objectName: "editFilmstrip"
-	                    visible: root.editingChromeVisible && !root.activeCanvasToolChromeReduced && !root.scopeDockActive("bottom")
+	                    visible: !root.editBoardMode && root.editingChromeVisible && !root.activeCanvasToolChromeReduced && !root.scopeDockActive("bottom")
 	                    Layout.fillWidth: true
-	                    Layout.preferredHeight: 86
+	                    Layout.preferredHeight: root.editFilmstripCollapsed ? 32 : 86
                     color: root.panelColor
                     border.width: theme.chromeBorderWidth
                     border.color: root.hairline
                     radius: 4
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        spacing: 4
+	                    RowLayout {
+	                        anchors.fill: parent
+	                        anchors.margins: 6
+	                        spacing: 4
 
-                        ListView {
-                            id: editThumbnailFilmstrip
-                            objectName: "editThumbnailFilmstrip"
-                            Layout.fillWidth: true
+	                        MiniButton {
+	                            objectName: "editFilmstripCollapseButton"
+	                            Layout.preferredWidth: root.editFilmstripCollapsed ? 118 : 30
+	                            Layout.preferredHeight: theme.iconButtonSizeCompact
+	                            text: root.editFilmstripCollapsed ? qsTr("Show filmstrip") : qsTr("Hide filmstrip")
+	                            iconName: root.editFilmstripCollapsed ? "chevron-up" : "chevron-down"
+	                            role: root.editFilmstripCollapsed ? "secondary" : "icon"
+	                            labelVisible: root.editFilmstripCollapsed
+	                            tooltip: text
+	                            onClicked: root.editFilmstripCollapsed = !root.editFilmstripCollapsed
+	                        }
+
+	                        Label {
+	                            visible: root.editFilmstripCollapsed
+	                            Layout.fillWidth: true
+	                            text: qsTr("Filmstrip hidden")
+	                            color: theme.textMuted
+	                            font.family: theme.fontUi
+	                            font.pixelSize: theme.typeCaption
+	                        }
+
+	                        ListView {
+	                            id: editThumbnailFilmstrip
+	                            objectName: "editThumbnailFilmstrip"
+	                            visible: !root.editFilmstripCollapsed
+	                            Layout.fillWidth: visible
                             Layout.fillHeight: true
                             orientation: ListView.Horizontal
                             spacing: 4
@@ -15403,7 +17908,10 @@ Rectangle {
                                     thumbnailSource: parent.thumbnailSource
                                     filmstrip: true
                                     onActivated: root.selectAsset(index)
-                                    onDoubleActivated: root.selectAsset(index)
+                                    onDoubleActivated: {
+                                        root.selectAsset(index)
+                                        root.assetActivated("edit")
+                                    }
                                 }
                             }
                         }
@@ -15412,15 +17920,234 @@ Rectangle {
                 }
             }
 
-                        StudioPanel {
+            ColumnLayout {
+                objectName: "editRightSidebar"
+                visible: root.editRightSidebarActive
+                Layout.fillWidth: false
+                Layout.minimumWidth: visible ? root.editInspectorPanelWidth : 0
+                Layout.maximumWidth: visible ? root.editInspectorPanelWidth : 0
+                Layout.preferredWidth: visible ? root.editInspectorPanelWidth : 0
+                Layout.fillHeight: true
+                spacing: theme.space4
+
+                // Single instances of the drawing controls live in these hosts.
+                Item {
+                    id: creativePaintControlsHost
+                    objectName: "creativePaintControlsHost"
+                    parent: creativeToolsPanel.contentItem
+                    Layout.fillWidth: true
+                    implicitHeight: childrenRect.height
+                    visible: root.creativeToolKind === "paint" || root.creativeToolKind === "eraser"
+                }
+                Item {
+                    id: creativeShapeControlsHost
+                    objectName: "creativeShapeControlsHost"
+                    parent: creativeToolsPanel.contentItem
+                    Layout.fillWidth: true
+                    implicitHeight: childrenRect.height
+                    visible: root.creativeToolKind === "shapes"
+                }
+                Item {
+                    id: creativeTextControlsHost
+                    objectName: "creativeTextControlsHost"
+                    parent: creativeToolsPanel.contentItem
+                    Layout.fillWidth: true
+                    implicitHeight: childrenRect.height
+                    visible: root.editTool === "text" && !photoCanvasTextOverlay.editing
+                }
+                ColumnLayout {
+                    parent: creativeToolsPanel.contentItem
+                    Layout.fillWidth: true
+                    visible: root.creativeToolKind === "text" && photoCanvasTextOverlay.creationBox !== null
+                    Label {
+                        Layout.fillWidth: true
+                        text: "Edit your text on the image, then finish placement."
+                        wrapMode: Text.WordWrap
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeControl
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: photoCanvasTextOverlay.editError.length > 0
+                        text: photoCanvasTextOverlay.editError
+                        wrapMode: Text.WordWrap
+                        color: theme.warning
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        MiniButton { objectName: "photoTextCreationDone"; text: "Done"; role: "primary"; Layout.fillWidth: true; onClicked: photoCanvasTextOverlay.finish(true) }
+                        MiniButton { objectName: "photoTextCreationCancel"; text: "Cancel"; Layout.fillWidth: true; onClicked: photoCanvasTextOverlay.finish(false) }
+                    }
+                }
+                ColumnLayout {
+                    id: creativeSelectionControls
+                    parent: creativeToolsPanel.contentItem
+                    Layout.fillWidth: true
+                    visible: root.selectionPanelActive
+                    spacing: theme.space8
+                    ColumnLayout {
+                        id: creativeSelectionSourcesHost
+                        objectName: "creativeSelectionSourcesHost"
+                        Layout.fillWidth: true
+                        visible: root.creativeToolKind === "selection" && !root.maskRefinementSessionActive
+                        spacing: theme.space6
+                        RowLayout {
+                            Layout.fillWidth: true
+                            MiniButton {
+                                objectName: "selectionSource_object"
+                                Layout.fillWidth: true
+                                text: "Object"
+                                iconName: "smart-select"
+                                role: "segmented"
+                                active: root.objectPickArmed
+                                tooltip: "Click a specific item or enclose it with a box."
+                                onClicked: root.createMaskSource("object")
+                            }
+                            MiniButton {
+                                objectName: "selectionSource_subject"
+                                Layout.fillWidth: true
+                                text: "Subject"
+                                iconName: "smart-select"
+                                tooltip: "Select the main foreground subject automatically."
+                                onClicked: root.createGeneratedSelectionSource("subject")
+                            }
+                        }
+                        RowLayout {
+                            visible: root.objectPickArmed
+                            Layout.fillWidth: true
+                            MiniButton {
+                                objectName: "selectionObjectClickMode"
+                                Layout.fillWidth: true
+                                text: "Click / stroke"
+                                role: "segmented"
+                                active: !root.objectPickBoxMode
+                                onClicked: { root.objectPickBoxMode = false; editorPreview.clearSmartSelectPreview() }
+                            }
+                            MiniButton {
+                                objectName: "selectionObjectBoxMode"
+                                Layout.fillWidth: true
+                                text: "Enclose item"
+                                role: "segmented"
+                                active: root.objectPickBoxMode
+                                enabled: editorPreview.aiSmartSelectionAvailable
+                                tooltip: enabled ? "Drag a box around one item, then use the preview." : "Enclosing an item requires the local SAM2 model."
+                                onClicked: { root.objectPickBoxMode = true; editorPreview.clearSmartSelectPreview() }
+                            }
+                        }
+                        Label {
+                            objectName: "selectionWorkflowHint"
+                            visible: root.objectPickArmed
+                            Layout.fillWidth: true
+                            text: root.objectPickArmed
+                                ? (root.objectPickBoxMode ? "Drag around one item. Review the boundary, then choose Use selection." : "Click or stroke across an item. Shift adds; Option subtracts.")
+                                : "Choose a tool, build your selection, then refine its edges."
+                            wrapMode: Text.WordWrap
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                        }
+                        Label {
+                            objectName: "selectionObjectStatus"
+                            visible: root.objectPickArmed && root.objectPickBoxMode
+                            Layout.fillWidth: true
+                            text: editorPreview.status
+                            wrapMode: Text.WordWrap
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeCaption
+                        }
+                        MiniButton {
+                            objectName: "selectionObjectCancelButton"
+                            visible: root.objectPickArmed
+                            text: "Choose another tool"
+                            tooltip: "Discard the object preview and return to selection tools."
+                            onClicked: root.clearTransientMaskTools()
+                        }
+                        GridLayout {
+                            visible: !root.objectPickArmed
+                            Layout.fillWidth: true
+                            columns: 3
+                            rowSpacing: theme.space4
+                            columnSpacing: theme.space4
+                            Repeater {
+                                model: [
+                                    {key: "brush-add", label: "Brush", icon: "brush-tool"},
+                                    {key: "lasso", label: "Lasso", icon: "lasso"},
+                                    {key: "polygon", label: "Polygon", icon: "geometry"},
+                                    {key: "rectangle", label: "Rectangle", icon: "geometry"},
+                                    {key: "ellipse", label: "Ellipse", icon: "masks"},
+                                    {key: "pixel-brush-add", label: "Pixel", icon: "grid"}
+                                ]
+                                delegate: MiniButton {
+                                    required property var modelData
+                                    objectName: "selectionSource_" + modelData.key
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: modelData.label
+                                    iconName: modelData.icon
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskKind === modelData.key ||
+                                        (modelData.key === "brush-add" && root.brushToolReady()) ||
+                                        (modelData.key === "pixel-brush-add" && root.pixelBrushToolReady())
+                                    tooltip: "Select with " + modelData.label.toLowerCase()
+                                    onClicked: root.handleMaskToolMenuAction(modelData.key)
+                                }
+                            }
+                        }
+                        ColumnLayout {
+                            id: creativeSelectionMenusHost
+                            Layout.fillWidth: true
+                            visible: !root.objectPickArmed
+                        }
+                    }
+                    ColumnLayout {
+                        id: creativeSelectionPathHost
+                        Layout.fillWidth: true
+                        visible: root.selectionPanelActive
+                    }
+                    ColumnLayout {
+                        id: creativeSelectionContextHost
+                        objectName: "creativeSelectionContextHost"
+                        Layout.fillWidth: true
+                        visible: root.selectionPanelActive
+                        spacing: theme.space6
+                    }
+                    StudioCollapsibleGroup {
+                        objectName: "creativeSelectionRefineGroup"
+                        visible: root.selectionPanelActive && root.studioMaskSupportsSelectionRefine()
+                        title: "Refine edges"
+                        expanded: root.selectionRefineToolsExpanded || root.maskRefinementSessionActive
+                        onToggled: root.selectionRefineToolsExpanded = !expanded
+                        ColumnLayout {
+                            id: creativeSelectionRefineHost
+                            Layout.fillWidth: true
+                            ColumnLayout {
+                                id: creativeSelectionFeatherHost
+                                Layout.fillWidth: true
+                            }
+                            ColumnLayout {
+                                id: creativeSelectionEdgeHost
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        id: creativeSelectionSettingsHost
+                        objectName: "creativeSelectionSettingsHost"
+                        Layout.fillWidth: true
+                        visible: root.selectionPanelActive && editorPreview.hasActiveMask
+                    }
+                }
+                StudioPanel {
                 objectName: "editInspectorPanel"
                 readonly property string motionContract: "inspector-panel-motion:v1|duration:" +
                                                          String(root.studioMotionMedium) +
                                                          "|fade:true|mode-switch:true|width-stable:true|interruptible:true"
-                visible: root.editingChromeVisible && root.editInspectorPanelVisible
-                         && (root.editTool !== "compare" || root.compareInspectorVisible)
-                         && !root.scopeLargeActive()
-                         && !(root.editInspectorTab === "scopes" && root.scopeDockPosition !== "right")
+                visible: root.editInspectorPanelActive
+                Layout.fillWidth: true
                 Layout.preferredWidth: visible ? root.editInspectorPanelWidth : 0
                 Layout.fillHeight: true
                 title: root.inspectorTabTitle(root.editInspectorTab)
@@ -15436,7 +18163,9 @@ Rectangle {
                     spacing: 10
 
                     Rectangle {
+                        id: editInspectorTabs
                         objectName: "editInspectorTabRow"
+                        readonly property bool iconOnlyTabs: width < theme.scaled(340)
                         Layout.fillWidth: true
                         Layout.preferredHeight: theme.scaled(40)
                         visible: true
@@ -15453,7 +18182,9 @@ Rectangle {
                             MiniButton {
                                 objectName: "adjustInspectorTabButton"
                                 text: "Adjust"
-                                iconName: root.editInspectorPanelWidth < 400 ? "" : "adjust"
+                                tooltip: "Adjust image and layer settings."
+                                iconName: editInspectorTabs.iconOnlyTabs ? "adjust" : ""
+                                labelVisible: !editInspectorTabs.iconOnlyTabs
                                 role: "segmented"
                                 active: root.editInspectorTab === "adjust"
                                 Layout.fillWidth: true
@@ -15464,7 +18195,9 @@ Rectangle {
                             MiniButton {
                                 objectName: "presetsInspectorTabButton"
                                 text: "Presets"
-                                iconName: root.editInspectorPanelWidth < 400 ? "" : "swatch"
+                                tooltip: "Browse and manage presets."
+                                iconName: editInspectorTabs.iconOnlyTabs ? "swatch" : ""
+                                labelVisible: !editInspectorTabs.iconOnlyTabs
                                 role: "segmented"
                                 active: root.editInspectorTab === "presets"
                                 Layout.fillWidth: true
@@ -15475,7 +18208,8 @@ Rectangle {
                             MiniButton {
                                 objectName: "filtersInspectorTabButton"
                                 text: "Filters"
-                                iconName: root.editInspectorPanelWidth < 400 ? "" : "effects"
+                                iconName: editInspectorTabs.iconOnlyTabs ? "effects" : ""
+                                labelVisible: !editInspectorTabs.iconOnlyTabs
                                 role: "segmented"
                                 active: root.editInspectorTab === "filters"
                                 Layout.fillWidth: true
@@ -15487,7 +18221,9 @@ Rectangle {
                             MiniButton {
                                 objectName: "layersInspectorTabButton"
                                 text: "Layers"
-                                iconName: root.editInspectorPanelWidth < 400 ? "" : "layers"
+                                tooltip: "Manage image, text, shape, and adjustment layers."
+                                iconName: editInspectorTabs.iconOnlyTabs ? "layers" : ""
+                                labelVisible: !editInspectorTabs.iconOnlyTabs
                                 role: "segmented"
                                 active: root.editInspectorTab === "layers"
                                 Layout.fillWidth: true
@@ -15498,7 +18234,8 @@ Rectangle {
                             MiniButton {
                                 objectName: "historyInspectorTabButton"
                                 text: "History"
-                                iconName: root.editInspectorPanelWidth < 400 ? "" : "clock"
+                                iconName: editInspectorTabs.iconOnlyTabs ? "clock" : ""
+                                labelVisible: !editInspectorTabs.iconOnlyTabs
                                 role: "segmented"
                                 active: root.editInspectorTab === "history"
                                 Layout.fillWidth: true
@@ -15506,8 +18243,6 @@ Rectangle {
                                 tooltip: "Review edits and named restore points."
                                 onClicked: root.activateEditInspectorTab("history")
                             }
-
-                            Item { Layout.fillWidth: true }
 
                             MiniButton {
                                 objectName: "infoInspectorTabButton"
@@ -15620,16 +18355,13 @@ Rectangle {
                         readonly property string thumbnailSource: String(thumbnailData.thumbnailSource || "")
                         readonly property int thumbnailBackingWidth: Math.max(0, Number(thumbnailData.thumbnailBackingWidth || 0))
                         readonly property int thumbnailBackingHeight: Math.max(0, Number(thumbnailData.thumbnailBackingHeight || 0))
-                        readonly property bool inspectorContextVisible: root.page === "edit" &&
-                                                                         (root.editInspectorTab === "adjust" ||
-                                                                          root.editInspectorTab === "presets" ||
-                                                                          root.editInspectorTab === "crop")
+                        readonly property bool inspectorContextVisible: root.page === "edit" && editorPreview.hasAsset
                         readonly property string duplicateContextContract: "active-target-context:v4|inspector-visible:true|breadcrumb-visible:true|status-visible:true|owner:inspector|queryable:true"
                         readonly property string breadcrumbContract: "active-target-breadcrumbs:v2|inspector-visible:true|queryable:true|max-visible:1|duplicate-visible:false"
                         readonly property string routingMatrixContract: root.targetRoutingMatrixSignature()
                         visible: inspectorContextVisible
                         Layout.fillWidth: true
-                        Layout.preferredHeight: visible ? 36 : 0
+                        Layout.preferredHeight: visible ? (root.editBoardMode ? 56 : 36) : 0
                         radius: 0
                         color: "transparent"
                         opacity: visible ? 1.0 : 0.0
@@ -15714,17 +18446,32 @@ Rectangle {
                                 Layout.fillWidth: true
                                 spacing: 0
 
+                                Label {
+                                    objectName: "activeEditDocumentBreadcrumbLabel"
+                                    Layout.fillWidth: true
+                                    visible: root.editBoardMode
+                                    text: root.editDocumentBreadcrumbText()
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeCaption
+                                    elide: Text.ElideMiddle
+                                    Accessible.name: text
+                                    ToolTip.visible: documentBreadcrumbHover.hovered && truncated
+                                    ToolTip.text: text
+                                    HoverHandler { id: documentBreadcrumbHover }
+                                }
+
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 7
 
                                     Label {
                                         objectName: "activeEditTargetModeLabel"
-                                        visible: false
+                                        visible: true
                                         text: root.activeEditTargetModeLabel()
                                         color: activeEditTargetBar.accentColor
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeCaption
                                         font.weight: Font.DemiBold
 
                                         Behavior on color {
@@ -15735,6 +18482,7 @@ Rectangle {
                                     Label {
                                         objectName: "activeEditTargetBreadcrumbLabel"
                                         Layout.fillWidth: true
+                                        visible: root.activeEditTargetScope() !== "base-image"
                                         text: root.activeEditTargetBreadcrumbText()
                                         color: theme.textMain
                                         font.family: theme.fontUi
@@ -15860,11 +18608,16 @@ Rectangle {
                             spacing: 12
 
                             ColumnLayout {
+                                id: editHistoryPanel
                                 objectName: "editHistoryPanel"
+                                readonly property var historyRows: root.visible && visible ? editorPreview.editHistoryEntries : []
                                 readonly property string editHistoryPanelContract: "edit-history-panel:v2|chronological:user-label-value-scope-state|restore:any-step|snapshots:named-persistent|batch:restorable|assistant:provenance-and-recipe-link|preview-actions:excluded|session-undo:explicit"
                                 Layout.fillWidth: true
                                 visible: root.editInspectorTab === "history"
                                 spacing: 10
+                                onVisibleChanged: {
+                                    if (!visible) root.cancelEditHistoryHoverPreview()
+                                }
 
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -15894,7 +18647,7 @@ Rectangle {
                                     }
 
                                     StatusChip {
-                                        text: Math.max(0, editorPreview.editHistoryEntries.length - 1) + " edits"
+                                        text: Math.max(0, editHistoryPanel.historyRows.length - 1) + " edits"
                                         tone: "neutral"
                                         compact: true
                                     }
@@ -15910,11 +18663,13 @@ Rectangle {
                                         text: editorPreview.canUndo ? "Undo" : "Undo"
                                         iconName: "undo"
                                         role: "secondary"
-                                        enabled: editorPreview.canUndo
-                                        tooltip: editorPreview.canUndo
-                                                 ? "Undo " + editorPreview.undoLabel
+                                        enabled: root.canUndoEdit
+                                        tooltip: root.canUndoEdit
+                                                 ? "Undo " + root.undoEditLabel
                                                  : "Nothing to undo."
-                                        onClicked: editorPreview.undo()
+                                        onClicked: {
+                                            root.undoEdit()
+                                        }
                                     }
 
                                     MiniButton {
@@ -15923,11 +18678,13 @@ Rectangle {
                                         text: "Redo"
                                         iconName: "redo"
                                         role: "secondary"
-                                        enabled: editorPreview.canRedo
-                                        tooltip: editorPreview.canRedo
-                                                 ? "Redo " + editorPreview.redoLabel
+                                        enabled: root.canRedoEdit
+                                        tooltip: root.canRedoEdit
+                                                 ? "Redo " + root.redoEditLabel
                                                  : "Nothing to redo."
-                                        onClicked: editorPreview.redo()
+                                        onClicked: {
+                                            root.redoEdit()
+                                        }
                                     }
                                 }
 
@@ -15984,8 +18741,11 @@ Rectangle {
                                             text: "Restore"
                                             role: "secondary"
                                             tooltip: "Restore this snapshot as a new undoable edit."
-                                            onClicked: editorPreview.restoreEditHistorySnapshot(
-                                                           String(parent.parent.snapshot.id || ""))
+                                            onClicked: {
+                                                root.cancelEditHistoryHoverPreview()
+                                                editorPreview.restoreEditHistorySnapshot(
+                                                    String(parent.parent.snapshot.id || ""))
+                                            }
                                         }
                                     }
                                 }
@@ -15994,7 +18754,7 @@ Rectangle {
                                     objectName: "editHistoryEmptyState"
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 58
-                                    visible: editorPreview.editHistoryEntries.length <= 1
+                                    visible: editHistoryPanel.historyRows.length <= 1
                                     radius: theme.radius6
                                     color: theme.alpha(theme.ink900, 0.42)
                                     border.width: theme.chromeBorderWidth
@@ -16014,7 +18774,7 @@ Rectangle {
                                 }
 
                                 Repeater {
-                                    model: editorPreview.editHistoryEntries
+                                    model: editHistoryPanel.historyRows
 
                                     delegate: Rectangle {
                                         required property var modelData
@@ -16081,8 +18841,24 @@ Rectangle {
                                         }
 
                                         TapHandler {
+                                            objectName: "editHistoryEntryRestoreHandler"
                                             enabled: modelData.current !== true && modelData.restorable === true
-                                            onTapped: editorPreview.restoreEditHistoryIndex(Number(modelData.index || 0))
+                                            onTapped: {
+                                                root.cancelEditHistoryHoverPreview()
+                                                editorPreview.restoreEditHistoryIndex(Number(modelData.index || 0))
+                                            }
+                                        }
+
+                                        HoverHandler {
+                                            objectName: "editHistoryEntryHoverHandler"
+                                            enabled: modelData.current !== true && modelData.restorable === true
+                                            onHoveredChanged: {
+                                                const index = Number(modelData.index || 0)
+                                                if (hovered)
+                                                    root.queueEditHistoryHoverPreview(index)
+                                                else
+                                                    root.clearEditHistoryHoverPreviewForRow(index)
+                                            }
                                         }
                                     }
                                 }
@@ -16184,7 +18960,10 @@ Rectangle {
 
                                             TapHandler {
                                                 enabled: modelData.current !== true && modelData.restorable === true
-                                                onTapped: root.catalogAssets.restoreBatchRecipeHistoryIndex(Number(modelData.index || 0))
+                                                onTapped: {
+                                                    root.cancelEditHistoryHoverPreview()
+                                                    root.catalogAssets.restoreBatchRecipeHistoryIndex(Number(modelData.index || 0))
+                                                }
                                             }
                                         }
                                     }
@@ -16299,8 +19078,9 @@ Rectangle {
                                     Layout.fillWidth: true
                                     spacing: 6
 
-                                    TextField {
+                                    ToneTextField {
                                         objectName: "editHistorySnapshotNameField"
+                                        accessibleLabel: "Edit history snapshot name"
                                         Layout.fillWidth: true
                                         placeholderText: "e.g. Color approved"
                                         text: root.editHistorySnapshotDraft
@@ -16405,6 +19185,36 @@ Rectangle {
                                 Layout.fillWidth: true
                                 visible: root.editInspectorTab === "adjust" || root.editInspectorTab === "presets" || root.editInspectorTab === "filters" || root.editInspectorTab === "layers"
                                 spacing: 12
+
+                                Flow {
+                                    objectName: "adjustmentIntentNavigation"
+                                    Layout.fillWidth: true
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive()
+                                    spacing: theme.space4
+                                    Accessible.name: "Adjustment focus"
+
+                                    Repeater {
+                                        model: [
+                                            { key: "all", label: "All", tip: "Show every adjustment group." },
+                                            { key: "light", label: "Light", tip: "Exposure, tone, and RAW controls." },
+                                            { key: "color", label: "Color", tip: "White balance, color, grading, curves, and color tools." },
+                                            { key: "detail", label: "Detail", tip: "Presence, sharpening, noise, and lens controls." }
+                                        ]
+
+                                        FilterChip {
+                                            required property int index
+                                            required property var modelData
+                                            objectName: "adjustmentIntent" + modelData.key.charAt(0).toUpperCase() + modelData.key.slice(1) + "Button"
+                                            width: Math.max(theme.scaled(56),
+                                                            Math.min(theme.scaled(80),
+                                                                     (parent.width - theme.space4 * 3) / 4))
+                                            text: modelData.label
+                                            active: root.activeAdjustmentIntent === modelData.key
+                                            tooltipText: modelData.tip
+                                            onClicked: root.activeAdjustmentIntent = modelData.key
+                                        }
+                                    }
+                                }
 
                                 RowLayout {
                                     objectName: "editAdjustmentFilterRow"
@@ -16673,7 +19483,8 @@ Rectangle {
                                     }
 
                                     Repeater {
-                                        model: activeLayerMaskChildrenGroup.linkedMaskSets
+                                        model: activeLayerMaskChildrenGroup.visible
+                                               ? activeLayerMaskChildrenGroup.linkedMaskSets : null
 
                                         delegate: Rectangle {
                                             id: activeLayerMaskChildRowRoot
@@ -16888,11 +19699,16 @@ Rectangle {
                                     }
                                 }
 
-                                InspectorGroup {
+                                StudioCollapsibleGroup {
+                                    id: selectionInspectorSettings
+                                    parent: creativeSelectionSettingsHost
                                     objectName: "maskFirstInspectorGroup"
                                     readonly property string maskControlContract: root.maskFirstInspectorSignature()
-                                    visible: root.maskTargetInspectorActive()
-                                    title: "Selection"
+                                    visible: root.selectionPanelActive && editorPreview.hasActiveMask
+                                    title: "Preview & mask strength"
+                                    property bool detailsExpanded: false
+                                    expanded: root.maskRefinementSessionActive || detailsExpanded
+                                    onToggled: detailsExpanded = !detailsExpanded
 
                                     Label {
                                         objectName: "maskFirstInspectorStatusLabel"
@@ -17071,6 +19887,7 @@ Rectangle {
 
                                     AdjustSlider {
                                         objectName: "maskFirstFeatherSlider"
+                                        parent: creativeSelectionFeatherHost
                                         visible: !root.maskRefinementSessionActive ||
                                                  (root.maskRefinementPage === "edge" && !root.maskRefinementDetailPage)
                                         targetSupport: "mask"
@@ -17118,7 +19935,8 @@ Rectangle {
 
                                     InspectorGroup {
                                         objectName: "maskFirstRefineGroup"
-                                        title: "Refine"
+                                        parent: creativeSelectionEdgeHost
+                                        title: "Edge shaping"
                                         Layout.fillWidth: true
                                         visible: root.maskRefinementSessionActive ?
                                                      root.maskRefinementPage === "edge" && root.maskRefinementDetailPage : !root.brushToolReady()
@@ -17216,21 +20034,61 @@ Rectangle {
                                         visible: inspectorActive
                                         title: "Layers"
 
+                                        Rectangle {
+                                            id: photoLayerInsertionMarker
+                                            objectName: "photoLayerInsertionMarker"
+                                            parent: photoLayersInspectorGroup
+                                            readonly property var targetRow: root.photoLayerReorderDropTargetIndex >= 0 &&
+                                                root.photoLayerReorderDropTargetIndex < photoLayerRowsRepeater.count
+                                                ? photoLayerRowsRepeater.itemAt(root.photoLayerReorderDropTargetIndex) : null
+                                            readonly property point dropPoint: {
+                                                if (!targetRow)
+                                                    return Qt.point(0, 0)
+                                                const origin = targetRow.parent.mapToItem(parent, targetRow.x, targetRow.y)
+                                                return Qt.point(origin.x, origin.y + (root.photoLayerReorderDropAfter ? targetRow.height : 0))
+                                            }
+                                            x: dropPoint.x
+                                            y: dropPoint.y - height / 2
+                                            width: targetRow ? targetRow.width : 0
+                                            height: 3
+                                            color: root.mint
+                                            visible: targetRow !== null && root.photoLayerHierarchyDropTargetIndex < 0
+                                            enabled: false
+                                            z: 100
+
+                                            Rectangle {
+                                                anchors.left: parent.left
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                width: 7
+                                                height: 7
+                                                color: root.mint
+                                            }
+                                            Rectangle {
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                width: 7
+                                                height: 7
+                                                color: root.mint
+                                            }
+                                        }
+
                                     RowLayout {
                                         objectName: "photoLayerSparseHeader"
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 38
+                                        Layout.preferredHeight: theme.controlHeightPrimary
                                         spacing: 8
                                         visible: !root.brushToolReady()
 
                                         Label {
+                                            objectName: "photoLayerStackCountLabel"
                                             Layout.fillWidth: true
                                             text: editorPreview.photoLayerSoloActive
-                                                  ? "Layers / Isolated"
-                                                  : "Layers / " + editorPreview.photoLayerCount + " layers + base"
+                                                  ? "Solo"
+                                                  : (editorPreview.photoLayerCount + 1) +
+                                                    (editorPreview.photoLayerCount === 0 ? " layer" : " layers")
                                             color: editorPreview.photoLayerSoloActive ? theme.accentWarm400 : theme.textMain
                                             font.family: theme.fontUi
-                                            font.pixelSize: 12
+                                            font.pixelSize: theme.typeCaption
                                             font.weight: Font.DemiBold
                                             fontSizeMode: Text.HorizontalFit
                                             minimumPixelSize: 9
@@ -17255,8 +20113,9 @@ Rectangle {
                                         SplitButton {
                                             objectName: "photoLayerAddSplitButton"
                                             readonly property string layerAddSplitContract: root.layerAddSplitSignature()
-                                            text: "+"
-                                            iconName: "adjust"
+                                            text: "Add layer"
+                                            iconName: "plus"
+                                            accessibleName: "Add layer"
                                             compact: true
                                             tone: "primary"
                                             tooltipText: "Add the default layer."
@@ -17269,15 +20128,59 @@ Rectangle {
 
                                         MenuButton {
                                             objectName: "layerVisibilityStateMenuButton"
-                                            text: "More"
-                                            iconName: "menu"
+                                            text: "Visibility states"
+                                            iconName: "layers"
                                             compact: true
+                                            showText: false
+                                            primaryOpensMenu: true
+                                            accessibleName: "Layer visibility states"
                                             menuWidth: 270
                                             menuItemMaxLines: 3
                                             menuItems: root.layerVisibilityStateMenuItems()
-                                            tooltipText: "Layer visibility states."
+                                            tooltipText: "Save or restore layer visibility states."
                                             menuTooltipText: "Visibility states"
                                             onMenuItemTriggered: function(key) { root.handleLayerVisibilityStateMenuAction(key) }
+                                        }
+                                    }
+
+                                    Label {
+                                        objectName: "editBoardSharedLayersLabel"
+                                        Layout.fillWidth: true
+                                        visible: root.editBoardSharedScope.length > 0
+                                        text: root.editBoardSharedScope
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeCaption
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        Accessible.name: text + qsTr(". Edits appear on every board in this span.")
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: root.normalizedPhotoLayerSelection().length > 1
+                                        MenuButton {
+                                            objectName: "selectedPhotoLayerBatchActionsButton"
+                                            Layout.fillWidth: true
+                                            text: root.normalizedPhotoLayerSelection().length + " selected · Batch actions"
+                                            iconName: "layers"
+                                            compact: true
+                                            primaryOpensMenu: true
+                                            visible: root.normalizedPhotoLayerSelection().length > 1
+                                            menuWidth: 280
+                                            menuItems: root.selectedPhotoLayerBatchMenuItems(photoLayerPropertiesPanel.layerIndex, photoLayerPropertiesPanel.layerData)
+                                            onMenuItemTriggered: function(key) {
+                                                root.handleSelectedPhotoLayerBatchAction(key, photoLayerPropertiesPanel.layerIndex, photoLayerPropertiesPanel.layerData)
+                                            }
+                                        }
+                                        MenuButton {
+                                            objectName: "photoLayerAlignSelectionButton"
+                                            text: "Align"
+                                            iconName: "geometry"
+                                            compact: true
+                                            primaryOpensMenu: true
+                                            tooltipText: "Align or evenly space selected layers."
+                                            menuItems: root.layerAlignmentMenuItems()
+                                            onMenuItemTriggered: function(key) { root.alignSelectedLayers(key) }
                                         }
                                     }
 
@@ -17304,24 +20207,693 @@ Rectangle {
                                         }
                                     }
 
+                                    ColumnLayout {
+                                        id: photoLayerPropertiesPanel
+                                        objectName: "photoLayerPropertiesPanel"
+                                        readonly property int layerIndex: root.normalizedActivePhotoLayerIndex()
+                                        readonly property var layerData: root.currentPhotoLayerData()
+                                        readonly property bool layerValid: editorPreview.photoLayerCount > 0 &&
+                                                                         layerIndex >= 0 &&
+                                                                         layerIndex < editorPreview.photoLayerCount
+                                        readonly property bool layerLocked: layerData.locked === true
+                                        readonly property bool layerSelected: root.photoLayerSelected(layerIndex)
+                                        readonly property int layerOpacityPercent: Math.round(root.clamp(Number(layerData.opacity !== undefined ? layerData.opacity : 1.0), 0.0, 1.0) * 100)
+                                        readonly property int activeAdjustmentIndex: root.activeAdjustmentLayerIndex()
+                                        readonly property var syncTargets: root.selectedAdjustmentLayerIndices(activeAdjustmentIndex)
+                                        readonly property bool detailsExpanded: root.photoLayerDetailsExpanded
+                                        onLayerIndexChanged: root.photoLayerDetailsExpanded = false
+                                        readonly property string sparsePropertiesContract: "layer-properties:v2|source:active-layer|sliders:single-instance|batch:contextual|text:active-only|primary:edit-properties|secondary:one-menu|advanced:clip-transform-isolate-reorder|progressive:true"
+                                        Layout.fillWidth: true
+                                        visible: layerValid && root.selectedEditTargetScope() !== "base-image" && !root.brushToolReady() &&
+                                                 (!root.creativeToolsActive || detailsExpanded)
+                                        spacing: theme.space8
+
+                                        StudioRowRule { Layout.fillWidth: true; Layout.topMargin: theme.space8; Layout.bottomMargin: theme.space4 }
+
+                                        Label {
+                                            objectName: "photoLayerPropertiesNameLabel"
+                                            Layout.fillWidth: true
+                                            text: String(photoLayerPropertiesPanel.layerData.displayName ||
+                                                         photoLayerPropertiesPanel.layerData.name || "Layer")
+                                            color: theme.textMain
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeControl
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        }
+
+                                        RowLayout {
+                                            objectName: "photoLayerPropertiesHeader"
+                                            Layout.fillWidth: true
+                                            spacing: theme.space6
+
+                                            MiniButton {
+                                                objectName: "photoLayerEditButton"
+                                                Layout.fillWidth: true
+                                                text: photoLayerPropertiesPanel.layerData.kind === "adjustment" ? "Edit adjustments"
+                                                      : ["pixel", "source"].indexOf(String(photoLayerPropertiesPanel.layerData.kind || "")) >= 0 ? "Edit colors" : "Edit layer"
+                                                iconName: "edit"
+                                                role: "primary"
+                                                tooltip: "Open the editor for this layer."
+                                                onClicked: root.editPhotoLayerInspectorTarget(photoLayerPropertiesPanel.layerIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "photoLayerPropertiesDetailsButton"
+                                                text: "Properties"
+                                                iconName: photoLayerPropertiesPanel.detailsExpanded ? "chevron-up" : "chevron-down"
+                                                role: "secondary"
+                                                active: photoLayerPropertiesPanel.detailsExpanded
+                                                tooltip: active ? "Hide extended layer properties." : "Show extended layer properties."
+                                                onClicked: root.photoLayerDetailsExpanded = !root.photoLayerDetailsExpanded
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerPropertiesLayerActionsMenuButton"
+                                                iconName: "menu"
+                                                label: "Selected layer actions"
+                                                onClicked: selectedLayerActionsMenu.open()
+                                                LayerActionsMenu {
+                                                    id: selectedLayerActionsMenu
+                                                    menuItems: root.layerRowMenuItems(photoLayerPropertiesPanel.layerIndex, photoLayerPropertiesPanel.layerData)
+                                                    onMenuItemTriggered: function(key) {
+                                                        root.handleLayerRowMenuAction(key, photoLayerPropertiesPanel.layerIndex, photoLayerPropertiesPanel.layerData)
+                                                    }
+                                                }
+                                            }
+                                        }
+
+
+
+                                        PhotoShapePanel {
+                                            objectName: "photoLayerShapeEditor"
+                                            parent: creativeToolsPanel.contentItem
+                                            Layout.fillWidth: true
+                                            controller: editorPreview
+                                            layerIndex: photoLayerPropertiesPanel.layerIndex
+                                            layerData: photoLayerPropertiesPanel.layerData
+                                            locked: photoLayerPropertiesPanel.layerLocked
+                                            visible: root.creativeToolKind === "shape-properties"
+                                        }
+
+                                        ColumnLayout {
+                                            id: photoLayerTextEditor
+                                            objectName: "photoLayerTextEditor"
+                                            parent: creativeToolsPanel.contentItem
+                                            Layout.fillWidth: true
+                                            visible: root.creativeToolKind === "text" && root.editTool !== "text" &&
+                                                     String(photoLayerPropertiesPanel.layerData.kind || "") === "text"
+                                            spacing: theme.space8
+                                            readonly property string textEditorContract: "text-layer-editor:v4|single-instance:true|multiline-content:true|empty-text:true|unified-typography:true|geometry:disclosed|history:coalesced"
+
+                                            property bool geometryExpanded: false
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: theme.space6
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: qsTr("Content")
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: theme.typeCaption
+                                                }
+                                                MiniButton {
+                                                    objectName: "photoLayerTextEditCanvasButton"
+                                                    text: photoCanvasTextOverlay.editing ? qsTr("Done editing") : qsTr("Edit on canvas")
+                                                    role: photoCanvasTextOverlay.editing ? "primary" : "secondary"
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onClicked: {
+                                                        photoLayerTextContent.clearInputFocus()
+                                                        if (photoCanvasTextOverlay.editing) photoCanvasTextOverlay.finish(true)
+                                                        else photoCanvasTextOverlay.beginEditing()
+                                                    }
+                                                }
+                                            }
+
+                                            ScrollView {
+                                                id: photoTextContentScroll
+                                                objectName: "photoTextContentScroll"
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: theme.scaled(64)
+                                                contentWidth: availableWidth
+                                                clip: true
+                                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                                PhotoTextContentEditor {
+                                                    id: photoLayerTextContent
+                                                    width: photoTextContentScroll.availableWidth
+                                                    controller: editorPreview
+                                                    layerIndex: photoLayerPropertiesPanel.layerIndex
+                                                    layerData: photoLayerPropertiesPanel.layerData
+                                                    locked: photoLayerPropertiesPanel.layerLocked || photoCanvasTextOverlay.editing
+                                                }
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                visible: photoLayerTextContent.editError.length > 0
+                                                text: photoLayerTextContent.editError
+                                                wrapMode: Text.WordWrap
+                                                color: theme.warning
+                                                font.family: theme.fontUi
+                                                font.pixelSize: theme.typeCaption
+                                            }
+
+                                            ColumnLayout {
+                                                id: photoTextBoardLinks
+                                                objectName: "photoTextBoardLinks"
+                                                Layout.fillWidth: true
+                                                visible: root.editBoardMode && root.editBoardController !== null
+                                                readonly property string layerId: String(photoLayerPropertiesPanel.layerData.id || "")
+                                                onLayerIdChanged: photoTextBoardLinkPicker.close()
+                                                readonly property var linkState: {
+                                                    const boards = root.editBoardModel
+                                                    return root.editBoardController && layerId.length > 0
+                                                        ? root.editBoardController.photoTextLinkState(layerId) : ({})
+                                                }
+                                                Label {
+                                                    objectName: "photoTextBoardLinkStatus"
+                                                    Layout.fillWidth: true
+                                                    visible: photoTextBoardLinks.linkState.linked === true
+                                                    text: qsTr("Shared text · Boards %1").arg(
+                                                        (photoTextBoardLinks.linkState.boardNumbers || []).join(", "))
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: theme.typeCaption
+                                                    wrapMode: Text.WordWrap
+                                                }
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    MiniButton {
+                                                        objectName: "photoTextLinkBoardsButton"
+                                                        Layout.fillWidth: true
+                                                        text: photoTextBoardLinks.linkState.linked === true
+                                                            ? qsTr("Manage shared text…") : qsTr("Share text across boards…")
+                                                        enabled: !photoLayerPropertiesPanel.layerLocked && !root.editBoardSwitchBusy && !photoCanvasTextOverlay.editing
+                                                        onClicked: {
+                                                            photoLayerTextContent.clearInputFocus()
+                                                            photoTextBoardLinkPicker.open()
+                                                        }
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "photoTextDetachBoardButton"
+                                                        visible: photoTextBoardLinks.linkState.linked === true
+                                                        text: qsTr("Detach")
+                                                        enabled: !photoLayerPropertiesPanel.layerLocked && !root.editBoardSwitchBusy && !photoCanvasTextOverlay.editing
+                                                        tooltip: qsTr("Keep this board's text as a local copy.")
+                                                        onClicked: root.editBoardPhotoTextDetachRequested(photoTextBoardLinks.layerId)
+                                                    }
+                                                }
+                                                Popup {
+                                                    id: photoTextBoardLinkPicker
+                                                    objectName: "photoTextBoardLinkPicker"
+                                                    modal: true
+                                                    focus: true
+                                                    padding: theme.space12
+                                                    width: Math.max(theme.scaled(260), photoTextBoardLinks.width)
+                                                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                                                    property string sourceLayerId: ""
+                                                    readonly property string currentBoardId: String(root.activeEditBoard.boardId || "")
+                                                    onCurrentBoardIdChanged: close()
+                                                    property var candidates: []
+                                                    property var checkedBoards: []
+                                                    onOpened: {
+                                                        sourceLayerId = photoTextBoardLinks.layerId
+                                                        candidates = root.editBoardController.photoTextLinkCandidates(sourceLayerId)
+                                                        const members = root.editBoardController.photoTextLinkState(sourceLayerId).boardIds || []
+                                                        checkedBoards = candidates.filter(board => board.selected === true || members.indexOf(String(board.boardId)) >= 0)
+                                                            .map(board => String(board.boardId))
+                                                    }
+                                                    contentItem: ColumnLayout {
+                                                        spacing: theme.space8
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: qsTr("Share this text")
+                                                            font.weight: Font.DemiBold
+                                                        }
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: qsTr("Text content stays synchronized. Each board keeps its own typography and placement.")
+                                                            wrapMode: Text.WordWrap
+                                                        }
+                                                        ScrollView {
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: Math.min(theme.scaled(220), photoTextLinkChoices.implicitHeight)
+                                                            contentWidth: availableWidth
+                                                            clip: true
+                                                            ColumnLayout {
+                                                                id: photoTextLinkChoices
+                                                                width: parent.width
+                                                                Repeater {
+                                                                    model: photoTextBoardLinkPicker.candidates
+                                                                    delegate: ToolOptionToggle {
+                                                                        required property var modelData
+                                                                        objectName: "photoTextLinkCandidate_" + String(modelData.boardNumber)
+                                                                        Layout.fillWidth: true
+                                                                        label: String(modelData.boardName || qsTr("Board %1").arg(modelData.boardNumber))
+                                                                        checked: photoTextBoardLinkPicker.checkedBoards.indexOf(String(modelData.boardId)) >= 0
+                                                                        toggleEnabled: String(modelData.boardId) !== String(root.activeEditBoard.boardId)
+                                                                        disabledReason: qsTr("The current board is the source of this shared text.")
+                                                                        onToggled: function(value) {
+                                                                            const id = String(modelData.boardId)
+                                                                            photoTextBoardLinkPicker.checkedBoards = value
+                                                                                ? photoTextBoardLinkPicker.checkedBoards.concat([id])
+                                                                                : photoTextBoardLinkPicker.checkedBoards.filter(boardId => boardId !== id)
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        Label {
+                                                            visible: photoTextBoardLinkPicker.candidates.length < 2
+                                                            Layout.fillWidth: true
+                                                            text: qsTr("Create a variant of this board to share matching text layers.")
+                                                            wrapMode: Text.WordWrap
+                                                        }
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            MiniButton {
+                                                                text: qsTr("Cancel")
+                                                                onClicked: photoTextBoardLinkPicker.close()
+                                                            }
+                                                            MiniButton {
+                                                                objectName: "photoTextLinkBoardsApplyButton"
+                                                                Layout.fillWidth: true
+                                                                text: qsTr("Share text")
+                                                                role: "primary"
+                                                                enabled: photoTextBoardLinkPicker.checkedBoards.length > 1
+                                                                onClicked: {
+                                                                    root.editBoardPhotoTextLinkRequested(photoTextBoardLinkPicker.sourceLayerId,
+                                                                        photoTextBoardLinkPicker.checkedBoards)
+                                                                    photoTextBoardLinkPicker.close()
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            PhotoTypographyPanel {
+                                                Layout.fillWidth: true
+                                                showHeader: false
+                                                controller: editorPreview
+                                                layerIndex: photoLayerPropertiesPanel.layerIndex
+                                                layerData: photoLayerPropertiesPanel.layerData
+                                                selectedLayerIndices: root.selectedPhotoLayerIndices.filter(function(index) {
+                                                    return String((root.photoLayerRows[index] || {}).kind || "") === "text"
+                                                })
+                                                locked: photoLayerPropertiesPanel.layerLocked || selectedLayerIndices.some(function(index) {
+                                                    return (root.photoLayerRows[index] || {}).locked === true
+                                                })
+                                                onBaselineEditingRequested: function(active) {
+                                                    photoCanvasTextOverlay.pathHandlesActive = active
+                                                }
+                                            }
+
+                                            MiniButton {
+                                                objectName: "photoTypographyGeometryToggle"
+                                                Layout.fillWidth: true
+                                                text: qsTr("Box & perspective")
+                                                iconName: photoLayerTextEditor.geometryExpanded ? "chevron-down" : "chevron-right"
+                                                role: "ghost"
+                                                active: photoLayerTextEditor.geometryExpanded
+                                                onClicked: photoLayerTextEditor.geometryExpanded = !photoLayerTextEditor.geometryExpanded
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                visible: photoLayerTextEditor.geometryExpanded
+                                                spacing: theme.space8
+
+                                                AdjustSlider {
+                                                    objectName: "photoLayerTextBoxWidthSlider"
+                                                    controlHeight: 24
+                                                    label: "Text Box Width"
+                                                    from: 16
+                                                    to: 8192
+                                                    stepSize: 8
+                                                    defaultValue: 512
+                                                    value: Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512)
+                                                    valueText: Math.round(Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512)).toString()
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onValueDragged: function(value) {
+                                                        editorPreview.setPhotoLayerTextBox(
+                                                                    photoLayerPropertiesPanel.layerIndex,
+                                                                    Math.round(value),
+                                                                    Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128))
+                                                    }
+                                                }
+
+                                                AdjustSlider {
+                                                    objectName: "photoLayerTextBoxHeightSlider"
+                                                    controlHeight: 24
+                                                    label: "Text Box Height"
+                                                    from: 16
+                                                    to: 8192
+                                                    stepSize: 8
+                                                    defaultValue: 128
+                                                    value: Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128)
+                                                    valueText: Math.round(Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128)).toString()
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onValueDragged: function(value) {
+                                                        editorPreview.setPhotoLayerTextBox(
+                                                                    photoLayerPropertiesPanel.layerIndex,
+                                                                    Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512),
+                                                                    Math.round(value))
+                                                    }
+                                                }
+                                                PhotoTextPerspectivePanel {
+                                                    Layout.fillWidth: true
+                                                    controller: editorPreview
+                                                    layerIndex: photoLayerPropertiesPanel.layerIndex
+                                                    layerData: photoLayerPropertiesPanel.layerData
+                                                    locked: photoLayerPropertiesPanel.layerLocked
+                                                }
+
+                                            }
+                                        }
+
+                                        StudioTinyInput {
+                                            objectName: "photoLayerNameField"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 24
+                                            visible: photoLayerPropertiesPanel.detailsExpanded
+                                            text: String(photoLayerPropertiesPanel.layerData.displayName ||
+                                                         photoLayerPropertiesPanel.layerData.name ||
+                                                         "Layer")
+                                            enabled: !photoLayerPropertiesPanel.layerLocked
+                                            placeholder: "Layer name"
+                                            onAccepted: {
+                                                const nextName = String(text || "").trim()
+                                                const currentName = String(photoLayerPropertiesPanel.layerData.name || "").trim()
+                                                const currentDisplayName = String(photoLayerPropertiesPanel.layerData.displayName || currentName).trim()
+                                                if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
+                                                    editorPreview.renamePhotoLayer(photoLayerPropertiesPanel.layerIndex, nextName)
+                                                clearInputFocus()
+                                            }
+                                            onEditingFinished: accepted()
+                                        }
+
+                                        InspectorSection {
+                                            objectName: "photoLayerGroupColorSection"
+                                            Layout.fillWidth: true
+                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                     photoLayerPropertiesPanel.layerData.kind === "group"
+                                            title: "Group Color"
+                                            subtitle: "Grade the flattened child composite."
+                                            accent: theme.accentCool300
+                                            expandable: true
+                                            expanded: true
+
+                                            Flow {
+                                                Layout.fillWidth: true
+                                                spacing: theme.space8
+
+                                                ToolValueSlider {
+                                                    objectName: "photoLayerGroupExposureSlider"
+                                                    width: 132
+                                                    height: 26
+                                                    label: "Exposure"
+                                                    valueText: root.exposureText(Number(photoLayerPropertiesPanel.layerData.exposure || 0))
+                                                    from: -5
+                                                    to: 5
+                                                    stepSize: 0.01
+                                                    value: Number(photoLayerPropertiesPanel.layerData.exposure || 0)
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onPressedChanged: {
+                                                        if (pressed)
+                                                            editorPreview.beginCoalescedEdit()
+                                                        else
+                                                            editorPreview.endCoalescedEdit()
+                                                    }
+                                                    onMoved: editorPreview.setPhotoLayerAdjustmentValue(
+                                                                 photoLayerPropertiesPanel.layerIndex,
+                                                                 "exposure", value)
+                                                }
+
+                                                ToolValueSlider {
+                                                    objectName: "photoLayerGroupContrastSlider"
+                                                    width: 132
+                                                    height: 26
+                                                    label: "Contrast"
+                                                    valueText: root.signedPercent(Number(photoLayerPropertiesPanel.layerData.contrast || 0))
+                                                    from: -100
+                                                    to: 100
+                                                    stepSize: 1
+                                                    value: Number(photoLayerPropertiesPanel.layerData.contrast || 0)
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onPressedChanged: {
+                                                        if (pressed)
+                                                            editorPreview.beginCoalescedEdit()
+                                                        else
+                                                            editorPreview.endCoalescedEdit()
+                                                    }
+                                                    onMoved: editorPreview.setPhotoLayerAdjustmentValue(
+                                                                 photoLayerPropertiesPanel.layerIndex,
+                                                                 "contrast", value)
+                                                }
+
+                                                ToolValueSlider {
+                                                    objectName: "photoLayerGroupTemperatureSlider"
+                                                    width: 132
+                                                    height: 26
+                                                    label: "Temperature"
+                                                    valueText: root.signedPercent(Number(photoLayerPropertiesPanel.layerData.temperature || 0))
+                                                    from: -100
+                                                    to: 100
+                                                    stepSize: 1
+                                                    value: Number(photoLayerPropertiesPanel.layerData.temperature || 0)
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onPressedChanged: {
+                                                        if (pressed)
+                                                            editorPreview.beginCoalescedEdit()
+                                                        else
+                                                            editorPreview.endCoalescedEdit()
+                                                    }
+                                                    onMoved: editorPreview.setPhotoLayerAdjustmentValue(
+                                                                 photoLayerPropertiesPanel.layerIndex,
+                                                                 "temperature", value)
+                                                }
+
+                                                ToolValueSlider {
+                                                    objectName: "photoLayerGroupTintSlider"
+                                                    width: 132
+                                                    height: 26
+                                                    label: "Tint"
+                                                    valueText: root.signedPercent(Number(photoLayerPropertiesPanel.layerData.tint || 0))
+                                                    from: -100
+                                                    to: 100
+                                                    stepSize: 1
+                                                    value: Number(photoLayerPropertiesPanel.layerData.tint || 0)
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onPressedChanged: {
+                                                        if (pressed)
+                                                            editorPreview.beginCoalescedEdit()
+                                                        else
+                                                            editorPreview.endCoalescedEdit()
+                                                    }
+                                                    onMoved: editorPreview.setPhotoLayerAdjustmentValue(
+                                                                 photoLayerPropertiesPanel.layerIndex,
+                                                                 "tint", value)
+                                                }
+
+                                                ToolValueSlider {
+                                                    objectName: "photoLayerGroupSaturationSlider"
+                                                    width: 132
+                                                    height: 26
+                                                    label: "Saturation"
+                                                    valueText: root.signedPercent(Number(photoLayerPropertiesPanel.layerData.saturation || 0))
+                                                    from: -100
+                                                    to: 100
+                                                    stepSize: 1
+                                                    value: Number(photoLayerPropertiesPanel.layerData.saturation || 0)
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onPressedChanged: {
+                                                        if (pressed)
+                                                            editorPreview.beginCoalescedEdit()
+                                                        else
+                                                            editorPreview.endCoalescedEdit()
+                                                    }
+                                                    onMoved: editorPreview.setPhotoLayerAdjustmentValue(
+                                                                 photoLayerPropertiesPanel.layerIndex,
+                                                                 "saturation", value)
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+
+                                                Item { Layout.fillWidth: true }
+
+                                                MiniButton {
+                                                    objectName: "photoLayerGroupColorResetButton"
+                                                    iconName: "reset"
+                                                    text: "Reset Color"
+                                                    tooltip: "Reset this group's color adjustments."
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked
+                                                    onClicked: editorPreview.resetPhotoLayerAdjustments(
+                                                                   photoLayerPropertiesPanel.layerIndex)
+                                                }
+                                            }
+                                        }
+
+                                        Flow {
+                                            objectName: "photoLayerPropertiesPrimaryControls"
+                                            Layout.fillWidth: true
+                                            visible: photoLayerPropertiesPanel.detailsExpanded
+                                            spacing: theme.space8
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerOpacitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "adjustment-layer,photo-layer"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "layer-opacity"
+                                                width: Math.max(120, (parent.width - theme.space8) / 2)
+                                                height: theme.controlHeightDense + theme.space24
+                                                showCaption: true
+                                                label: "Opacity"
+                                                valueText: photoLayerPropertiesPanel.layerOpacityPercent + "%"
+                                                tooltipText: "Layer opacity - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: photoLayerPropertiesPanel.layerOpacityPercent
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+
+                                            Column {
+                                                width: Math.max(120, (parent.width - theme.space8) / 2)
+                                                height: theme.controlHeightDense + theme.space24
+
+                                                Label {
+                                                    objectName: "photoLayerBlendModeCaption"
+                                                    height: theme.space24
+                                                    text: "Blend"
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: theme.typeCaption
+                                                }
+
+                                                ToneComboBox {
+                                                    objectName: "photoLayerBlendModeComboBox"
+                                                    readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(photoLayerPropertiesPanel.layerData)
+                                                    width: parent.width
+                                                    height: theme.controlHeightDense
+                                                    Accessible.name: "Layer blend mode"
+                                                    enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                             root.photoLayerBlendModeControlsEnabled(photoLayerPropertiesPanel.layerData)
+                                                    model: root.photoLayerBlendLabelsForLayer(photoLayerPropertiesPanel.layerData)
+                                                    currentIndex: root.photoLayerBlendModeIndexForLayer(
+                                                                      photoLayerPropertiesPanel.layerData,
+                                                                      photoLayerPropertiesPanel.layerData.blendMode)
+                                                    onActivated: function(index) {
+                                                        editorPreview.setPhotoLayerBlendMode(
+                                                                    photoLayerPropertiesPanel.layerIndex,
+                                                                    root.photoLayerBlendModeAtForLayer(
+                                                                        photoLayerPropertiesPanel.layerData,
+                                                                        index))
+                                                    }
+                                                }
+                                            }
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerMaskOpacitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "mask"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "mask-opacity"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                width: 118
+                                                height: 42
+                                                showCaption: true
+                                                label: "Mask Opacity"
+                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100).toString() + "%"
+                                                tooltipText: "Mask opacity - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100)
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerMaskOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerMaskDensitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "mask"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "mask-density"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                width: 118
+                                                height: 42
+                                                showCaption: true
+                                                label: "Mask Density"
+                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100).toString() + "%"
+                                                tooltipText: "Mask density - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100)
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerMaskDensity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+                                        }
+
+
+
+
+                                    }
+
                                     BrushLayerInspectorHeader {
                                         id: brushLayerInspectorHeader
                                         objectName: "brushLayerInspectorHeader"
+                                        Layout.fillWidth: true
+                                        readonly property int targetLayerIndex: root.selectedEditTargetLayerIndex()
+                                        readonly property var targetLayer: targetLayerIndex >= 0
+                                                                          ? root.photoLayerRows[targetLayerIndex] || ({})
+                                                                          : ({})
                                         visible: root.brushToolReady()
-                                        totalLayersText: (editorPreview.photoLayerCount + 1) + " TOTAL LAYERS"
+                                        totalLayersText: (editorPreview.photoLayerCount + 1) + " layers"
                                         isolationActive: editorPreview.photoLayerSoloActive
-                                        targetIconName: editorPreview.photoLayerCount > 0 ? root.photoLayerIconName(root.currentPhotoLayerData()) : "media"
-                                        targetName: editorPreview.photoLayerCount > 0
-                                                    ? String(root.currentPhotoLayerData().displayName ||
-                                                             root.currentPhotoLayerData().name ||
+                                        canIsolate: targetLayerIndex >= 0
+                                        targetIconName: targetLayerIndex >= 0 ? root.photoLayerIconName(targetLayer) : "media"
+                                        targetName: targetLayerIndex >= 0
+                                                    ? String(targetLayer.displayName ||
+                                                             targetLayer.name ||
                                                              "Layer")
                                                     : "Base image"
-                                        targetStateText: editorPreview.photoLayerCount > 0
-                                                         ? "Brush target / " +
+                                        targetStateText: targetLayerIndex >= 0
+                                                         ? "Selection target · " +
                                                            root.photoLayerMaskLinkLabel(
-                                                               root.currentPhotoLayerData(),
-                                                               root.normalizedActivePhotoLayerIndex())
-                                                         : "Brush target / Direct adjustment"
+                                                               targetLayer,
+                                                               targetLayerIndex)
+                                                         : "Selection target · Base image"
                                         maskName: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Selection") : "No active selection"
                                         maskStateText: root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
                                                        root.maskOperationLabel(editorPreview.activeMaskOperation) +
@@ -17332,8 +20904,8 @@ Rectangle {
                                         onAddLayerRequested: root.addAdjustmentLayerForCurrentTarget()
                                         onAddLayerMenuItemTriggered: function(key) { root.handleLayerAddMenuAction(key) }
                                         onIsolateRequested: {
-                                            if (editorPreview.photoLayerCount > 0)
-                                                editorPreview.isolatePhotoLayer(0)
+                                            if (targetLayerIndex >= 0)
+                                                editorPreview.isolatePhotoLayer(targetLayerIndex)
                                         }
                                         onClearIsolationRequested: editorPreview.clearPhotoLayerSolo()
                                     }
@@ -17691,7 +21263,7 @@ Rectangle {
                                                 readonly property string thumbnailStateSignature: root.thumbnailStateSignature(modelData)
                                                 readonly property string clickRouteContract: "mask-row-click:select-mask|adjust-button:edit-layer"
                                                 Layout.fillWidth: true
-                                                Layout.preferredHeight: root.brushToolReady() ? 44 : 48
+                                                Layout.preferredHeight: Math.max(48, standaloneMaskContent.implicitHeight + 14)
                                                 compact: true
                                                 rowKind: "standalone-mask-set"
                                                 targetKind: linkedLayerIndex >= 0 ? "linked-adjustment" : "mask"
@@ -17791,7 +21363,9 @@ Rectangle {
                                                     }
 
                                                     ColumnLayout {
+                                                        id: standaloneMaskContent
                                                         Layout.fillWidth: true
+                                                        Layout.minimumWidth: 0
                                                         spacing: 2
 
                                                         Label {
@@ -17800,7 +21374,7 @@ Rectangle {
                                                             text: String(modelData.name || "Selection")
                                                             color: theme.textMain
                                                             font.family: theme.fontUi
-                                                            font.pixelSize: 11
+                                                            font.pixelSize: theme.typeLabel
                                                             font.weight: Font.DemiBold
                                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                             maximumLineCount: 2
@@ -17812,9 +21386,9 @@ Rectangle {
                                                             Layout.fillWidth: true
 	                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
 	                                                                  : root.brushToolReady()
-	                                                                  ? root.maskKindLabel(String(modelData.primarySourceKind || modelData.sourceKind || "")) + " / " +
-	                                                                    (linkedLayerIndex >= 0 ? "Linked layer" : "Standalone selection") + " / " +
-	                                                                    (activeMaskSet ? "Editing selection" : "Ready")
+                                                                  ? root.maskKindLabel(String(modelData.primarySourceKind || modelData.sourceKind || "")) + " / " +
+                                                                    (linkedLayerIndex >= 0 ? "Linked layer" : "Standalone selection") + " / " +
+                                                                    (activeMaskSet ? "Editing" : "Ready")
 	                                                                  : root.thumbnailStatusLabel(
 	                                                                         modelData,
 	                                                                         root.selectionRowFallbackStatus(
@@ -17824,8 +21398,8 @@ Rectangle {
 	                                                                             : "Standalone selection"))
                                                             color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
                                                                    : linkedLayerIndex >= 0 ? root.mint : root.dimText
-                                                            font.family: theme.fontMono
-                                                            font.pixelSize: 8
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: theme.typeCaption
                                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                             maximumLineCount: 2
                                                             elide: Text.ElideNone
@@ -18032,6 +21606,8 @@ Rectangle {
                                     }
 
                                     Repeater {
+                                        id: photoLayerRowsRepeater
+                                        objectName: "photoLayerRowsRepeater"
                                         model: photoLayersInspectorGroup.inspectorActive ? editorPreview.photoLayerCount : 0
 
                                         delegate: LayerRowChrome {
@@ -18072,12 +21648,13 @@ Rectangle {
                                             readonly property string changedAdjustmentGroupSignature: root.layerChangedAdjustmentGroupSignature(layerData)
                                             readonly property string localAdjustmentSummary: root.layerLocalAdjustmentSummary(layerData)
                                             readonly property string keyboardNavigationSignature: root.layerKeyboardNavigationSignature()
-                                            readonly property string dropTargetSignature: "layer-reorder-drop-targets:v1|before:" +
+                                            readonly property string dropTargetSignature: "layer-hierarchy-drop-targets:v2|before:" +
                                                                                           String(layerIndex > 0 && !layerLocked) +
                                                                                           "|after:" +
                                                                                           String(layerIndex < editorPreview.photoLayerCount - 1 && !layerLocked) +
-                                                                                          "|operation:editorPreview.movePhotoLayer|order:deterministic"
-                                            readonly property string directLayerRowDragContract: "layer-row-drag:v1|grip:true|row-body:true|selection-preserved:true|locked:blocked|live-translate:true"
+                                                                                          "|into-group:" + String(String(layerData.kind || "") === "group" && !layerLocked) +
+                                                                                          "|operation:editorPreview.movePhotoLayerIntoGroup|cycle-safe:true"
+                                            readonly property string directLayerRowDragContract: "layer-row-drag:v2|grip:true|row-body:true|selection-preserved:true|locked:blocked|live-translate:true|hierarchy:drop-into-group"
                                                 readonly property bool layerFailed: layerFailureLabel.length > 0 || thumbnailFailureContained
                                                 readonly property var layerStateBadges: root.photoLayerStateBadges(
                                                                                          layerData,
@@ -18103,7 +21680,8 @@ Rectangle {
 
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: Math.max(48, layerContent.implicitHeight + 10)
-                                            z: reorderDragActive ? 20 : 0
+                                            visible: layerData.treeVisible !== false
+                                            z: reorderDragActive ? 20 : root.photoLayerHierarchyDropTargetIndex === layerIndex ? 21 : 0
                                             scale: reorderDragActive ? 1.015 : 1.0
                                             transform: Translate { y: photoLayerRowRoot.reorderDragActive ? photoLayerReorderDragProxy.y : 0 }
                                             rowKind: "photo-layer"
@@ -18115,6 +21693,7 @@ Rectangle {
                                             hidden: layerHidden
                                             solo: layerSoloed
                                             changed: changedAdjustmentGroups.length > 0
+                                            recentlyAdded: root.recentlyPastedLayerIds.indexOf(String(layerData.id)) >= 0
                                             accentVisible: rowAccentVisible
                                             Accessible.name: String(layerData.displayName || layerData.name || "Layer")
                                             Accessible.description: root.photoLayerStateSummary(layerData, layerIndex)
@@ -18185,20 +21764,43 @@ Rectangle {
                                                 color: layerData.solo === true ? theme.accentWarm400 : root.mint
                                             }
 
+                                            Rectangle {
+                                                objectName: "photoLayerHierarchyDropHighlight"
+                                                anchors.fill: parent
+                                                anchors.margins: 1
+                                                radius: 5
+                                                color: theme.alpha(root.mint, 0.08)
+                                                border.color: root.mint
+                                                border.width: 2
+                                                visible: root.photoLayerHierarchyDropTargetIndex === layerIndex
+                                                enabled: false
+                                                z: 12
+                                            }
+
                                             MouseArea {
+                                                id: photoLayerRowEditTargetArea
                                                 objectName: "photoLayerRowEditTargetArea"
                                                 anchors.fill: parent
+                                                preventStealing: true
                                                 drag.target: layerLocked ? null : photoLayerReorderDragProxy
-                                                drag.axis: Qt.YAxis
+                                                drag.axis: Drag.YAxis
                                                 drag.minimumY: -layerIndex * photoLayerRowRoot.height
                                                 drag.maximumY: (editorPreview.photoLayerCount - layerIndex - 1) * photoLayerRowRoot.height
                                                 onPressed: function(mouse) {
+                                                    root.clearPhotoLayerDropIndicator()
                                                     photoLayerRowRoot.forceActiveFocus()
                                                     root.selectPhotoLayerWithModifiers(parent.layerIndex, mouse.modifiers)
                                                 }
-                                                onPositionChanged: {
-                                                    if (drag.active)
+                                                onPositionChanged: function(mouse) {
+                                                    if (drag.active) {
                                                         photoLayerRowRoot.reorderDragActive = true
+                                                        root.updatePhotoLayerHierarchyDropTarget(
+                                                                    layerIndex,
+                                                                    photoLayerRowEditTargetArea,
+                                                                    mouse.x,
+                                                                    mouse.y,
+                                                                    photoLayerRowsRepeater)
+                                                    }
                                                 }
                                                 onClicked: function(mouse) {
                                                     const multiSelect = (mouse.modifiers &
@@ -18206,26 +21808,50 @@ Rectangle {
                                                     if (multiSelect)
                                                         root.openPhotoLayerInspector(parent.layerIndex)
                                                     else
-                                                        root.editPhotoLayerInspectorTarget(parent.layerIndex)
+                                                        root.setActivePhotoLayer(parent.layerIndex)
                                                 }
-                                                onReleased: {
-                                                    const offset = Math.round(photoLayerReorderDragProxy.y /
-                                                                              Math.max(1, photoLayerRowRoot.height))
-                                                    photoLayerReorderDragProxy.y = 0
-                                                    photoLayerRowRoot.reorderDragActive = false
-                                                    if (offset !== 0)
-                                                        root.movePhotoLayerPreservingSelection(layerIndex, offset)
+                                                onReleased: function(mouse) {
+                                                    root.finishPhotoLayerDrag(
+                                                                layerIndex,
+                                                                photoLayerRowRoot,
+                                                                photoLayerRowEditTargetArea,
+                                                                mouse.x,
+                                                                mouse.y,
+                                                                photoLayerReorderDragProxy,
+                                                                photoLayerRowsRepeater)
                                                 }
                                                 onCanceled: {
                                                     photoLayerReorderDragProxy.y = 0
                                                     photoLayerRowRoot.reorderDragActive = false
+                                                    root.clearPhotoLayerDropIndicator()
                                                 }
                                             }
 
                                             RowLayout {
                                                 anchors.fill: parent
                                                 anchors.margins: 5
+                                                anchors.leftMargin: 5 + Math.max(0, Number(layerData.treeDepth || 0)) * 14
                                                 spacing: 7
+
+                                                MiniButton {
+                                                    objectName: "photoLayerGroupExpandButton"
+                                                    visible: String(layerData.kind || "") === "group"
+                                                    Layout.preferredWidth: visible ? 20 : 0
+                                                    Layout.preferredHeight: 20
+                                                    iconName: layerData.expanded === false ? "chevron-right" : "chevron-down"
+                                                    labelVisible: false
+                                                    role: "ghost"
+                                                    square: true
+                                                    a11yName: layerData.expanded === false
+                                                              ? "Expand layer group"
+                                                              : "Collapse layer group"
+                                                    tooltip: layerData.expanded === false
+                                                             ? "Show grouped layers."
+                                                             : "Hide grouped layers in the stack."
+                                                    onClicked: editorPreview.setPhotoLayerGroupExpanded(
+                                                                   layerIndex,
+                                                                   layerData.expanded === false)
+                                                }
 
                                                 Rectangle {
                                                     objectName: "photoLayerReorderHandle"
@@ -18261,6 +21887,7 @@ Rectangle {
 
                                                     Item {
                                                         id: photoLayerReorderDragProxy
+                                                        objectName: "photoLayerReorderDragProxy"
                                                         width: 1
                                                         height: 1
                                                     }
@@ -18268,6 +21895,7 @@ Rectangle {
                                                     MouseArea {
                                                         id: photoLayerReorderDragArea
                                                         anchors.fill: parent
+                                                        preventStealing: true
                                                         enabled: !layerLocked
                                                         cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
                                                         drag.target: photoLayerReorderDragProxy
@@ -18275,21 +21903,36 @@ Rectangle {
                                                         drag.minimumY: -layerIndex * photoLayerRowRoot.height
                                                         drag.maximumY: (editorPreview.photoLayerCount - layerIndex - 1) * photoLayerRowRoot.height
                                                         onPressed: function(mouse) {
-                                                            photoLayerRowRoot.reorderDragActive = true
+                                                            root.clearPhotoLayerDropIndicator()
+                                                            photoLayerRowRoot.reorderDragActive = false
                                                             photoLayerReorderDragProxy.y = 0
                                                             root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
                                                         }
-                                                        onReleased: {
-                                                            const offset = Math.round(photoLayerReorderDragProxy.y /
-                                                                                      Math.max(1, photoLayerRowRoot.height))
-                                                            photoLayerReorderDragProxy.y = 0
-                                                            photoLayerRowRoot.reorderDragActive = false
-                                                            if (offset !== 0)
-                                                                root.movePhotoLayerPreservingSelection(layerIndex, offset)
+                                                        onPositionChanged: function(mouse) {
+                                                            if (drag.active) {
+                                                                photoLayerRowRoot.reorderDragActive = true
+                                                                root.updatePhotoLayerHierarchyDropTarget(
+                                                                            layerIndex,
+                                                                            photoLayerReorderDragArea,
+                                                                            mouse.x,
+                                                                            mouse.y,
+                                                                            photoLayerRowsRepeater)
+                                                            }
+                                                        }
+                                                        onReleased: function(mouse) {
+                                                            root.finishPhotoLayerDrag(
+                                                                        layerIndex,
+                                                                        photoLayerRowRoot,
+                                                                photoLayerReorderDragArea,
+                                                                mouse.x,
+                                                                mouse.y,
+                                                                photoLayerReorderDragProxy,
+                                                                photoLayerRowsRepeater)
                                                         }
                                                         onCanceled: {
                                                             photoLayerReorderDragProxy.y = 0
                                                             photoLayerRowRoot.reorderDragActive = false
+                                                            root.clearPhotoLayerDropIndicator()
                                                         }
                                                     }
                                                 }
@@ -18347,6 +21990,8 @@ Rectangle {
                                                     readonly property string layerThumbnailPathSignature: "layer-thumbnail|stage:" + layerThumbnailStage + "|composite:" + String(layerThumbnailCompositePath) + "|color:" + layerThumbnailInvalidationColorPipeline + "|key:" + layerThumbnailInvalidationKey
                                                     Layout.preferredWidth: 30
                                                     Layout.preferredHeight: 30
+                                                    Layout.alignment: Qt.AlignTop
+                                                    Layout.topMargin: theme.space4
                                                     radius: 3
                                                     color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.12)
                                                            : layerData.kind === "fill" ? String(layerData.fillColor || "#808080")
@@ -18415,21 +22060,21 @@ Rectangle {
                                                     RowLayout {
                                                         objectName: "photoLayerPrimaryLine"
                                                         Layout.fillWidth: true
-                                                        Layout.preferredHeight: 20
+                                                        Layout.preferredHeight: Math.max(22, photoLayerNameLabel.implicitHeight)
                                                         spacing: 6
 
                                                         Label {
+                                                            id: photoLayerNameLabel
                                                             objectName: "photoLayerNameLabel"
                                                             Layout.fillWidth: true
                                                             visible: root.inlineRenamingPhotoLayerIndex !== layerIndex
                                                             text: String(layerData.displayName || layerData.name || "Layer")
                                                             color: layerHidden ? root.dimText : theme.textMain
                                                             font.family: theme.fontUi
-                                                            font.pixelSize: 11
+                                                            font.pixelSize: theme.typeControl
                                                             font.weight: layerSelected || activeLayerTarget ? Font.DemiBold : Font.Medium
-                                                            maximumLineCount: 1
-                                                            fontSizeMode: Text.HorizontalFit
-                                                            minimumPixelSize: 8
+                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                            maximumLineCount: 2
                                                             elide: Text.ElideNone
 
                                                             MouseArea {
@@ -18437,6 +22082,7 @@ Rectangle {
                                                                 acceptedButtons: Qt.LeftButton
                                                                 onClicked: function(mouse) {
                                                                     root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
+                                                                    root.openPhotoLayerInspector(layerIndex)
                                                                 }
                                                                 onDoubleClicked: function(mouse) {
                                                                     root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
@@ -18478,6 +22124,8 @@ Rectangle {
                                                             layerOpacityPercent: photoLayerRowRoot.layerOpacityPercent
                                                             layerIndex: photoLayerRowRoot.layerIndex
                                                             accent: root.mint
+                                                            showEditButton: !root.brushToolReady()
+                                                            onEditClicked: root.editPhotoLayerInspectorTarget(layerIndex)
                                                             menuItems: root.layerRowMenuItems(layerIndex, layerData)
                                                             onVisibilityClicked: editorPreview.setPhotoLayerEnabled(layerIndex, !(layerData.enabled !== false))
                                                             onMenuItemTriggered: function(key) {
@@ -18511,17 +22159,15 @@ Rectangle {
                                                                 (layerSoloed ? " / Isolated" : "")
                                                         color: layerFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
                                                                 : layerHidden ? root.dimText
-                                                                : layerMaskSelected || layerSoloed || layerSelected ? root.mint
-                                                                : theme.textMain
-                                                        font.family: theme.fontMono
-                                                        font.pixelSize: 8
+                                                                : theme.textMuted
+                                                        font.family: theme.fontUi
+                                                        font.pixelSize: theme.typeCaption
                                                         font.weight: layerFailureLabel.length > 0 ||
                                                                      thumbnailFailureContained ||
                                                                      layerMaskSelected || layerSoloed || layerSelected
                                                                     ? Font.DemiBold : Font.Normal
                                                         maximumLineCount: 1
-                                                        fontSizeMode: Text.HorizontalFit
-                                                        minimumPixelSize: 7
+                                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                         elide: Text.ElideNone
                                                     }
 
@@ -18974,6 +22620,11 @@ Rectangle {
 
                                                         Rectangle {
                                                             objectName: "photoLayerNestedMaskSectionHeader"
+                                                            activeFocusOnTab: true
+                                                            Accessible.role: Accessible.Button
+                                                            Accessible.name: photoLayerNestedMaskList.maskSectionCollapsed ? "Expand layer masks" : "Collapse layer masks"
+                                                            Keys.onReturnPressed: root.setPhotoLayerMaskSectionCollapsed(layerIndex, layerData, !photoLayerNestedMaskList.maskSectionCollapsed)
+                                                            Keys.onSpacePressed: root.setPhotoLayerMaskSectionCollapsed(layerIndex, layerData, !photoLayerNestedMaskList.maskSectionCollapsed)
                                                             Layout.fillWidth: true
                                                             Layout.leftMargin: 18
                                                             Layout.preferredHeight: 28
@@ -19011,8 +22662,8 @@ Rectangle {
                                                                 Label {
                                                                     objectName: "photoLayerNestedMaskSectionLabel"
                                                                     Layout.fillWidth: true
-                                                                    text: photoLayerNestedMaskList.linkedMaskSets.length + " SELECTION" +
-                                                                          (photoLayerNestedMaskList.linkedMaskSets.length === 1 ? "" : "S")
+                                                                    text: "MASK" + (photoLayerNestedMaskList.linkedMaskSets.length === 1 ? "" : "S") +
+                                                                          " · " + photoLayerNestedMaskList.linkedMaskSets.length
                                                                     color: root.dimText
                                                                     font.family: theme.fontMono
                                                                     font.pixelSize: 8
@@ -19024,6 +22675,7 @@ Rectangle {
 
                                                                 MiniButton {
                                                                     objectName: "photoLayerNestedMaskSectionToggle"
+                                                                    visible: false
                                                                     square: true
                                                                     iconName: photoLayerNestedMaskList.maskSectionCollapsed ? "chevron-right" : "move-up"
                                                                     role: "icon"
@@ -19043,6 +22695,7 @@ Rectangle {
                                                             delegate: LayerRowChrome {
                                                                 id: photoLayerNestedMaskRowRoot
                                                                 objectName: "photoLayerNestedMaskRow"
+                                                                required property int index
                                                                 required property var modelData
                                                                 readonly property bool maskChildAttachment: true
                                                                 readonly property int parentLayerIndex: layerIndex
@@ -19094,7 +22747,7 @@ Rectangle {
                                                                  readonly property string maskSourceGeneratedSignature: String(modelData.generatedAlphaSourceSignature || "")
                                                                  readonly property string maskSourceGeneratedRefinementSignature: String(modelData.generatedAlphaRefinementStateSignature || "")
                                                                  readonly property string maskSourceProvenanceSummary: root.maskSourceProvenanceSummary(modelData)
-                                                                   readonly property int maskChildIndent: 18
+                                                                   readonly property int maskChildIndent: 26
                                                                    readonly property int combineOrderIndex: index
                                                                    readonly property int combineOrderCount: photoLayerNestedMaskList.linkedMaskSets.length
                                                                    readonly property string combineOrderLabel: (combineOrderIndex + 1).toString() + " / " + combineOrderCount.toString()
@@ -19115,7 +22768,7 @@ Rectangle {
                                                                   readonly property string thumbnailStateSignature: root.thumbnailStateSignature(modelData)
                                                                 Layout.fillWidth: true
                                                                 Layout.leftMargin: maskChildIndent
-                                                                Layout.preferredHeight: root.brushToolReady() ? 42 : Math.max(38, nestedMaskContent.implicitHeight + 10)
+                                                                Layout.preferredHeight: Math.max(42, nestedMaskContent.implicitHeight + 10)
                                                                 compact: true
                                                                 rowKind: "nested-mask-set"
                                                                 targetKind: primarySourceKind.length > 0 ? primarySourceKind : "mask"
@@ -19136,6 +22789,7 @@ Rectangle {
 
                                                                     AppIcon {
                                                                         objectName: "photoLayerNestedMaskTypeIcon"
+                                                                        visible: false
                                                                         readonly property string sourceKind: photoLayerNestedMaskRowRoot.primarySourceKind
                                                                         readonly property string sourceKindLabel: photoLayerNestedMaskRowRoot.sourceKindLabel
                                                                         readonly property string iconContract: "mask-type-icon:v1|kind:" +
@@ -19149,7 +22803,7 @@ Rectangle {
 
                                                                     Label {
                                                                         objectName: "photoLayerNestedMaskOrderLabel"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: photoLayerNestedMaskRowRoot.combineOrderCount > 1 && !root.brushToolReady()
                                                                         readonly property int combineOrderIndex: photoLayerNestedMaskRowRoot.combineOrderIndex
                                                                         readonly property int combineOrderCount: photoLayerNestedMaskRowRoot.combineOrderCount
                                                                         readonly property string combineOrderLabel: photoLayerNestedMaskRowRoot.combineOrderLabel
@@ -19246,15 +22900,16 @@ Rectangle {
                                                                     ColumnLayout {
                                                                         id: nestedMaskContent
                                                                         Layout.fillWidth: true
+                                                                        Layout.minimumWidth: 0
                                                                         spacing: 1
 
                                                                         Label {
                                                                             objectName: "photoLayerNestedMaskNameLabel"
                                                                             Layout.fillWidth: true
-                                                                            text: String(modelData.name || "Selection")
+                                                                            text: "Mask · " + String(modelData.name || "Selection")
                                                                             color: activeMaskSet ? root.mint : theme.textMain
                                                                             font.family: theme.fontUi
-                                                                            font.pixelSize: 10
+                                                                            font.pixelSize: theme.typeLabel
                                                                             font.weight: Font.DemiBold
                                                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                                             maximumLineCount: 2
@@ -19266,9 +22921,9 @@ Rectangle {
                                                                             Layout.fillWidth: true
 	                                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
 	                                                                                  : root.brushToolReady()
-	                                                                                  ? photoLayerNestedMaskRowRoot.sourceKindLabel + " / " +
-	                                                                                    photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
-	                                                                                    (activeMaskSet ? "Editing selection" : "Ready")
+                                                                                  ? photoLayerNestedMaskRowRoot.sourceKindLabel + " / " +
+                                                                                    photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
+                                                                                    (activeMaskSet ? "Editing" : "Ready")
 	                                                                                  : root.thumbnailStatusLabel(
 	                                                                                         modelData,
 	                                                                                          photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
@@ -19276,8 +22931,8 @@ Rectangle {
 	                                                                                              modelData,
 	                                                                                              "Linked selection"))
                                                                             color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning : root.dimText
-                                                                            font.family: theme.fontMono
-                                                                            font.pixelSize: 8
+                                                                            font.family: theme.fontUi
+                                                                            font.pixelSize: theme.typeCaption
                                                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                                             maximumLineCount: 2
                                                                             elide: Text.ElideNone
@@ -19414,6 +23069,9 @@ Rectangle {
 
                                                                     MenuButton {
                                                                         objectName: "photoLayerNestedMaskRowMoreMenuButton"
+                                                                        showText: false
+                                                                        primaryOpensMenu: true
+                                                                        accessibleName: "Mask actions"
                                                                         readonly property string maskRowActionContract: "mask-row-actions:v2|default:more-only|edit-layer:menu|edit-mask:menu|preview:menu|delete:menu|move:menu"
                                                                         visible: true
                                                                         text: "More"
@@ -19449,7 +23107,7 @@ Rectangle {
                                     LayerRow {
                                         id: baseImageLayerRow
                                         objectName: "baseImageLayerRow"
-                                        readonly property bool baseLayerLocked: true
+                                        readonly property bool baseLayerLocked: editorPreview.baseImageLocked
                                         readonly property string baseLayerStackPosition: "bottom"
                                         readonly property bool baseLayerSelected: root.selectedEditTargetScope() === "base-image"
                                         readonly property string baseLayerTargetKind: "global-edits"
@@ -19460,7 +23118,7 @@ Rectangle {
                                         readonly property string changedAdjustmentGroupSignature: root.globalChangedAdjustmentGroupSignature()
                                         readonly property string baseLayerSummary: root.globalAdjustmentSummary()
                                         readonly property string baseLayerMetadataSummary: root.baseImageMetadataSummary()
-                                        readonly property string baseLayerContract: "base-image-layer:v1|locked:true|stack:bottom|target:" +
+                                        readonly property string baseLayerContract: "base-image-layer:v2|locked:" + String(baseLayerLocked) + "|stack:bottom|target:" +
                                                                                    baseLayerTargetKind + "|thumbnail:original|selected:" +
                                                                                    String(baseLayerSelected) +
                                                                                    "|thumbnail-dpr:screen-aware"
@@ -19477,772 +23135,39 @@ Rectangle {
                                         lockButtonObjectName: "baseImageLayerLockButton"
                                         visibilityButtonObjectName: "baseImageLayerVisibilityButton"
                                         title: "Base Image"
-                                        subtitle: "Original photo · Locked"
+                                        subtitle: "Original · " + (baseLayerLocked ? "Locked" : "Unlocked · Eraser available") + (changedAdjustmentGroups.length > 0 ? " · " + changedAdjustmentGroups.length + " edit groups" : "")
                                         metadata: ""
                                         accessibleDescription: baseLayerSummary + " / Global edits target / Locked bottom layer / " + baseLayerMetadataSummary
                                         iconName: "media"
                                         thumbnailSource: baseLayerThumbnailSource
                                         thumbnailSourceSize: root.thumbnailSourceSizeForDisplay(thumbnailZoneSize, 96)
                                         selected: baseLayerSelected
-                                        locked: true
+                                        locked: editorPreview.baseImageLocked
                                         changed: changedAdjustmentGroups.length > 0
                                         accent: root.mint
                                         thumbnailAccent: theme.accentCool400
-                                        showLockBadge: true
+                                        showLockBadge: false
+                                        showLockButton: true
+                                        showVisibilityButton: false
                                         showMenuButton: false
-                                        lockButtonEnabled: false
+                                        lockButtonEnabled: editorPreview.hasAsset
                                         visibilityButtonEnabled: false
-                                        lockDisabledReason: "Base image is locked and stays at the bottom of the stack."
+                                        lockDisabledReason: "Open a document to unlock its base image."
                                         visibilityDisabledReason: "Base image is always visible."
-                                        badges: [
-                                            {
-                                                objectName: "baseImageGlobalAdjustmentBadge",
-                                                label: changedAdjustmentGroups.length > 0
-                                                       ? "Global " + changedAdjustmentGroups.length
-                                                       : "Global",
-                                                active: changedAdjustmentGroups.length > 0,
-                                                accent: root.mint
-                                            }
-                                        ]
+                                        badges: []
                                         onClicked: root.activateBaseImageLayerTarget()
+                                        onLockClicked: {
+                                            root.activateBaseImageLayerTarget()
+                                            editorPreview.setBaseImageLocked(!editorPreview.baseImageLocked)
+                                        }
                                     }
 
-                                    ColumnLayout {
-                                        id: photoLayerPropertiesPanel
-                                        objectName: "photoLayerPropertiesPanel"
-                                        readonly property int layerIndex: root.normalizedActivePhotoLayerIndex()
-                                        readonly property var layerData: root.currentPhotoLayerData()
-                                        readonly property bool layerValid: editorPreview.photoLayerCount > 0 &&
-                                                                         layerIndex >= 0 &&
-                                                                         layerIndex < editorPreview.photoLayerCount
-                                        readonly property bool layerLocked: layerData.locked === true
-                                        readonly property bool layerSelected: root.photoLayerSelected(layerIndex)
-                                        readonly property int layerOpacityPercent: Math.round(root.clamp(Number(layerData.opacity !== undefined ? layerData.opacity : 1.0), 0.0, 1.0) * 100)
-                                        readonly property int activeAdjustmentIndex: root.activeAdjustmentLayerIndex()
-                                        readonly property var syncTargets: root.selectedAdjustmentLayerIndices(activeAdjustmentIndex)
-                                        property bool detailsExpanded: false
-                                        function revealLayerEditor() {
-                                            const kind = String(layerData.kind || "")
-                                            if (kind === "text" || (layerData.shapeDefinition &&
-                                                    Object.keys(layerData.shapeDefinition).length > 0))
-                                                detailsExpanded = true
-                                        }
-                                        onLayerIndexChanged: revealLayerEditor()
-                                        onLayerDataChanged: revealLayerEditor()
-                                        Component.onCompleted: revealLayerEditor()
-                                        readonly property string sparsePropertiesContract: "layer-properties:v2|source:active-layer|sliders:single-instance|batch:contextual|text:active-only|quick-actions:mask-lock-duplicate-delete|advanced:clip-transform-isolate-reorder|progressive:true"
-                                        Layout.fillWidth: true
-                                        visible: layerValid && !root.brushToolReady()
-                                        spacing: 6
 
-                                        RowLayout {
-                                            objectName: "photoLayerPropertiesHeader"
-                                            Layout.fillWidth: true
-                                            spacing: 8
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: String(photoLayerPropertiesPanel.layerData.displayName ||
-                                                             photoLayerPropertiesPanel.layerData.name ||
-                                                             "Layer")
-                                                color: theme.textMain
-                                                font.family: theme.fontUi
-                                                font.pixelSize: 12
-                                                font.weight: Font.DemiBold
-                                                maximumLineCount: 1
-                                                fontSizeMode: Text.HorizontalFit
-                                                minimumPixelSize: 9
-                                                elide: Text.ElideNone
-                                            }
-
-                                            Label {
-                                                objectName: "photoLayerAdjustmentCommandSelectionLabel"
-                                                visible: root.normalizedPhotoLayerSelection().length > 1
-                                                Layout.preferredWidth: 92
-                                                text: root.normalizedPhotoLayerSelection().length + " selected / " +
-                                                      photoLayerPropertiesPanel.syncTargets.length + " sync target" +
-                                                      (photoLayerPropertiesPanel.syncTargets.length === 1 ? "" : "s")
-                                                color: photoLayerPropertiesPanel.syncTargets.length > 0 ? root.mint : root.dimText
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 8
-                                                fontSizeMode: Text.HorizontalFit
-                                                minimumPixelSize: 6
-                                                elide: Text.ElideNone
-                                            }
-
-                                            MiniButton {
-                                                objectName: "photoLayerSelectionButton"
-                                                square: true
-                                                iconName: "check"
-                                                role: "icon"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded ||
-                                                         root.normalizedPhotoLayerSelection().length > 1
-                                                active: photoLayerPropertiesPanel.layerSelected
-                                                tooltip: active ? "Remove this layer from batch selection." : "Select this layer for batch commands."
-                                                onClicked: root.setActivePhotoLayerSelection(photoLayerPropertiesPanel.layerIndex, true)
-                                            }
-
-                                            MenuButton {
-                                                objectName: "selectedPhotoLayerBatchActionsButton"
-                                                text: "More"
-                                                iconName: "menu"
-                                                compact: true
-                                                secondaryActionMenu: true
-                                                visible: root.normalizedPhotoLayerSelection().length > 1
-                                                enabled: root.selectedPhotoLayerBatchTargets(true, -1).length > 0
-                                                menuWidth: 250
-                                                menuItems: root.selectedPhotoLayerBatchMenuItems(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               photoLayerPropertiesPanel.layerData)
-                                                tooltipText: "Apply actions to selected layers."
-                                                onMenuItemTriggered: function(key) {
-                                                    root.handleSelectedPhotoLayerBatchAction(
-                                                                key,
-                                                                photoLayerPropertiesPanel.layerIndex,
-                                                                photoLayerPropertiesPanel.layerData)
-                                                }
-                                            }
-
-                                            MenuButton {
-                                                objectName: "photoLayerPropertiesLayerActionsMenuButton"
-                                                text: "More"
-                                                iconName: "menu"
-                                                compact: true
-                                                menuWidth: 250
-                                                menuItemMaxLines: 3
-                                                menuItems: root.layerRowMenuItems(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               photoLayerPropertiesPanel.layerData)
-                                                tooltipText: "Layer actions."
-                                                menuTooltipText: "Layer actions"
-                                                onMenuItemTriggered: function(key) {
-                                                    root.handleLayerRowMenuAction(
-                                                                key,
-                                                                photoLayerPropertiesPanel.layerIndex,
-                                                                photoLayerPropertiesPanel.layerData)
-                                                }
-                                            }
-
-                                            MiniButton {
-                                                objectName: "photoLayerPropertiesDetailsButton"
-                                                square: true
-                                                iconName: "adjust"
-                                                role: "icon"
-                                                active: photoLayerPropertiesPanel.detailsExpanded
-                                                tooltip: active ? "Hide layer details." : "Show layer details."
-                                                onClicked: photoLayerPropertiesPanel.detailsExpanded =
-                                                           !photoLayerPropertiesPanel.detailsExpanded
-                                            }
-
-                                            MiniButton {
-                                                objectName: "clearPhotoLayerSelectionButton"
-                                                square: true
-                                                iconName: "close"
-                                                role: "icon"
-                                                visible: root.normalizedPhotoLayerSelection().length > 1
-                                                tooltip: "Clear multi-layer selection."
-                                                onClicked: root.selectedPhotoLayerIndices = [photoLayerPropertiesPanel.layerIndex]
-                                            }
-                                        }
-
-                                        PhotoShapePanel {
-                                            objectName: "photoLayerShapeEditor"
-                                            Layout.fillWidth: true
-                                            controller: editorPreview
-                                            layerIndex: photoLayerPropertiesPanel.layerIndex
-                                            layerData: photoLayerPropertiesPanel.layerData
-                                            locked: photoLayerPropertiesPanel.layerLocked
-                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
-                                                     Object.keys(photoLayerPropertiesPanel.layerData.shapeDefinition || ({})).length > 0
-                                        }
-
-                                        ColumnLayout {
-                                            id: photoLayerTextEditor
-                                            objectName: "photoLayerTextEditor"
-                                            Layout.fillWidth: true
-                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
-                                                     String(photoLayerPropertiesPanel.layerData.kind || "") === "text"
-                                            spacing: 5
-                                            readonly property string textEditorContract: "text-layer-editor:v3|single-instance:true|live-content:true|empty-text:true|font:true|color:true|size:fractional-0.25-8192|weight:bold-regular|alignment:left-center-right|box:typed-and-slider|perspective:horizontal-vertical|history:coalesced"
-
-                                            function applyTextStyle(overrides) {
-                                                const next = overrides || ({})
-                                                const layer = photoLayerPropertiesPanel.layerData || ({})
-                                                return editorPreview.setPhotoLayerTextStyle(
-                                                            photoLayerPropertiesPanel.layerIndex,
-                                                            next.fontFamily !== undefined
-                                                                ? String(next.fontFamily || "")
-                                                                : String(layer.fontFamily || "Helvetica"),
-                                                            Number(next.fontSize !== undefined
-                                                                   ? next.fontSize
-                                                                   : Number(layer.fontSize || 48)),
-                                                            next.textColor !== undefined
-                                                                ? String(next.textColor || "")
-                                                                : String(layer.textColor || "#ffffff"),
-                                                            next.fontWeight !== undefined
-                                                                ? String(next.fontWeight || "regular")
-                                                                : String(layer.fontWeight || "regular"),
-                                                            next.textAlignment !== undefined
-                                                                ? String(next.textAlignment || "left")
-                                                                : String(layer.textAlignment || "left"))
-                                            }
-
-                                            MiniButton {
-                                                Layout.fillWidth: true
-                                                text: qsTr("Edit on canvas")
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                onClicked: {
-                                                    root.editTool = "layers"
-                                                    photoCanvasTextOverlay.beginEditing()
-                                                }
-                                            }
-
-                                            PhotoTypographyPanel {
-                                                Layout.fillWidth: true
-                                                controller: editorPreview
-                                                layerIndex: photoLayerPropertiesPanel.layerIndex
-                                                layerData: photoLayerPropertiesPanel.layerData
-                                                locked: photoLayerPropertiesPanel.layerLocked
-                                            }
-
-                                            PhotoTextPerspectivePanel {
-                                                Layout.fillWidth: true
-                                                controller: editorPreview
-                                                layerIndex: photoLayerPropertiesPanel.layerIndex
-                                                layerData: photoLayerPropertiesPanel.layerData
-                                                locked: photoLayerPropertiesPanel.layerLocked
-                                            }
-
-                                            StudioTinyInput {
-                                                objectName: "photoLayerTextContentField"
-                                                Layout.fillWidth: true
-                                                Layout.preferredHeight: 24
-                                                text: photoLayerPropertiesPanel.layerData.text === undefined
-                                                      ? "Text"
-                                                      : String(photoLayerPropertiesPanel.layerData.text)
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                placeholder: "Text"
-                                                onUserEditingChanged: {
-                                                    if (userEditing)
-                                                        editorPreview.beginCoalescedEdit()
-                                                    else
-                                                        editorPreview.endCoalescedEdit()
-                                                }
-                                                onTextChanged: {
-                                                    if (!userEditing)
-                                                        return
-                                                    if (String(photoLayerPropertiesPanel.layerData.kind || "") === "text" &&
-                                                            text !== String(photoLayerPropertiesPanel.layerData.text === undefined
-                                                                          ? "Text"
-                                                                          : photoLayerPropertiesPanel.layerData.text))
-                                                        editorPreview.setPhotoLayerText(photoLayerPropertiesPanel.layerIndex, text)
-                                                }
-                                                onAccepted: clearInputFocus()
-                                            }
-
-                                            RowLayout {
-                                                Layout.fillWidth: true
-                                                spacing: 5
-
-                                                ToneComboBox {
-                                                    id: photoLayerFontCombo
-                                                    objectName: "photoLayerTextFontField"
-                                                    Layout.fillWidth: true
-                                                    Layout.preferredHeight: 28
-                                                    editable: true
-                                                    model: editorPreview.availablePhotoTextFonts()
-                                                    editText: String(photoLayerPropertiesPanel.layerData.fontFamily || "Helvetica")
-                                                    enabled: !photoLayerPropertiesPanel.layerLocked
-                                                    Accessible.name: "Text font family"
-                                                    contentItem: TextInput {
-                                                        text: photoLayerFontCombo.editText
-                                                        font: photoLayerFontCombo.font
-                                                        color: photoLayerFontCombo.enabled ? theme.textStrong : root.dimText
-                                                        verticalAlignment: Text.AlignVCenter
-                                                        leftPadding: 12
-                                                        rightPadding: 28
-                                                        selectByMouse: true
-                                                        readOnly: !photoLayerFontCombo.editable
-                                                        clip: true
-                                                    }
-                                                    onActivated: photoLayerTextEditor.applyTextStyle({ fontFamily: currentText })
-                                                    onAccepted: photoLayerTextEditor.applyTextStyle({ fontFamily: editText })
-                                                }
-
-                                                StudioTinyInput {
-                                                    objectName: "photoLayerTextColorField"
-                                                    Layout.preferredWidth: 92
-                                                    Layout.preferredHeight: 24
-                                                    text: String(photoLayerPropertiesPanel.layerData.textColor || "#ffffff")
-                                                    enabled: !photoLayerPropertiesPanel.layerLocked
-                                                    placeholder: "#ffffff"
-                                                    onAccepted: {
-                                                        photoLayerTextEditor.applyTextStyle({ textColor: text })
-                                                        clearInputFocus()
-                                                    }
-                                                    onEditingFinished: photoLayerTextEditor.applyTextStyle({ textColor: text })
-                                                }
-                                            }
-
-                                            AdjustSlider {
-                                                objectName: "photoLayerTextSizeSlider"
-                                                controlHeight: 24
-                                                label: "Text Size"
-                                                from: 0.25
-                                                to: 8192
-                                                stepSize: 0.25
-                                                defaultValue: 48
-                                                value: Number(photoLayerPropertiesPanel.layerData.fontSize || 48)
-                                                valueText: Number(photoLayerPropertiesPanel.layerData.fontSize || 48).toFixed(2).replace(/\.?0+$/, "")
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                onValueDragged: function(value) {
-                                                    photoLayerTextEditor.applyTextStyle({ fontSize: value })
-                                                }
-                                            }
-
-                                            RowLayout {
-                                                Layout.fillWidth: true
-                                                spacing: 4
-
-                                                MiniButton {
-                                                    objectName: "photoLayerTextBoldButton"
-                                                    text: "B"
-                                                    role: "segmented"
-                                                    active: String(photoLayerPropertiesPanel.layerData.fontWeight || "regular") === "bold"
-                                                    enabled: !photoLayerPropertiesPanel.layerLocked
-                                                    tooltip: active ? "Use regular text weight." : "Use bold text weight."
-                                                    onClicked: photoLayerTextEditor.applyTextStyle({
-                                                        fontWeight: active ? "regular" : "bold"
-                                                    })
-                                                }
-
-                                                Repeater {
-                                                    model: [
-                                                        { label: "Left", value: "left" },
-                                                        { label: "Center", value: "center" },
-                                                        { label: "Right", value: "right" },
-                                                        { label: "Justify", value: "justify" }
-                                                    ]
-
-                                                    MiniButton {
-                                                        required property var modelData
-                                                        objectName: "photoLayerTextAlign" + modelData.label + "Button"
-                                                        Layout.fillWidth: true
-                                                        text: modelData.label
-                                                        role: "segmented"
-                                                        active: String(photoLayerPropertiesPanel.layerData.textAlignment || "left") === modelData.value
-                                                        enabled: !photoLayerPropertiesPanel.layerLocked
-                                                        tooltip: "Align text " + modelData.value + "."
-                                                        onClicked: photoLayerTextEditor.applyTextStyle({ textAlignment: modelData.value })
-                                                    }
-                                                }
-                                            }
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                wrapMode: Text.WordWrap
-                                                text: editorPreview.photoTextFontWarning(
-                                                    String(photoLayerPropertiesPanel.layerData.fontFamily || "Helvetica"))
-                                                visible: text.length > 0
-                                                Accessible.name: text
-                                            }
-
-                                            AdjustSlider {
-                                                objectName: "photoLayerTextBoxWidthSlider"
-                                                controlHeight: 24
-                                                label: "Text Box Width"
-                                                from: 16
-                                                to: 8192
-                                                stepSize: 8
-                                                defaultValue: 512
-                                                value: Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512)
-                                                valueText: Math.round(Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512)).toString()
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                onValueDragged: function(value) {
-                                                    editorPreview.setPhotoLayerTextBox(
-                                                                photoLayerPropertiesPanel.layerIndex,
-                                                                Math.round(value),
-                                                                Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128))
-                                                }
-                                            }
-
-                                            AdjustSlider {
-                                                objectName: "photoLayerTextBoxHeightSlider"
-                                                controlHeight: 24
-                                                label: "Text Box Height"
-                                                from: 16
-                                                to: 8192
-                                                stepSize: 8
-                                                defaultValue: 128
-                                                value: Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128)
-                                                valueText: Math.round(Number(photoLayerPropertiesPanel.layerData.pixelHeight || 128)).toString()
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                onValueDragged: function(value) {
-                                                    editorPreview.setPhotoLayerTextBox(
-                                                                photoLayerPropertiesPanel.layerIndex,
-                                                                Number(photoLayerPropertiesPanel.layerData.pixelWidth || 512),
-                                                                Math.round(value))
-                                                }
-                                            }
-                                        }
-
-                                        StudioTinyInput {
-                                            objectName: "photoLayerNameField"
-                                            Layout.fillWidth: true
-                                            Layout.preferredHeight: 24
-                                            visible: photoLayerPropertiesPanel.detailsExpanded
-                                            text: String(photoLayerPropertiesPanel.layerData.displayName ||
-                                                         photoLayerPropertiesPanel.layerData.name ||
-                                                         "Layer")
-                                            enabled: !photoLayerPropertiesPanel.layerLocked
-                                            placeholder: "Layer name"
-                                            onAccepted: {
-                                                const nextName = String(text || "").trim()
-                                                const currentName = String(photoLayerPropertiesPanel.layerData.name || "").trim()
-                                                const currentDisplayName = String(photoLayerPropertiesPanel.layerData.displayName || currentName).trim()
-                                                if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
-                                                    editorPreview.renamePhotoLayer(photoLayerPropertiesPanel.layerIndex, nextName)
-                                                clearInputFocus()
-                                            }
-                                            onEditingFinished: accepted()
-                                        }
-
-                                        Flow {
-                                            objectName: "photoLayerPropertiesPrimaryControls"
-                                            Layout.fillWidth: true
-                                            spacing: 6
-
-                                            ToolValueSlider {
-                                                objectName: "photoLayerOpacitySlider"
-                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                readonly property string targetSupport: "adjustment-layer,photo-layer"
-                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                readonly property string parameterRole: "layer-opacity"
-                                                width: 118
-                                                height: 24
-                                                label: "Opacity"
-                                                valueText: photoLayerPropertiesPanel.layerOpacityPercent + "%"
-                                                tooltipText: "Layer opacity - " + valueText
-                                                from: 0
-                                                to: 100
-                                                stepSize: 1
-                                                value: photoLayerPropertiesPanel.layerOpacityPercent
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                onPressedChanged: {
-                                                    if (pressed)
-                                                        editorPreview.beginCoalescedEdit()
-                                                    else
-                                                        editorPreview.endCoalescedEdit()
-                                                }
-                                                onMoved: editorPreview.setPhotoLayerOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
-                                            }
-
-                                            ToneComboBox {
-                                                objectName: "photoLayerBlendModeComboBox"
-                                                readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(photoLayerPropertiesPanel.layerData)
-                                                width: 110
-                                                height: 26
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         root.photoLayerBlendModeControlsEnabled(photoLayerPropertiesPanel.layerData)
-                                                model: root.photoLayerBlendLabelsForLayer(photoLayerPropertiesPanel.layerData)
-                                                currentIndex: root.photoLayerBlendModeIndexForLayer(
-                                                                  photoLayerPropertiesPanel.layerData,
-                                                                  photoLayerPropertiesPanel.layerData.blendMode)
-                                                onActivated: function(index) {
-                                                    editorPreview.setPhotoLayerBlendMode(
-                                                                photoLayerPropertiesPanel.layerIndex,
-                                                                root.photoLayerBlendModeAtForLayer(
-                                                                    photoLayerPropertiesPanel.layerData,
-                                                                    index))
-                                                }
-                                            }
-
-                                            ToolValueSlider {
-                                                objectName: "photoLayerMaskOpacitySlider"
-                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                readonly property string targetSupport: "mask"
-                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                readonly property string parameterRole: "mask-opacity"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
-                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
-                                                width: 118
-                                                height: 24
-                                                label: "Mask Opacity"
-                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100).toString() + "%"
-                                                tooltipText: "Mask opacity - " + valueText
-                                                from: 0
-                                                to: 100
-                                                stepSize: 1
-                                                value: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100)
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
-                                                onPressedChanged: {
-                                                    if (pressed)
-                                                        editorPreview.beginCoalescedEdit()
-                                                    else
-                                                        editorPreview.endCoalescedEdit()
-                                                }
-                                                onMoved: editorPreview.setPhotoLayerMaskOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
-                                            }
-
-                                            ToolValueSlider {
-                                                objectName: "photoLayerMaskDensitySlider"
-                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                readonly property string targetSupport: "mask"
-                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                readonly property string parameterRole: "mask-density"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
-                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
-                                                width: 118
-                                                height: 24
-                                                label: "Mask Density"
-                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100).toString() + "%"
-                                                tooltipText: "Mask density - " + valueText
-                                                from: 0
-                                                to: 100
-                                                stepSize: 1
-                                                value: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100)
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
-                                                onPressedChanged: {
-                                                    if (pressed)
-                                                        editorPreview.beginCoalescedEdit()
-                                                    else
-                                                        editorPreview.endCoalescedEdit()
-                                                }
-                                                onMoved: editorPreview.setPhotoLayerMaskDensity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
-                                            }
-                                        }
-
-                                        Flow {
-                                            objectName: "photoLayerPropertiesActionRow"
-                                            Layout.fillWidth: true
-                                            visible: true
-                                            spacing: 6
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerClippingMaskButton"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded
-                                                iconName: "link"
-                                                compact: true
-                                                label: photoLayerPropertiesPanel.layerData.clippingMask === true ? "Release clipping mask" : "Clip to below"
-                                                active: photoLayerPropertiesPanel.layerData.clippingMask === true
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         photoLayerPropertiesPanel.layerData.kind !== "group" &&
-                                                         photoLayerPropertiesPanel.layerIndex < editorPreview.photoLayerCount - 1
-                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before changing clipping." :
-                                                                photoLayerPropertiesPanel.layerData.kind === "group" ? "Groups are organizational only." :
-                                                                photoLayerPropertiesPanel.layerIndex >= editorPreview.photoLayerCount - 1 ? "No layer below is available for clipping." : ""
-                                                onClicked: editorPreview.setPhotoLayerClippingMask(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               !(photoLayerPropertiesPanel.layerData.clippingMask === true))
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerMaskButton"
-                                                iconName: "masks"
-                                                compact: true
-                                                label: photoLayerPropertiesPanel.layerData.hasLayerMask === true ? "Remove layer mask" : "Add layer mask"
-                                                active: photoLayerPropertiesPanel.layerData.hasLayerMask === true
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                disabledReason: "Unlock the layer before changing its mask."
-                                                onClicked: editorPreview.setPhotoLayerMaskEnabled(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               !(photoLayerPropertiesPanel.layerData.hasLayerMask === true))
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerUseSelectionMaskButton"
-                                                iconName: "masks"
-                                                compact: true
-                                                label: "Use Selection"
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         photoLayerPropertiesPanel.layerData.kind !== "adjustment" &&
-                                                         photoLayerPropertiesPanel.layerData.kind !== "group" &&
-                                                         editorPreview.hasActiveMask &&
-                                                         editorPreview.activeMaskToolRole !== "retouch"
-                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before adding a selection mask." :
-                                                                !editorPreview.hasActiveMask ? "Create or select a selection first." :
-                                                                "Choose an image, pixel, fill, or text layer."
-                                                onClicked: root.useActiveSelectionAsLayerMask(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               false)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerBackgroundEraserButton"
-                                                iconName: "erase-tool"
-                                                compact: true
-                                                label: "Erase Background"
-                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
-                                                         photoLayerPropertiesPanel.layerData.kind !== "adjustment" &&
-                                                         photoLayerPropertiesPanel.layerData.kind !== "group"
-                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before erasing its background." :
-                                                                "Choose an image, pixel, fill, or text layer."
-                                                onClicked: root.startLayerBackgroundEraser(photoLayerPropertiesPanel.layerIndex)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerTransformButton"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded
-                                                iconName: "geometry"
-                                                compact: true
-                                                label: "Transform"
-                                                active: true
-                                                enabled: root.photoLayerHasDirectTransform(photoLayerPropertiesPanel.layerData)
-                                                disabledReason: "This layer type has no direct transform handles."
-                                                onClicked: root.setActivePhotoLayer(photoLayerPropertiesPanel.layerIndex)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerRowSoloButton"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded
-                                                iconName: "select"
-                                                compact: true
-                                                label: photoLayerPropertiesPanel.layerData.solo === true ? "Clear isolate" : "Isolate"
-                                                active: photoLayerPropertiesPanel.layerData.solo === true
-                                                enabled: !photoLayerPropertiesPanel.layerLocked ||
-                                                         photoLayerPropertiesPanel.layerData.solo === true
-                                                disabledReason: "Unlock the layer before isolating it."
-                                                onClicked: {
-                                                    if (photoLayerPropertiesPanel.layerData.solo === true)
-                                                        editorPreview.clearPhotoLayerSolo()
-                                                    else
-                                                        editorPreview.isolatePhotoLayer(photoLayerPropertiesPanel.layerIndex)
-                                                }
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerLockButton"
-                                                iconName: "lock"
-                                                compact: true
-                                                label: photoLayerPropertiesPanel.layerLocked ? "Unlock" : "Lock"
-                                                active: photoLayerPropertiesPanel.layerLocked
-                                                onClicked: editorPreview.setPhotoLayerLocked(
-                                                               photoLayerPropertiesPanel.layerIndex,
-                                                               !photoLayerPropertiesPanel.layerLocked)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerMoveUpButton"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded
-                                                iconName: "move-up"
-                                                compact: true
-                                                label: "Move up"
-                                                enabled: photoLayerPropertiesPanel.layerIndex > 0 &&
-                                                         !photoLayerPropertiesPanel.layerLocked
-                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before moving it." : "Layer is already at the top."
-                                                onClicked: root.movePhotoLayerPreservingSelection(photoLayerPropertiesPanel.layerIndex, -1)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerMoveDownButton"
-                                                visible: photoLayerPropertiesPanel.detailsExpanded
-                                                iconName: "move-down"
-                                                compact: true
-                                                label: "Move down"
-                                                enabled: photoLayerPropertiesPanel.layerIndex < editorPreview.photoLayerCount - 1 &&
-                                                         !photoLayerPropertiesPanel.layerLocked
-                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before moving it." : "Layer is already at the bottom."
-                                                onClicked: root.movePhotoLayerPreservingSelection(photoLayerPropertiesPanel.layerIndex, 1)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerDuplicateButton"
-                                                iconName: "source"
-                                                compact: true
-                                                label: "Duplicate"
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                disabledReason: "Unlock the layer before duplicating it."
-                                                onClicked: editorPreview.duplicatePhotoLayerWithMasks(photoLayerPropertiesPanel.layerIndex)
-                                            }
-
-                                            Components.ToolButton {
-                                                objectName: "photoLayerDeleteButton"
-                                                iconName: "delete"
-                                                compact: true
-                                                showLabel: true
-                                                label: "Delete"
-                                                warning: true
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                disabledReason: "Unlock the layer before deleting it."
-                                                onClicked: root.deletePhotoLayerTarget(photoLayerPropertiesPanel.layerIndex)
-                                            }
-                                        }
-
-                                        Flow {
-                                            objectName: "photoLayerPropertiesAdjustmentActions"
-                                            Layout.fillWidth: true
-                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
-                                                     photoLayerPropertiesPanel.activeAdjustmentIndex >= 0
-                                            spacing: 6
-
-                                            MiniButton {
-                                                objectName: "copyPhotoLayerAdjustmentsButton"
-                                                square: true
-                                                iconName: "source"
-                                                role: "icon"
-                                                tooltip: "Copy active layer adjustments."
-                                                onClicked: editorPreview.copyPhotoLayerAdjustments(photoLayerPropertiesPanel.activeAdjustmentIndex)
-                                            }
-
-                                            MiniButton {
-                                                objectName: "pastePhotoLayerAdjustmentsButton"
-                                                square: true
-                                                iconName: "insert"
-                                                role: "icon"
-                                                enabled: editorPreview.hasCopiedPhotoLayerAdjustments &&
-                                                         !photoLayerPropertiesPanel.layerLocked
-                                                tooltip: "Paste copied adjustments onto the active layer."
-                                                onClicked: editorPreview.pastePhotoLayerAdjustments(photoLayerPropertiesPanel.activeAdjustmentIndex)
-                                            }
-
-                                            MiniButton {
-                                                objectName: "pasteGlobalAdjustmentsToPhotoLayerButton"
-                                                square: true
-                                                iconName: "media"
-                                                role: "icon"
-                                                enabled: !photoLayerPropertiesPanel.layerLocked
-                                                tooltip: "Paste Base Image adjustments onto the active layer."
-                                                onClicked: editorPreview.pasteGlobalAdjustmentsToPhotoLayer(photoLayerPropertiesPanel.activeAdjustmentIndex)
-                                            }
-
-                                            MiniButton {
-                                                objectName: "togglePhotoLayerAdjustmentsPreviewButton"
-                                                square: true
-                                                iconName: "compare"
-                                                role: "icon"
-                                                active: photoLayerPropertiesPanel.layerData.adjustmentsPreviewBypassed === true
-                                                enabled: photoLayerPropertiesPanel.layerData.hasNonNeutralAdjustments === true
-                                                tooltip: active ? "Show this layer with adjustments." : "Preview this layer before adjustments."
-                                                onClicked: editorPreview.setPhotoLayerAdjustmentsPreviewBypassed(
-                                                               photoLayerPropertiesPanel.activeAdjustmentIndex,
-                                                               photoLayerPropertiesPanel.layerData.adjustmentsPreviewBypassed !== true)
-                                            }
-
-                                            MiniButton {
-                                                objectName: "syncPhotoLayerAdjustmentsButton"
-                                                square: true
-                                                iconName: "effects"
-                                                role: "icon"
-                                                enabled: photoLayerPropertiesPanel.syncTargets.length > 0
-                                                tooltip: "Sync active layer adjustments to selected layers."
-                                                onClicked: editorPreview.syncPhotoLayerAdjustments(
-                                                               photoLayerPropertiesPanel.activeAdjustmentIndex,
-                                                               photoLayerPropertiesPanel.syncTargets)
-                                            }
-                                        }
-
-
-
-                                    }
 
                                 }
 
                                 InspectorGroup {
+                                    id: presetLibraryInspectorGroup
                                     objectName: "presetLibraryInspectorGroup"
                                     readonly property string layerLocalPresetApplyContract: root.layerLocalPresetApplicationSignature()
                                     visible: root.editInspectorTab === "presets"
@@ -20251,65 +23176,86 @@ Rectangle {
                                     beforeAfterObjectName: "presetLibraryBeforeAfterButton"
                                     ColumnLayout {
                                         Layout.fillWidth: true
-                                        spacing: 8
+                                        spacing: 9
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            spacing: 6
-                                            ToneComboBox {
-                                                objectName: "studioPresetQuickSelect"
+                                            spacing: 8
+                                            ColumnLayout {
                                                 Layout.fillWidth: true
-                                                model: editorPreview.presetNames
-                                                currentIndex: root.studioCurrentPresetName().length > 0
-                                                              ? editorPreview.presetNames.indexOf(root.studioCurrentPresetName())
-                                                              : -1
-                                                onActivated: root.selectStudioPreset(currentText)
+                                                spacing: 2
+                                                Label {
+                                                    text: "LOOK LIBRARY"
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: theme.typeMicro
+                                                    font.letterSpacing: 1.1
+                                                }
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Presets"
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 17
+                                                    font.weight: Font.DemiBold
+                                                }
                                             }
                                             MiniButton {
-                                                objectName: "studioApplyPresetButton"
-                                                text: "Apply"
+                                                objectName: "studioCreatePresetButton"
+                                                text: "Create preset"
                                                 role: "primary"
-                                                enabled: root.studioCurrentPresetName().length > 0 && editorPreview.hasAsset
-                                                onClicked: root.applyStudioPreset()
+                                                iconName: "plus"
+                                                enabled: editorPreview.hasAsset
+                                                tooltip: "Save your current adjustments as a reusable preset."
+                                                onClicked: root.saveStudioPreset()
                                             }
                                         }
                                         RowLayout {
+                                            objectName: "studioPresetLibraryTabs"
                                             Layout.fillWidth: true
-                                            spacing: 6
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: root.studioPresetMetaText()
-                                                color: root.dimText
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 10
-                                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                                maximumLineCount: 2
-                                                elide: Text.ElideNone
-                                            }
-                                        }
-                                        ToneTextField {
-                                            objectName: "studioPresetSearchField"
-                                            Layout.fillWidth: true
-                                            placeholderText: "Search Looksy and custom presets"
-                                            text: root.studioPresetSearchText
-                                            onTextEdited: root.studioPresetSearchText = text
-                                        }
-                                        Flow {
-                                            objectName: "studioPresetCategoryFilterRow"
-                                            Layout.fillWidth: true
-                                            spacing: 5
+                                            spacing: 4
                                             Repeater {
-                                                model: root.studioPresetCategoryFilters()
-                                                FilterChip {
+                                                model: ["All", "Favorites", "My Presets"]
+                                                MiniButton {
                                                     required property string modelData
-                                                    text: root.studioPresetFilterLabel(modelData)
-                                                    active: root.studioPresetCategoryFilter === modelData
-                                                    onClicked: root.studioPresetCategoryFilter = modelData
+                                                    Layout.fillWidth: true
+                                                    text: modelData
+                                                    role: "segmented"
+                                                    active: root.studioPresetLibraryTab === modelData
+                                                    onClicked: root.studioPresetLibraryTab = modelData
                                                 }
                                             }
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true
                                             spacing: 6
+                                            ToneTextField {
+                                                objectName: "studioPresetSearchField"
+                                                Layout.fillWidth: true
+                                                placeholderText: "Search presets"
+                                                text: root.studioPresetSearchText
+                                                onTextEdited: root.studioPresetSearchText = text
+                                            }
+                                            MiniButton {
+                                                objectName: "studioPresetFavoritesFilterButton"
+                                                square: true
+                                                iconName: root.studioPresetFavoritesOnly ? "rating" : "star"
+                                                role: "icon"
+                                                active: root.studioPresetFavoritesOnly
+                                                tooltip: root.studioPresetFavoritesOnly ? "Clear the favorites-only filter." : "Show only favorited presets."
+                                                onClicked: root.studioPresetFavoritesOnly = !root.studioPresetFavoritesOnly
+                                            }
+                                        }
+                                        RowLayout {
+                                            objectName: "studioPresetCategoryFilterRow"
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            ToneComboBox {
+                                                objectName: "studioPresetCategoryFilterCombo"
+                                                Layout.fillWidth: true
+                                                model: root.studioPresetCategoryFilters()
+                                                currentIndex: Math.max(0, root.studioPresetCategoryFilters().indexOf(root.studioPresetCategoryFilter))
+                                                onActivated: root.studioPresetCategoryFilter = currentText
+                                            }
                                             ToneComboBox {
                                                 objectName: "studioPresetPackFilterCombo"
                                                 Layout.fillWidth: true
@@ -20317,21 +23263,23 @@ Rectangle {
                                                 currentIndex: Math.max(0, root.studioPresetPackFilters().indexOf(root.studioPresetPackFilter))
                                                 onActivated: root.studioPresetPackFilter = currentText
                                             }
-                                            MiniButton {
-                                                objectName: "studioPresetFavoritesFilterButton"
-                                                text: "Favorites"
-                                                role: "segmented"
-                                                active: root.studioPresetFavoritesOnly
-                                                onClicked: root.studioPresetFavoritesOnly = !root.studioPresetFavoritesOnly
+                                            Label {
+                                                objectName: "studioPresetResultCount"
+                                                text: root.studioPresetLibraryNames().length + (root.studioPresetLibraryNames().length === 1 ? " look" : " looks")
+                                                color: root.dimText
+                                                font.family: theme.fontMono
+                                                font.pixelSize: theme.typeMicro
                                             }
                                         }
                                         ListView {
                                             objectName: "studioPresetLibraryList"
+                                            visible: count > 0
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 292
+                                            Layout.preferredHeight: Math.min(286, Math.max(100, contentHeight))
                                             clip: true
-                                            spacing: 8
+                                            spacing: 6
                                             model: root.studioPresetLibraryRows()
+                                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                                             delegate: Rectangle {
                                                 id: presetCard
                                                 required property var modelData
@@ -20339,13 +23287,13 @@ Rectangle {
                                                 readonly property string presetName: packHeader ? "" : String(modelData.name || "")
                                                 objectName: packHeader ? "studioPresetPackHeader" : "studioPresetLibraryCard"
                                                 width: ListView.view ? ListView.view.width : 0
-                                                height: packHeader ? 30 : 112
-                                                radius: 4
+                                                height: packHeader ? 21 : 90
+                                                radius: theme.radius4
                                                 color: packHeader
-                                                       ? theme.alpha(theme.ink950, 0.08)
+                                                       ? "transparent"
                                                        : root.studioCurrentPresetName() === presetName
-                                                        ? theme.alpha(root.mint, 0.10)
-                                                        : theme.alpha(theme.ink950, hoverHandler.hovered ? 0.44 : 0.28)
+                                                        ? theme.alpha(root.mint, 0.12)
+                                                        : theme.alpha(theme.ink950, hoverHandler.hovered ? 0.42 : 0.25)
                                                 border.color: packHeader ? "transparent" : root.studioCurrentPresetName() === presetName ? root.mint : root.hairline
                                                 border.width: packHeader ? 0 : 1
 
@@ -20371,37 +23319,32 @@ Rectangle {
                                                     anchors.leftMargin: 2
                                                     anchors.rightMargin: 2
                                                     visible: presetCard.packHeader
-                                                    spacing: 6
-
+                                                    spacing: 5
                                                     Label {
                                                         Layout.fillWidth: true
                                                         text: String(presetCard.modelData.label || "")
-                                                        color: theme.textMain
-                                                        font.family: theme.fontUi
-                                                        font.pixelSize: 12
-                                                        font.weight: Font.DemiBold
-                                                        fontSizeMode: Text.HorizontalFit
-                                                        minimumPixelSize: 9
-                                                        elide: Text.ElideNone
+                                                        color: root.dimText
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: theme.typeMicro
+                                                        font.letterSpacing: 0.4
                                                     }
                                                     Label {
                                                         text: String(presetCard.modelData.count || 0)
                                                         color: root.dimText
                                                         font.family: theme.fontMono
-                                                        font.pixelSize: 10
+                                                        font.pixelSize: theme.typeMicro
                                                     }
                                                 }
 
                                                 RowLayout {
                                                     anchors.fill: parent
-                                                    anchors.margins: 9
+                                                    anchors.margins: 7
                                                     visible: !presetCard.packHeader
-                                                    spacing: 10
-
+                                                    spacing: 8
                                                     Rectangle {
-                                                        Layout.preferredWidth: 78
+                                                        Layout.preferredWidth: 66
                                                         Layout.fillHeight: true
-                                                        radius: 3
+                                                        radius: theme.radius4
                                                         color: theme.alpha(theme.ink950, 0.55)
                                                         clip: true
                                                         border.color: theme.alpha(theme.polar, 0.12)
@@ -20410,57 +23353,43 @@ Rectangle {
                                                             anchors.fill: parent
                                                             source: editorPreview.presetThumbnailSource(presetCard.presetName)
                                                             fillMode: Image.PreserveAspectCrop
+                                                            asynchronous: true
+                                                            cache: true
                                                             smooth: true
                                                         }
                                                     }
-
                                                     ColumnLayout {
                                                         Layout.fillWidth: true
                                                         Layout.fillHeight: true
                                                         spacing: 2
-
                                                         Label {
                                                             Layout.fillWidth: true
                                                             text: presetCard.presetName
                                                             color: theme.textMain
                                                             font.family: theme.fontUi
-                                                            font.pixelSize: 13
+                                                            font.pixelSize: theme.typeCaption
                                                             font.weight: Font.DemiBold
-                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                                             maximumLineCount: 2
-                                                            elide: Text.ElideNone
+                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                            elide: Text.ElideRight
                                                         }
                                                         Label {
                                                             Layout.fillWidth: true
-                                                            text: root.studioPresetTypeText(presetCard.presetName) + " · " + editorPreview.presetCategoryName(presetCard.presetName)
+                                                            text: root.studioPresetTypeText(presetCard.presetName) + "  ·  " + editorPreview.presetCategoryName(presetCard.presetName)
                                                             color: root.dimText
                                                             font.family: theme.fontMono
-                                                            font.pixelSize: 9
-                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                            font.pixelSize: theme.typeMicro
                                                             maximumLineCount: 2
-                                                            elide: Text.ElideNone
-                                                        }
-                                                        Flow {
-                                                            Layout.fillWidth: true
-                                                            spacing: 3
-                                                            Repeater {
-                                                                model: editorPreview.presetAdjustmentGroups(presetCard.presetName).slice(0, 3)
-                                                                FilterChip {
-                                                                    required property string modelData
-                                                                    text: modelData
-                                                                    active: true
-                                                                    enabled: false
-                                                                }
-                                                            }
+                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                            elide: Text.ElideRight
                                                         }
                                                     }
-
                                                     MiniButton {
                                                         objectName: "studioPresetFavoriteButton"
                                                         square: true
-                                                        iconName: editorPreview.isPresetFavorite(presetCard.presetName) ? "rating" : "star"
+                                                        iconName: (root.studioPresetLibraryRevision >= 0 && editorPreview.isPresetFavorite(presetCard.presetName)) ? "rating" : "star"
                                                         role: "icon"
-                                                        active: editorPreview.isPresetFavorite(presetCard.presetName)
+                                                        active: root.studioPresetLibraryRevision >= 0 && editorPreview.isPresetFavorite(presetCard.presetName)
                                                         tooltip: "Favorite preset."
                                                         onClicked: root.toggleStudioPresetFavorite(presetCard.presetName)
                                                     }
@@ -20469,7 +23398,7 @@ Rectangle {
                                                         text: "Apply"
                                                         role: "secondary"
                                                         enabled: editorPreview.hasAsset
-                                                        tooltip: "Apply preset."
+                                                        tooltip: "Apply this look to the current edit target."
                                                         onClicked: {
                                                             root.selectStudioPreset(presetCard.presetName)
                                                             root.applyStudioPreset()
@@ -20478,22 +23407,112 @@ Rectangle {
                                                 }
                                             }
                                         }
-                                        AdjustSlider {
-                                            label: "Intensity"
-                                            from: 0
-                                            to: 1
-                                            stepSize: 0.01
-                                            defaultValue: 1
-                                            value: editorPreview.presetIntensity
-                                            valueText: Math.round(editorPreview.presetIntensity * 100).toString() + "%"
-                                            onValueDragged: function(value) { editorPreview.presetIntensity = value }
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: root.studioPresetLibraryNames().length === 0 ? 94 : 128
+                                            visible: root.studioPresetLibraryNames().length === 0
+                                            radius: theme.radius4
+                                            color: theme.alpha(theme.ink950, 0.22)
+                                            border.color: root.hairline
+                                            ColumnLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: 12
+                                                spacing: 3
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: root.studioPresetLibraryTab === "My Presets" ? "Your custom library starts here" : "No presets match these filters"
+                                                    color: theme.textMain
+                                                    font.pixelSize: theme.typeCaption
+                                                    font.weight: Font.DemiBold
+                                                }
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: editorPreview.hasAsset ? "Save the current look, or clear a filter to browse the full collection." : "Open a photo to preview and apply a preset."
+                                                    color: root.dimText
+                                                    font.pixelSize: theme.typeMicro
+                                                    wrapMode: Text.WordWrap
+                                                }
+                                                MiniButton {
+                                                    objectName: "studioPresetEmptyCreateButton"
+                                                    visible: editorPreview.hasAsset && root.studioPresetLibraryTab === "My Presets"
+                                                    text: "Create your first preset"
+                                                    role: "secondary"
+                                                    onClicked: root.saveStudioPreset()
+                                                }
+                                            }
+                                        }
+                                        Rectangle {
+                                            objectName: "studioPresetSelectedDetail"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 92
+                                            radius: theme.radius4
+                                            color: theme.alpha(theme.ink950, 0.28)
+                                            border.color: root.hairline
+                                            ColumnLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: 9
+                                                spacing: 4
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 1
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: root.studioCurrentPresetName().length > 0 ? root.studioCurrentPresetName() : "Choose a preset"
+                                                            color: theme.textMain
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: 13
+                                                            font.weight: Font.DemiBold
+                                                            maximumLineCount: 2
+                                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                            elide: Text.ElideRight
+                                                        }
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: root.studioPresetMetaText()
+                                                            color: root.dimText
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: theme.typeMicro
+                                                            maximumLineCount: 1
+                                                            elide: Text.ElideRight
+                                                        }
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioPresetQuickSelect"
+                                                        text: "Browse"
+                                                        role: "secondary"
+                                                        enabled: editorPreview.presetNames.length > 0
+                                                        tooltip: "Choose a preset by name."
+                                                        onClicked: studioPresetQuickSelectMenu.open()
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioApplyPresetButton"
+                                                        text: "Apply"
+                                                        role: "primary"
+                                                        enabled: root.studioCurrentPresetName().length > 0 && editorPreview.hasAsset
+                                                        onClicked: root.applyStudioPreset()
+                                                    }
+                                                }
+                                                AdjustSlider {
+                                                    label: "Intensity"
+                                                    from: 0
+                                                    to: 1
+                                                    stepSize: 0.01
+                                                    defaultValue: 1
+                                                    value: editorPreview.presetIntensity
+                                                    valueText: Math.round(editorPreview.presetIntensity * 100).toString() + "%"
+                                                    onValueDragged: function(value) { editorPreview.presetIntensity = value }
+                                                }
+                                            }
                                         }
                                         Flow {
                                             Layout.fillWidth: true
                                             spacing: 4
                                             visible: root.studioCurrentPresetName().length > 0
                                             Repeater {
-                                                model: editorPreview.presetChangedControls(root.studioCurrentPresetName(), []).slice(0, 8)
+                                                model: editorPreview.presetChangedControls(root.studioCurrentPresetName(), []).slice(0, 6)
                                                 FilterChip {
                                                     required property string modelData
                                                     text: modelData
@@ -20505,42 +23524,53 @@ Rectangle {
                                         RowLayout {
                                             Layout.fillWidth: true
                                             spacing: 6
-                                            ToneTextField {
-                                                Layout.fillWidth: true
-                                                objectName: "studioPresetNameField"
-                                                placeholderText: "Preset name"
-                                                text: root.studioPresetDraftName
-                                                onTextEdited: root.studioPresetDraftName = text
-                                                onAccepted: root.saveStudioPreset()
-                                            }
-                                            ToneTextField {
-                                                Layout.preferredWidth: 116
-                                                objectName: "studioPresetPackField"
-                                                placeholderText: "Pack"
-                                                text: root.studioPresetDraftPack
-                                                onTextEdited: root.studioPresetDraftPack = text
-                                                onAccepted: root.saveStudioPreset()
-                                            }
-                                            MiniButton {
-                                                objectName: "studioSavePresetButton"
-                                                text: "Save"
-                                                role: "secondary"
-                                                enabled: editorPreview.hasAsset && root.studioPresetDraftName.trim().length > 0
-                                                onClicked: root.saveStudioPreset()
-                                            }
                                             MiniButton {
                                                 objectName: "studioPresetManageMenuButton"
-                                                text: "More"
+                                                Layout.fillWidth: true
+                                                text: "Manage presets"
                                                 role: "secondary"
-                                                tooltip: "Preset management actions."
+                                                tooltip: "Rename, move, export, or delete custom presets."
                                                 onClicked: studioPresetManagementMenu.open()
+                                            }
+                                        }
+                                        Popup {
+                                            id: studioPresetQuickSelectMenu
+                                            objectName: "studioPresetQuickSelectMenu"
+                                            parent: root
+                                            implicitWidth: Math.min(300, presetLibraryInspectorGroup.width)
+                                            implicitHeight: 300
+                                            onOpened: {
+                                                x = Math.max(0, presetLibraryInspectorGroup.mapToItem(root, presetLibraryInspectorGroup.width - width, 130).x)
+                                                y = Math.max(0, presetLibraryInspectorGroup.mapToItem(root, 0, 130).y)
+                                            }
+                                            modal: true
+                                            focus: true
+                                            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                                            background: Rectangle { color: root.panelColor; border.color: root.hairline; border.width: 1; radius: theme.radius4 }
+                                            contentItem: ListView {
+                                                clip: true
+                                                model: editorPreview.presetNames
+                                                delegate: ItemDelegate {
+                                                    required property string modelData
+                                                    width: ListView.view.width
+                                                    text: modelData
+                                                    onClicked: { root.selectStudioPreset(modelData); studioPresetQuickSelectMenu.close() }
+                                                }
                                             }
                                         }
                                         Popup {
                                             id: studioPresetManagementMenu
                                             objectName: "studioPresetManagementMenu"
-                                            implicitWidth: parent ? parent.width : 300
-                                            modal: false
+                                            parent: root
+                                            implicitWidth: Math.min(380, presetLibraryInspectorGroup.width)
+                                            onOpened: {
+                                                x = Math.max(0, presetLibraryInspectorGroup.mapToItem(root, presetLibraryInspectorGroup.width - width, 120).x)
+                                                y = Math.max(0, presetLibraryInspectorGroup.mapToItem(root, 0, 120).y)
+                                                root.studioPresetDraftName = root.studioCurrentPresetName()
+                                                const selectedPack = editorPreview.presetPackName(root.studioCurrentPresetName())
+                                                root.studioPresetDraftPack = selectedPack.length > 0 ? selectedPack : "User Presets"
+                                            }
+                                            modal: true
                                             focus: true
                                             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                                             background: Rectangle {
@@ -20551,6 +23581,42 @@ Rectangle {
                                             }
                                             contentItem: ColumnLayout {
                                                 spacing: 8
+                                                MiniButton {
+                                                    objectName: "studioDuplicatePresetButton"
+                                                    Layout.fillWidth: true
+                                                    text: "Duplicate selected as custom…"
+                                                    role: "secondary"
+                                                    enabled: root.studioCurrentPresetName().length > 0
+                                                    onClicked: {
+                                                        studioPresetManagementMenu.close()
+                                                        root.openStudioPresetDuplicateDialog()
+                                                    }
+                                                }
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Selected preset"
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: theme.typeMicro
+                                                }
+                                                ToneTextField {
+                                                    objectName: "studioManagePresetNameField"
+                                                    Layout.fillWidth: true
+                                                    accessibleLabel: "Selected custom preset name"
+                                                    placeholderText: "Preset name"
+                                                    text: root.studioPresetDraftName
+                                                    enabled: editorPreview.isUserPreset(root.studioCurrentPresetName())
+                                                    onTextEdited: root.studioPresetDraftName = text
+                                                }
+                                                ToneTextField {
+                                                    objectName: "studioManagePresetPackField"
+                                                    Layout.fillWidth: true
+                                                    accessibleLabel: "Selected custom preset pack"
+                                                    placeholderText: "Pack name"
+                                                    text: root.studioPresetDraftPack
+                                                    enabled: editorPreview.isUserPreset(root.studioCurrentPresetName())
+                                                    onTextEdited: root.studioPresetDraftPack = text
+                                                }
                                                 RowLayout {
                                                     Layout.fillWidth: true
                                                     spacing: 6
@@ -20560,21 +23626,15 @@ Rectangle {
                                                         text: "Rename"
                                                         role: "secondary"
                                                         enabled: editorPreview.isUserPreset(root.studioCurrentPresetName()) && root.studioPresetDraftName.trim().length > 0
-                                                        onClicked: {
-                                                            root.renameStudioPreset()
-                                                            studioPresetManagementMenu.close()
-                                                        }
+                                                        onClicked: { root.renameStudioPreset(); studioPresetManagementMenu.close() }
                                                     }
                                                     MiniButton {
                                                         objectName: "studioMovePresetButton"
                                                         Layout.fillWidth: true
-                                                        text: "Move Pack"
+                                                        text: "Move pack"
                                                         role: "secondary"
                                                         enabled: editorPreview.isUserPreset(root.studioCurrentPresetName()) && root.studioPresetDraftPack.trim().length > 0
-                                                        onClicked: {
-                                                            root.moveStudioPresetToPack()
-                                                            studioPresetManagementMenu.close()
-                                                        }
+                                                        onClicked: { root.moveStudioPresetToPack(); studioPresetManagementMenu.close() }
                                                     }
                                                     MiniButton {
                                                         objectName: "studioDeletePresetButton"
@@ -20582,10 +23642,7 @@ Rectangle {
                                                         text: "Delete"
                                                         role: "destructive"
                                                         enabled: editorPreview.isUserPreset(root.studioCurrentPresetName())
-                                                        onClicked: {
-                                                            root.deleteStudioPreset()
-                                                            studioPresetManagementMenu.close()
-                                                        }
+                                                        onClicked: { root.deleteStudioPreset(); studioPresetManagementMenu.close() }
                                                     }
                                                 }
                                                 RowLayout {
@@ -20621,11 +23678,12 @@ Rectangle {
                                                         text: "Import"
                                                         role: "secondary"
                                                         enabled: root.studioPresetImportFolder.trim().length > 0
-                                                        onClicked: root.importStudioPresetBundle()
+                                                        onClicked: { root.importStudioPresetBundle(); studioPresetManagementMenu.close() }
                                                     }
                                                 }
                                             }
                                         }
+
                                     }
                                 }
 
@@ -20634,12 +23692,13 @@ Rectangle {
                                     objectName: "photoFiltersInspectorGroup"
                                     readonly property int targetLayerIndex: root.normalizedActivePhotoLayerIndex()
                                     readonly property var targetLayerData: root.currentPhotoLayerData()
-                                    readonly property bool targetLayerAvailable: targetLayerIndex >= 0 &&
+                                    readonly property bool targetLayerAvailable: root.selectedEditTargetScope() !== "base-image" &&
+                                                                               targetLayerIndex >= 0 &&
                                                                                String(targetLayerData.kind || "") !== "group"
                                     visible: root.editInspectorTab === "filters"
                                     title: "Filters"
                                     subtitle: targetLayerAvailable
-                                              ? String(targetLayerData.displayName || targetLayerData.name || "Selected layer")
+                                              ? qsTr("Effects on: %1").arg(String(targetLayerData.displayName || targetLayerData.name || "Selected layer"))
                                               : "Non-destructive layer effects"
 
                                     Label {
@@ -20647,7 +23706,9 @@ Rectangle {
                                         visible: !photoFiltersInspectorGroup.targetLayerAvailable
                                         text: editorPreview.photoLayerCount <= 0
                                               ? qsTr("Add a paint, text, shape, or image layer to use filters.")
-                                              : qsTr("Select a photo layer to add and edit its filters.")
+                                              : root.selectedEditTargetScope() === "base-image"
+                                                ? qsTr("Select a layer in Layers to target its filters.")
+                                                : qsTr("Groups cannot hold filters. Select a photo layer instead.")
                                         color: theme.textMuted
                                         font.family: theme.fontUi
                                         font.pixelSize: theme.typeBody
@@ -20674,21 +23735,22 @@ Rectangle {
                                 }
 
                                 InspectorGroup {
+                                    id: selectiveBatchSyncGroup
                                     objectName: "selectiveBatchSyncInspectorGroup"
                                     visible: root.editInspectorTab === "adjust" &&
                                              !root.maskTargetInspectorActive() &&
                                              catalogAssets.selectedAssetCount > 1
                                     title: "Sync Selected Photos"
-                                    subtitle: root.formatInt(catalogAssets.selectedAssetCount) +
+                                    subtitle: visible ? root.formatInt(catalogAssets.selectedAssetCount) +
                                               " targets · " + root.formatInt(root.batchRecipeConflictCount()) +
-                                              " with different edits"
+                                              " with different edits" : ""
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: "From the current photo to: " + root.selectedBatchFileNames(3).join(", ") +
+                                        text: selectiveBatchSyncGroup.visible ? "From the current photo to: " + root.selectedBatchFileNames(3).join(", ") +
                                               (catalogAssets.selectedAssetCount > 3
                                                ? " +" + root.formatInt(catalogAssets.selectedAssetCount - 3) + " more"
-                                               : "")
+                                               : "") : ""
                                         color: root.dimText
                                         font.family: theme.fontUi
                                         font.pixelSize: 11
@@ -20752,11 +23814,62 @@ Rectangle {
                                 }
 
                                 InspectorGroup {
+                                    objectName: "whiteBalanceInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("white-balance")
+                                    title: "White Balance"
+                                    resetGroup: "whiteBalance"
+                                    resetObjectName: "whiteBalancePanelResetButton"
+                                    compareGroup: "white-balance"
+                                    beforeAfterObjectName: "whiteBalancePanelBeforeAfterButton"
+                                    AdjustSlider {
+                                        objectName: "temperatureSlider"
+                                        label: "Temperature"
+                                        valueInputMode: "kelvin"
+                                        value: root.primaryAdjustmentValue("temperature", editorPreview.temperature)
+                                        valueText: root.whiteBalanceKelvin(value) + " K"
+                                        trackColors: ["#4FB5FF", "#F2C35B"]
+                                        onValueDragged: function(value) { root.setPrimaryAdjustmentValue("temperature", value) }
+                                    }
+                                    AdjustSlider {
+                                        objectName: "tintSlider"
+                                        label: "Tint"
+                                        value: root.primaryAdjustmentValue("tint", editorPreview.tint)
+                                        valueText: root.signedPercent(value)
+                                        trackColors: ["#49B86B", "#C85AC1"]
+                                        onValueDragged: function(value) { root.setPrimaryAdjustmentValue("tint", value) }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        ActionButton {
+                                            objectName: "whiteBalanceSampleNeutralButton"
+                                            text: "Pick neutral"
+                                            iconName: "eyedropper"
+                                            compact: true
+                                            active: editorPreview.whiteBalanceSampling
+                                            tooltipText: "Click a neutral gray or white area in the photo."
+                                            enabled: root.adjustmentControlCanWriteActiveTarget("base-image")
+                                            disabledReason: root.adjustmentControlDisabledReason("base-image")
+                                            onClicked: editorPreview.setWhiteBalanceSampling(!editorPreview.whiteBalanceSampling)
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: editorPreview.whiteBalanceSampling
+                                            text: "Click a neutral area"
+                                            color: theme.textMuted
+                                            font.pixelSize: theme.typeCaption
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
+                                InspectorGroup {
                                     objectName: "lightInspectorGroup"
                                     enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
                                     visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("light")
                                     title: "Light"
                                     subtitle: ""
+                                    helpText: root.colorControlDomainHelpText("light")
                                     resetGroup: "light"
                                     resetObjectName: "lightPanelResetButton"
                                     compareGroup: "light"
@@ -20817,290 +23930,190 @@ Rectangle {
                                 }
 
                                 InspectorGroup {
-                                    objectName: "whiteBalanceInspectorGroup"
-                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("white-balance")
-                                    title: "White Balance"
-                                    resetGroup: "whiteBalance"
-                                    resetObjectName: "whiteBalancePanelResetButton"
-                                    compareGroup: "white-balance"
-                                    beforeAfterObjectName: "whiteBalancePanelBeforeAfterButton"
+                                    objectName: "rawInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image")
+                                    title: "Raw"
+                                    resetGroup: "raw"
+                                    resetObjectName: "rawPanelResetButton"
+                                    compareGroup: "raw"
+                                    beforeAfterObjectName: "rawPanelBeforeAfterButton"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && editorPreview.rawControlsAvailable && root.adjustmentGroupMatches("raw")
+                                    AdjustSlider { label: "Raw Exposure"; targetSupport: "base-image"; from: -4; to: 4; stepSize: 0.01; value: editorPreview.rawExposure; valueText: root.exposureText(editorPreview.rawExposure); onValueDragged: function(value) { root.setPrimaryBaseAdjustmentValue("rawExposure", value) } }
                                     RowLayout {
-                                        id: whiteBalanceControls
                                         Layout.fillWidth: true
-                                        spacing: theme.space12
-                                        AdjustmentPad2D {
-                                            compact: true
-                                            Layout.fillWidth: false
-                                            Layout.preferredWidth: Math.max(128, whiteBalanceControls.width * 0.43)
-                                        objectName: "whiteBalancePad"
-                                        title: "Temp / Tint"
-                                        xLabel: "Cool  /  Warm"
-                                        yLabel: "Magenta  /  Green"
-                                        xValue: root.primaryAdjustmentValue("temperature", editorPreview.temperature)
-                                        yValue: root.primaryAdjustmentValue("tint", editorPreview.tint)
-                                        xValueText: root.whiteBalanceKelvin(root.primaryAdjustmentValue("temperature", editorPreview.temperature)) + "K"
-                                        yValueText: root.signedPercent(root.primaryAdjustmentValue("tint", editorPreview.tint))
-                                        leftColor: "#4FB5FF"
-                                        rightColor: "#F2C35B"
-                                        topColor: "#C85AC1"
-                                        bottomColor: "#49B86B"
-                                        onInteractionStarted: editorPreview.beginCoalescedEdit()
-                                        onInteractionFinished: editorPreview.endCoalescedEdit()
-                                        onValueEdited: function(xValue, yValue) {
-                                            root.setPrimaryAdjustmentValue("temperature", xValue)
-                                            root.setPrimaryAdjustmentValue("tint", yValue)
-                                        }
+                                        MiniButton { Layout.fillWidth: true; text: "Highlight Recovery"; role: "segmented"; active: editorPreview.rawHighlightRecovery; enabled: root.adjustmentControlCanWriteActiveTarget("base-image"); disabledReason: root.adjustmentControlDisabledReason("base-image"); onClicked: root.setPrimaryBaseBoolAdjustmentValue("rawHighlightRecovery", !editorPreview.rawHighlightRecovery) }
+                                        MiniButton { Layout.fillWidth: true; text: "Lens Correction"; role: "segmented"; active: editorPreview.rawLensCorrection; enabled: root.adjustmentControlCanWriteActiveTarget("base-image"); disabledReason: root.adjustmentControlDisabledReason("base-image"); onClicked: root.setPrimaryBaseBoolAdjustmentValue("rawLensCorrection", !editorPreview.rawLensCorrection) }
                                     }
-                                        ColumnLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 2
-                                    AdjustSlider { labelColumnWidth: 35; valueColumnWidth: 62; showResetButton: false; objectName: "temperatureSlider"; label: "Temp"; valueInputMode: "kelvin"; value: root.primaryAdjustmentValue("temperature", editorPreview.temperature); valueText: root.whiteBalanceKelvin(root.primaryAdjustmentValue("temperature", editorPreview.temperature)) + "K"; trackColors: ["#4FB5FF", "#F2C35B"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("temperature", value) } }
-                                    AdjustSlider { labelColumnWidth: 35; valueColumnWidth: 62; showResetButton: false; objectName: "tintSlider"; label: "Tint"; value: root.primaryAdjustmentValue("tint", editorPreview.tint); valueText: root.signedPercent(root.primaryAdjustmentValue("tint", editorPreview.tint)); trackColors: ["#49B86B", "#C85AC1"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("tint", value) } }
-                                            MiniButton {
-                                                Layout.fillWidth: true
-                                                text: "Sample neutral"
-                                                iconName: "brush-tool"
-                                                role: "ghost"
-                                                enabled: root.adjustmentControlCanWriteActiveTarget("base-image")
-                                                disabledReason: root.adjustmentControlDisabledReason("base-image")
-                                                onClicked: editorPreview.setWhiteBalanceSampling(true)
+                                }
+
+                                InspectorGroup {
+                                    objectName: "levelsInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("levels")
+                                    title: "Levels"
+                                    helpText: root.colorControlDomainHelpText("levels")
+                                    resetAvailable: true
+                                    resetObjectName: "toneCurveInputLevelsResetButton"
+                                    onResetRequested: {
+                                        editorPreview.beginCoalescedEdit()
+                                        root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
+                                        root.setPrimaryAdjustmentValue("levelsGamma", 0)
+                                        root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
+                                        editorPreview.endCoalescedEdit()
+                                    }
+                                    Rectangle {
+                                        objectName: "toneCurveInputLevelsStrip"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: theme.scaled(100)
+                                        radius: theme.radiusControl
+                                        color: theme.fieldFill
+                                        border.color: theme.lineSoft
+                                        border.width: 1
+                                        clip: true
+                                        HistogramDisplay {
+                                            objectName: "toneCurveInputLevelsHistogram"
+                                            anchors.fill: parent
+                                            anchors.margins: theme.space4
+                                            redData: []
+                                            greenData: []
+                                            blueData: []
+                                            luminanceData: editorPreview.histogramLuminance
+                                            showRgb: false
+                                            showLuminance: true
+                                            logScale: root.scopeLogHistogram
+                                            framed: false
+                                        }
+                                        Item {
+                                            id: toneCurveInputLevelsHandles
+                                            objectName: "toneCurveInputLevelsHandles"
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            anchors.topMargin: 6
+                                            anchors.bottomMargin: 6
+
+                                            function clamp(value, minimum, maximum) {
+                                                return Math.max(minimum, Math.min(maximum, value))
                                             }
-                                        }
-                                    }
-                                }
 
-                                InspectorGroup {
-                                    objectName: "colorInspectorGroup"
-                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("color")
-                                    title: "Color"
-                                    subtitle: "Look-space • applied after tone and curves"
-                                    resetGroup: "color"
-                                    resetObjectName: "colorPanelResetButton"
-                                    compareGroup: "color"
-                                    beforeAfterObjectName: "colorPanelBeforeAfterButton"
-                                    AdjustSlider { label: "Vibrance"; value: root.primaryAdjustmentValue("vibrance", editorPreview.vibrance); valueText: root.signedPercent(root.primaryAdjustmentValue("vibrance", editorPreview.vibrance)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("vibrance", value) } }
-                                    AdjustSlider { objectName: "saturationSlider"; label: "Saturation"; value: root.primaryAdjustmentValue("saturation", editorPreview.saturation); valueText: root.signedPercent(root.primaryAdjustmentValue("saturation", editorPreview.saturation)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("saturation", value) } }
-                                }
+                                            function dragLevelHandle(handleName, localX) {
+                                                const position = clamp(localX / Math.max(1, width), 0, 1)
+                                                if (handleName === "black") {
+                                                    root.setPrimaryAdjustmentValue("levelsBlackPoint", clamp(position / 0.0095, 0, 95))
+                                                } else if (handleName === "gamma") {
+                                                    root.setPrimaryAdjustmentValue("levelsGamma", clamp((position - 0.5) * 220, -100, 100))
+                                                } else if (handleName === "white") {
+                                                    root.setPrimaryAdjustmentValue("levelsWhitePoint", clamp((1 - position) / 0.0095, 0, 95))
+                                                }
+                                            }
 
-                                InspectorGroup {
-                                    objectName: "colorGradingInspectorGroup"
-                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("advanced-color")
-                                    title: "Color Grading"
-                                    subtitle: "Look-space • shadows, midtones, and highlights"
-                                    compareGroup: "grading"
-                                    beforeAfterObjectName: "colorGradingPanelBeforeAfterButton"
-                                    resetGroup: "color"
-                                    resetObjectName: "colorGradingPanelResetButton"
-                                    StudioCollapsibleGroup {
-                                        objectName: "splitToningGroup"
-                                        title: "Split Toning"
-                                        expanded: root.splitToningExpanded
-                                        onToggled: root.splitToningExpanded = !root.splitToningExpanded
+                                            function nearestLevelHandle(localX) {
+                                                const position = clamp(localX / Math.max(1, width), 0, 1)
+                                                const positions = [
+                                                    { name: "black", value: clamp(root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095, 0, 0.95) },
+                                                    { name: "gamma", value: clamp(0.5 + root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 220, 0.05, 0.95) },
+                                                    { name: "white", value: clamp(1 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint) * 0.0095, 0.05, 1) }
+                                                ]
+                                                let nearest = positions[0]
+                                                for (let index = 1; index < positions.length; ++index) {
+                                                    if (Math.abs(positions[index].value - position) < Math.abs(nearest.value - position))
+                                                        nearest = positions[index]
+                                                }
+                                                return nearest.name
+                                            }
 
-                                        RowLayout {
-                                            objectName: "splitToningRangeTabs"
-                                            Layout.fillWidth: true
-                                            spacing: 6
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                z: -1
+                                                property string activeHandle: ""
+                                                cursorShape: Qt.SizeHorCursor
+                                                onPressed: function(mouse) {
+                                                    activeHandle = toneCurveInputLevelsHandles.nearestLevelHandle(mouse.x)
+                                                    editorPreview.beginCoalescedEdit()
+                                                    toneCurveInputLevelsHandles.dragLevelHandle(activeHandle, mouse.x)
+                                                }
+                                                onPositionChanged: function(mouse) {
+                                                    if (pressed)
+                                                        toneCurveInputLevelsHandles.dragLevelHandle(activeHandle, mouse.x)
+                                                }
+                                                onReleased: {
+                                                    activeHandle = ""
+                                                    editorPreview.endCoalescedEdit()
+                                                }
+                                                onCanceled: {
+                                                    activeHandle = ""
+                                                    editorPreview.endCoalescedEdit()
+                                                }
+                                            }
 
                                             Repeater {
-                                                model: ["Shadows", "Midtones", "Highlights"]
-
+                                                model: [
+                                                    { name: "black", position: Math.max(0, Math.min(0.95, root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095)), color: theme.ink950 },
+                                                    { name: "gamma", position: Math.max(0.05, Math.min(0.95, 0.5 + root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 220)), color: theme.textMuted },
+                                                    { name: "white", position: Math.max(0.05, Math.min(1, 1 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint) * 0.0095)), color: theme.brandPaper }
+                                                ]
                                                 Rectangle {
-                                                    required property int index
-                                                    required property string modelData
-                                                    objectName: index === 0
-                                                                ? "splitToningShadowsWheel"
-                                                                : (index === 1 ? "splitToningMidtonesWheel" : "splitToningHighlightsWheel")
-                                                    readonly property bool active: root.selectedToneWheel === index
-                                                    readonly property int minimumUsefulWidth: 96
-                                                    readonly property real toneHue: index === 0
-                                                                                    ? root.primaryGradingValue("shadows", "hue", editorPreview.gradingShadowsHue)
-                                                                                    : (index === 2
-                                                                                       ? root.primaryGradingValue("highlights", "hue", editorPreview.gradingHighlightsHue)
-                                                                                       : root.primaryGradingValue("midtones", "hue", editorPreview.gradingMidtonesHue))
-                                                    readonly property real toneSat: index === 0
-                                                                                    ? root.primaryGradingValue("shadows", "saturation", editorPreview.gradingShadowsSaturation)
-                                                                                    : (index === 2
-                                                                                       ? root.primaryGradingValue("highlights", "saturation", editorPreview.gradingHighlightsSaturation)
-                                                                                       : root.primaryGradingValue("midtones", "saturation", editorPreview.gradingMidtonesSaturation))
-                                                    readonly property real toneLum: index === 0
-                                                                                    ? root.primaryGradingValue("shadows", "luminance", editorPreview.gradingShadowsLuminance)
-                                                                                    : (index === 2
-                                                                                       ? root.primaryGradingValue("highlights", "luminance", editorPreview.gradingHighlightsLuminance)
-                                                                                       : root.primaryGradingValue("midtones", "luminance", editorPreview.gradingMidtonesLuminance))
-                                                    Layout.fillWidth: true
-                                                    Layout.preferredHeight: 42
-                                                    activeFocusOnTab: true
-                                                    Accessible.role: Accessible.RadioButton
-                                                    Accessible.name: modelData + " color grading"
-                                                    Accessible.checked: active
-                                                    Keys.onLeftPressed: root.selectedToneWheel = Math.max(0, index - 1)
-                                                    Keys.onRightPressed: root.selectedToneWheel = Math.min(2, index + 1)
-                                                    Keys.onSpacePressed: root.selectedToneWheel = index
-                                                    Keys.onReturnPressed: root.selectedToneWheel = index
-                                                    radius: theme.radius8
-                                                    color: active ? theme.alpha(root.mint, 0.12)
-                                                                  : (toneTabMouse.containsMouse ? theme.alpha(theme.glassLift, 0.24)
-                                                                                                 : theme.alpha(theme.glassBase, 0.38))
-                                                    border.width: active ? 1 : 0
-                                                    border.color: theme.alpha(root.mint, 0.48)
-
+                                                    required property var modelData
+                                                    objectName: "toneCurveInputLevelsHandle"
+                                                    Accessible.role: Accessible.Slider
+                                                    Accessible.name: modelData.name === "black" ? qsTr("Black input")
+                                                                   : modelData.name === "gamma" ? qsTr("Midtone gamma")
+                                                                   : qsTr("White input")
+                                                    Accessible.description: Math.round(modelData.position * 100) + "%"
+                                                    x: modelData.position * (parent.width - width)
+                                                    y: 0
+                                                    width: 2
+                                                    height: parent.height
+                                                    radius: 1
+                                                    color: modelData.color
+                                                    opacity: 0.92
                                                     Rectangle {
-                                                        anchors.left: parent.left
-                                                        anchors.right: parent.right
+                                                        anchors.horizontalCenter: parent.horizontalCenter
                                                         anchors.bottom: parent.bottom
-                                                        height: 2
-                                                        color: parent.active ? root.mint : "transparent"
-                                                    }
-
-                                                    RowLayout {
-                                                        anchors.fill: parent
-                                                        anchors.leftMargin: 9
-                                                        anchors.rightMargin: 9
-                                                        spacing: 7
-
-                                                        Rectangle {
-                                                            Layout.preferredWidth: 13
-                                                            Layout.preferredHeight: 13
-                                                            radius: 6.5
-                                                            color: root.gradingPreviewColor(toneHue, toneSat, toneLum)
-                                                            border.width: 1
-                                                            border.color: parent.parent.active ? theme.alpha(root.mint, 0.92)
-                                                                                               : theme.alpha(theme.polar, 0.30)
-                                                        }
-
-                                                        ColumnLayout {
-                                                            Layout.fillWidth: true
-                                                            spacing: 0
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: modelData
-                                                                color: parent.parent.parent.active ? theme.textStrong : theme.textMain
-                                                                font.family: theme.fontUi
-                                                                font.pixelSize: 11
-                                                                font.weight: Font.DemiBold
-                                                                fontSizeMode: Text.HorizontalFit
-                                                                minimumPixelSize: 8
-                                                                elide: Text.ElideNone
-                                                            }
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: Math.round(toneHue * 360).toString() + "\u00B0  " +
-                                                                      Math.round(toneSat).toString() + "S  " +
-                                                                      root.signedPercent(toneLum)
-                                                                color: root.dimText
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 8
-                                                                font.letterSpacing: 0
-                                                                elide: Text.ElideNone
-                                                            }
-                                                        }
+                                                        width: 10
+                                                        height: 10
+                                                        radius: 2
+                                                        rotation: 45
+                                                        color: parent.color
+                                                        border.color: modelData.name === "black" ? theme.textMuted : theme.alpha(theme.ink950, 0.74)
+                                                        border.width: 1
                                                     }
 
                                                     MouseArea {
-                                                        id: toneTabMouse
-                                                        anchors.fill: parent
+                                                        anchors.centerIn: parent
+                                                        width: 40
+                                                        height: parent.height
                                                         hoverEnabled: true
-                                                        cursorShape: Qt.PointingHandCursor
-                                                        onPressed: parent.forceActiveFocus()
-                                                        onClicked: root.selectedToneWheel = index
+                                                        cursorShape: Qt.SizeHorCursor
+                                                        onPressed: function(mouse) {
+                                                            editorPreview.beginCoalescedEdit()
+                                                            const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
+                                                            toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
+                                                        }
+                                                        onPositionChanged: function(mouse) {
+                                                            if (!pressed)
+                                                                return
+                                                            const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
+                                                            toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
+                                                        }
+                                                        onReleased: editorPreview.endCoalescedEdit()
+                                                        onCanceled: editorPreview.endCoalescedEdit()
+                                                        onDoubleClicked: {
+                                                            if (modelData.name === "black")
+                                                                root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
+                                                            else if (modelData.name === "gamma")
+                                                                root.setPrimaryAdjustmentValue("levelsGamma", 0)
+                                                            else
+                                                                root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
-
-                                        ColorWheelControl {
-                                            objectName: "splitToningFocusedWheel"
-                                            Layout.alignment: Qt.AlignHCenter
-                                            Layout.preferredWidth: 250
-                                            Layout.preferredHeight: implicitHeight
-                                            title: root.selectedToneWheelName()
-                                            wheelSize: 224
-                                            ringMode: true
-                                            hue: root.selectedToneWheelHue()
-                                            saturation: root.selectedToneWheelSaturation()
-                                            luminance: root.selectedToneWheelLuminance()
-                                            accent: root.mint
-                                            onHueEdited: function(value) { root.setSelectedToneWheelHue(value) }
-                                            onSaturationEdited: function(value) { root.setSelectedToneWheelSaturation(value) }
-                                            onLuminanceEdited: function(value) { root.setSelectedToneWheelLuminance(value) }
-                                        }
-
-                                        GradingMacroControl {
-                                            objectName: "colorGradingAmountSlider"
-                                            label: "Amount"
-                                            from: 0
-                                            to: 100
-                                            defaultValue: 100
-                                            value: root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)
-                                            valueText: Math.round(root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)).toString()
-                                            leftColor: theme.alpha(theme.polar, 0.18)
-                                            centerColor: theme.alpha(root.gradingPreviewColor(root.selectedToneWheelHue(), root.selectedToneWheelSaturation(), root.selectedToneWheelLuminance()), 0.45)
-                                            rightColor: root.gradingPreviewColor(root.selectedToneWheelHue(), 100, root.selectedToneWheelLuminance())
-                                            onInteractionStarted: editorPreview.beginCoalescedEdit()
-                                            onInteractionFinished: editorPreview.endCoalescedEdit()
-                                            onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingAmount", value) }
-                                        }
-
-                                        GradingMacroControl {
-                                            objectName: "colorGradingBalanceSlider"
-                                            label: "Balance"
-                                            defaultValue: 0
-                                            value: root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance)
-                                            valueText: root.signedPercent(root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance))
-                                            leftColor: root.gradingPreviewColor(root.primaryGradingValue("shadows", "hue", editorPreview.gradingShadowsHue),
-                                                                                 root.primaryGradingValue("shadows", "saturation", editorPreview.gradingShadowsSaturation),
-                                                                                 root.primaryGradingValue("shadows", "luminance", editorPreview.gradingShadowsLuminance))
-                                            centerColor: root.gradingPreviewColor(root.primaryGradingValue("midtones", "hue", editorPreview.gradingMidtonesHue),
-                                                                                   root.primaryGradingValue("midtones", "saturation", editorPreview.gradingMidtonesSaturation),
-                                                                                   root.primaryGradingValue("midtones", "luminance", editorPreview.gradingMidtonesLuminance))
-                                            rightColor: root.gradingPreviewColor(root.primaryGradingValue("highlights", "hue", editorPreview.gradingHighlightsHue),
-                                                                                  root.primaryGradingValue("highlights", "saturation", editorPreview.gradingHighlightsSaturation),
-                                                                                  root.primaryGradingValue("highlights", "luminance", editorPreview.gradingHighlightsLuminance))
-                                            onInteractionStarted: editorPreview.beginCoalescedEdit()
-                                            onInteractionFinished: editorPreview.endCoalescedEdit()
-                                            onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingBalance", value) }
-                                        }
-
-                                        AdjustSlider {
-                                            objectName: "selectedToneWheelHueSlider"
-                                            controlHeight: 40
-                                            label: "Hue"
-                                            from: 0
-                                            to: 1
-                                            stepSize: 0.001
-                                            defaultValue: 0
-                                            valueInputMode: "degreesNormalized"
-                                            value: root.selectedToneWheelHue()
-                                            valueText: Math.round(root.selectedToneWheelHue() * 360) + "\u00B0"
-                                            onValueDragged: function(value) { root.setSelectedToneWheelHue(value) }
-                                        }
-
-                                        AdjustSlider {
-                                            objectName: "selectedToneWheelSaturationSlider"
-                                            controlHeight: 40
-                                            label: "Saturation"
-                                            defaultValue: 0
-                                            value: root.selectedToneWheelSaturation()
-                                            valueText: root.signedPercent(root.selectedToneWheelSaturation())
-                                            onValueDragged: function(value) { root.setSelectedToneWheelSaturation(value) }
-                                        }
-
-                                        AdjustSlider {
-                                            objectName: "selectedToneWheelLuminanceSlider"
-                                            controlHeight: 40
-                                            label: "Luminance"
-                                            defaultValue: 0
-                                            value: root.selectedToneWheelLuminance()
-                                            valueText: root.signedPercent(root.selectedToneWheelLuminance())
-                                            onValueDragged: function(value) { root.setSelectedToneWheelLuminance(value) }
-                                        }
                                     }
+                                    AdjustSlider { objectName: "toneCurveInputBlackSlider"; label: "Black input"; from: 0; to: 95; value: root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint); valueText: Math.round(root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsBlackPoint", value) } }
+                                    AdjustSlider { objectName: "toneCurveInputGammaSlider"; label: "Gamma"; valueInputMode: "gamma"; stepSize: 0.01; value: root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma); valueText: Number(Math.pow(2, -root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 100 * 1.45)).toFixed(2); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsGamma", value) } }
+                                    AdjustSlider { objectName: "toneCurveInputWhiteSlider"; label: "White input"; from: 5; to: 100; defaultValue: 100; value: 100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint); valueText: Math.round(100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsWhitePoint", 100 - value) } }
                                 }
 
                                 InspectorGroup {
@@ -21108,13 +24121,14 @@ Rectangle {
                                     enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
                                     visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("tone-curve")
                                     title: "Tone Curve"
-                                    subtitle: "Display-referred • applied after scene-linear tone"
+                                    helpText: root.colorControlDomainHelpText("tone-curve")
                                     compareGroup: "curves"
                                     beforeAfterObjectName: "toneCurvePanelBeforeAfterButton"
                                     ToneCurveEditor {
                                         objectName: "studioToneCurveEditor"
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 430
+                                        Layout.preferredHeight: Math.min(implicitHeight, Math.max(theme.scaled(300),
+                                            editInspectorScroll.availableHeight - theme.scaled(root.editAdjustmentFilterNeedle().length > 0 ? 140 : 80)))
                                         compactMode: false
                                         accent: root.mint
                                         selectedChannel: editorPreview.curveChannel
@@ -21133,236 +24147,62 @@ Rectangle {
                                         onPointsEdited: function(points) { root.setPrimaryCurvePoints(points) }
                                         onPresetSelected: function(preset) { root.applyPrimaryCurvePreset(preset) }
                                     }
+
                                     StudioCollapsibleGroup {
-                                        objectName: "toneCurveInputLevelsGroup"
-                                        title: "Input Levels"
-                                        expanded: root.lightLevelsExpanded
-                                        resetObjectName: "toneCurveInputLevelsResetButton"
-                                        resetVisible: true
-                                        onToggled: root.lightLevelsExpanded = !root.lightLevelsExpanded
-                                        onResetRequested: {
-                                            root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
-                                            root.setPrimaryAdjustmentValue("levelsGamma", 0)
-                                            root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
-                                        }
-                                        Rectangle {
-                                            objectName: "toneCurveInputLevelsStrip"
-                                            Layout.fillWidth: true
-                                            Layout.preferredHeight: 82
-                                            radius: theme.radius8
-                                            color: theme.alpha(theme.ink950, 0.26)
-                                            border.color: root.hairlineStrong
-                                            border.width: 1
-                                            clip: true
-                                            HistogramDisplay {
-                                                objectName: "toneCurveInputLevelsHistogram"
-                                                anchors.fill: parent
-                                                anchors.margins: 6
-                                                redData: []
-                                                greenData: []
-                                                blueData: []
-                                                luminanceData: editorPreview.histogramLuminance
-                                                showRgb: false
-                                                showLuminance: true
-                                                logScale: root.scopeLogHistogram
-                                                framed: false
-                                            }
-                                            Item {
-                                                id: toneCurveInputLevelsHandles
-                                                objectName: "toneCurveInputLevelsHandles"
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 8
-                                                anchors.rightMargin: 8
-                                                anchors.topMargin: 6
-                                                anchors.bottomMargin: 6
-
-                                                function clamp(value, minimum, maximum) {
-                                                    return Math.max(minimum, Math.min(maximum, value))
-                                                }
-
-                                                function dragLevelHandle(handleName, localX) {
-                                                    const position = clamp(localX / Math.max(1, width), 0, 1)
-                                                    if (handleName === "black") {
-                                                        root.setPrimaryAdjustmentValue("levelsBlackPoint", clamp(position / 0.0095, 0, 95))
-                                                    } else if (handleName === "gamma") {
-                                                        root.setPrimaryAdjustmentValue("levelsGamma", clamp((position - 0.5) * 220, -100, 100))
-                                                    } else if (handleName === "white") {
-                                                        root.setPrimaryAdjustmentValue("levelsWhitePoint", clamp((1 - position) / 0.0095, 0, 95))
-                                                    }
-                                                }
-
-                                                function nearestLevelHandle(localX) {
-                                                    const position = clamp(localX / Math.max(1, width), 0, 1)
-                                                    const positions = [
-                                                        { name: "black", value: clamp(root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095, 0, 0.95) },
-                                                        { name: "gamma", value: clamp(0.5 + root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 220, 0.05, 0.95) },
-                                                        { name: "white", value: clamp(1 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint) * 0.0095, 0.05, 1) }
-                                                    ]
-                                                    let nearest = positions[0]
-                                                    for (let index = 1; index < positions.length; ++index) {
-                                                        if (Math.abs(positions[index].value - position) < Math.abs(nearest.value - position))
-                                                            nearest = positions[index]
-                                                    }
-                                                    return nearest.name
-                                                }
-
-                                                MouseArea {
-                                                    anchors.fill: parent
-                                                    z: -1
-                                                    property string activeHandle: ""
-                                                    cursorShape: Qt.SizeHorCursor
-                                                    onPressed: function(mouse) {
-                                                        activeHandle = toneCurveInputLevelsHandles.nearestLevelHandle(mouse.x)
-                                                        editorPreview.beginCoalescedEdit()
-                                                        toneCurveInputLevelsHandles.dragLevelHandle(activeHandle, mouse.x)
-                                                    }
-                                                    onPositionChanged: function(mouse) {
-                                                        if (pressed)
-                                                            toneCurveInputLevelsHandles.dragLevelHandle(activeHandle, mouse.x)
-                                                    }
-                                                    onReleased: {
-                                                        activeHandle = ""
-                                                        editorPreview.endCoalescedEdit()
-                                                    }
-                                                    onCanceled: {
-                                                        activeHandle = ""
-                                                        editorPreview.endCoalescedEdit()
-                                                    }
-                                                }
-
-                                                Repeater {
-                                                    model: [
-                                                        { name: "black", position: Math.max(0, Math.min(0.95, root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095)), color: "#4FB5FF" },
-                                                        { name: "gamma", position: Math.max(0.05, Math.min(0.95, 0.5 + root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 220)), color: root.mint },
-                                                        { name: "white", position: Math.max(0.05, Math.min(1, 1 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint) * 0.0095)), color: "#F2C35B" }
-                                                    ]
-                                                    Rectangle {
-                                                        required property var modelData
-                                                        objectName: "toneCurveInputLevelsHandle"
-                                                        Accessible.role: Accessible.Slider
-                                                        Accessible.name: modelData.name === "black" ? qsTr("Black input")
-                                                                       : modelData.name === "gamma" ? qsTr("Midtone gamma")
-                                                                       : qsTr("White input")
-                                                        Accessible.description: Math.round(modelData.position * 100) + "%"
-                                                        x: modelData.position * (parent.width - width)
-                                                        y: 0
-                                                        width: 2
-                                                        height: parent.height
-                                                        radius: 1
-                                                        color: modelData.color
-                                                        opacity: 0.92
-                                                        Rectangle {
-                                                            anchors.horizontalCenter: parent.horizontalCenter
-                                                            anchors.bottom: parent.bottom
-                                                            width: 10
-                                                            height: 10
-                                                            radius: 2
-                                                            rotation: 45
-                                                            color: parent.color
-                                                            border.color: theme.alpha(theme.ink950, 0.74)
-                                                            border.width: 1
-                                                        }
-
-                                                        MouseArea {
-                                                            anchors.centerIn: parent
-                                                            width: 40
-                                                            height: parent.height
-                                                            hoverEnabled: true
-                                                            cursorShape: Qt.SizeHorCursor
-                                                            onPressed: function(mouse) {
-                                                                editorPreview.beginCoalescedEdit()
-                                                                const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
-                                                                toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
-                                                            }
-                                                            onPositionChanged: function(mouse) {
-                                                                if (!pressed)
-                                                                    return
-                                                                const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
-                                                                toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
-                                                            }
-                                                            onReleased: editorPreview.endCoalescedEdit()
-                                                            onCanceled: editorPreview.endCoalescedEdit()
-                                                            onDoubleClicked: {
-                                                                if (modelData.name === "black")
-                                                                    root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
-                                                                else if (modelData.name === "gamma")
-                                                                    root.setPrimaryAdjustmentValue("levelsGamma", 0)
-                                                                else
-                                                                    root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        AdjustSlider { objectName: "toneCurveInputBlackSlider"; controlHeight: 38; label: "Black Input"; from: 0; to: 95; value: root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint); valueText: Math.round(root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsBlackPoint", value) } }
-                                        AdjustSlider { objectName: "toneCurveInputGammaSlider"; controlHeight: 38; label: "Gamma"; value: root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma); valueText: Number(Math.pow(2, -root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 100 * 1.45)).toFixed(2); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsGamma", value) } }
-                                        AdjustSlider { objectName: "toneCurveInputWhiteSlider"; controlHeight: 38; label: "White Input"; from: 5; to: 100; defaultValue: 100; value: 100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint); valueText: Math.round(100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsWhitePoint", 100 - value) } }
+                                        objectName: "toneCurveParametricGroup"
+                                        title: "Tone ranges"
+                                        expanded: root.curveParametricExpanded
+                                        onToggled: root.curveParametricExpanded = !root.curveParametricExpanded
+                                        AdjustSlider { label: "Shadows"; value: root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows); valueText: root.signedPercent(root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveShadows", value) } }
+                                        AdjustSlider { label: "Darks"; value: root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks); valueText: root.signedPercent(root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveDarks", value) } }
+                                        AdjustSlider { label: "Lights"; value: root.primaryAdjustmentValue("curveLights", editorPreview.curveLights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveLights", editorPreview.curveLights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveLights", value) } }
+                                        AdjustSlider { label: "Highlights"; value: root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveHighlights", value) } }
                                     }
-                                    AdjustSlider { label: "Shadows"; value: root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows); valueText: root.signedPercent(root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveShadows", value) } }
-                                    AdjustSlider { label: "Darks"; value: root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks); valueText: root.signedPercent(root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveDarks", value) } }
-                                    AdjustSlider { label: "Lights"; value: root.primaryAdjustmentValue("curveLights", editorPreview.curveLights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveLights", editorPreview.curveLights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveLights", value) } }
-                                    AdjustSlider { label: "Highlights"; value: root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveHighlights", value) } }
                                 }
 
                                 InspectorGroup {
-                                    objectName: "presenceInspectorGroup"
+                                    objectName: "colorInspectorGroup"
                                     enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("presence")
-                                    title: "Presence"
-                                    resetGroup: "presence"
-                                    resetObjectName: "presencePanelResetButton"
-                                    compareGroup: "presence"
-                                    beforeAfterObjectName: "presencePanelBeforeAfterButton"
-                                    AdjustSlider { objectName: "presenceTextureSlider"; label: "Texture"; value: root.primaryAdjustmentValue("texture", editorPreview.texture); valueText: root.signedPercent(root.primaryAdjustmentValue("texture", editorPreview.texture)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("texture", value) } }
-                                    AdjustSlider { objectName: "presenceClaritySlider"; label: "Clarity"; value: root.primaryAdjustmentValue("clarity", editorPreview.clarity); valueText: root.signedPercent(root.primaryAdjustmentValue("clarity", editorPreview.clarity)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("clarity", value) } }
-                                    AdjustSlider { objectName: "presenceDehazeSlider"; label: "Dehaze"; value: root.primaryAdjustmentValue("dehaze", editorPreview.dehaze); valueText: root.signedPercent(root.primaryAdjustmentValue("dehaze", editorPreview.dehaze)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("dehaze", value) } }
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("color")
+                                    title: "Color"
+                                    helpText: root.colorControlDomainHelpText("color")
+                                    resetGroup: "color"
+                                    resetObjectName: "colorPanelResetButton"
+                                    compareGroup: "color"
+                                    beforeAfterObjectName: "colorPanelBeforeAfterButton"
+                                    AdjustSlider { label: "Vibrance"; value: root.primaryAdjustmentValue("vibrance", editorPreview.vibrance); valueText: root.signedPercent(root.primaryAdjustmentValue("vibrance", editorPreview.vibrance)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("vibrance", value) } }
+                                    AdjustSlider { objectName: "saturationSlider"; label: "Saturation"; value: root.primaryAdjustmentValue("saturation", editorPreview.saturation); valueText: root.signedPercent(root.primaryAdjustmentValue("saturation", editorPreview.saturation)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("saturation", value) } }
                                 }
 
                                 InspectorGroup {
-                                    objectName: "rawInspectorGroup"
-                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image")
-                                    title: "Raw"
-                                    resetGroup: "raw"
-                                    resetObjectName: "rawPanelResetButton"
-                                    compareGroup: "raw"
-                                    beforeAfterObjectName: "rawPanelBeforeAfterButton"
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && editorPreview.rawControlsAvailable && root.adjustmentGroupMatches("raw")
-                                    AdjustSlider { label: "Raw Exposure"; targetSupport: "base-image"; from: -4; to: 4; stepSize: 0.01; value: editorPreview.rawExposure; valueText: root.exposureText(editorPreview.rawExposure); onValueDragged: function(value) { root.setPrimaryBaseAdjustmentValue("rawExposure", value) } }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        MiniButton { Layout.fillWidth: true; text: "Highlight Recovery"; role: "segmented"; active: editorPreview.rawHighlightRecovery; enabled: root.adjustmentControlCanWriteActiveTarget("base-image"); disabledReason: root.adjustmentControlDisabledReason("base-image"); onClicked: root.setPrimaryBaseBoolAdjustmentValue("rawHighlightRecovery", !editorPreview.rawHighlightRecovery) }
-                                        MiniButton { Layout.fillWidth: true; text: "Lens Correction"; role: "segmented"; active: editorPreview.rawLensCorrection; enabled: root.adjustmentControlCanWriteActiveTarget("base-image"); disabledReason: root.adjustmentControlDisabledReason("base-image"); onClicked: root.setPrimaryBaseBoolAdjustmentValue("rawLensCorrection", !editorPreview.rawLensCorrection) }
-                                    }
-                                }
-
-                                InspectorGroup {
-                                    objectName: "advancedColorInspectorGroup"
+                                    objectName: "colorMixInspectorGroup"
                                     enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("advanced-color")
-                                    title: "Advanced Color"
-                                    compareGroup: "advanced-color"
-                                    beforeAfterObjectName: "advancedColorPanelBeforeAfterButton"
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        MiniButton {
-                                            Layout.fillWidth: true
-                                            text: "Lab"
-                                            role: "segmented"
-                                            active: root.labColorToolsVisible
-                                            onClicked: root.labColorToolsVisible = !root.labColorToolsVisible
-                                        }
-                                    }
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("color-mix")
+                                    title: "Color Mix"
+                                    expandable: true
+                                    expanded: root.colorMixExpanded
+                                    onToggled: root.colorMixExpanded = !root.colorMixExpanded
+                                    compareGroup: "color-mix"
+                                    beforeAfterObjectName: "colorMixPanelBeforeAfterButton"
                                     StudioCollapsibleGroup {
                                     objectName: "colorMixGroup"
-                                    title: "Color Mix"
-                                    compareObjectName: "colorMixPanelBeforeAfterButton"
-                                    compareVisible: true
+                                    title: "Color channels"
+                                    headerVisible: false
+                                    compareVisible: false
                                     compareActive: root.sectionComparisonActive("color-mix")
                                     onCompareRequested: root.toggleSectionComparison("color-mix")
                                     onCompareHoldRequested: function(held) { root.holdSectionComparison("color-mix", held) }
-                                    expanded: root.colorMixExpanded
-                                    onToggled: root.colorMixExpanded = !root.colorMixExpanded
+                                    expanded: true
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton {
+                                            text: "Color models"
+                                            role: "ghost"
+                                            active: root.labColorToolsVisible
+                                            tooltip: "Show HSV, LCH, OKLab and selective color controls"
+                                            onClicked: root.labColorToolsVisible = !root.labColorToolsVisible
+                                        }
+                                    }
                                     RowLayout {
                                         Layout.fillWidth: true
                                         visible: root.labColorToolsVisible
@@ -21485,6 +24325,14 @@ Rectangle {
                                             }
                                         }
                                     }
+                                    MiniButton {
+                                        objectName: "colorMixImageDragButton"
+                                        Layout.fillWidth: true
+                                        text: root.colorMixerImageDragActive ? "Drag on image · active" : "Pick color and drag on image"
+                                        role: root.colorMixerImageDragActive ? "primary" : "secondary"
+                                        tooltip: "Click a color in the photo, then drag horizontally for hue or vertically for saturation. One gesture is one undo step."
+                                        onClicked: root.colorMixerImageDragActive = !root.colorMixerImageDragActive
+                                    }
                                     ChannelPadControl {
                                         objectName: "colorMixChannelPad"
                                         title: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) + " Refinement"
@@ -21513,10 +24361,183 @@ Rectangle {
                                     AdjustSlider { visible: root.labColorToolsVisible; label: "Yellow"; value: root.primaryColorMixerChannelValue("selectiveYellow", editorPreview.selectiveYellow); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveYellow", editorPreview.selectiveYellow)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveYellow", value) } }
                                     AdjustSlider { visible: root.labColorToolsVisible; label: "Black"; value: root.primaryColorMixerChannelValue("selectiveBlack", editorPreview.selectiveBlack); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveBlack", editorPreview.selectiveBlack)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveBlack", value) } }
                                 }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "colorGradingInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("color-grading")
+                                    title: "Color Grading"
+                                    helpText: root.colorControlDomainHelpText("color-grading")
+                                    expandable: true
+                                    expanded: root.splitToningExpanded
+                                    onToggled: root.splitToningExpanded = !root.splitToningExpanded
+                                    compareGroup: "grading"
+                                    beforeAfterObjectName: "colorGradingPanelBeforeAfterButton"
+                                    resetGroup: "grading"
+                                    resetObjectName: "colorGradingPanelResetButton"
+                                    StudioCollapsibleGroup {
+                                        objectName: "splitToningGroup"
+                                        title: "Tonal range"
+                                        headerVisible: false
+                                        expanded: true
+
+                                        RowLayout {
+                                            objectName: "splitToningRangeTabs"
+                                            Layout.fillWidth: true
+                                            spacing: theme.space4
+                                            Repeater {
+                                                model: ["Shadows", "Midtones", "Highlights"]
+                                                MiniButton {
+                                                    required property int index
+                                                    required property string modelData
+                                                    objectName: index === 0 ? "splitToningShadowsWheel" : (index === 1 ? "splitToningMidtonesWheel" : "splitToningHighlightsWheel")
+                                                    Layout.fillWidth: true
+                                                    text: modelData
+                                                    role: "segmented"
+                                                    active: root.selectedToneWheel === index
+                                                    fitTextToWidth: false
+                                                    Accessible.role: Accessible.RadioButton
+                                                    Accessible.name: modelData + " color grading"
+                                                    Accessible.checked: active
+                                                    Keys.onLeftPressed: root.selectedToneWheel = Math.max(0, index - 1)
+                                                    Keys.onRightPressed: root.selectedToneWheel = Math.min(2, index + 1)
+                                                    onClicked: root.selectedToneWheel = index
+                                                }
+                                            }
+                                        }
+
+
+
+                                        GridLayout {
+                                            id: gradingEditorLayout
+                                            objectName: "colorGradingEditorLayout"
+                                            Layout.fillWidth: true
+                                            columns: 1
+                                            rowSpacing: theme.space8
+                                            ColorWheelControl {
+                                                objectName: "splitToningFocusedWheel"
+                                                Layout.alignment: Qt.AlignHCenter
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: implicitHeight
+                                                title: ""
+                                                showValueReadouts: false
+                                                wheelSize: Math.max(theme.scaled(160), Math.min(theme.scaled(420), gradingEditorLayout.width - theme.scaled(20)))
+                                                ringMode: false
+                                                hue: root.selectedToneWheelHue()
+                                                saturation: root.selectedToneWheelSaturation()
+                                                luminance: root.selectedToneWheelLuminance()
+                                                accent: root.mint
+                                                onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                                onInteractionFinished: editorPreview.endCoalescedEdit()
+                                                onHueEdited: function(value) { root.setSelectedToneWheelHue(value) }
+                                                onSaturationEdited: function(value) { root.setSelectedToneWheelSaturation(value) }
+                                                onLuminanceEdited: function(value) { root.setSelectedToneWheelLuminance(value) }
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: theme.space4
+                                                AdjustSlider {
+                                                    objectName: "selectedToneWheelHueSlider"
+                                                    label: "Hue"
+                                                    trackColors: ["#F06B69", "#DED568", "#6BC686", "#66C5D0", "#798BED", "#CC78D3", "#F06B69"]
+                                                    from: 0
+                                                    to: 1
+                                                    stepSize: 0.001
+                                                    defaultValue: 0
+                                                    valueInputMode: "degreesNormalized"
+                                                    value: root.selectedToneWheelHue()
+                                                    valueText: Math.round(root.selectedToneWheelHue() * 360) + "\u00B0"
+                                                    onValueDragged: function(value) { root.setSelectedToneWheelHue(value) }
+                                                }
+                                                AdjustSlider {
+                                                    objectName: "selectedToneWheelSaturationSlider"
+                                                    label: "Saturation"
+                                                    defaultValue: 0
+                                                    value: root.selectedToneWheelSaturation()
+                                                    valueText: root.signedPercent(root.selectedToneWheelSaturation())
+                                                    onValueDragged: function(value) { root.setSelectedToneWheelSaturation(value) }
+                                                }
+                                                AdjustSlider {
+                                                    objectName: "selectedToneWheelLuminanceSlider"
+                                                    label: "Luminance"
+                                                    defaultValue: 0
+                                                    value: root.selectedToneWheelLuminance()
+                                                    valueText: root.signedPercent(root.selectedToneWheelLuminance())
+                                                    onValueDragged: function(value) { root.setSelectedToneWheelLuminance(value) }
+                                                }
+                                            }
+                                        }
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            implicitHeight: 1
+                                            color: theme.lineSoft
+                                        }
+                                        GradingMacroControl {
+                                            objectName: "colorGradingAmountSlider"
+                                            label: "Amount"
+                                            from: 0
+                                            to: 100
+                                            defaultValue: 100
+                                            value: root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)
+                                            valueText: Math.round(root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)).toString()
+                                            leftColor: theme.alpha(theme.polar, 0.18)
+                                            centerColor: theme.alpha(root.gradingPreviewColor(root.selectedToneWheelHue(), root.selectedToneWheelSaturation(), root.selectedToneWheelLuminance()), 0.45)
+                                            rightColor: root.gradingPreviewColor(root.selectedToneWheelHue(), 100, root.selectedToneWheelLuminance())
+                                            onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                            onInteractionFinished: editorPreview.endCoalescedEdit()
+                                            onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingAmount", value) }
+                                        }
+
+                                        GradingMacroControl {
+                                            objectName: "colorGradingBalanceSlider"
+                                            label: "Balance"
+                                            defaultValue: 0
+                                            value: root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance)
+                                            valueText: root.signedPercent(root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance))
+                                            leftColor: root.gradingPreviewColor(root.primaryGradingValue("shadows", "hue", editorPreview.gradingShadowsHue),
+                                                                                 root.primaryGradingValue("shadows", "saturation", editorPreview.gradingShadowsSaturation),
+                                                                                 root.primaryGradingValue("shadows", "luminance", editorPreview.gradingShadowsLuminance))
+                                            centerColor: root.gradingPreviewColor(root.primaryGradingValue("midtones", "hue", editorPreview.gradingMidtonesHue),
+                                                                                   root.primaryGradingValue("midtones", "saturation", editorPreview.gradingMidtonesSaturation),
+                                                                                   root.primaryGradingValue("midtones", "luminance", editorPreview.gradingMidtonesLuminance))
+                                            rightColor: root.gradingPreviewColor(root.primaryGradingValue("highlights", "hue", editorPreview.gradingHighlightsHue),
+                                                                                  root.primaryGradingValue("highlights", "saturation", editorPreview.gradingHighlightsSaturation),
+                                                                                  root.primaryGradingValue("highlights", "luminance", editorPreview.gradingHighlightsLuminance))
+                                            onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                            onInteractionFinished: editorPreview.endCoalescedEdit()
+                                            onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingBalance", value) }
+                                        }
+
+
+
+
+
+
+                                    }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "advancedColorInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("advanced-color")
+                                    title: "Specialist Color"
+                                    compareGroup: "advanced-color"
+                                    beforeAfterObjectName: "advancedColorPanelBeforeAfterButton"
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton {
+                                            Layout.fillWidth: true
+                                            text: "Extended controls"
+                                            role: "segmented"
+                                            active: root.labColorToolsVisible
+                                            onClicked: root.labColorToolsVisible = !root.labColorToolsVisible
+                                        }
+                                    }
+
 
                                     StudioCollapsibleGroup {
                                     objectName: "channelMixerGroup"
-                                    visible: root.labColorToolsVisible
                                     title: "Channel Mixer"
                                     expanded: root.channelMixerExpanded
                                     onToggled: root.channelMixerExpanded = !root.channelMixerExpanded
@@ -22025,6 +25046,24 @@ Rectangle {
 
                                 }
 
+                                InspectorGroup {
+                                    objectName: "presenceInspectorGroup"
+                                    enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("presence")
+                                    title: "Presence"
+                                    resetGroup: "presence"
+                                    resetObjectName: "presencePanelResetButton"
+                                    compareGroup: "presence"
+                                    beforeAfterObjectName: "presencePanelBeforeAfterButton"
+                                    AdjustSlider { objectName: "presenceTextureSlider"; label: "Texture"; value: root.primaryAdjustmentValue("texture", editorPreview.texture); valueText: root.signedPercent(root.primaryAdjustmentValue("texture", editorPreview.texture)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("texture", value) } }
+                                    AdjustSlider { objectName: "presenceClaritySlider"; label: "Clarity"; value: root.primaryAdjustmentValue("clarity", editorPreview.clarity); valueText: root.signedPercent(root.primaryAdjustmentValue("clarity", editorPreview.clarity)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("clarity", value) } }
+                                    AdjustSlider { objectName: "presenceDehazeSlider"; label: "Dehaze"; value: root.primaryAdjustmentValue("dehaze", editorPreview.dehaze); valueText: root.signedPercent(root.primaryAdjustmentValue("dehaze", editorPreview.dehaze)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("dehaze", value) } }
+                                }
+
+
+
+
+
                             }
 
                             ColumnLayout {
@@ -22069,7 +25108,7 @@ Rectangle {
                                 InspectorGroup {
                                     objectName: "lensInspectorGroup"
                                     enabled: root.adjustmentControlCanWriteActiveTarget("base-image,adjustment-layer")
-                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("detail")
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("lens")
                                     title: "Lens"
                                     resetGroup: "lens"
                                     resetObjectName: "lensPanelResetButton"
@@ -22348,7 +25387,7 @@ Rectangle {
                     }
                     RowLayout {
                         objectName: "editInspectorFooter"
-                        visible: root.editInspectorTab !== "scopes" && root.editInspectorTab !== "info" && !root.maskTargetInspectorActive()
+                        visible: (root.editInspectorTab === "adjust" || root.editInspectorTab === "presets") && !root.maskTargetInspectorActive()
                         Layout.fillWidth: true
                         MiniButton {
                             objectName: "editInspectorResetButton"
@@ -22365,6 +25404,62 @@ Rectangle {
                         }
                         MiniButton { objectName: "editInspectorSavePresetButton"; Layout.fillWidth: true; text: "Save Preset"; role: "secondary"; onClicked: root.saveStudioPreset() }
                     }
+                }
+                }
+                Rectangle {
+                    objectName: "creativeToolsResizeHandle"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: theme.scaled(5)
+                    visible: root.creativeToolsActive && !root.editCreativeToolsFloating && root.editInspectorPanelActive
+                    color: resizeHover.containsMouse ? theme.controlEdge : "transparent"
+                    MouseArea {
+                        id: resizeHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.SizeVerCursor
+                        property real startY: 0
+                        property real startHeight: 0
+                        onPressed: function(mouse) {
+                            startY = mapToItem(root, mouse.x, mouse.y).y
+                            startHeight = root.editCreativeToolsHeight
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed)
+                                root.editCreativeToolsHeight = root.clamp(startHeight -
+                                    (mapToItem(root, mouse.x, mouse.y).y - startY) / theme.interfaceScale, 200, 800)
+                        }
+                    }
+                }
+                ModularToolPanel {
+                    id: creativeToolsPanel
+                    objectName: "creativeToolsPanel"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    Layout.maximumWidth: parent.width
+                    // Keep the user's dock split stable while switching tools;
+                    // long tool settings scroll inside the panel instead.
+                    Layout.preferredHeight: Math.min(theme.scaled(root.editCreativeToolsHeight),
+                        root.editInspectorPanelActive ? parent.height * 0.55 : parent.height)
+                    Layout.fillHeight: !root.editInspectorPanelActive
+                    active: root.creativeToolsActive
+                    floating: root.editCreativeToolsFloating
+                    title: root.creativeToolKind === "paint" ? "Paint brush"
+                         : root.creativeToolKind === "eraser" ? "Eraser"
+                         : root.creativeToolKind === "brush" ? "Selection brush"
+                         : root.creativeToolKind === "selection" ? "Selection"
+                         : root.creativeToolKind === "text" ? "Typography"
+                         : root.creativeToolKind === "shape-properties" ? "Edit shape" : "New shape"
+                    targetText: root.creativeToolKind === "selection" || root.creativeToolKind === "brush"
+                        ? (editorPreview.hasActiveMask ? editorPreview.activeMaskName : "Choose a tool, then select on the image")
+                        : root.creativeToolKind === "shapes" ? "Draw a shape on the image"
+                        : root.editTool === "text"
+                            ? "Click or drag on the image to create text"
+                        : String(root.creativeToolLayer.displayName || root.creativeToolLayer.name || "Base image") +
+                            (root.creativeToolLayer.locked === true ? " · Locked" : "")
+                    onFloatingRequested: function(floating) { root.editCreativeToolsFloating = floating }
+                    onCloseRequested: root.editCreativeToolsVisible = false
+                    onUndoRequested: root.undoEdit()
+                    onRedoRequested: root.redoEdit()
                 }
             }
         }
@@ -22455,7 +25550,22 @@ Rectangle {
                     }
                     MiniButton { text: "Presets"; role: "segmented"; active: root.exportPresetsPanelVisible; onClicked: root.exportPresetsPanelVisible = !root.exportPresetsPanelVisible }
                     MiniButton { text: "Settings"; role: "segmented"; active: root.exportSettingsPanelVisible; onClicked: root.exportSettingsPanelVisible = !root.exportSettingsPanelVisible }
-                    MiniButton { text: root.compactMode ? "Pro" : "Compact"; role: "segmented"; active: root.compactMode; onClicked: root.toggleInterfaceMode() }
+                    MenuButton {
+                        objectName: "exportInterfaceDensityMenuButton"
+                        text: "Density"
+                        iconName: "density"
+                        tone: "secondary"
+                        compact: true
+                        primaryOpensMenu: true
+                        menuWidth: 210
+                        menuItems: [
+                            { key: "comfortable", label: "Comfortable", icon: "density", checked: root.interfaceDensity === "comfortable" },
+                            { key: "balanced", label: "Balanced", icon: "density", checked: root.interfaceDensity === "balanced" },
+                            { key: "compact", label: "Compact", icon: "density", checked: root.interfaceDensity === "compact" }
+                        ]
+                        tooltipText: "Choose the control size and spacing used throughout the app."
+                        onMenuItemTriggered: function(key) { root.setInterfaceDensity(key) }
+                    }
                     MenuButton {
                         objectName: "exportAddAssetsMenuButton"
                         text: "Add Assets"

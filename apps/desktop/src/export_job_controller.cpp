@@ -7,6 +7,13 @@
 #include "photo_editor/io/hdr_avif_io.h"
 
 #include <QDateTime>
+#include <QCache>
+#include <QCryptographicHash>
+#include <QDataStream>
+#include <QElapsedTimer>
+#include <QJsonDocument>
+#include <atomic>
+#include <memory>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -35,6 +42,23 @@
 #include "photo_editor/pipeline/output_rendering.h"
 
 namespace photo_editor::desktop {
+
+struct ExportPreflightRequest final {
+  QVariantMap input;
+  quint64 generation = 0;
+  std::shared_ptr<std::atomic_bool> cancellation = std::make_shared<std::atomic_bool>(false);
+};
+
+struct ExportPreflightCache final {
+  struct Entry {
+    QVariantMap source_report;
+    QByteArray source_revision;
+    QElapsedTimer age;
+  };
+  // Worker-owned report cache, capped by approximate serialized/recipe KiB.
+  QCache<QByteArray, Entry> reports{32 * 1024};
+  int source_build_count = 0;
+};
 
 namespace {
 
@@ -338,17 +362,7 @@ bool preflight_issue_code_present(const QVariantList& issues, const QString& cod
 }
 
 int preset_max_edge(const QString& preset) {
-  const auto normalized = preset.trimmed();
-  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
-    return 1440;
-  }
-  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
-    return 2048;
-  }
-  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
-    return 2560;
-  }
-  return 0;
+  return export_image_settings_for_preset(preset).max_edge;
 }
 
 QString preset_format(const QString& preset) {
@@ -405,8 +419,9 @@ QVariantMap plan_export_output(
       display_label.trimmed().isEmpty() ? fallback_label : display_label,
       QStringLiteral("Export"));
   if (!is_original_copy_preset(preset)) {
+    const auto display_preset = preset.section(QLatin1Char('|'), 0, 0).trimmed();
     stem += QStringLiteral("-%1").arg(
-        safe_export_token(preset.toLower(), QStringLiteral("export")));
+        safe_export_token(display_preset.toLower(), QStringLiteral("export")));
   }
   const auto suffix = planned_output_suffix(preset, source_path, render_photo);
   const auto extension = suffix.isEmpty() ? QString{} : QStringLiteral(".%1").arg(suffix);
@@ -446,7 +461,12 @@ QVariantMap plan_export_output(
       is_original_copy_preset(preset)
           ? QStringLiteral("Original file metadata preserved by byte-for-byte copy.")
           : QStringLiteral("Color profile and delivery verification recorded; camera metadata is not copied."));
-  plan.insert(QStringLiteral("sharpeningPolicy"), QStringLiteral("No additional output sharpening."));
+  const auto output_sharpening = export_output_sharpening_for_preset(preset);
+  plan.insert(QStringLiteral("sharpeningPolicy"),
+              output_sharpening == QStringLiteral("off")
+                  ? QStringLiteral("No additional output sharpening.")
+                  : QStringLiteral("%1 output sharpening after resizing.")
+                        .arg(output_sharpening == QStringLiteral("screen") ? QStringLiteral("Screen") : QStringLiteral("Print")));
   return plan;
 }
 
@@ -508,6 +528,12 @@ QJsonObject export_crop_metadata(
 }  // namespace
 
 ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {
+  preflight_cache_ = std::make_shared<ExportPreflightCache>();
+  preflight_timer_.setSingleShot(true);
+  preflight_timer_.setInterval(150);
+  connect(&preflight_timer_, &QTimer::timeout, this, &ExportJobController::startPreflight);
+  connect(&preflight_watcher_, &QFutureWatcher<QVariantMap>::finished,
+          this, &ExportJobController::finishPreflight);
   admission_writer_ = persist_export_admission;
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &ExportJobController::refreshJobs);
   history_reader_ = [] {
@@ -525,6 +551,9 @@ ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {
 }
 
 void ExportJobController::finishPendingAdmissions() {
+  // Preflight uses Qt image plugins too; finish worker reads while QApplication
+  // is still alive. Normal window closing waits for batch submission first.
+  preflightThreadPool().waitForDone();
   export_admission_pool()->waitForDone();
 }
 
@@ -543,6 +572,7 @@ bool ExportJobController::busy() const { return busy_; }
 
 QString ExportJobController::status() const {
   if (!startup_recovery_error_.isEmpty()) return QStringLiteral("Background jobs paused: %1").arg(startup_recovery_error_);
+  if (batch_submission_busy_) return QStringLiteral("Checking selected exports before saving jobs.");
   if (!submission_error_.isEmpty()) return submission_error_;
   if (pendingAdmissionCount() > 0) return QStringLiteral("Saving %1 export job(s) to the catalog…").arg(pendingAdmissionCount());
   const auto error = admissionError();
@@ -784,7 +814,8 @@ bool ExportJobController::queuePlannedExportWithCropConstraint(
             : QStringLiteral("Color profile and delivery verification recorded; camera metadata is not copied."));
     enriched_delivery_plan.insert(
         QStringLiteral("sharpeningPolicy"),
-        QStringLiteral("No additional output sharpening."));
+        delivery_plan.value(QStringLiteral("sharpeningPolicy"))
+            .toString(QStringLiteral("No additional output sharpening.")));
     job.metadata_json.insert(QStringLiteral("deliveryPlan"), enriched_delivery_plan);
   }
   job.preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
@@ -837,7 +868,18 @@ int ExportJobController::queueBatchExportWithCropConstraint(
     double crop_y,
     double crop_width,
     double crop_height) {
-  const auto batch_preflight = batchExportPreflight(assets, preset, destination_directory);
+  return queueBatchExportWithPlan(assets, preset, destination_directory, crop_preset,
+      crop_x, crop_y, crop_width, crop_height, batchExportPreflight(assets, preset, destination_directory));
+}
+
+int ExportJobController::queueBatchExportWithPlan(
+    const QVariantList& assets, const QString& preset, const QString& destination_directory,
+    const QString& crop_preset, double crop_x, double crop_y, double crop_width, double crop_height,
+    const QVariantMap& batch_preflight) {
+  QSet<QString> reserved_paths;
+  for (const auto& job : jobs_) {
+    if (!job.output_path.isEmpty()) reserved_paths.insert(QDir::cleanPath(job.output_path));
+  }
   const auto planned_items = batch_preflight.value(QStringLiteral("items")).toList();
   int queued = 0;
   for (qsizetype index = 0; index < assets.size(); ++index) {
@@ -852,16 +894,23 @@ int ExportJobController::queueBatchExportWithCropConstraint(
     const auto effective_preset =
         is_photo_media(media_type) ? preset : QStringLiteral("Original Copy");
     const auto effective_crop_preset = is_photo_media(media_type) ? crop_preset : QString();
-    const auto planned_item = index < planned_items.size() ? planned_items.at(index).toMap() : QVariantMap{};
-    if (planned_item.value(QStringLiteral("errorCount")).toInt() > 0) {
+    auto planned_item = index < planned_items.size() ? planned_items.at(index).toMap() : QVariantMap{};
+    if (planned_item.isEmpty() || planned_item.value(QStringLiteral("errorCount")).toInt() > 0) {
       continue;
     }
+    // Files and queued reservations may have changed since review. Re-plan the
+    // filename at admission; the cached report is never authority to overwrite.
+    const auto fresh_plan = plan_export_output(display_label_for_job(display_label, file_path),
+        normalized_local_path(file_path), media_type, effective_preset,
+        normalized_local_path(destination_directory), &reserved_paths);
+    for (auto item = fresh_plan.cbegin(); item != fresh_plan.cend(); ++item)
+      planned_item.insert(item.key(), item.value());
     if (queuePlannedExportWithCropConstraint(
             asset_id,
             media_type,
             display_label,
             file_path,
-            QString(),
+            asset.value(QStringLiteral("editedPreviewSource")).toString(),
             adjustment_payload,
             effective_preset,
             destination_directory,
@@ -878,19 +927,12 @@ int ExportJobController::queueBatchExportWithCropConstraint(
   return queued;
 }
 
-QVariantMap ExportJobController::exportPreflight(
-    const QString& media_type,
-    const QString& source_path,
-    const QString& edited_preview_source,
-    const QString& recipe_json,
-    const QString& preset,
-    const QString& destination_directory,
-    int histogram_sample_count,
-    int shadow_clip_count,
-    int highlight_clip_count,
-    int raw_clip_sample_count,
-    int raw_shadow_clip_count,
-    int raw_highlight_clip_count) const {
+namespace {
+
+QVariantMap build_export_source_report(
+    const QString& media_type, const QString& source_path,
+    const QString& edited_preview_source, const QString& recipe_json,
+    const QString& preset, bool* cacheable = nullptr) {
   QVariantList issues;
   auto error_count = 0;
   auto warning_count = 0;
@@ -907,14 +949,7 @@ QVariantMap ExportJobController::exportPreflight(
   const auto normalized_preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
   const auto normalized_source = normalized_local_path(source_path);
   const auto normalized_preview = normalized_local_path(edited_preview_source);
-  const auto normalized_destination = normalized_local_path(destination_directory);
   const auto render_photo = should_render_photo_job(normalized_media_type, normalized_preset);
-  const auto delivery_plan = plan_export_output(
-      QFileInfo(normalized_source).completeBaseName(),
-      normalized_source,
-      normalized_media_type,
-      normalized_preset,
-      normalized_destination);
   const auto export_settings = export_image_settings_for_preset(normalized_preset);
   const auto scene_linear_export = render_photo && export_settings.scene_linear;
   const auto explicit_scene_linear_interchange =
@@ -937,40 +972,7 @@ QVariantMap ExportJobController::exportPreflight(
             "HDR AVIF export was requested, but this build does not contain a working 10-bit AV1 encoder and decoder."));
   }
 
-  if (normalized_destination.isEmpty()) {
-    add_issue(
-        QStringLiteral("error"),
-        QStringLiteral("destination-missing"),
-        QStringLiteral("Choose an export destination."));
-  } else {
-    const QFileInfo destination_info(normalized_destination);
-    if (destination_info.exists() && !destination_info.isDir()) {
-      add_issue(
-          QStringLiteral("error"),
-          QStringLiteral("destination-not-folder"),
-          QStringLiteral("The export destination is not a folder."));
-    } else if (!destination_info.exists()) {
-      add_issue(
-          QStringLiteral("warning"),
-          QStringLiteral("destination-create"),
-          QStringLiteral("The destination folder will be created before export."));
-    } else if (!QFileInfo(normalized_destination).isWritable()) {
-      add_issue(
-          QStringLiteral("error"),
-          QStringLiteral("destination-unwritable"),
-          QStringLiteral("The export destination is not writable."));
-    }
-  }
-  if (!normalized_destination.isEmpty() &&
-      delivery_plan.value(QStringLiteral("collision")).toBool()) {
-    add_issue(
-        QStringLiteral("warning"),
-        QStringLiteral("output-collision-renamed"),
-        QStringLiteral("%1 already exists. The export will use %2 so the existing file is preserved.")
-            .arg(
-                QFileInfo(delivery_plan.value(QStringLiteral("preferredPath")).toString()).fileName(),
-                delivery_plan.value(QStringLiteral("outputFileName")).toString()));
-  }
+  const auto delivery_issue_offset = issues.size();
 
   QSize source_size;
   if (render_photo) {
@@ -1402,20 +1404,6 @@ QVariantMap ExportJobController::exportPreflight(
         QStringLiteral("RAW gamut mapping is off for an sRGB export."));
   }
 
-  if (histogram_sample_count > 0 && shadow_clip_count + highlight_clip_count > 0) {
-    add_issue(
-        QStringLiteral("warning"),
-        QStringLiteral("preview-clipping"),
-        QStringLiteral("The current preview has shadow or highlight clipping."));
-  }
-
-  if (raw_clip_sample_count > 0 && raw_shadow_clip_count + raw_highlight_clip_count > 0) {
-    add_issue(
-        QStringLiteral("warning"),
-        QStringLiteral("raw-clipping"),
-        QStringLiteral("The source has RAW clipping before edits."));
-  }
-
   QVariantMap result;
   result.insert(QStringLiteral("ok"), error_count == 0);
   result.insert(QStringLiteral("issueCount"), issues.size());
@@ -1652,12 +1640,6 @@ QVariantMap ExportJobController::exportPreflight(
       recipe_state.proof_icc_profile_asset.payload_sha256);
   result.insert(QStringLiteral("estimatedPixelWidth"), estimated_size.isValid() ? estimated_size.width() : 0);
   result.insert(QStringLiteral("estimatedPixelHeight"), estimated_size.isValid() ? estimated_size.height() : 0);
-  result.insert(QStringLiteral("outputPath"), delivery_plan.value(QStringLiteral("outputPath")));
-  result.insert(QStringLiteral("outputFileName"), delivery_plan.value(QStringLiteral("outputFileName")));
-  result.insert(QStringLiteral("collision"), delivery_plan.value(QStringLiteral("collision")));
-  result.insert(QStringLiteral("collisionOutcome"), delivery_plan.value(QStringLiteral("collisionOutcome")));
-  result.insert(QStringLiteral("metadataPolicy"), delivery_plan.value(QStringLiteral("metadataPolicy")));
-  result.insert(QStringLiteral("sharpeningPolicy"), delivery_plan.value(QStringLiteral("sharpeningPolicy")));
   result.insert(
       QStringLiteral("previewExportParity"),
       QVariantMap{
@@ -1671,13 +1653,126 @@ QVariantMap ExportJobController::exportPreflight(
           {QStringLiteral("expectedTolerance"),
            preview_export_parity_tolerance_for_preset(normalized_preset)},
       });
+  result.insert(QStringLiteral("_deliveryIssueOffset"), delivery_issue_offset);
+  if (cacheable != nullptr) {
+    // Registry mappings can change without a source-file revision. Re-evaluate
+    // custom ICC/DCP requests until those registries expose revision tokens.
+    *cacheable = !recipe_state.input_icc_profile_asset.configured() &&
+        !recipe_state.export_icc_profile_asset.configured() &&
+        !recipe_state.proof_icc_profile_asset.configured() &&
+        !recipe_state.camera_dcp_profile_asset.configured();
+  }
   return result;
 }
 
-QVariantMap ExportJobController::batchExportPreflight(
+QVariantMap finish_export_preflight(
+    QVariantMap result, const QString& media_type, const QString& source_path,
+    const QString& preset, const QString& destination_directory,
+    int histogram_sample_count, int shadow_clip_count, int highlight_clip_count,
+    int raw_clip_sample_count, int raw_shadow_clip_count, int raw_highlight_clip_count) {
+  const auto normalized_source = normalized_local_path(source_path);
+  const auto normalized_preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
+  const auto normalized_destination = normalized_local_path(destination_directory);
+  const auto delivery_plan = plan_export_output(
+      QFileInfo(normalized_source).completeBaseName(), normalized_source,
+      media_type.trimmed().toLower(), normalized_preset, normalized_destination);
+  auto issues = result.value(QStringLiteral("issues")).toList();
+  const auto offset = result.take(QStringLiteral("_deliveryIssueOffset")).toInt();
+  auto issue_position = offset;
+  auto error_count = result.value(QStringLiteral("errorCount")).toInt();
+  auto warning_count = result.value(QStringLiteral("warningCount")).toInt();
+  const auto add_issue = [&](const QString& severity, const QString& code, const QString& message) {
+    issues.insert(issue_position++, preflight_issue(severity, code, message));
+    if (severity == QStringLiteral("error")) ++error_count;
+    else if (severity == QStringLiteral("warning")) ++warning_count;
+  };
+  if (normalized_destination.isEmpty()) {
+    add_issue(
+        QStringLiteral("error"),
+        QStringLiteral("destination-missing"),
+        QStringLiteral("Choose an export destination."));
+  } else {
+    const QFileInfo destination_info(normalized_destination);
+    if (destination_info.exists() && !destination_info.isDir()) {
+      add_issue(
+          QStringLiteral("error"),
+          QStringLiteral("destination-not-folder"),
+          QStringLiteral("The export destination is not a folder."));
+    } else if (!destination_info.exists()) {
+      add_issue(
+          QStringLiteral("warning"),
+          QStringLiteral("destination-create"),
+          QStringLiteral("The destination folder will be created before export."));
+    } else if (!QFileInfo(normalized_destination).isWritable()) {
+      add_issue(
+          QStringLiteral("error"),
+          QStringLiteral("destination-unwritable"),
+          QStringLiteral("The export destination is not writable."));
+    }
+  }
+  if (!normalized_destination.isEmpty() &&
+      delivery_plan.value(QStringLiteral("collision")).toBool()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("output-collision-renamed"),
+        QStringLiteral("%1 already exists. The export will use %2 so the existing file is preserved.")
+            .arg(
+                QFileInfo(delivery_plan.value(QStringLiteral("preferredPath")).toString()).fileName(),
+                delivery_plan.value(QStringLiteral("outputFileName")).toString()));
+  }
+
+  issue_position = static_cast<int>(issues.size());
+  if (histogram_sample_count > 0 && shadow_clip_count + highlight_clip_count > 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("preview-clipping"),
+        QStringLiteral("The current preview has shadow or highlight clipping."));
+  }
+
+  if (raw_clip_sample_count > 0 && raw_shadow_clip_count + raw_highlight_clip_count > 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("raw-clipping"),
+        QStringLiteral("The source has RAW clipping before edits."));
+  }
+
+  result.insert(QStringLiteral("ok"), error_count == 0);
+  result.insert(QStringLiteral("issueCount"), issues.size());
+  result.insert(QStringLiteral("errorCount"), error_count);
+  result.insert(QStringLiteral("warningCount"), warning_count);
+  result.insert(QStringLiteral("issues"), issues);
+  result.insert(QStringLiteral("outputPath"), delivery_plan.value(QStringLiteral("outputPath")));
+  result.insert(QStringLiteral("outputFileName"), delivery_plan.value(QStringLiteral("outputFileName")));
+  result.insert(QStringLiteral("collision"), delivery_plan.value(QStringLiteral("collision")));
+  result.insert(QStringLiteral("collisionOutcome"), delivery_plan.value(QStringLiteral("collisionOutcome")));
+  result.insert(QStringLiteral("metadataPolicy"), delivery_plan.value(QStringLiteral("metadataPolicy")));
+  result.insert(QStringLiteral("sharpeningPolicy"), delivery_plan.value(QStringLiteral("sharpeningPolicy")));
+  return result;
+}
+
+}  // namespace
+
+QVariantMap ExportJobController::exportPreflight(
+    const QString& media_type, const QString& source_path,
+    const QString& edited_preview_source, const QString& recipe_json,
+    const QString& preset, const QString& destination_directory,
+    int histogram_sample_count, int shadow_clip_count, int highlight_clip_count,
+    int raw_clip_sample_count, int raw_shadow_clip_count, int raw_highlight_clip_count) const {
+  return finish_export_preflight(
+      build_export_source_report(media_type, source_path, edited_preview_source, recipe_json, preset),
+      media_type, source_path, preset, destination_directory,
+      histogram_sample_count, shadow_clip_count, highlight_clip_count,
+      raw_clip_sample_count, raw_shadow_clip_count, raw_highlight_clip_count);
+}
+
+namespace {
+
+QVariantMap build_batch_export_preflight(
     const QVariantList& assets,
     const QString& preset,
-    const QString& destination_directory) const {
+    const QString& destination_directory,
+    const std::function<QVariantMap(const QVariantMap&, const QString&, const QString&)>& single_report,
+    const std::shared_ptr<std::atomic_bool>& cancellation = {}) {
   QVariantList items;
   QSet<QString> reserved_paths;
   auto ready_count = 0;
@@ -1689,28 +1784,15 @@ QVariantMap ExportJobController::batchExportPreflight(
   const auto normalized_destination = normalized_local_path(destination_directory);
 
   for (qsizetype index = 0; index < assets.size(); ++index) {
+    if (cancellation && cancellation->load(std::memory_order_relaxed)) return {};
     const auto asset = assets.at(index).toMap();
     const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
     const auto media_type = asset.value(QStringLiteral("mediaType"), QStringLiteral("photo")).toString().trimmed().toLower();
     const auto source_path = asset.value(QStringLiteral("filePath")).toString();
-    const auto adjustment_payload =
-        asset.value(QStringLiteral("adjustmentPatchJson")).toString();
     const auto display_label = display_label_for_job(
         asset.value(QStringLiteral("displayLabel")).toString(), source_path);
     const auto effective_preset = is_photo_media(media_type) ? preset : QStringLiteral("Original Copy");
-    const auto single_preflight = exportPreflight(
-        media_type,
-        source_path,
-        QString(),
-        adjustment_payload,
-        effective_preset,
-        normalized_destination,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0);
+    const auto single_preflight = single_report(asset, effective_preset, normalized_destination);
     auto plan = plan_export_output(
         display_label,
         normalized_local_path(source_path),
@@ -1771,8 +1853,214 @@ QVariantMap ExportJobController::batchExportPreflight(
   result.insert(QStringLiteral("preset"), preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed());
   result.insert(QStringLiteral("items"), items);
   result.insert(QStringLiteral("metadataPolicy"), QStringLiteral("Color profile and delivery verification recorded; camera metadata is not copied."));
-  result.insert(QStringLiteral("sharpeningPolicy"), QStringLiteral("No additional output sharpening."));
+  const auto sharpening = export_output_sharpening_for_preset(preset);
+  result.insert(QStringLiteral("sharpeningPolicy"),
+                sharpening == QStringLiteral("off")
+                    ? QStringLiteral("No additional output sharpening.")
+                    : QStringLiteral("%1 output sharpening after resizing.")
+                          .arg(sharpening == QStringLiteral("screen") ? QStringLiteral("Screen") : QStringLiteral("Print")));
   return result;
+}
+
+}  // namespace
+
+QVariantMap ExportJobController::batchExportPreflight(
+    const QVariantList& assets, const QString& preset, const QString& destination_directory) const {
+  return build_batch_export_preflight(assets, preset, destination_directory,
+      [this](const QVariantMap& asset, const QString& effective_preset, const QString& destination) {
+        return exportPreflight(asset.value(QStringLiteral("mediaType"), QStringLiteral("photo")).toString(),
+            asset.value(QStringLiteral("filePath")).toString(), {},
+            asset.value(QStringLiteral("adjustmentPatchJson")).toString(), effective_preset, destination,
+            0, 0, 0, 0, 0, 0);
+      });
+}
+
+namespace {
+
+QByteArray export_source_revision(const QString& source, const QString& preview) {
+  QByteArray bytes;
+  QDataStream stream(&bytes, QIODevice::WriteOnly);
+  for (const auto& path : {source, preview}) {
+    const QFileInfo info(path);
+    stream << path << info.exists() << info.isReadable() << info.canonicalFilePath()
+           << info.size() << info.lastModified().toMSecsSinceEpoch()
+           << info.metadataChangeTime().toMSecsSinceEpoch();
+  }
+  return bytes;
+}
+
+QVariantMap cached_export_preflight(
+    ExportPreflightCache& cache, const QVariantMap& asset, const QString& preset,
+    const QString& destination, const QVariantMap& scopes = {}) {
+  const auto media = asset.value(QStringLiteral("mediaType"), QStringLiteral("photo")).toString();
+  const auto source = normalized_local_path(asset.value(QStringLiteral("filePath")).toString());
+  const auto preview = normalized_local_path(asset.value(QStringLiteral("editedPreviewSource")).toString());
+  const auto recipe = asset.value(QStringLiteral("adjustmentPatchJson")).toString();
+  QByteArray input;
+  QDataStream stream(&input, QIODevice::WriteOnly);
+  stream << media << source << preview << recipe << preset;
+  const auto key = QCryptographicHash::hash(input, QCryptographicHash::Sha256);
+  const auto revision = export_source_revision(source, preview);
+  auto* entry = cache.reports.object(key);
+  QVariantMap source_report;
+  if (entry && entry->source_revision == revision && entry->age.elapsed() < 30000) {
+    source_report = entry->source_report;
+  } else {
+    bool cacheable = false;
+    source_report = build_export_source_report(media, source, preview, recipe, preset, &cacheable);
+    ++cache.source_build_count;
+    if (cacheable && export_source_revision(source, preview) == revision) {
+      auto next = std::make_unique<ExportPreflightCache::Entry>();
+      next->source_report = source_report;
+      next->source_revision = revision;
+      next->age.start();
+      const auto bytes = QJsonDocument::fromVariant(source_report).toJson(QJsonDocument::Compact).size()
+          + recipe.size() * 2 + revision.size() + 512;
+      const auto cost = static_cast<int>(std::min<qsizetype>(32 * 1024 + 1, (bytes + 1023) / 1024));
+      cache.reports.insert(key, next.release(), cost);
+    }
+  }
+  return finish_export_preflight(source_report, media, source, preset, destination,
+      scopes.value(QStringLiteral("histogramSamples")).toInt(),
+      scopes.value(QStringLiteral("shadowClip")).toInt(), scopes.value(QStringLiteral("highlightClip")).toInt(),
+      scopes.value(QStringLiteral("rawSamples")).toInt(),
+      scopes.value(QStringLiteral("rawShadowClip")).toInt(), scopes.value(QStringLiteral("rawHighlightClip")).toInt());
+}
+
+}  // namespace
+
+bool ExportJobController::queueBatchExportAsync(
+    const QVariantList& assets, const QString& preset, const QString& destination_directory,
+    const QString& crop_preset, double crop_x, double crop_y, double crop_width, double crop_height) {
+  if (batch_submission_busy_ || assets.isEmpty()) return false;
+  cancelPreflight();
+  batch_submission_busy_ = true;
+  batch_submission_cancellation_ = std::make_shared<std::atomic_bool>(false);
+  const auto cancellation = batch_submission_cancellation_;
+  auto* watcher = new QFutureWatcher<QVariantMap>(this);
+  connect(watcher, &QFutureWatcher<QVariantMap>::finished, this,
+      [this, watcher, assets, preset, destination_directory, crop_preset,
+       crop_x, crop_y, crop_width, crop_height] {
+    int queued = 0;
+    try {
+      queued = queueBatchExportWithPlan(assets, preset, destination_directory, crop_preset,
+          crop_x, crop_y, crop_width, crop_height, watcher->result());
+    } catch (...) {
+      rejectSubmission(QStringLiteral("Export checks failed. Retry the selected exports."));
+    }
+    watcher->deleteLater();
+    batch_submission_busy_ = false;
+    batch_submission_cancellation_.reset();
+    emit batchSubmissionChanged();
+    emit statusChanged();
+    emit batchSubmissionFinished(queued, static_cast<int>(assets.size()));
+  });
+  watcher->setFuture(QtConcurrent::run(&preflightThreadPool(), [assets, preset, destination_directory, cancellation] {
+    // Fresh source/profile validation for submission, independent of review cache.
+    return build_batch_export_preflight(assets, preset, destination_directory,
+        [](const QVariantMap& asset, const QString& effective_preset, const QString& destination) {
+          const auto media = asset.value(QStringLiteral("mediaType"), QStringLiteral("photo")).toString();
+          const auto path = asset.value(QStringLiteral("filePath")).toString();
+          const auto preview = asset.value(QStringLiteral("editedPreviewSource")).toString();
+          return finish_export_preflight(build_export_source_report(media, path, preview,
+              asset.value(QStringLiteral("adjustmentPatchJson")).toString(), effective_preset),
+              media, path, effective_preset, destination, 0, 0, 0, 0, 0, 0);
+        }, cancellation);
+  }));
+  emit batchSubmissionChanged();
+  emit statusChanged();
+  return true;
+}
+
+ExportJobController::~ExportJobController() {
+  if (batch_submission_cancellation_) batch_submission_cancellation_->store(true, std::memory_order_relaxed);
+  if (active_preflight_) active_preflight_->cancellation->store(true, std::memory_order_relaxed);
+}
+
+QThreadPool& ExportJobController::preflightThreadPool() {
+  static QThreadPool pool;
+  static const bool configured = [] { pool.setMaxThreadCount(1); pool.setExpiryTimeout(30000); return true; }();
+  Q_UNUSED(configured)
+  return pool;
+}
+
+void ExportJobController::requestPreflight(const QVariantMap& request, bool force) {
+  if (!force && request == preflight_input_ &&
+      (preflight_busy_ || (preflight_age_.isValid() && preflight_age_.elapsed() < 2000))) return;
+  if (active_preflight_) active_preflight_->cancellation->store(true, std::memory_order_relaxed);
+  preflight_input_ = request;
+  auto next = std::make_shared<ExportPreflightRequest>();
+  next->input = request;
+  next->generation = ++preflight_generation_;
+  pending_preflight_ = std::move(next);
+  single_preflight_.clear();
+  batch_preflight_.clear();
+  preflight_busy_ = true;
+  preflight_timer_.start();
+  emit preflightChanged();
+}
+
+void ExportJobController::cancelPreflight() {
+  ++preflight_generation_;
+  if (active_preflight_) active_preflight_->cancellation->store(true, std::memory_order_relaxed);
+  pending_preflight_.reset();
+  preflight_timer_.stop();
+  preflight_age_.invalidate();
+  preflight_input_.clear();
+  single_preflight_.clear();
+  batch_preflight_.clear();
+  preflight_busy_ = false;
+  emit preflightChanged();
+}
+
+void ExportJobController::startPreflight() {
+  if (active_preflight_ || !pending_preflight_) return;
+  active_preflight_ = std::move(pending_preflight_);
+  const auto request = active_preflight_;
+  const auto cache = preflight_cache_;
+  preflight_watcher_.setFuture(QtConcurrent::run(&preflightThreadPool(), [request, cache] {
+    const auto cancelled = [&] { return request->cancellation->load(std::memory_order_relaxed); };
+    if (cancelled()) return QVariantMap{};
+    const auto single = request->input.value(QStringLiteral("single")).toMap();
+    const auto assets = request->input.value(QStringLiteral("assets")).toList();
+    const auto preset = request->input.value(QStringLiteral("preset")).toString();
+    const auto destination = request->input.value(QStringLiteral("destination")).toString();
+    const auto scopes = request->input.value(QStringLiteral("scopes")).toMap();
+    auto single_result = cached_export_preflight(*cache, single, preset, destination, scopes);
+    if (cancelled()) return QVariantMap{};
+    auto batch_result = build_batch_export_preflight(assets, preset, destination,
+        [&](const QVariantMap& asset, const QString& effective_preset, const QString& output) {
+          return cached_export_preflight(*cache, asset, effective_preset, output);
+        }, request->cancellation);
+    return QVariantMap{{QStringLiteral("single"), single_result}, {QStringLiteral("batch"), batch_result},
+                      {QStringLiteral("sourceBuildCount"), cache->source_build_count}};
+  }));
+}
+
+void ExportJobController::finishPreflight() {
+  const auto request = std::move(active_preflight_);
+  if (!request) return;
+  QVariantMap result;
+  try {
+    result = preflight_watcher_.result();
+  } catch (...) {
+    const QVariantMap failure{{QStringLiteral("ok"), false}, {QStringLiteral("errorCount"), 1},
+        {QStringLiteral("readyCount"), 0}, {QStringLiteral("blockedCount"), 1},
+        {QStringLiteral("issues"), QVariantList{preflight_issue(QStringLiteral("error"),
+            QStringLiteral("preflight-failed"), QStringLiteral("Export checks failed. Change the settings or retry."))}}};
+    result.insert(QStringLiteral("single"), failure);
+    result.insert(QStringLiteral("batch"), failure);
+  }
+  if (request->generation == preflight_generation_ &&
+      !request->cancellation->load(std::memory_order_relaxed)) {
+    single_preflight_ = result.value(QStringLiteral("single")).toMap();
+    batch_preflight_ = result.value(QStringLiteral("batch")).toMap();
+    preflight_source_build_count_ = result.value(QStringLiteral("sourceBuildCount")).toInt();
+    preflight_busy_ = false;
+    preflight_age_.start();
+    emit preflightChanged();
+  }
+  if (!preflight_timer_.isActive()) startPreflight();
 }
 
 QString ExportJobController::revealTarget(const QString& job_id) const {

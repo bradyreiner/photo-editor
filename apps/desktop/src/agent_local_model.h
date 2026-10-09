@@ -2,6 +2,8 @@
 
 #include <functional>
 
+#include <QList>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -23,6 +25,9 @@ struct AgentLocalModelPlanRequest final {
   QVariantMap memory_packet;
   QVariantList few_shot_examples;
   bool allow_tool_call_plan = false;
+  // Require a structured tool plan instead of accepting a final numeric edit
+  // intent. This is request-scoped and only meaningful when tools are allowed.
+  bool require_tool_call_plan = false;
   bool force_model_planning = false;
   bool allow_deterministic_fallback = true;
   std::function<bool()> cancellation_requested;
@@ -72,6 +77,29 @@ struct AgentLocalModelProofCritiqueResult final {
   QStringList warnings;
 };
 
+// Read-only conversation planning. This transport can suggest questions and an
+// approved plan, but it has no command or mutation interface.
+struct AgentLocalModelTaskSessionRequest final {
+  QString model_id;
+  QVariantMap brief;
+  QVariantMap context;
+  QVariantMap answers;
+  QVariantList prior_questions;
+  std::function<bool()> cancellation_requested;
+  std::function<void(const QString&)> activity_received;
+};
+
+struct AgentLocalModelTaskSessionResult final {
+  bool ok = false;
+  QString error_message;
+  QString model_id;
+  QString decision;
+  QVariantList questions;
+  QVariantMap plan;
+  QVariantMap prompt_audit;
+  QStringList warnings;
+};
+
 [[nodiscard]] QVariantList available_agent_local_models();
 [[nodiscard]] QString default_agent_local_model_id();
 [[nodiscard]] QVariantMap probe_agent_local_model(const QString& model_id);
@@ -79,5 +107,26 @@ struct AgentLocalModelProofCritiqueResult final {
     const AgentLocalModelPlanRequest& request);
 [[nodiscard]] AgentLocalModelProofCritiqueResult critique_agent_rendered_proof(
     const AgentLocalModelProofCritiqueRequest& request);
+[[nodiscard]] AgentLocalModelTaskSessionResult plan_agent_task_session(
+    const AgentLocalModelTaskSessionRequest& request);
+[[nodiscard]] QStringList agent_composition_text_layer_ids(const QVariantList& tool_reports);
+[[nodiscard]] QVariantMap agent_graphic_proof_layout_metrics(const QVariantMap& layer);
+[[nodiscard]] QVariantList agent_graphic_proof_layers(
+    const QVariantList& layers, const QStringList& composition_text_layer_ids = {});
+
+namespace agent_detail {
+// Bind each approved text action to one primary role and exact copy.
+[[nodiscard]] QVariantMap approved_typography_role_copy(
+    const QVariantList& plan_actions, const QVariantList& expected_copy);
+[[nodiscard]] QVariantMap typography_hierarchy_fit_guidance(
+    const QVariantMap& headline_layer, double minimum_ratio);
+// Shared production audit helper for image-token context reservations. Missing,
+// malformed, unrecognized, or larger images intentionally keep the 4096-token
+// fallback; tests use this same implementation for those fail-safe branches.
+[[nodiscard]] QVariantList ollama_image_context_reservations(
+    const QString& model_name,
+    const QList<QSize>& transmitted_sizes,
+    int attached_image_count);
+}  // namespace agent_detail
 
 }  // namespace photo_editor::desktop

@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
   qputenv("PHOTO_EDITOR_CACHE_DIR", cache_root.path().toUtf8());
   qputenv("PHOTO_EDITOR_DATABASE_URL", QByteArray("postgres://example/test"));
+  qputenv("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP", QByteArray("0"));
 
   const auto app_data_location = photo_editor::desktop::AppBootstrap::appDataLocation();
   const auto cache_location = photo_editor::desktop::AppBootstrap::cacheLocation();
@@ -123,7 +124,8 @@ int main(int argc, char** argv) {
       environment.value(QStringLiteral("PHOTO_EDITOR_LOG_DIR")) != photo_editor::desktop::AppBootstrap::logLocation() ||
       environment.value(QStringLiteral("PHOTO_EDITOR_BACKUP_DIR")) != photo_editor::desktop::AppBootstrap::backupLocation() ||
       environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")) !=
-          QStringLiteral("postgres://example/test")) {
+          QStringLiteral("postgres://example/test") ||
+      environment.value(QStringLiteral("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP")) != QStringLiteral("0")) {
     return fail("prepared process environment should preserve the explicit PostgreSQL authority");
   }
 

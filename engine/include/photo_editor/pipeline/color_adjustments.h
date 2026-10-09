@@ -269,6 +269,9 @@ struct LutAdjustment final {
   std::array<double, 3> domain_max = {1.0, 1.0, 1.0};
   std::string input_color_space = "sRGB";
   std::string output_color_space = "sRGB";
+  std::vector<ColorPixel> shaper_table;
+  int shaper_size = 0;
+  std::array<double, 2> shaper_input_range = {0.0, 1.0};
 };
 
 constexpr int kColorMixerChannelCount = 8;
@@ -277,7 +280,11 @@ constexpr std::array<const char*, kColorMixerChannelCount> kColorMixerChannelNam
 };
 
 struct PhotoLayer final {
+  // Resolve against the base at the layer stage, before any sibling content.
+  bool copy_base_image = false;
+  bool erase_base_image = false;
   std::string id;
+  std::string parent_id;
   std::string name;
   std::string kind = "adjustment";
   std::string blend_mode = "normal";
@@ -388,6 +395,9 @@ struct PhotoLayer final {
   std::string lut_input_color_space = "sRGB";
   std::string lut_output_color_space = "sRGB";
   std::vector<LutAdjustment> lut_stack;
+  std::vector<ColorPixel> lut_shaper_table;
+  int lut_shaper_size = 0;
+  std::array<double, 2> lut_shaper_input_range = {0.0, 1.0};
   ColorPixel fill_color = {0.5F, 0.5F, 0.5F, 1.0F};
   std::vector<uint8_t> mask_data;
   int mask_width = 0;
@@ -398,6 +408,15 @@ struct PhotoLayer final {
   std::vector<ColorPixel> pixels;
   int pixel_width = 0;
   int pixel_height = 0;
+  // Material typography is resolved during source-over against only the
+  // backdrop accumulated below this text layer.
+  std::string text_material;
+  ColorPixel text_material_tint = {0.34F, 0.48F, 0.58F, 1.0F};
+  double text_material_blur = 6.0;
+  double text_material_transmission = 0.68;
+  double text_material_edge_softness = 1.0;
+  double text_material_depth = 4.0;
+  double text_material_light_angle = -45.0;
   int x = 0;
   int y = 0;
   double transform_scale = 1.0;
@@ -406,6 +425,7 @@ struct PhotoLayer final {
   std::vector<PhotoEffectMaskRaster> effect_masks;
   double effect_scale_x = 1.0;
   double effect_scale_y = 1.0;
+  std::array<double, 3> effect_luminance_weights{0.2126, 0.7152, 0.0722};
   std::string effect_error;
   int effect_padding_x = 0;
   int effect_padding_y = 0;
@@ -562,6 +582,9 @@ struct ColorAdjustmentState final {
   std::string lut_input_color_space = "sRGB";
   std::string lut_output_color_space = "sRGB";
   std::vector<LutAdjustment> lut_stack;
+  std::vector<ColorPixel> lut_shaper_table;
+  int lut_shaper_size = 0;
+  std::array<double, 2> lut_shaper_input_range = {0.0, 1.0};
   double grading_shadows_hue = 0.0;
   double grading_shadows_saturation = 0.0;
   double grading_shadows_luminance = 0.0;
@@ -591,6 +614,17 @@ struct ColorAdjustmentState final {
   std::vector<LocalMaskSet> local_mask_sets;
   std::vector<LocalMask> retouch_masks;
   std::vector<LocalMask> local_masks;
+  // Plain root text layers that the desktop compiler has proven safe to
+  // composite in display-linear space after photographic output. The normal
+  // layer stage applies these in working-scene space when the output plan
+  // cannot honor that policy.
+  std::vector<PhotoLayer> display_referred_text_layers;
+  std::string display_referred_text_color_domain = "working-scene-linear";
+  std::string display_referred_text_eligibility = "legacy-working-scene";
+  std::string display_referred_text_eligibility_reason =
+      "no-topmost-plain-text-suffix";
+  std::string display_referred_text_policy_version =
+      "display-referred-text-suffix-v1";
   std::vector<PhotoLayer> photo_layers;
 };
 
@@ -653,6 +687,11 @@ struct ColorLut3D final {
   double shoulder_threshold = 1.0;
   double shoulder_headroom = 1.0;
   bool valid = false;
+  // Optional per-channel CUBE shaper, applied before the 3D table. A pure
+  // 1D CUBE has size == 0 and an empty table while retaining this payload.
+  std::vector<ColorPixel> shaper_table;
+  int shaper_size = 0;
+  std::array<double, 2> shaper_input_range = {0.0, 1.0};
 };
 
 // Immutable, scene-linear global-tone program shared by the exact CPU stage
@@ -950,6 +989,9 @@ void apply_aces2_output_lut_target_application(
     std::string_view chromatic_adaptation_method = "Bradford");
 [[nodiscard]] ColorLut3D build_color_lut(const ColorAdjustmentState& state);
 [[nodiscard]] ColorPixel apply_lut(const ColorLut3D& lut, const ColorPixel& pixel);
+[[nodiscard]] ColorPixel apply_lut_tetrahedral(
+    const ColorLut3D& lut,
+    const ColorPixel& pixel);
 [[nodiscard]] CubeLutParseResult parse_cube_lut(std::string_view text);
 [[nodiscard]] CubeLutParseResult load_cube_lut_file(std::string_view file_path);
 [[nodiscard]] std::string serialize_cube_lut(const ColorLut3D& lut, std::string_view title = {});
@@ -1008,6 +1050,13 @@ struct ColorAdjustmentTelemetry final {
   std::int64_t detail_output_ms = 0;
   std::int64_t geometry_ms = 0;
   std::int64_t photographic_output_ms = 0;
+  std::string display_referred_text_color_domain = "working-scene-linear";
+  std::string display_referred_text_eligibility = "legacy-working-scene";
+  std::string display_referred_text_eligibility_reason;
+  std::string display_referred_text_policy_version =
+      "display-referred-text-suffix-v1";
+  std::int64_t display_referred_text_layer_count = 0;
+  std::int64_t display_referred_text_applied_layer_count = 0;
   std::int64_t proof_ms = 0;
   std::int64_t device_transform_ms = 0;
   std::int64_t publish_ms = 0;
@@ -1066,7 +1115,8 @@ struct ColorPrefixStageContext final {
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_photographic_output_stage(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -1075,7 +1125,9 @@ struct ColorPrefixStageContext final {
     GamutWarningTarget target,
     Aces2OutputLutQuality quality,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    std::span<const PhotoLayer> display_referred_text_layers = {},
+    bool display_referred_text_overlay_enabled = false);
 [[nodiscard]] bool apply_color_publish_stage(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -1090,7 +1142,9 @@ struct ColorPrefixStageContext final {
     const ColorAdjustmentState& state,
     RemovalQuality removal_quality = RemovalQuality::Interactive,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false,
+    bool include_display_referred_text_layers = true);
 [[nodiscard]] ColorPrefixStageContext prepare_color_prefix_stage_context(
     std::span<const ColorPixel> decoded_pixels,
     int width,
@@ -1103,7 +1157,8 @@ struct ColorPrefixStageContext final {
     const ColorAdjustmentState& state,
     ColorPrefixStageContext* context,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_camera_characterization_stage(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -1111,35 +1166,40 @@ struct ColorPrefixStageContext final {
     const ColorAdjustmentState& state,
     const ColorPrefixStageContext& context,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_scene_adjustments_stage(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_tone_stage(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_curves_stage(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_look_stage(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const ColorAdjustmentState& state,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 [[nodiscard]] bool apply_color_compatibility_output_stage(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -1170,7 +1230,8 @@ bool apply_color_adjustments_through_layers(
     const ColorAdjustmentState& state,
     RemovalQuality removal_quality = RemovalQuality::Interactive,
     CancellationToken cancellation = {},
-    ColorAdjustmentTelemetry* telemetry = nullptr);
+    ColorAdjustmentTelemetry* telemetry = nullptr,
+    bool input_finite_validated = false);
 bool apply_color_adjustments_through_detail(
     std::vector<ColorPixel>* pixels,
     int width,

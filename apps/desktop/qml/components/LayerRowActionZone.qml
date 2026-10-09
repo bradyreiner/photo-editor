@@ -9,6 +9,7 @@ RowLayout {
     id: root
 
     property bool brushMode: false
+    property bool showEditButton: true
     property bool hasMask: false
     property bool maskSelected: false
     property bool layerVisible: true
@@ -16,18 +17,38 @@ RowLayout {
     property int layerIndex: -1
     property color accent: theme.accentCool400
     property var menuItems: []
-    readonly property string actionZoneContract: "layer-row-action-zone:v4|component:LayerRowActionZone|normal-width:60|brush-width:30|brush:more-only|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true"
+    readonly property string actionZoneContract: "layer-row-action-zone:v6|component:LayerRowActionZone|normal-width:edit-visibility-more|brush-width:edit-more|edit:labeled|summary-in-tooltip:true|mask-state:tooltip-only|opacity-readout:properties-only|visibility:icon-only|more:icon-only|hover-no-shift:true|no-elide:true"
 
+    signal editClicked()
     signal visibilityClicked()
     signal menuItemTriggered(string key)
 
     Theme { id: theme }
 
-    Layout.preferredWidth: root.brushMode ? 30 : 60
-    Layout.minimumWidth: root.brushMode ? 30 : 60
-    Layout.maximumWidth: root.brushMode ? 30 : 60
-    Layout.preferredHeight: 28
-    spacing: 4
+    readonly property int editButtonWidth: theme.scaled(58)
+    readonly property int visibleActionCount: (root.showEditButton ? 1 : 0) +
+                                               (root.brushMode ? 0 : 1) + 1
+    Layout.preferredWidth: (root.showEditButton ? editButtonWidth : 0) +
+                           (root.brushMode ? 0 : theme.iconButtonSizeCompact) +
+                           theme.iconButtonSizeCompact +
+                           Math.max(0, visibleActionCount - 1) * theme.space4
+    Layout.minimumWidth: Layout.preferredWidth
+    Layout.maximumWidth: Layout.preferredWidth
+    Layout.preferredHeight: theme.iconButtonSizeCompact
+    spacing: theme.space4
+
+    Components.ToolButton {
+        objectName: "photoLayerRowEditButton"
+        Layout.preferredWidth: root.editButtonWidth
+        visible: root.showEditButton
+        iconName: "edit"
+        compact: true
+        showLabel: true
+        label: "Edit"
+        active: false
+        enabled: root.layerIndex >= 0
+        onClicked: root.editClicked()
+    }
 
     Rectangle {
         objectName: "photoLayerMaskStatePill"
@@ -83,10 +104,10 @@ RowLayout {
     Components.ToolButton {
         objectName: "photoLayerVisibilityButton"
         visible: !root.brushMode
-        iconName: root.layerVisible ? "visible" : "media"
+        iconName: root.layerVisible ? "visible" : "hidden"
         compact: true
         label: root.layerVisible ? "Hide layer" : "Show layer"
-        active: root.layerVisible
+        active: false
         onClicked: root.visibilityClicked()
     }
 
@@ -99,24 +120,10 @@ RowLayout {
         onClicked: photoLayerRowMenu.open()
     }
 
-    Menu {
+    LayerActionsMenu {
         id: photoLayerRowMenu
-
-        Instantiator {
-            model: root.menuItems || []
-
-            delegate: MenuItem {
-                required property var modelData
-
-                text: String(modelData.label || "")
-                enabled: modelData.enabled !== false
-                checkable: modelData.checked !== undefined
-                checked: modelData.checked === true
-                onTriggered: root.menuItemTriggered(String(modelData.key || ""))
-            }
-
-            onObjectAdded: function(index, object) { photoLayerRowMenu.insertItem(index, object) }
-            onObjectRemoved: function(index, object) { photoLayerRowMenu.removeItem(object) }
-        }
+        objectName: "photoLayerRowActionsPopup"
+        menuItems: root.menuItems
+        onMenuItemTriggered: function(key) { root.menuItemTriggered(key) }
     }
 }

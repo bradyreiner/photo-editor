@@ -12,6 +12,56 @@
 #endif
 
 namespace photo_editor::desktop {
+namespace {
+bool readTrustedKeys(const QByteArray& primary_public_key,
+    const QString& primary_key_id, const QByteArray& json, QJsonObject* output) {
+  static const QRegularExpression key_id_pattern(QStringLiteral("^[A-Za-z0-9_-]{1,80}$"));
+  static const QRegularExpression key_pattern(QStringLiteral("^[A-Za-z0-9+/]{43}=$"));
+  if (primary_public_key.size() != 32 || !key_id_pattern.match(primary_key_id).hasMatch() || json.size() > 8192) return false;
+  QJsonParseError error;
+  const auto document = QJsonDocument::fromJson(json.isEmpty() ? QByteArray("{}") : json, &error);
+  if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
+  auto keys = document.object();
+  if (keys.size() > 4) return false;
+  for (auto it = keys.constBegin(); it != keys.constEnd(); ++it) {
+    if (!key_id_pattern.match(it.key()).hasMatch() || !it.value().isString() ||
+        !key_pattern.match(it.value().toString()).hasMatch()) return false;
+    const auto encoded = it.value().toString().toLatin1();
+    const auto decoded = QByteArray::fromBase64(encoded, QByteArray::AbortOnBase64DecodingErrors);
+    if (decoded.size() != 32 || decoded.toBase64() != encoded) return false;
+    if (it.key() == primary_key_id && decoded != primary_public_key) return false;
+  }
+  keys.insert(primary_key_id, QString::fromLatin1(primary_public_key.toBase64()));
+  *output = keys;
+  return true;
+}
+}  // namespace
+
+bool validCustomerKeyConfiguration(const QByteArray& primary_public_key,
+    const QString& primary_key_id, const QByteArray& trusted_keys_json) {
+  QJsonObject keys;
+  return readTrustedKeys(primary_public_key, primary_key_id, trusted_keys_json, &keys);
+}
+
+CustomerLeaseResult verifyCustomerLeaseWithTrustedKeys(
+    const QByteArray& token, const QByteArray& primary_public_key,
+    const QString& primary_key_id, const QByteArray& trusted_keys_json,
+    const QString& issuer, const QByteArray& credential, qint64 now,
+    qint64 last_observed_time, int app_major) {
+  QJsonObject keys;
+  if (!readTrustedKeys(primary_public_key, primary_key_id, trusted_keys_json, &keys)) {
+    return {{}, QStringLiteral("Invalid license key configuration.")};
+  }
+  if (token.size() > 16384) return {{}, QStringLiteral("Invalid access record.")};
+  const auto parts = token.split('.');
+  if (parts.size() != 3) return {{}, QStringLiteral("Invalid access record.")};
+  const auto header = QJsonDocument::fromJson(QByteArray::fromBase64(parts[0],
+      QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors)).object();
+  const auto kid = header.value(QStringLiteral("kid")).toString();
+  if (!keys.contains(kid)) return {{}, QStringLiteral("Unsupported access signature.")};
+  return verifyCustomerLease(token, QByteArray::fromBase64(keys.value(kid).toString().toLatin1()),
+      kid, issuer, credential, now, last_observed_time, app_major);
+}
 
 CustomerLeaseResult verifyCustomerLease(
     const QByteArray& token, const QByteArray& public_key, const QString& key_id,

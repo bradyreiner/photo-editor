@@ -153,7 +153,8 @@ QRect rasterize_brush_point_into_mask(
     photo_editor::pipeline::CancellationToken cancellation,
     bool* cancelled,
     qint64* auto_mask_candidate_pixels,
-    qint64* auto_mask_edge_evaluation_pixels) {
+    qint64* auto_mask_edge_evaluation_pixels,
+    BrushRasterGeometry geometry) {
   if (mask == nullptr) return {};
   auto data = mask->value(QStringLiteral("segmentationData")).toByteArray();
   const auto width = mask->value(QStringLiteral("segmentationWidth")).toInt();
@@ -163,7 +164,7 @@ QRect rasterize_brush_point_into_mask(
       source_image, normalized_x, normalized_y, brush_size, brush_flow,
       brush_opacity, feather, erase, auto_mask, auto_mask_tolerance,
       auto_mask_anchor_x, auto_mask_anchor_y, protect_edges, cancellation,
-      &was_cancelled, auto_mask_candidate_pixels, auto_mask_edge_evaluation_pixels);
+      &was_cancelled, auto_mask_candidate_pixels, auto_mask_edge_evaluation_pixels, geometry);
   if (cancelled) *cancelled = was_cancelled;
   if (!was_cancelled && valid_segmentation_payload(data, width, height))
     mask->insert(QStringLiteral("segmentationData"), data);
@@ -188,12 +189,14 @@ QRect rasterize_brush_point_into_alpha(
     photo_editor::pipeline::CancellationToken cancellation,
     bool* cancelled,
     qint64* auto_mask_candidate_pixels,
-    qint64* auto_mask_edge_evaluation_pixels) {
+    qint64* auto_mask_edge_evaluation_pixels,
+    BrushRasterGeometry geometry) {
   if (cancelled) *cancelled = false;
   if (alpha == nullptr || !valid_segmentation_payload(*alpha, width, height)) return {};
   auto& data = *alpha;
-  const auto softness = std::clamp(feather, 0.05, 1.0);
-  const auto inner_scale = std::max(0.0, 1.0 - softness);
+  const auto softness = std::clamp(feather, geometry.circular ? 0.0 : 0.05, 1.0);
+  const auto inner_scale = (1.0 - softness) *
+      (geometry.circular ? clamp_unit(geometry.hardness) : 1.0);
   const auto clamped_size = std::max(0.01, brush_size);
   const auto clamped_flow = clamp_unit(brush_flow) * clamp_unit(brush_opacity);
   const auto center_x = clamp_unit(normalized_x);
@@ -235,14 +238,15 @@ QRect rasterize_brush_point_into_alpha(
       auto_mask_enabled ? auto_mask_perceptual_color(anchor_color)
                         : AutoMaskPerceptualColor{};
   const auto clamped_auto_tolerance = std::clamp(auto_mask_tolerance, 0.02, 0.75);
+  const auto pixel_radius = clamped_size * static_cast<double>(std::max(1, std::min(width - 1, height - 1)));
   const auto max_x_radius = std::max(
       2,
       static_cast<int>(
-          std::ceil(clamped_size * static_cast<double>(std::max(width - 1, 1)))));
+          std::ceil(geometry.circular ? pixel_radius : clamped_size * static_cast<double>(std::max(width - 1, 1)))));
   const auto max_y_radius = std::max(
       2,
       static_cast<int>(
-          std::ceil(clamped_size * static_cast<double>(std::max(height - 1, 1)))));
+          std::ceil(geometry.circular ? pixel_radius : clamped_size * static_cast<double>(std::max(height - 1, 1)))));
   const auto anchor_x = center_x * static_cast<double>(std::max(width - 1, 1));
   const auto anchor_y = center_y * static_cast<double>(std::max(height - 1, 1));
   const auto min_x = std::max(0, static_cast<int>(std::floor(anchor_x)) - max_x_radius);
@@ -265,8 +269,17 @@ QRect rasterize_brush_point_into_alpha(
           height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
       const auto delta_x = pixel_x - center_x;
       const auto delta_y = pixel_y - center_y;
-      const auto distance = std::sqrt(delta_x * delta_x + delta_y * delta_y) / clamped_size;
-      const auto weight = clamped_flow * (1.0 - smoothstep(inner_scale, 1.0, distance));
+      const auto distance = geometry.circular
+          ? std::hypot(delta_x * static_cast<double>(width - 1),
+                       delta_y * static_cast<double>(height - 1)) / pixel_radius
+          : std::hypot(delta_x, delta_y) / clamped_size;
+      // Even a fully hard tip keeps a one-pixel antialiased edge. Feather
+      // changes the falloff inside the same footprint, without a hard fringe.
+      const auto tip_weight = geometry.circular && (1.0 - inner_scale) * pixel_radius < 1.0
+          ? 1.0 - smoothstep(inner_scale * pixel_radius - 0.5, pixel_radius + 0.5,
+                             distance * pixel_radius)
+          : 1.0 - smoothstep(inner_scale, 1.0, distance);
+      const auto weight = clamped_flow * tip_weight;
       auto adjusted_weight = weight;
       if (auto_mask_enabled) {
         if (auto_mask_candidate_pixels != nullptr) {

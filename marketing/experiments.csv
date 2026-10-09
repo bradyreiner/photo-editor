@@ -1,0 +1,5 @@
+post_id,campaign,platform,style,hook,duration_s,variant,ratio,hypothesis,publish_url,published_at,checkpoint_hours,views,reach,average_watch_s,completion_rate,shares,saves,comments,profile_visits,link_clicks,attributed_signups,observation,next_test
+cc-result-01,creative-control,instagram,cinematic,The creative future is yours.,24,result,9:16,A finished image attracts creators interested in local control,,,,,,,,,,,,,,,Compare with founder-led opening
+cc-founder-01,creative-control,instagram,candid,I built the creative tool I wanted on my own computer.,24,founder,9:16,Personal motivation increases qualified profile visits,,,,,,,,,,,,,,,Record founder opener over same proof sequence
+shoot-result-01,one-shoot-many-deliverables,facebook,workflow,One idea. More ways to tell it.,24,result,4:5,Showing multiple deliverables increases saves,,,,,,,,,,,,,,,Replace draft with real shoot exports
+shoot-challenge-01,one-shoot-many-deliverables,reddit,challenge,Can one shoot become a whole campaign?,24,challenge,4:5,A specific workflow challenge starts useful discussion,,,,,,,,,,,,,,,Test a short factual walkthrough

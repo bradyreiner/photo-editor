@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include "edit_recipe_state.h"
 #include "editor_preview_controller.h"
@@ -29,6 +30,54 @@ struct EditorPreviewControllerTestAccess {
   }
   static int render_generation(const EditorPreviewController& controller) {
     return controller.preview_session_.generation();
+  }
+
+  static bool full_native_coverage(const EditorPreviewController& controller) {
+    return QRegion(QRect(QPoint(), controller.displayPreviewNativeSize())).subtracted(
+               controller.display_preview_native_full_resolution_coverage_).isEmpty() &&
+        controller.display_preview_native_full_resolution_coverage_size_ ==
+            controller.displayPreviewNativeSize();
+  }
+
+  static QString recipe_json(const EditorPreviewController& controller) {
+    return serialize_edit_recipe_json(controller.currentState());
+  }
+
+  static bool all_idle(const EditorPreviewController& controller) {
+    return !controller.render_scheduler_.interactiveActive() &&
+        !controller.render_scheduler_.fullActive() &&
+        !controller.render_scheduler_.pendingDispatchActive() &&
+        !controller.interactive_render_watcher_.isRunning() &&
+        !controller.full_render_watcher_.isRunning() &&
+        !controller.interactive_request_pending_ && !controller.full_request_pending_;
+  }
+
+  static void publish_visible_patch(EditorPreviewController& controller, bool in_flight) {
+    RenderResult result;
+    result.success = true;
+    result.full_resolution = true;
+    result.generation = controller.preview_session_.generation();
+    result.file_path = controller.file_path_;
+    result.render_reason = QStringLiteral("viewport_change");
+    result.render_mode = QStringLiteral("max_preview_visible_tile");
+    result.tile_visible_region_active = true;
+    result.tile_visible_region = controller.preview_viewport_rect_;
+    result.output_width = 1024;
+    result.output_height = 768;
+    result.source_width = 1024;
+    result.source_height = 768;
+    result.texture_upload_rect = QRect(256, 192, 128, 96);
+    result.texture_upload_image = QImage(128, 96, QImage::Format_ARGB32);
+    result.texture_upload_image.fill(QColor(180, 84, 52));
+    result.partial_texture_upload_candidate = true;
+    if (in_flight) {
+      controller.full_render_watcher_.setFuture(QtConcurrent::run([result] {
+        QThread::msleep(50);
+        return result;
+      }));
+    } else {
+      controller.handleRenderResult(true, result);
+    }
   }
 
   static void handle_render_result(
@@ -320,6 +369,73 @@ int main(int argc, char** argv) {
   QTemporaryDir runtime_root;
   if (!runtime_root.isValid()) {
     return fail("pixel zoom runtime directory should be available");
+  }
+
+  if (app.arguments().contains(QStringLiteral("--zoom-out-coverage"))) {
+    using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
+    qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
+    qputenv("PHOTO_EDITOR_CACHE_DIR", runtime_root.filePath("cache").toUtf8());
+    qputenv("PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE", "1");
+    QImage source(1024, 768, QImage::Format_ARGB32);
+    source.fill(QColor(92, 116, 140));
+    const auto path = runtime_root.filePath("zoom-out.png");
+    if (!source.save(path)) return fail("cannot save zoom-out fixture");
+    photo_editor::desktop::EditorPreviewController zoom_controller;
+    const auto wait_idle = [&] {
+      QElapsedTimer timer;
+      timer.start();
+      while (timer.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+        if (!zoom_controller.processing() && Access::all_idle(zoom_controller)) return true;
+        QThread::msleep(25);
+      }
+      return false;
+    };
+    Access::set_display_preview_texture(zoom_controller,
+        std::make_unique<photo_editor::desktop::FakeEditorPreviewTexture>());
+    zoom_controller.loadAsset("zoom-out", path, {}, {}, {}, {}, {});
+    if (!wait_idle())
+      return fail("zoom-out fixture must finish loading");
+    zoom_controller.setExposure(0.7);
+    if (!wait_idle())
+      return fail("zoom-out fixture edit must settle");
+    const auto recipe = Access::recipe_json(zoom_controller);
+    const auto history_index = zoom_controller.editHistoryCurrentIndex();
+    const auto generation = Access::render_generation(zoom_controller);
+    for (const bool wait_for_tile : {true, false}) {
+      // Recreate a source-size backing containing only a viewport patch. This
+      // is the native publication state left by a visible-only render when a
+      // resident full-image base is unavailable after an edit.
+      zoom_controller.setPreviewViewport(0.25, 0.25, 0.125, 0.125, 128, true);
+      Access::set_display_preview_texture(zoom_controller,
+          std::make_unique<photo_editor::desktop::FakeEditorPreviewTexture>());
+      Access::publish_visible_patch(zoom_controller, !wait_for_tile);
+      if (wait_for_tile &&
+          (!wait_idle() ||
+           !zoom_controller.displayPreviewNativeViewportFullResolution() ||
+           Access::full_native_coverage(zoom_controller))) {
+        std::cerr << "viewport_ready=" << zoom_controller.displayPreviewNativeViewportFullResolution()
+                  << " whole_image=" << Access::full_native_coverage(zoom_controller)
+                  << " native=" << zoom_controller.displayPreviewNativeSize().width()
+                  << " scheduled=" << Access::viewport_max_preview_schedule_count(zoom_controller) << '\n';
+        return fail("zoom-out fixture must have visible-only native coverage");
+      }
+      zoom_controller.setPreviewViewport(0, 0, 0, 0, 0, false);
+      if (!wait_idle() ||
+          !Access::full_native_coverage(zoom_controller))
+        return fail("zooming out must restore all edited pixels without another edit");
+      if (Access::recipe_json(zoom_controller) != recipe ||
+          zoom_controller.editHistoryCurrentIndex() != history_index ||
+          Access::render_generation(zoom_controller) != generation)
+        return fail("zoom-out restoration must not change recipe, history, or edit generation");
+    }
+    const auto resident_revision = zoom_controller.displayPreviewNativeRevision();
+    zoom_controller.setPreviewViewport(0.25, 0.25, 0.125, 0.125, 128, true);
+    zoom_controller.setPreviewViewport(0, 0, 0, 0, 0, false);
+    if (!wait_idle() ||
+        zoom_controller.displayPreviewNativeRevision() != resident_revision)
+      return fail("ordinary zoom out must reuse complete resident pixels");
+    return EXIT_SUCCESS;
   }
 
   if (app.arguments().contains(QStringLiteral("--resident-zoom"))) {
@@ -834,6 +950,10 @@ int main(int argc, char** argv) {
   }
 
   const QRectF uncovered_viewport(0.75, 0.75, 0.125, 0.125);
+  native_patch_controller.setPreviewViewport(0.30, 0.25, 0.125, 0.125, 128, true);
+  if (native_patch_controller.displayPreviewNativeViewportFullResolution()) {
+    return fail("partially overlapping rendered pixels must not qualify an expanded view as fully rendered");
+  }
   native_patch_controller.setPreviewViewport(
       uncovered_viewport.x(),
       uncovered_viewport.y(),

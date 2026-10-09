@@ -1,5 +1,7 @@
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -99,6 +101,35 @@ int main(int argc, char** argv) {
   }
   if (!controller.firstRunExperiencePending()) {
     return fail("a clean profile should open the first-run experience");
+  }
+
+  if (controller.interfaceDensity() != QStringLiteral("balanced")) {
+    return fail("control density should default to balanced");
+  }
+  const std::array<std::pair<const char*, const char*>, 7> density_migrations{{
+      {"clean", "compact"}, {"pro", "balanced"}, {"inspect", "comfortable"},
+      {"compact", "compact"}, {"balanced", "balanced"}, {"comfortable", "comfortable"},
+      {"unknown", "balanced"}}};
+  for (const auto& [stored, expected] : density_migrations) {
+    QSettings settings;
+    settings.setValue(QStringLiteral("accessibility/interfaceDensity"), QString::fromUtf8(stored));
+    settings.sync();
+    photo_editor::desktop::AppShellController migrated_controller;
+    if (migrated_controller.interfaceDensity() != QString::fromUtf8(expected)) {
+      return fail("legacy and current stored densities should normalize without resetting preferences");
+    }
+  }
+  for (const auto& density : {QStringLiteral("comfortable"), QStringLiteral("balanced"),
+                             QStringLiteral("compact")}) {
+    controller.setInterfaceDensity(density);
+    photo_editor::desktop::AppShellController relaunched_controller;
+    if (relaunched_controller.interfaceDensity() != density) {
+      return fail("each control density should persist across relaunch");
+    }
+  }
+  controller.setInterfaceDensity(QStringLiteral("invalid"));
+  if (controller.interfaceDensity() != QStringLiteral("balanced")) {
+    return fail("invalid density should safely fall back to balanced");
   }
 
   const auto photo_library_path = QDir(runtime_root.path()).filePath(QStringLiteral("user-photo-library"));
@@ -204,7 +235,7 @@ int main(int argc, char** argv) {
   if (!qFuzzyCompare(persisted_controller.interfaceScale(), 2.0) ||
       !persisted_controller.reducedMotion() || !persisted_controller.highContrast() ||
       persisted_controller.colorVisionMode() != QStringLiteral("deuteranopia") ||
-      persisted_controller.interfaceDensity() != QStringLiteral("inspect") ||
+      persisted_controller.interfaceDensity() != QStringLiteral("comfortable") ||
       persisted_controller.importWorkflowProfile() != QStringLiteral("studio") ||
       persisted_controller.importPresetNames() != QStringList{QStringLiteral("Wedding cards")} ||
       persisted_controller.importPreset(QStringLiteral("Wedding cards"))
@@ -291,7 +322,7 @@ int main(int argc, char** argv) {
   if (!qFuzzyCompare(persisted_controller.interfaceScale(), 1.0) ||
       persisted_controller.reducedMotion() || persisted_controller.highContrast() ||
       persisted_controller.colorVisionMode() != QStringLiteral("standard") ||
-      persisted_controller.interfaceDensity() != QStringLiteral("pro") ||
+      persisted_controller.interfaceDensity() != QStringLiteral("balanced") ||
       persisted_controller.importWorkflowProfile() != QStringLiteral("personal") ||
       !persisted_controller.importPresetNames().isEmpty() ||
       persisted_controller.shortcutOverrides().size() != 0) {

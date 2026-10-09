@@ -1,10 +1,12 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtCore
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtMultimedia
 import QtQml
 import "../components"
+import "../components/CanvasPresets.js" as CanvasPresets
 
 Rectangle {
     id: root
@@ -14,11 +16,37 @@ Rectangle {
     LayoutMirroring.enabled: uiRightToLeft
     LayoutMirroring.childrenInherit: true
 
+    property bool integratedEdit: false
+    property bool workspaceActive: visible
+    readonly property bool shortcutContextActive: workspaceActive && visible
+
     signal editPhotoRequested(var payload)
 
     Theme { id: theme }
 
-    readonly property string carouselVisibilityContract: "carousel-visibility:v1|always:tool-rail-composer-header-artboard-board-strip-inspector|contextual:setup-recent-carousel-media-picker-selection-rating-layer-controls-empty-slot-guides|one-expansion:tool-variants-layer-add-export-actions-object-actions-board-actions|hover-focus:canvas-selection-handles-layer-row-actions-board-thumbs|diagnostic:export-busy-snap-guides-media-offline|preserve:functionality"
+    Settings {
+        id: carouselLayoutSettings
+        category: "CarouselWorkspace"
+        property bool toolRailVisible: true
+        property bool boardStripVisible: true
+        property bool inspectorVisible: true
+    }
+    property bool carouselLayoutSettingsReady: false
+    property bool carouselToolRailVisible: true
+    property bool carouselBoardStripVisible: true
+    property bool carouselInspectorVisible: true
+    onCarouselToolRailVisibleChanged: {
+        if (carouselLayoutSettingsReady) carouselLayoutSettings.toolRailVisible = carouselToolRailVisible
+    }
+    onCarouselBoardStripVisibleChanged: {
+        if (carouselLayoutSettingsReady) carouselLayoutSettings.boardStripVisible = carouselBoardStripVisible
+    }
+    onCarouselInspectorVisibleChanged: {
+        if (carouselLayoutSettingsReady) carouselLayoutSettings.inspectorVisible = carouselInspectorVisible
+        if (!carouselInspectorVisible) carouselCompactInspectorDrawer.close()
+    }
+
+    readonly property string carouselVisibilityContract: "carousel-visibility:v2|always:composer-header-artboard-layout-menu|configurable:tool-rail-board-strip-inspector|contextual:setup-recent-carousel-media-picker-selection-rating-layer-controls-empty-slot-guides|one-expansion:tool-variants-layer-add-export-actions-object-actions-board-actions|hover-focus:canvas-selection-handles-layer-row-actions-board-thumbs|diagnostic:export-busy-snap-guides-media-offline|preserve:functionality"
     readonly property string carouselSurfaceContract: "carousel-surfaces:v1|setup:create-and-recent|composer:dominant-artboard|tools:rail-with-menus|board-strip:stable|inspector:board-or-selection|layers:object-stack|media-picker:contextual|no-elide:true|no-overlap:true"
     readonly property string carouselPlaceholderLayoutContract: "carousel-placeholder-layout:v1|slot-label-zone:reserved|slot-action-zone:separate|slot-min-gap:8|tiny:icon-only|gallery-empty-card:bounded|no-elide:true|no-overlap:true"
     readonly property string carouselWorkflowPolishContract: "carousel-workflow-polish:v1|first-glance:setup-or-board-canvas-tool-rail-inspector-strip|close-inspection:active-tool-board-selection-media-layer-rating-export|clutter:one-active-selection-context-media-picker-contextual|interaction:create-select-pan-text-media-shape-guide-layer-export|text:no-elide-no-overlap|functionality:preserved"
@@ -91,10 +119,29 @@ Rectangle {
     readonly property string carouselPdfProofContract: "carousel-pdf-proof:v1|review-only:true|platform-output:separate|page:a4-landscape|boards-per-page:4|board-numbers:true|board-names:true|roles:true|resolved-file-names:true|optional-notes:true|thumbnail-color-management:output-profile-to-srgb|collision-policy:true|undo:true|persistence:true|no-elide:true"
 
     readonly property var selection: carouselDocument.selectionDetails
+    property bool statusToastVisible: false
+    readonly property var currentStatusNotice: {
+        const notices = carouselDocument.statusNotices || []
+        for (let index = notices.length - 1; index >= 0; --index) {
+            if (String(notices[index].message || "") === carouselDocument.status)
+                return notices[index]
+        }
+        return ({})
+    }
+    readonly property bool currentStatusRetained: currentStatusNotice.noticeId !== undefined
+    readonly property bool currentStatusError: carouselDocument.saveState === "Save failed" ||
+                                               currentStatusNotice.severity === "error"
     property string clipboardPasteStylePolicy: "preserve"
     property string clipboardPasteBrandId: ""
     property string layoutRecipeName: ""
+    property string layoutRecipeSaveError: ""
     property string variantComparisonName: "Variant A"
+    property string variantComparisonError: ""
+    function captureDesignVariant() {
+        if (carouselDocument.captureVariantComparisonBaseline(root.variantComparisonName))
+            root.variantComparisonError = ""
+        else root.variantComparisonError = carouselDocument.status
+    }
     property string richTextLinkDraft: ""
     property string richTextColorDraft: "#ff5d57"
     property string brandThemeScope: "current"
@@ -108,6 +155,10 @@ Rectangle {
         return ({})
     }
     property var mediaPickerAssets: []
+    property string selectedQuickLibraryAssetId: ""
+    property bool mediaPickerAssetsDirty: true
+    readonly property string mediaPickerPreferredProject: preferredMediaPickerProject()
+    onMediaPickerPreferredProjectChanged: requestMediaPickerRefresh()
     property string mediaPickerProjectName: ""
     property string mediaPickerScope: "all"
     property string mediaPickerIntent: "slot"
@@ -141,6 +192,10 @@ Rectangle {
     property string platformPreviewProfileId: "none"
     property string carouselInspectionMode: "normal"
     property bool focusedCropMode: false
+    onFocusedCropModeChanged: {
+        if (focusedCropMode)
+            focusedCropInspectorScrollTimer.restart()
+    }
     property string cropRuleOverlay: "thirds"
     property var pendingPreflightIgnoreIssue: ({})
     property string preflightIgnoreReason: ""
@@ -150,6 +205,7 @@ Rectangle {
     property bool carouselCommandSuppressFocusRestore: false
     property var carouselReadingOrderRestoreFocusItem: null
     property string inspectorPrimarySurface: "board"
+    property bool inspectorHadObjectSelection: false
     readonly property string carouselInspectorSplitContract: "carousel-inspector-split:v1|surfaces:board-properties-reusable-designs|board:authoring-selection-layers-media-layout-preflight|designs:saved-boards-components-templates-brand-kits|selection-preserved:true|board-preserved:true|single-visible-surface:true|no-elide:true"
     readonly property var platformPreviewProfile: {
         const profiles = carouselDocument.platformPreviewProfiles || []
@@ -240,12 +296,7 @@ Rectangle {
         { label: "Screen", value: "screen" },
         { label: "Overlay", value: "overlay" }
     ]
-    readonly property var formatButtons: [
-        { label: "4:5", value: "4x5", size: "1080 x 1350" },
-        { label: "1:1", value: "1x1", size: "1080 x 1080" },
-        { label: "9:16", value: "9x16", size: "1080 x 1920" },
-        { label: "5:4", value: "5x4", size: "1350 x 1080" }
-    ]
+    readonly property var formatButtons: CanvasPresets.formats
     readonly property var layoutSettings: carouselDocument.layoutSettings
     readonly property bool snappingEnabled: Boolean(layoutSettings.snappingEnabled)
     readonly property bool guidesEnabled: Boolean(layoutSettings.guidesEnabled)
@@ -302,7 +353,11 @@ Rectangle {
                                                               : wideWorkspace ? 600 : 460
     readonly property var responsiveMetrics: carouselResponsiveLayoutMetrics(width, height)
     readonly property string carouselResponsiveLayoutContract: "carousel-responsive-layout:v1|modes:compact-under-1050,standard-1050-to-1719,wide-1720-plus|supported:760x600,1280x720,1920x1080|compact-inspector:right-drawer|standard-inspector:300-scaled|wide-inspector:336-scaled|composer-min:360-460-600|board-strip:112-136-152|header:condensed|empty-card:bounded|state-preserved:true|no-elide:true|no-overlap:true"
-    readonly property bool condensedHeader: width < 1180
+    readonly property real availableComposerWidth: width
+                                                   - (carouselToolRailVisible ? 54 : 0)
+                                                   - (!compactWorkspace && carouselInspectorVisible
+                                                      ? responsiveInspectorWidth + 6 : 0)
+    readonly property bool condensedHeader: availableComposerWidth < 1180
     readonly property real stripAvailableWidth: Math.max(240, artboardFlick.width - 44)
     readonly property real stripAvailableHeight: Math.max(260, artboardFlick.height - 44)
     readonly property real stripFitScaleWidth: carouselDocument.documentPixelWidth > 0 ? root.stripAvailableWidth / carouselDocument.documentPixelWidth : 1
@@ -311,9 +366,10 @@ Rectangle {
     readonly property real stripScale: root.baseStripScale * root.composerZoom
     readonly property var currentSlideLayers: {
         const items = []
+        const canvasItems = carouselDocument.canvasItems || []
         const slide = root.slideGeometry(carouselDocument.currentIndex)
-        for (let index = carouselDocument.canvasItems.length - 1; index >= 0; --index) {
-            const item = carouselDocument.canvasItems[index]
+        for (let index = canvasItems.length - 1; index >= 0; --index) {
+            const item = canvasItems[index]
             if (root.itemIntersectsSlide(item, slide))
                 items.push(item)
         }
@@ -652,6 +708,11 @@ Rectangle {
             }
         }
     }
+
+    readonly property bool selectedPhotoEditable: root.selection &&
+        (root.selection.hasSelection
+         ? Boolean(root.selection.isImage) && Number(root.selection.selectedCount || 0) === 1
+         : root.selection.mediaType === "image")
 
     function editSelectedPhoto() {
         const payload = carouselDocument.selectedPhotoEditPayload()
@@ -1129,6 +1190,9 @@ Rectangle {
     function chooseFontBrowserFamily(family) {
         if (!selection.textFontAvailable) {
             if (carouselDocument.previewFontSubstitution(selection.textFontFamily, family)) {
+                carouselFontRecoveryDialog.focusReturnItem = carouselFontBrowserDialog.focusReturnItem
+                carouselFontRecoveryDialog.preserveFocusReturnItem = true
+                carouselFontBrowserDialog.handoffToRecovery = true
                 carouselFontBrowserDialog.close()
                 carouselFontRecoveryDialog.open()
             }
@@ -1304,6 +1368,50 @@ Rectangle {
         root.carouselInspectionMode = normalized
     }
 
+    function carouselLayoutMenuItems() {
+        return [
+            { key: "commands", label: "Search commands", icon: "search" },
+            { key: "show-main", label: "Show main panels", icon: "grid" },
+            { key: "focus", label: "Focus on canvas", icon: "fullscreen" },
+            { key: "tools", label: "Tool rail", icon: "brush-tool", checked: carouselToolRailVisible },
+            { key: "boards", label: "Board strip", icon: "grid", checked: carouselBoardStripVisible },
+            { key: "inspector", label: "Inspector", icon: "panel-right", checked: carouselInspectorVisible }
+        ]
+    }
+
+    function handleCarouselLayoutMenu(key) {
+        if (key === "commands") root.openCarouselCommandPalette()
+        else if (key === "show-main") {
+            carouselToolRailVisible = true
+            carouselBoardStripVisible = true
+            carouselInspectorVisible = true
+        } else if (key === "focus") {
+            carouselToolRailVisible = false
+            carouselBoardStripVisible = false
+            carouselInspectorVisible = false
+        } else if (key === "tools") carouselToolRailVisible = !carouselToolRailVisible
+        else if (key === "boards") carouselBoardStripVisible = !carouselBoardStripVisible
+        else if (key === "inspector") carouselInspectorVisible = !carouselInspectorVisible
+    }
+
+    function revealActiveBoardInFilmstrip() {
+        const index = Number(carouselDocument.currentIndex)
+        if (index >= 0 && index < carouselDocument.slideCount)
+            boardFilmstrip.positionViewAtIndex(index, ListView.Contain)
+    }
+
+    function scheduleActiveBoardReveal() {
+        Qt.callLater(function() { root.revealActiveBoardInFilmstrip() })
+    }
+
+    function repeatedElementBoardSummary() {
+        const boardNumbers = root.selectedRepeatedElementLink.boardNumbers || []
+        const labels = []
+        for (let index = 0; index < boardNumbers.length; ++index)
+            labels.push(String(boardNumbers[index]))
+        return labels.join(", ")
+    }
+
     function carouselInspectionMenuItems() {
         return [
             { key: "inspect.normal", label: "Normal Color", icon: "visible", checked: root.carouselInspectionMode === "normal", tooltip: "Return the canvas to authored color." },
@@ -1385,8 +1493,7 @@ Rectangle {
 
             root.carouselCommand("preflight.open", "Open Preflight", "Preflight", "check warnings blocking delivery inspect", "Ctrl+Shift+P", active, activeReason),
             root.carouselCommand("save.document", "Save Document", "Save", "write store persist", "Ctrl/Meta+S", active, activeReason),
-            root.carouselCommand("export.open", "Export Carousel", "Export", "render deliver output images", "Ctrl+Shift+E", active && !carouselDocument.exportBusy,
-                                 active ? "Export is already running." : activeReason)
+            root.carouselCommand("export.open", "Export Carousel", "Export", "render deliver monitor output images", "Ctrl+Shift+E", active, activeReason)
         ]
     }
 
@@ -1429,14 +1536,13 @@ Rectangle {
         root.carouselCommandSearchText = ""
         root.carouselCommandIndex = 0
         carouselCommandPalette.open()
-        Qt.callLater(function() { carouselCommandSearchField.forceActiveFocus() })
+        Qt.callLater(function() { if (carouselCommandPalette.searchField) carouselCommandPalette.searchField.forceActiveFocus() })
     }
 
     function openCarouselReadingOrderEditor() {
         const window = root.Window.window
         root.carouselReadingOrderRestoreFocusItem = window ? window.activeFocusItem : null
         carouselReadingOrderDialog.open()
-        Qt.callLater(function() { carouselReadingOrderList.forceActiveFocus() })
     }
 
     function openCarouselPreflight() {
@@ -1548,11 +1654,10 @@ Rectangle {
             },
             {
                 key: "export",
-                label: "Export Carousel",
+                label: carouselDocument.exportBusy ? "View export progress" : "Export Carousel",
                 icon: "export",
-                enabled: !carouselDocument.exportBusy,
-                disabledReason: "Export is already running.",
-                tooltip: carouselDocument.exportBusy ? "Export is already running." : "Render this carousel with the current settings."
+                enabled: true,
+                tooltip: carouselDocument.exportBusy ? "View export progress." : "Render this carousel with the current settings."
             }
         ]
     }
@@ -2067,6 +2172,17 @@ Rectangle {
         return changed
     }
 
+    onVisibleChanged: {
+        if (!visible) {
+            mediaPickerRefreshTimer.stop()
+            mediaPickerDialog.close()
+            statusToastTimer.stop()
+            statusToastVisible = false
+        } else if (mediaPickerDialog.visible && mediaPickerAssetsDirty) {
+            requestMediaPickerRefresh()
+        }
+    }
+
     function preferredMediaPickerProject() {
         if (catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned")
             return catalogAssets.projectFilter
@@ -2077,17 +2193,38 @@ Rectangle {
         return preferredMediaPickerProject().length > 0
     }
 
-    function refreshMediaPickerAssets() {
-        mediaPickerProjectName = mediaPickerScope === "project" ? preferredMediaPickerProject() : ""
-        const assets = catalogAssets.timelinePickerAssets(mediaPickerProjectName)
-        const filtered = []
-        for (let index = 0; index < assets.length; ++index) {
-            const item = assets[index]
-            const mediaType = String(item.mediaType || "")
-            if (mediaType === "photo" || (mediaType === "video" && mediaPickerIntent !== "brand-logo"))
-                filtered.push(item)
+    function requestMediaPickerRefresh() {
+        mediaPickerAssetsDirty = true
+        if (root.visible && mediaPickerDialog.visible)
+            mediaPickerRefreshTimer.restart()
+    }
+
+    function refreshMediaPickerAssets(force) {
+        if (!force && (!root.visible || !mediaPickerDialog.visible)) {
+            mediaPickerAssetsDirty = true
+            return
         }
+        mediaPickerRefreshTimer.stop()
+        const selectedAssetId = mediaPickerDialog.selectedAssetId
+        mediaPickerProjectName = mediaPickerScope === "project" ? preferredMediaPickerProject() : ""
+        const mediaTypes = mediaPickerIntent === "brand-logo" ? ["photo"] : ["photo", "video"]
+        const assets = catalogAssets.mediaPickerAssets(mediaPickerProjectName, mediaTypes)
+        const filtered = []
+        // Keep the existing JavaScript array used by the dialog.
+        for (let index = 0; index < assets.length; ++index)
+            filtered.push(assets[index])
         mediaPickerAssets = filtered
+        mediaPickerAssetsDirty = false
+        if (!force && selectedAssetId.length > 0) {
+            let selectedIndex = -1
+            for (let index = 0; index < mediaPickerAssets.length; ++index) {
+                if (String(mediaPickerAssets[index].assetId || "") === selectedAssetId) {
+                    selectedIndex = index
+                    break
+                }
+            }
+            mediaPickerDialog.selectAssetIndex(selectedIndex)
+        }
     }
 
     function mediaPickerSubtitle() {
@@ -2116,7 +2253,7 @@ Rectangle {
                                                    : intent === "layer" ? "layer"
                                                                         : intent === "brand-logo" ? "brand-logo" : "slot"
         mediaPickerScope = hasProjectScopedMediaPicker() ? "project" : "all"
-        refreshMediaPickerAssets()
+        refreshMediaPickerAssets(true)
         mediaPickerDialog.openDialog()
     }
 
@@ -2220,6 +2357,7 @@ Rectangle {
     function guideCandidatesForSlide(index) {
         const rect = slideGeometry(index)
         const slide = slideData(index)
+        const canvasItems = carouselDocument.canvasItems || []
         const guides = []
         const horizontalPeers = []
         const verticalPeers = []
@@ -2261,8 +2399,8 @@ Rectangle {
             pushGuide(guides, "horizontal", rect.y + rect.height * 2 / 3, "Slot")
         }
 
-        for (let itemIndex = 0; itemIndex < carouselDocument.canvasItems.length; ++itemIndex) {
-            const item = carouselDocument.canvasItems[itemIndex]
+        for (let itemIndex = 0; itemIndex < canvasItems.length; ++itemIndex) {
+            const item = canvasItems[itemIndex]
             if ((selection.selectedItemIds || []).indexOf(String(item.itemId || "")) >= 0)
                 continue
             if (!root.itemIntersectsSlide(item, rect))
@@ -2512,32 +2650,89 @@ Rectangle {
         }
     }
 
+    Timer {
+        id: mediaPickerRefreshTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.refreshMediaPickerAssets(false)
+    }
+
+    Timer {
+        id: statusToastTimer
+        interval: 3200
+        repeat: false
+        onTriggered: root.statusToastVisible = false
+    }
+
+    Timer {
+        id: focusedCropInspectorScrollTimer
+        interval: 120
+        repeat: false
+        onTriggered: root.revealFocusedCropControls()
+    }
+
+    function focusInspectorForSelection() {
+        const hasObjectSelection = Boolean(selection.hasSelection)
+        if (hasObjectSelection === inspectorHadObjectSelection)
+            return
+        inspectorHadObjectSelection = hasObjectSelection
+        carouselBoardPropertiesSection.expanded = !hasObjectSelection
+        carouselLayersSection.expanded = !hasObjectSelection
+        carouselInspectorScroll.contentItem.contentY = 0
+        if (hasObjectSelection)
+            inspectorPrimarySurface = "board"
+    }
+
+    function revealFocusedCropControls() {
+        if (!focusedCropMode || !selection.isImage || !carouselInspectorVisible)
+            return
+        inspectorPrimarySurface = "board"
+        carouselPhotoSection.expanded = true
+        const flickable = carouselInspectorScroll.contentItem
+        if (!flickable)
+            return
+        const controlY = carouselFocusedCropControls.mapToItem(null, 0, 0).y
+        const inspectorY = carouselInspectorScroll.mapToItem(null, 0, 0).y
+        flickable.contentY = Math.max(0, flickable.contentY + controlY - inspectorY - theme.space12)
+    }
+
     Connections {
-        target: catalogAssets
-
-        function onAssetCountChanged() {
-            root.refreshMediaPickerAssets()
-        }
-
-        function onTotalAssetCountChanged() {
-            root.refreshMediaPickerAssets()
-        }
-
-        function onProjectStatsRevisionChanged() {
-            root.refreshMediaPickerAssets()
-        }
-
-        function onLoadingChanged() {
-            root.refreshMediaPickerAssets()
+        target: carouselDocument
+        function onStatusChanged() {
+            const message = String(carouselDocument.status || "")
+            root.statusToastVisible = root.visible && message.length > 0 &&
+                                      message !== "Carousel ready." &&
+                                      !message.startsWith("Autosaved ") &&
+                                      !message.startsWith("Saved carousel ")
+            if (root.statusToastVisible)
+                statusToastTimer.restart()
+            else
+                statusToastTimer.stop()
         }
     }
 
+    Connections {
+        target: catalogAssets
+
+        function onMediaDurationsChanged() { root.requestMediaPickerRefresh() }
+        function onAssetCountChanged() { root.requestMediaPickerRefresh() }
+        function onTotalAssetCountChanged() { root.requestMediaPickerRefresh() }
+        function onProjectStatsRevisionChanged() { root.requestMediaPickerRefresh() }
+        function onLoadingChanged() { root.requestMediaPickerRefresh() }
+        function onDataChanged() { root.requestMediaPickerRefresh() }
+        function onModelReset() { root.requestMediaPickerRefresh() }
+    }
+
     Component.onCompleted: {
-        refreshMediaPickerAssets()
+        carouselToolRailVisible = carouselLayoutSettings.toolRailVisible
+        carouselBoardStripVisible = carouselLayoutSettings.boardStripVisible
+        carouselInspectorVisible = carouselLayoutSettings.inspectorVisible
+        carouselLayoutSettingsReady = true
         if (carouselDocument.recoveryState.available)
             carouselRecoveryDialog.open()
         else if (!carouselDocument.hasActiveCarousel)
             beginCarouselSetup()
+        focusInspectorForSelection()
     }
 
     Connections {
@@ -2552,29 +2747,35 @@ Rectangle {
             if (carouselDocument.recoveryState.available)
                 carouselRecoveryDialog.open()
         }
+
+        function onSelectionChanged() {
+            root.focusInspectorForSelection()
+            if (root.focusedCropMode)
+                focusedCropInspectorScrollTimer.restart()
+        }
     }
 
     Shortcut {
         sequences: [StandardKey.Delete]
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("arrange.delete")
     }
 
     Shortcut {
         sequences: [StandardKey.Undo]
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (!root.integratedEdit && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()))
         onActivated: carouselDocument.undo()
     }
 
     Shortcut {
         sequences: [StandardKey.Redo]
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (!root.integratedEdit && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()))
         onActivated: carouselDocument.redo()
     }
 
     Shortcut {
         sequences: [StandardKey.Copy]
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: {
             if (selection.hasSelection)
                 carouselDocument.copySelectedItems()
@@ -2585,76 +2786,84 @@ Rectangle {
 
     Shortcut {
         sequences: [StandardKey.Cut]
-        enabled: carouselDocument.hasActiveCarousel && selection.hasSelection && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && selection.hasSelection && !root.editableTextControlHasFocus())
         onActivated: carouselDocument.cutSelectedItems()
     }
 
     Shortcut {
         sequences: [StandardKey.Paste]
-        enabled: carouselDocument.hasActiveCarousel && carouselDocument.canPaste && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && carouselDocument.canPaste && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("add.paste")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Ctrl+D"
         onActivated: root.runCarouselCommand("arrange.duplicate")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Meta+D"
         onActivated: root.runCarouselCommand("arrange.duplicate")
     }
 
     Shortcut {
         sequence: "Ctrl+G"
-        enabled: selection.selectedCount > 1 && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.selectedCount > 1 && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("arrange.group")
     }
 
     Shortcut {
         sequence: "Meta+G"
-        enabled: selection.selectedCount > 1 && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.selectedCount > 1 && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("arrange.group")
     }
 
     Shortcut {
         sequence: "Ctrl+Shift+G"
-        enabled: selection.isObjectGroup && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.isObjectGroup && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("arrange.ungroup")
     }
 
     Shortcut {
         sequence: "Meta+Shift+G"
-        enabled: selection.isObjectGroup && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.isObjectGroup && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("arrange.ungroup")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "V"
         onActivated: root.setActiveTool("select")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "H"
         onActivated: root.setActiveTool("hand")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "T"
         onActivated: root.setActiveTool("text")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "M"
         onActivated: root.setActiveTool("media")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "U"
         onActivated: root.setActiveTool("shape")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "B"
         onActivated: {
             root.brushEraser = false
@@ -2663,6 +2872,7 @@ Rectangle {
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "E"
         onActivated: {
             root.brushEraser = true
@@ -2671,146 +2881,164 @@ Rectangle {
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+T"
         onActivated: root.runCarouselCommand("add.text")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+U"
         onActivated: root.runCarouselCommand("add.shape")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+M"
         onActivated: root.runCarouselCommand("add.media")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "]"
         onActivated: root.runCarouselCommand("arrange.forward")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "["
         onActivated: root.runCarouselCommand("arrange.backward")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "="
         onActivated: root.runCarouselCommand("transform.zoom-in")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "-"
         onActivated: root.runCarouselCommand("transform.zoom-out")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "0"
         onActivated: root.runCarouselCommand("transform.zoom-fit")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Left"
         onActivated: root.runCarouselCommand("transform.nudge-left")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Right"
         onActivated: root.runCarouselCommand("transform.nudge-right")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Up"
         onActivated: root.runCarouselCommand("transform.nudge-up")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Down"
         onActivated: root.runCarouselCommand("transform.nudge-down")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+Left"
         onActivated: root.nudgeSelected(-Number(root.layoutSettings.largeNudgeStep || 10), 0)
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+Right"
         onActivated: root.nudgeSelected(Number(root.layoutSettings.largeNudgeStep || 10), 0)
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+Up"
         onActivated: root.nudgeSelected(0, -Number(root.layoutSettings.largeNudgeStep || 10))
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Shift+Down"
         onActivated: root.nudgeSelected(0, Number(root.layoutSettings.largeNudgeStep || 10))
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Ctrl+Left"
         onActivated: root.runCarouselCommand("board.previous")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Ctrl+Right"
         onActivated: root.runCarouselCommand("board.next")
     }
 
     Shortcut {
         sequence: "Meta+Left"
-        enabled: !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("board.previous")
     }
 
     Shortcut {
         sequence: "Meta+Right"
-        enabled: !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("board.next")
     }
 
     Shortcut {
         sequence: "Ctrl+Shift+Left"
-        enabled: !root.editableTextControlHasFocus() && carouselDocument.currentIndex > 0
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus() && carouselDocument.currentIndex > 0)
         onActivated: root.runCarouselCommand("board.move-backward")
     }
 
     Shortcut {
         sequence: "Ctrl+Shift+Right"
-        enabled: !root.editableTextControlHasFocus() && carouselDocument.currentIndex < carouselDocument.slideCount - 1
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus() && carouselDocument.currentIndex < carouselDocument.slideCount - 1)
         onActivated: root.runCarouselCommand("board.move-forward")
     }
 
     Shortcut {
         sequence: "Alt+Up"
-        enabled: !root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0)
         onActivated: carouselDocument.selectAdjacentLayer(-1)
     }
 
     Shortcut {
         sequence: "Alt+Down"
-        enabled: !root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0
+        enabled: root.shortcutContextActive && (!root.editableTextControlHasFocus() && root.currentSlideLayers.length > 0)
         onActivated: carouselDocument.selectAdjacentLayer(1)
     }
 
     Shortcut {
         sequence: "Alt+Shift+Up"
-        enabled: selection.hasSelection && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.hasSelection && !root.editableTextControlHasFocus())
         onActivated: carouselDocument.bringSelectedForward()
     }
 
     Shortcut {
         sequence: "Alt+Shift+Down"
-        enabled: selection.hasSelection && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.hasSelection && !root.editableTextControlHasFocus())
         onActivated: carouselDocument.sendSelectedBackward()
     }
 
     Shortcut {
         sequence: "Return"
-        enabled: selection.isText && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (selection.isText && !root.editableTextControlHasFocus())
         onActivated: {
             textEditor.forceActiveFocus()
             textEditor.cursorPosition = textEditor.text.length
@@ -2819,39 +3047,42 @@ Rectangle {
 
     Shortcut {
         sequence: "Ctrl+Alt+I"
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: carouselInspectorScroll.forceActiveFocus()
     }
 
     Shortcut {
         sequence: "Ctrl+Shift+P"
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("preflight.open")
     }
 
     Shortcut {
         sequence: "Ctrl+Alt+P"
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: carouselCopyProofDialog.open()
     }
 
     Shortcut {
         sequence: "Ctrl+Shift+E"
-        enabled: carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus()
+        enabled: root.shortcutContextActive && (carouselDocument.hasActiveCarousel && !root.editableTextControlHasFocus())
         onActivated: root.runCarouselCommand("export.open")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive && !root.integratedEdit
         sequence: "Ctrl+S"
         onActivated: root.runCarouselCommand("save.document")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive && !root.integratedEdit
         sequence: "Meta+S"
         onActivated: root.runCarouselCommand("save.document")
     }
 
     Shortcut {
+        enabled: root.shortcutContextActive
         sequence: "Escape"
         onActivated: {
             carouselDocument.clearSelection()
@@ -3218,15 +3449,16 @@ Rectangle {
     RowLayout {
         id: carouselActiveWorkspace
         objectName: "carouselActiveWorkspace"
-        readonly property string surfaceContract: "carousel-active-workspace:v2|tool-rail:always|composer:dominant|inspector:inline-standard-wide-drawer-compact|board-strip:always|selection-contextual:true|modes:compact-standard-wide|no-elide:true|no-overlap:true"
+        readonly property string surfaceContract: "carousel-active-workspace:v3|tool-rail:configurable|composer:dominant|inspector:configurable-inline-standard-wide-drawer-compact|board-strip:configurable|selection-contextual:true|modes:compact-standard-wide|no-elide:true|no-overlap:true"
         anchors.fill: parent
         visible: carouselDocument.hasActiveCarousel
         spacing: 6
 
         Rectangle {
             objectName: "carouselToolRail"
-            readonly property string visibilityRole: "always-visible|tool-families-snap-guides-menu-expansion"
-            Layout.preferredWidth: 48
+            readonly property string visibilityRole: "configurable|tool-families-snap-guides-menu-expansion"
+            visible: root.carouselToolRailVisible
+            Layout.preferredWidth: visible ? 48 : 0
             Layout.fillHeight: true
             radius: theme.radius8
             color: theme.alpha(theme.ink900, 0.88)
@@ -3246,7 +3478,7 @@ Rectangle {
 
                         Layout.fillWidth: true
                         Layout.preferredHeight: 40
-                        compactLabelMode: false
+                        compactLabelMode: true
                         toolData: modelData
                         activeTool: root.activeTool
                         menuItems: root.carouselToolMenuItems(modelData.value)
@@ -3339,7 +3571,7 @@ Rectangle {
 
         Rectangle {
             objectName: "carouselComposerPanel"
-            readonly property string surfaceContract: "carousel-composer-panel:v1|header:always|artboard:dominant|zoom:contextual|board-strip:always|empty-slot:contextual|drag-handles:hover-focus|no-overlap:true"
+            readonly property string surfaceContract: "carousel-composer-panel:v2|header:always|artboard:dominant|zoom:contextual|board-strip:configurable|empty-slot:contextual|drag-handles:hover-focus|no-overlap:true"
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.minimumWidth: root.responsiveComposerMinimumWidth
@@ -3359,19 +3591,25 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    TextField {
+                    ToneTextField {
                         id: documentNameField
                         objectName: "carouselDocumentNameField"
                         visible: !root.compactWorkspace
                         Layout.fillWidth: true
                         Layout.minimumWidth: visible ? 160 : 0
-                        Layout.maximumWidth: visible ? (root.wideWorkspace ? 320 : 240) : 0
+                        Layout.maximumWidth: visible ? (root.wideWorkspace ? 360 : 320) : 0
                         text: carouselDocument.documentName
                         color: theme.textStrong
                         font.family: theme.fontDisplay
                         font.pixelSize: 18
                         font.weight: Font.DemiBold
                         selectByMouse: true
+                        onActiveFocusChanged: {
+                            if (!activeFocus) cursorPosition = 0
+                        }
+                        onTextChanged: {
+                            if (!activeFocus) cursorPosition = 0
+                        }
                         background: Rectangle {
                             radius: 4
                             color: documentNameField.activeFocus
@@ -3389,7 +3627,7 @@ Rectangle {
                     }
 
                     Label {
-                        visible: root.width >= 860
+                        visible: !root.condensedHeader
                         text: carouselDocument.documentFormat.toUpperCase() + "  " + documentPixelLabel()
                         color: theme.textFaint
                         font.family: theme.fontMono
@@ -3397,6 +3635,17 @@ Rectangle {
                     }
 
                     Item { Layout.fillWidth: true }
+
+                    ActionButton {
+                        objectName: "editBoardPhotoToolsButton"
+                        visible: root.integratedEdit
+                        compact: true
+                        text: "Photo tools"
+                        iconName: "edit"
+                        enabled: root.selectedPhotoEditable
+                        tooltipText: "Edit this board's photo and its layers."
+                        onClicked: root.editSelectedPhoto()
+                    }
 
                     StatusChip {
                         objectName: "carouselDocumentSaveState"
@@ -3416,6 +3665,21 @@ Rectangle {
                                       : "This document has not been saved yet."
                         minimumReadableWidth: 78
                         maximumReadableWidth: 116
+                    }
+
+                    ActionButton {
+                        objectName: "carouselStatusDetailsButton"
+                        visible: carouselDocument.statusNotices.length > 0
+                        compact: true
+                        showText: !root.compactWorkspace
+                        iconName: "warning"
+                        tone: "warning"
+                        text: carouselDocument.statusNotices.length +
+                              (carouselDocument.statusNotices.length === 1 ? " Issue" : " Issues")
+                        accessibleName: "Open " + carouselDocument.statusNotices.length +
+                                        " retained Carousel issues"
+                        tooltipText: "Open retained Carousel failures and recovery actions."
+                        onClicked: carouselStatusNoticesDialog.open()
                     }
 
                     ActionButton {
@@ -3452,8 +3716,8 @@ Rectangle {
 
                         SequentialAnimation on opacity {
                             loops: Animation.Infinite
-                            NumberAnimation { from: 1.0; to: 0.3; duration: 600 }
-                            NumberAnimation { from: 0.3; to: 1.0; duration: 600 }
+                            OpacityAnimator { from: 1.0; to: 0.3; duration: 600 }
+                            OpacityAnimator { from: 0.3; to: 1.0; duration: 600 }
                         }
                     }
 
@@ -3502,15 +3766,29 @@ Rectangle {
                         compact: true
                         showText: !root.condensedHeader
                         text: "Commands"
+                        visible: !root.integratedEdit
                         iconName: "search"
                         tooltipText: "Search Carousel commands (Ctrl/Meta+K)."
                         onClicked: root.openCarouselCommandPalette()
                     }
 
+                    MenuButton {
+                        id: carouselLayoutButton
+                        objectName: "carouselLayoutButton"
+                        compact: true
+                        showText: !root.condensedHeader && !root.integratedEdit
+                        text: "Layout"
+                        iconName: "panel-right"
+                        primaryOpensMenu: true
+                        tooltipText: "Choose visible Carousel panels"
+                        menuItems: root.carouselLayoutMenuItems()
+                        onMenuItemTriggered: function(key) { root.handleCarouselLayoutMenu(key) }
+                    }
+
                     ActionButton {
                         id: carouselCompactInspectorButton
                         objectName: "carouselCompactInspectorButton"
-                        visible: root.compactWorkspace
+                        visible: root.compactWorkspace && root.carouselInspectorVisible
                         compact: true
                         showText: false
                         text: "Inspector"
@@ -3533,10 +3811,10 @@ Rectangle {
                         compact: true
                         showText: !root.compactWorkspace
                         text: "Export"
+                        objectName: "carouselOpenExportButton"
                         iconName: "export"
                         tone: "primary"
-                        enabled: !carouselDocument.exportBusy
-                        tooltipText: carouselDocument.exportBusy ? "Export is already running." : "Export this carousel."
+                        tooltipText: carouselDocument.exportBusy ? "View export progress." : "Export this carousel."
                         menuItems: root.carouselExportMenuItems()
                         menuWidth: 190
                         onClicked: root.runCarouselCommand("export.open")
@@ -3548,16 +3826,13 @@ Rectangle {
                     objectName: "carouselStatusSurface"
                     Layout.fillWidth: true
                     Layout.preferredHeight: statusMessageLabel.implicitHeight + 12
-                    visible: carouselDocument.status.length > 0 &&
-                             carouselDocument.status !== "Carousel ready."
+                    visible: root.currentStatusRetained ||
+                             carouselDocument.saveState === "Save failed"
                     radius: theme.radius6
-                    color: carouselDocument.saveState === "Save failed"
-                           ? theme.alpha(theme.error, 0.1)
-                           : theme.alpha(theme.ink850, 0.66)
+                    color: theme.alpha(root.currentStatusError ? theme.error : theme.warning, 0.1)
                     border.width: 1
-                    border.color: carouselDocument.saveState === "Save failed"
-                                  ? theme.alpha(theme.error, 0.5)
-                                  : theme.alpha(theme.lineSoft, 0.32)
+                    border.color: theme.alpha(root.currentStatusError ? theme.error : theme.warning,
+                                              0.45)
 
                     Label {
                         id: statusMessageLabel
@@ -3565,26 +3840,17 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: 10
-                        anchors.rightMargin: carouselDocument.statusNotices.length > 0 ? 104 : 10
-                        text: carouselDocument.status
-                        color: carouselDocument.saveState === "Save failed" ? theme.error : theme.textMuted
+                        anchors.rightMargin: 10
+                        text: carouselDocument.saveState === "Save failed" &&
+                              !root.currentStatusRetained && carouselDocument.saveError.length > 0
+                              ? carouselDocument.saveError : carouselDocument.status
+                        color: root.currentStatusError ? theme.error : theme.warning
                         font.family: theme.fontUi
                         font.pixelSize: 10
                         wrapMode: Text.WordWrap
                         elide: Text.ElideNone
                     }
 
-                    ActionButton {
-                        objectName: "carouselStatusDetailsButton"
-                        anchors.right: parent.right
-                        anchors.rightMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: carouselDocument.statusNotices.length > 0
-                        compact: true
-                        text: carouselDocument.statusNotices.length + " Details"
-                        tooltipText: "Open retained Carousel failures and recovery actions."
-                        onClicked: carouselStatusNoticesDialog.open()
-                    }
                 }
 
                 Rectangle {
@@ -3830,7 +4096,8 @@ Rectangle {
                                             y: Number(modelData.y || 0)
                                             width: Number(modelData.width || 0)
                                             height: Number(modelData.height || 0)
-                                            visible: slideDelegate.modelData.selected && !root.selection.hasSelection
+                                            visible: slideDelegate.modelData.selected && !root.selection.hasSelection &&
+                                                     !emptyBoardStartCard.visible
                                             activeFocusOnTab: visible
                                             Accessible.name: "Media slot " + String(modelData.label || modelData.name || "slot")
                                             Accessible.description: (slotRegion.isActive ? "Selected. " : "") +
@@ -4138,19 +4405,31 @@ Rectangle {
                                     Rectangle {
                                         id: emptyBoardStartCard
                                         objectName: "carouselEmptyBoardStartCard"
-                                        readonly property string emptyStateContract: "carousel-empty-board:v2|chrome:compact-command-surface|commands:add-media-add-text-add-shape-paste-apply-template|instruction-copy:none|direct:true|keyboard:true|no-elide:true|no-overlap:true"
+                                        readonly property string emptyStateContract: "carousel-empty-board:v3|chrome:compact-command-surface|commands:add-media-add-text-add-shape-paste-apply-template|narrow:primary-media-plus-menu|instruction-copy:none|direct-or-one-expansion:true|keyboard:true|no-elide:true|no-overlap:true"
                                         anchors.centerIn: parent
                                         readonly property bool responsiveCompactCard: parent.width < 360
-                                        width: Math.max(
-                                                   220,
-                                                   Math.min(parent.width - 24, 420))
+                                        readonly property bool compactCommandSurface: width < 240
+                                        width: Math.max(1, Math.min(parent.width - 24, 420))
                                         height: emptyBoardStartColumn.implicitHeight + 20
                                         visible: modelData.selected && !root.currentBoardHasContent()
                                         z: 30
-                                        radius: theme.radius10
-                                        color: theme.alpha(theme.ink950, 0.9)
+                                        radius: theme.radiusSurface
+                                        color: theme.ink900
                                         border.width: 1
                                         border.color: theme.alpha(theme.lineSoft, 0.54)
+
+                                        function triggerCreationAction(action) {
+                                            if (action === "media")
+                                                root.openMediaPicker("slot")
+                                            else if (action === "text")
+                                                carouselDocument.addTextItem("New Text")
+                                            else if (action === "shape")
+                                                carouselDocument.addShapeItem("rectangle")
+                                            else if (action === "paste")
+                                                root.runCarouselCommand("add.paste")
+                                            else
+                                                root.openCarouselTemplateLibrary()
+                                        }
 
                                         ColumnLayout {
                                             id: emptyBoardStartColumn
@@ -4173,6 +4452,7 @@ Rectangle {
 
                                             GridLayout {
                                                 Layout.fillWidth: true
+                                                visible: !emptyBoardStartCard.compactCommandSurface
                                                 columns: emptyBoardStartCard.responsiveCompactCard ? 2 : 3
                                                 columnSpacing: 6
                                                 rowSpacing: 6
@@ -4202,19 +4482,41 @@ Rectangle {
                                                         disabledReason: modelData.action === "paste"
                                                                         ? "Copy a Carousel board or component before pasting."
                                                                         : ""
-                                                        onClicked: {
-                                                            if (modelData.action === "media")
-                                                                root.openMediaPicker("slot")
-                                                            else if (modelData.action === "text")
-                                                                carouselDocument.addTextItem("New Text")
-                                                            else if (modelData.action === "shape")
-                                                                carouselDocument.addShapeItem("rectangle")
-                                                            else if (modelData.action === "paste")
-                                                                root.runCarouselCommand("add.paste")
-                                                            else
-                                                                root.openCarouselTemplateLibrary()
-                                                        }
+                                                        onClicked: emptyBoardStartCard.triggerCreationAction(modelData.action)
                                                     }
+                                                }
+                                            }
+
+                                            ActionButton {
+                                                objectName: "carouselEmptyBoardCompactMediaAction"
+                                                Layout.fillWidth: true
+                                                visible: emptyBoardStartCard.compactCommandSurface
+                                                compact: true
+                                                text: "Add media"
+                                                iconName: "media"
+                                                tone: "primary"
+                                                onClicked: emptyBoardStartCard.triggerCreationAction("media")
+                                            }
+
+                                            MenuButton {
+                                                objectName: "carouselEmptyBoardCompactActionsMenu"
+                                                Layout.fillWidth: true
+                                                visible: emptyBoardStartCard.compactCommandSurface
+                                                compact: true
+                                                primaryOpensMenu: true
+                                                text: "More actions"
+                                                iconName: "plus"
+                                                tooltipText: "Add text or a shape, paste a copied design, or apply a template."
+                                                menuItems: [
+                                                    { key: "text", label: "Add text", icon: "edit" },
+                                                    { key: "shape", label: "Add shape", icon: "geometry" },
+                                                    { key: "paste", label: "Paste", icon: "paste",
+                                                      enabled: carouselDocument.canPaste,
+                                                      disabledReason: "Copy a Carousel board or component before pasting." },
+                                                    { key: "template", label: "Apply template", icon: "grid" }
+                                                ]
+                                                onMenuItemTriggered: function(key) {
+                                                    emptyBoardStartCard.triggerCreationAction(key)
                                                 }
                                             }
                                         }
@@ -4235,7 +4537,7 @@ Rectangle {
                                                 x: (modelData - root.slideGeometry(slideGuideOverlay.slideIndex).x) * root.stripScale
                                                 y: 0
                                                 width: 1
-                                                height: parent.height
+                                                height: slideGuideOverlay.height
                                                 color: theme.alpha(root.guideColor, root.guideOpacity * 0.55)
                                             }
                                         }
@@ -4247,7 +4549,7 @@ Rectangle {
                                                 required property real modelData
                                                 x: 0
                                                 y: (modelData - root.slideGeometry(slideGuideOverlay.slideIndex).y) * root.stripScale
-                                                width: parent.width
+                                                width: slideGuideOverlay.width
                                                 height: 1
                                                 color: theme.alpha(root.guideColor, root.guideOpacity * 0.55)
                                             }
@@ -5451,33 +5753,35 @@ Rectangle {
                                                             model: richTextLine.segments
 
                                                             delegate: Text {
+                                                                id: segmentText
                                                                 required property var modelData
+                                                                readonly property var sourceLayer: layerItem ? layerItem.modelData : ({})
                                                                 x: Number(modelData.x || 0) * root.stripScale
                                                                 y: Number(modelData.baselineShift || 0) * root.stripScale
                                                                 width: Math.max(1, Number(modelData.width || 0) * root.stripScale + 2)
                                                                 height: richTextLine.height
                                                                 text: String(modelData.text || "")
-                                                                color: String(modelData.color || layerItem.modelData.textColor)
-                                                                font.family: root.textFontFamily(layerItem.modelData.textFontFamily)
+                                                                color: String(modelData.color || segmentText.sourceLayer.textColor)
+                                                                font.family: root.textFontFamily(segmentText.sourceLayer.textFontFamily)
                                                                 font.pixelSize: Math.max(
                                                                     1,
-                                                                    Number(layerItem.modelData.textPointSize || 0) *
+                                                                    Number(segmentText.sourceLayer.textPointSize || 0) *
                                                                     Number(modelData.pointSizeScale || 1) * root.stripScale)
                                                                 font.weight: root.textFontWeight(
-                                                                    String(modelData.fontWeight || layerItem.modelData.textWeight))
+                                                                    String(modelData.fontWeight || segmentText.sourceLayer.textWeight))
                                                                 font.italic: Boolean(modelData.italic)
                                                                 font.underline: Boolean(modelData.underline)
                                                                 font.strikeout: Boolean(modelData.strikethrough)
                                                                 font.letterSpacing: Math.max(
                                                                     0,
-                                                                    Number(layerItem.modelData.textLetterSpacing || 0) * root.stripScale)
+                                                                    Number(segmentText.sourceLayer.textLetterSpacing || 0) * root.stripScale)
                                                                 wrapMode: Text.NoWrap
                                                                 horizontalAlignment: Text.AlignLeft
                                                                 verticalAlignment: root.textVerticalAlignment(
-                                                                    layerItem.modelData.textVerticalAlignment)
-                                                                style: Number(layerItem.modelData.textStrokeWidth || 0) > 0
+                                                                    segmentText.sourceLayer.textVerticalAlignment)
+                                                                style: Number(segmentText.sourceLayer.textStrokeWidth || 0) > 0
                                                                        ? Text.Outline : Text.Normal
-                                                                styleColor: String(layerItem.modelData.textStrokeColor || "#000000")
+                                                                styleColor: String(segmentText.sourceLayer.textStrokeColor || "#000000")
                                                                 elide: Text.ElideNone
                                                             }
                                                         }
@@ -5826,6 +6130,41 @@ Rectangle {
                                      " is a canvas-only inspection. Export remains authored color."
                         onClicked: root.runCarouselCommand("inspect.normal")
                     }
+
+                    Rectangle {
+                        objectName: "carouselStatusToast"
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 12
+                        anchors.bottomMargin: 12
+                        width: Math.min(parent.width * 0.64, theme.scaled(460))
+                        height: statusToastLabel.implicitHeight + 16
+                        radius: theme.radius6
+                        color: theme.alpha(theme.ink950, 0.94)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.72)
+                        visible: root.statusToastVisible && !root.currentStatusRetained &&
+                                 carouselDocument.saveState !== "Save failed"
+                        enabled: false
+                        z: 220
+                        Accessible.name: carouselDocument.status
+                        Accessible.role: Accessible.StaticText
+
+                        Label {
+                            id: statusToastLabel
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.leftMargin: 9
+                            anchors.rightMargin: 9
+                            text: carouselDocument.status
+                            color: theme.textMain
+                            font.family: theme.fontUi
+                            font.pixelSize: theme.typeLabel
+                            wrapMode: Text.WordWrap
+                            elide: Text.ElideNone
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -5877,9 +6216,10 @@ Rectangle {
 
                 Rectangle {
                     objectName: "carouselBoardStrip"
-                    readonly property string visibilityRole: "always-visible|board-thumbs-add-select-duplicate"
+                    readonly property string visibilityRole: "configurable|board-thumbs-add-select-duplicate"
+                    visible: root.carouselBoardStripVisible
                     Layout.fillWidth: true
-                    Layout.preferredHeight: root.responsiveBoardStripHeight
+                    Layout.preferredHeight: visible ? root.responsiveBoardStripHeight : 0
                     radius: theme.radius8
                     color: theme.alpha(theme.ink950, 0.68)
                     border.width: 1
@@ -6075,6 +6415,12 @@ Rectangle {
                                 }
                             }
                         }
+
+                        Connections {
+                            target: carouselDocument
+                            function onSelectionChanged() { root.scheduleActiveBoardReveal() }
+                            function onSlidesChanged() { root.scheduleActiveBoardReveal() }
+                        }
                     }
                 }
             }
@@ -6083,7 +6429,7 @@ Rectangle {
         Item {
             id: carouselInspectorInlineHost
             objectName: "carouselInspectorInlineHost"
-            visible: !root.compactWorkspace
+            visible: !root.compactWorkspace && root.carouselInspectorVisible
             Layout.preferredWidth: visible ? root.responsiveInspectorWidth : 0
             Layout.minimumWidth: visible ? root.responsiveInspectorWidth : 0
             Layout.maximumWidth: visible ? root.responsiveInspectorWidth : 0
@@ -6094,7 +6440,8 @@ Rectangle {
                 readonly property string surfaceContract: "carousel-inspector:v1|board-settings:when-no-object|selection-settings:contextual|layers:always|media:one-expansion|actions:menus|no-elide:true|no-overlap:true"
                 parent: root.compactWorkspace ? carouselCompactInspectorHost : carouselInspectorInlineHost
                 anchors.fill: parent
-                visible: !root.compactWorkspace || carouselCompactInspectorDrawer.position > 0
+                visible: root.carouselInspectorVisible &&
+                         (!root.compactWorkspace || carouselCompactInspectorDrawer.position > 0)
                 radius: theme.radius8
                 color: theme.alpha(theme.ink900, 0.92)
                 border.width: 1
@@ -6151,7 +6498,7 @@ Rectangle {
                         expandable: true
                         expanded: true
 
-                        TextField {
+                        ToneTextField {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 28
                             placeholderText: "Design name"
@@ -6211,6 +6558,7 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        id: carouselBoardPropertiesSection
                         objectName: "carouselBoardPropertiesSurface"
                         readonly property bool surfaceActive: root.inspectorPrimarySurface === "board"
                         width: parent.width
@@ -6261,6 +6609,30 @@ Rectangle {
                             }
                         }
 
+                        ActionButton {
+                            objectName: "carouselCreateBoardVariantButton"
+                            Layout.fillWidth: true
+                            compact: true
+                            text: "Create variant · compare"
+                            iconName: "compare"
+                            tooltipText: "Duplicate this board, give the copy a variant name, and review both boards side by side."
+                            enabled: carouselDocument.canAddSlide
+                            disabledReason: "The carousel has reached its 20-board limit."
+                            onClicked: {
+                                const sourceIndex = Number(carouselDocument.currentIndex)
+                                const source = carouselDocument.slides[sourceIndex] || ({})
+                                const sourceGroupSpan = Number(source.groupSpan || 0)
+                                const sourceGroupPosition = Number(source.groupPosition || 1)
+                                const comparisonSourceIndex = sourceGroupSpan > 1
+                                        ? sourceIndex + sourceGroupSpan - sourceGroupPosition
+                                        : sourceIndex
+                                if (carouselDocument.createBoardVariant()) {
+                                    carouselDocument.selectSlide(comparisonSourceIndex)
+                                    carouselNeighborComparisonDialog.open()
+                                }
+                            }
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 4
@@ -6289,7 +6661,7 @@ Rectangle {
                             }
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: boardNameField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 28
@@ -6316,20 +6688,21 @@ Rectangle {
                             when: !boardNameField.activeFocus
                         }
 
-                        Flow {
+                        MenuButton {
+                            objectName: "carouselBoardRoleMenu"
                             Layout.fillWidth: true
-                            spacing: 3
-
-                            Repeater {
-                                model: root.boardRoleButtons
-
-                                delegate: FilterChip {
-                                    required property var modelData
-                                    text: modelData.label
-                                    active: selection.boardRole === modelData.value
-                                    onClicked: carouselDocument.setCurrentSlideRole(modelData.value)
-                                }
-                            }
+                            compact: true
+                            primaryOpensMenu: true
+                            text: "Role · " + (root.boardRoleButtons.find(function(option) {
+                                return option.value === selection.boardRole
+                            }) || root.boardRoleButtons[0]).label
+                            tooltipText: "Choose the board's semantic role. This is metadata and does not appear in the artwork."
+                            menuItems: root.boardRoleButtons.map(function(option) {
+                                return { key: option.value, label: option.label,
+                                         checked: selection.boardRole === option.value }
+                            })
+                            menuWidth: 220
+                            onMenuItemTriggered: carouselDocument.setCurrentSlideRole(key)
                         }
 
                         RowLayout {
@@ -6337,10 +6710,13 @@ Rectangle {
                             spacing: 4
 
                             ActionButton {
+                                objectName: "carouselMoveBoardEarlierButton"
                                 Layout.preferredWidth: 34
                                 compact: true
                                 iconName: "chevron-left"
                                 showText: false
+                                accessibleName: "Move board earlier"
+                                tooltipText: "Move board earlier"
                                 enabled: carouselDocument.slideCount > 1
                                 onClicked: carouselDocument.moveCurrentBackward()
                             }
@@ -6355,10 +6731,13 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "carouselMoveBoardLaterButton"
                                 Layout.preferredWidth: 34
                                 compact: true
                                 iconName: "chevron-right"
                                 showText: false
+                                accessibleName: "Move board later"
+                                tooltipText: "Move board later"
                                 enabled: carouselDocument.slideCount > 1
                                 onClicked: carouselDocument.moveCurrentForward()
                             }
@@ -6383,6 +6762,13 @@ Rectangle {
                                         carouselDocument.removeCurrentSlide()
                                 }
                             }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Board format"
+                            color: theme.textMuted
+                            font.pixelSize: theme.typeLabel
                         }
 
                         RowLayout {
@@ -6413,31 +6799,22 @@ Rectangle {
                             }
                         }
 
-                        GridLayout {
+                        MenuButton {
+                            objectName: "carouselBoardLayoutMenu"
                             Layout.fillWidth: true
-                            columns: 2
-                            columnSpacing: 4
-                            rowSpacing: 4
-
-                            Repeater {
-                                model: root.templateButtons
-
-                                delegate: FilterChip {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    text: modelData.shortLabel
-                                    active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
-                                    ToolTip.visible: templateHover.hovered
-                                    ToolTip.delay: 350
-                                    ToolTip.text: modelData.label + " — " + modelData.description
-                                    onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
-
-                                    HoverHandler {
-                                        id: templateHover
-                                        cursorShape: Qt.PointingHandCursor
-                                    }
-                                }
-                            }
+                            compact: true
+                            primaryOpensMenu: true
+                            text: "Layout · " + (root.templateButtons.find(function(option) {
+                                return selection.templateKind === option.value || selection.groupKind === option.value
+                            }) || root.templateButtons[0]).label
+                            tooltipText: "Choose the board's editable media layout."
+                            menuItems: root.templateButtons.map(function(option) {
+                                return { key: option.value, label: option.label, description: option.description,
+                                         checked: selection.templateKind === option.value ||
+                                                  selection.groupKind === option.value }
+                            })
+                            menuWidth: 280
+                            onMenuItemTriggered: carouselDocument.applyTemplateToCurrent(key)
                         }
 
                         RowLayout {
@@ -6473,7 +6850,7 @@ Rectangle {
                             color: theme.alpha(theme.lineSoft, 0.25)
                         }
 
-                        TextField {
+                        ToneTextField {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 28
                             visible: false
@@ -6704,7 +7081,7 @@ Rectangle {
                             }
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: boardBackgroundField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -6737,7 +7114,7 @@ Rectangle {
                             when: !selection.hasSelection && !boardBackgroundField.activeFocus
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: boardBackgroundSecondaryField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -6890,6 +7267,7 @@ Rectangle {
                         width: parent.width
                         visible: root.inspectorPrimarySurface === "board" && !selection.hasSelection
                         title: "Board Notes"
+                        objectName: "carouselBoardNotesSection"
                         subtitle: "Saved as metadata · never rendered"
                         showAccentMarker: false
                         uppercaseTitle: false
@@ -6910,6 +7288,7 @@ Rectangle {
 
                         ToneTextArea {
                             id: boardMessageNoteField
+                            accessibleLabel: "Board message"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 66
                             placeholderText: "What this board needs to communicate"
@@ -6940,6 +7319,7 @@ Rectangle {
 
                         ToneTextArea {
                             id: boardMediaIntentNoteField
+                            accessibleLabel: "Media intent"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 66
                             placeholderText: "Subject, framing, or image requirement"
@@ -6970,6 +7350,7 @@ Rectangle {
 
                         ToneTextArea {
                             id: boardSourceReferenceNoteField
+                            accessibleLabel: "Source reference and credit"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 66
                             placeholderText: "Credit, URL, caption source, or review note"
@@ -7000,6 +7381,7 @@ Rectangle {
 
                         ToneTextArea {
                             id: boardAltTextField
+                            accessibleLabel: "Alternative text"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 66
                             placeholderText: "Concise description for platform accessibility fields"
@@ -7029,6 +7411,7 @@ Rectangle {
 
                         ToneTextArea {
                             id: boardPlainLanguageDescriptionField
+                            accessibleLabel: "Plain-language board description"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 66
                             placeholderText: "Describe the board's message and meaningful visual content"
@@ -7305,7 +7688,9 @@ Rectangle {
                                             ActionButton {
                                                 Layout.preferredWidth: 34
                                                 compact: true
-                                                text: Boolean(modelData.isFavorite) ? "★" : "☆"
+                                                iconName: Boolean(modelData.isFavorite) ? "rating" : "star"
+                                                showText: false
+                                                active: Boolean(modelData.isFavorite)
                                                 tooltipText: Boolean(modelData.isFavorite)
                                                              ? "Remove from favorites"
                                                              : "Add to favorites"
@@ -8030,13 +8415,16 @@ Rectangle {
 
                                 delegate: CarouselMediaThumb {
                                     required property var modelData
+                                    objectName: "carouselQuickLibraryAsset" + String(modelData.assetId || "")
 
                                     asset: modelData
+                                    selected: String(modelData.assetId || "") === root.selectedQuickLibraryAssetId
                                     onActivated: function(asset, modifiers) {
-                                        root.placeLibraryAsset(asset, root.hasMultiSelectModifier(modifiers) ? "layer" : "slot")
+                                        root.selectedQuickLibraryAssetId = String(asset.assetId || "")
                                     }
-                                    onDoubleActivated: function(asset) {
-                                        root.placeLibraryAsset(asset, "layer")
+                                    onDoubleActivated: function(asset, modifiers) {
+                                        root.selectedQuickLibraryAssetId = String(asset.assetId || "")
+                                        root.placeLibraryAsset(asset, root.hasMultiSelectModifier(modifiers) ? "layer" : "slot")
                                     }
                                 }
                             }
@@ -8099,25 +8487,19 @@ Rectangle {
                                 font.weight: Font.DemiBold
                             }
 
-                            RowLayout {
+                            ToneComboBox {
+                                objectName: "carouselSlotCropSourceCombo"
                                 Layout.fillWidth: true
-                                spacing: 3
-
-                                Repeater {
-                                    model: [
-                                        { label: "Use Edit crop", value: "edit" },
-                                        { label: "Use original", value: "original" },
-                                        { label: "Use Carousel crop", value: "carousel" }
-                                    ]
-
-                                    delegate: FilterChip {
-                                        required property var modelData
-                                        Layout.fillWidth: true
-                                        text: modelData.label
-                                        active: String(selection.cropSource || "edit") === modelData.value
-                                        onClicked: carouselDocument.setCurrentMediaCropSource(modelData.value)
-                                    }
-                                }
+                                model: [
+                                    { label: "Use Edit crop", value: "edit" },
+                                    { label: "Use original", value: "original" },
+                                    { label: "Use Carousel crop", value: "carousel" }
+                                ]
+                                textRole: "label"
+                                valueRole: "value"
+                                currentIndex: indexOfValue(String(selection.cropSource || "edit"))
+                                Accessible.name: "Photographic crop source"
+                                onActivated: carouselDocument.setCurrentMediaCropSource(String(currentValue || "edit"))
                             }
 
                             Label {
@@ -8229,14 +8611,174 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        id: carouselDesignVariantsSection
+                        objectName: "carouselDesignVariantsSection"
+                        width: parent.width
+                        visible: root.inspectorPrimarySurface === "board"
+                        title: "Design variants"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontUi
+                        titlePixelSize: theme.typeLabel
+                        titleWeight: Font.DemiBold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: false
+
+                        ColumnLayout {
+                            objectName: "carouselVariantComparisonControls"
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ToneTextField {
+                                objectName: "carouselVariantComparisonNameField"
+                                Layout.fillWidth: true
+                                placeholderText: "Captured variant name"
+                                accessibleLabel: "Captured variant name"
+                                text: root.variantComparisonName
+                                onTextEdited: {
+                                    root.variantComparisonName = text
+                                    root.variantComparisonError = ""
+                                }
+                                onAccepted: root.captureDesignVariant()
+                            }
+                            ActionButton {
+                                objectName: "carouselCaptureVariantButton"
+                                Layout.alignment: Qt.AlignRight
+                                compact: true
+                                text: carouselDocument.variantComparisonState.active ? "Replace capture" : "Capture current"
+                                enabled: root.variantComparisonName.trim().length > 0
+                                disabledReason: "Name the captured variant."
+                                onClicked: root.captureDesignVariant()
+                            }
+                            Label {
+                                objectName: "carouselVariantComparisonError"
+                                Layout.fillWidth: true
+                                visible: root.variantComparisonError.length > 0
+                                text: root.variantComparisonError
+                                color: theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
+                            Label {
+                                objectName: "carouselCapturedVariantName"
+                                Layout.fillWidth: true
+                                visible: Boolean(carouselDocument.variantComparisonState.active)
+                                text: String(carouselDocument.variantComparisonState.leftName || "")
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeControl
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: carouselDocument.variantComparisonState.active
+                                      ? "Edit the document, then compare it with this capture."
+                                      : "Capture the full document before trying another design."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
+                            ActionButton {
+                                objectName: "carouselOpenVariantComparisonButton"
+                                Layout.alignment: Qt.AlignRight
+                                visible: Boolean(carouselDocument.variantComparisonState.active)
+                                compact: true
+                                tone: "primary"
+                                text: "Compare variants"
+                                onClicked: {
+                                    if (carouselDocument.refreshVariantComparison()) {
+                                        root.variantComparisonError = ""
+                                        carouselVariantComparisonDialog.open()
+                                    } else root.variantComparisonError = carouselDocument.status
+                                }
+                            }
+                            Repeater {
+                                model: carouselDocument.savedDesignVersions
+                                delegate: ColumnLayout {
+                                    id: versionRow
+                                    required property var modelData
+                                    objectName: "carouselDesignVersionRow_" + modelData.versionId
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+                                    Label {
+                                        objectName: "carouselDesignVersionName_" + versionRow.modelData.versionId
+                                        Layout.fillWidth: true
+                                        text: String(versionRow.modelData.name || "Saved variant")
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: theme.typeControl
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        elide: Text.ElideNone
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: Number(versionRow.modelData.boardCount || 0) + " boards"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: theme.typeCaption
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: theme.space6
+                                        ActionButton {
+                                            objectName: "carouselRestoreDesignVersion_" + versionRow.modelData.versionId
+                                            compact: true
+                                            text: "Restore"
+                                            accessibleName: "Restore design version " + String(versionRow.modelData.name)
+                                            onClicked: {
+                                                if (carouselDocument.restoreSavedDesignVersion(String(versionRow.modelData.versionId)))
+                                                    root.variantComparisonError = ""
+                                                else root.variantComparisonError = carouselDocument.status
+                                            }
+                                        }
+                                        MenuButton {
+                                            objectName: "carouselDesignVersionMenu_" + versionRow.modelData.versionId
+                                            compact: true
+                                            text: "More"
+                                            iconName: "menu"
+                                            primaryOpensMenu: true
+                                            accessibleName: "More options for design version " + String(versionRow.modelData.name)
+                                            menuItems: [{ key: "delete", label: "Delete version", icon: "delete" }]
+                                            onMenuItemTriggered: function(key) {
+                                                if (key === "delete") {
+                                                    if (carouselDocument.deleteSavedDesignVersion(String(versionRow.modelData.versionId)))
+                                                        root.variantComparisonError = ""
+                                                    else root.variantComparisonError = carouselDocument.status
+                                                    carouselDesignVariantsSection.forceActiveFocus()
+                                                }
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                visible: carouselDocument.savedDesignVersions.length > 0
+                                text: "Saved versions contain the full document. Restore and delete each use one Undo."
+                                color: theme.textFaint
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        id: carouselLayoutGuidesSection
+                        objectName: "carouselLayoutGuidesSection"
                         width: parent.width
                         visible: root.inspectorPrimarySurface === "board"
                         title: "Layout & Guides"
                         showAccentMarker: false
                         uppercaseTitle: false
-                        titleFontFamily: theme.fontDisplay
-                        titlePixelSize: 15
-                        titleWeight: Font.Bold
+                        titleFontFamily: theme.fontUi
+                        titlePixelSize: theme.typeLabel
+                        titleWeight: Font.DemiBold
                         titleLetterSpacing: 0
                         expandable: true
                         expanded: false
@@ -8268,210 +8810,128 @@ Rectangle {
                         ColumnLayout {
                             objectName: "carouselLayoutRecipeControls"
                             Layout.fillWidth: true
-                            spacing: 5
+                            spacing: theme.space8
 
                             Label {
                                 Layout.fillWidth: true
                                 text: "Layout recipes"
                                 color: theme.textMuted
                                 font.family: theme.fontUi
-                                font.pixelSize: 10
+                                font.pixelSize: theme.typeCaption
                                 font.weight: Font.DemiBold
                                 elide: Text.ElideNone
                             }
 
-                            RowLayout {
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 4
+                                spacing: theme.space6
 
                                 ToneTextField {
                                     objectName: "carouselLayoutRecipeNameField"
                                     Layout.fillWidth: true
                                     placeholderText: "Recipe name"
                                     text: root.layoutRecipeName
-                                    onTextEdited: root.layoutRecipeName = text
+                                    onTextEdited: {
+                                        root.layoutRecipeName = text
+                                        root.layoutRecipeSaveError = ""
+                                    }
                                     onAccepted: {
-                                        if (carouselDocument.saveCurrentLayoutRecipe(text))
+                                        if (carouselDocument.saveCurrentLayoutRecipe(text)) {
                                             root.layoutRecipeName = ""
+                                            root.layoutRecipeSaveError = ""
+                                        } else root.layoutRecipeSaveError = carouselDocument.status
                                     }
                                 }
 
                                 ActionButton {
                                     objectName: "carouselSaveLayoutRecipeButton"
+                                    Layout.alignment: Qt.AlignRight
                                     compact: true
                                     text: "Save layout"
                                     enabled: root.layoutRecipeName.trim().length > 0
                                     disabledReason: "Enter a recipe name."
                                     onClicked: {
-                                        if (carouselDocument.saveCurrentLayoutRecipe(root.layoutRecipeName))
+                                        if (carouselDocument.saveCurrentLayoutRecipe(root.layoutRecipeName)) {
                                             root.layoutRecipeName = ""
+                                            root.layoutRecipeSaveError = ""
+                                        } else root.layoutRecipeSaveError = carouselDocument.status
                                     }
+                                }
+                                Label {
+                                    objectName: "carouselLayoutRecipeSaveError"
+                                    Layout.fillWidth: true
+                                    visible: root.layoutRecipeSaveError.length > 0
+                                    text: root.layoutRecipeSaveError
+                                    color: theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: theme.typeCaption
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 }
                             }
 
                             Repeater {
                                 model: carouselDocument.layoutRecipes
 
-                                delegate: RowLayout {
+                                delegate: ColumnLayout {
+                                    id: recipeRow
                                     required property var modelData
+                                    objectName: "carouselLayoutRecipeLibraryRow_" + modelData.recipeId
                                     Layout.fillWidth: true
-                                    spacing: 4
+                                    spacing: theme.space6
 
                                     Label {
                                         Layout.fillWidth: true
-                                        text: String(modelData.name || "Layout") + " · " +
-                                              Number(modelData.columns || 4) + "×" +
-                                              Number(modelData.rows || 4) + " · " +
-                                              Number(modelData.guideCount || 0) + " guides"
+                                        objectName: "carouselLayoutRecipeLibraryName_" + recipeRow.modelData.recipeId
+                                        text: String(recipeRow.modelData.name || "Layout")
                                         color: theme.textMain
                                         font.family: theme.fontUi
-                                        font.pixelSize: 10
+                                        font.pixelSize: theme.typeControl
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                         elide: Text.ElideNone
                                     }
 
-                                    ActionButton {
-                                        compact: true
-                                        text: "Preview"
-                                        onClicked: root.openLayoutRecipePreview(
-                                                       String(parent.modelData.recipeId || ""))
-                                    }
-
-                                    ActionButton {
-                                        compact: true
-                                        showText: false
-                                        iconName: "delete"
-                                        tone: "danger"
-                                        tooltipText: "Delete layout recipe"
-                                        onClicked: carouselDocument.deleteLayoutRecipe(
-                                                       String(parent.modelData.recipeId || ""))
-                                    }
-                                }
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Recipes store only layout geometry and preview overlays—never colors, type, media, or layer content."
-                                color: theme.textFaint
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                        }
-
-                        ColumnLayout {
-                            objectName: "carouselVariantComparisonControls"
-                            Layout.fillWidth: true
-                            spacing: 5
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Design variants"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideNone
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 4
-
-                                ToneTextField {
-                                    objectName: "carouselVariantComparisonNameField"
-                                    Layout.fillWidth: true
-                                    placeholderText: "Left variant name"
-                                    text: root.variantComparisonName
-                                    onTextEdited: root.variantComparisonName = text
-                                    onAccepted: carouselDocument.captureVariantComparisonBaseline(text)
-                                }
-
-                                ActionButton {
-                                    objectName: "carouselCaptureVariantButton"
-                                    compact: true
-                                    text: "Capture left"
-                                    enabled: root.variantComparisonName.trim().length > 0
-                                    disabledReason: "Name the left variant."
-                                    onClicked: carouselDocument.captureVariantComparisonBaseline(
-                                                   root.variantComparisonName)
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: Boolean(carouselDocument.variantComparisonState.active)
-                                spacing: 4
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(carouselDocument.variantComparisonState.leftName || "Captured variant") +
-                                          " captured. Edit the document, then compare it with the current variant."
-                                    color: theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                ActionButton {
-                                    objectName: "carouselOpenVariantComparisonButton"
-                                    compact: true
-                                    tone: "primary"
-                                    text: "Compare variants"
-                                    onClicked: {
-                                        if (carouselDocument.refreshVariantComparison())
-                                            carouselVariantComparisonDialog.open()
-                                    }
-                                }
-                            }
-
-                            Repeater {
-                                model: carouselDocument.savedDesignVersions
-
-                                delegate: RowLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
                                     Label {
                                         Layout.fillWidth: true
-                                        text: String(parent.modelData.name || "Saved variant") + " · " +
-                                              Number(parent.modelData.boardCount || 0) + " boards"
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
+                                        text: Number(recipeRow.modelData.columns || 4) + " × " + Number(recipeRow.modelData.rows || 4) +
+                                              " · " + Number(recipeRow.modelData.guideCount || 0) + " guides"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: theme.typeCaption
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
                                     }
-
-                                    ActionButton {
-                                        compact: true
-                                        text: "Restore"
-                                        onClicked: carouselDocument.restoreSavedDesignVersion(
-                                                       String(parent.modelData.versionId || ""))
-                                    }
-
-                                    ActionButton {
-                                        compact: true
-                                        showText: false
-                                        iconName: "delete"
-                                        tone: "danger"
-                                        tooltipText: "Delete saved design version"
-                                        onClicked: carouselDocument.deleteSavedDesignVersion(
-                                                       String(parent.modelData.versionId || ""))
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: theme.space6
+                                        ActionButton {
+                                            objectName: "carouselPreviewLayoutRecipeButton_" + recipeRow.modelData.recipeId
+                                            compact: true
+                                            text: "Preview"
+                                            accessibleName: "Preview layout recipe " + String(recipeRow.modelData.name)
+                                            onClicked: root.openLayoutRecipePreview(String(recipeRow.modelData.recipeId || ""))
+                                        }
+                                        MenuButton {
+                                            objectName: "carouselLayoutRecipeMenu_" + recipeRow.modelData.recipeId
+                                            compact: true
+                                            text: "More"
+                                            iconName: "menu"
+                                            primaryOpensMenu: true
+                                            accessibleName: "More options for layout recipe " + String(recipeRow.modelData.name)
+                                            menuItems: [{ key: "delete", label: "Delete recipe", icon: "delete" }]
+                                            onMenuItemTriggered: function(key) {
+                                                if (key === "delete") carouselDocument.deleteLayoutRecipe(String(recipeRow.modelData.recipeId || ""))
+                                            }
+                                        }
+                                        Item { Layout.fillWidth: true }
                                     }
                                 }
                             }
 
                             Label {
                                 Layout.fillWidth: true
-                                visible: carouselDocument.savedDesignVersions.length > 0
-                                text: "Saved variants are full document versions. Restore and delete are undoable."
+                                text: "Saved recipes contain board geometry and document-wide precision settings."
                                 color: theme.textFaint
                                 font.family: theme.fontUi
-                                font.pixelSize: 9
+                                font.pixelSize: theme.typeCaption
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 elide: Text.ElideNone
                             }
@@ -8837,6 +9297,8 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        id: carouselLayersSection
+                        objectName: "carouselLayersSection"
                         width: parent.width
                         visible: root.inspectorPrimarySurface === "board"
                         title: "Layers"
@@ -8996,6 +9458,7 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        objectName: "carouselSelectionTransformSection"
                         width: parent.width
                         visible: root.inspectorPrimarySurface === "board" && selection.hasSelection
                         title: "Transform"
@@ -9050,7 +9513,7 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            TextField {
+                            ToneTextField {
                                 id: transformXField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
@@ -9079,7 +9542,7 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            TextField {
+                            ToneTextField {
                                 id: transformYField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
@@ -9108,7 +9571,7 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            TextField {
+                            ToneTextField {
                                 id: transformRotationField
                                 Layout.preferredWidth: 54
                                 Layout.preferredHeight: 26
@@ -9142,7 +9605,7 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            TextField {
+                            ToneTextField {
                                 id: transformWidthField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
@@ -9184,7 +9647,7 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            TextField {
+                            ToneTextField {
                                 id: transformHeightField
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 26
@@ -9718,6 +10181,19 @@ Rectangle {
                                 }
                             }
 
+                            Label {
+                                objectName: "carouselRepeatedElementSyncExplanation"
+                                Layout.fillWidth: true
+                                visible: Boolean(root.selectedRepeatedElementLink.linked)
+                                text: "Edits sync across boards " + root.repeatedElementBoardSummary() +
+                                      ". Detach this board to make a local override."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                elide: Text.ElideNone
+                            }
+
                             ActionButton {
                                 objectName: "carouselCreateRepeatedElementLinkButton"
                                 Layout.fillWidth: true
@@ -9740,6 +10216,7 @@ Rectangle {
                                     Layout.fillWidth: true
                                     compact: true
                                     text: "Detach this board"
+                                    tooltipText: "Keep this board's linked layers, then edit them locally."
                                     enabled: Boolean(root.selectedRepeatedElementLink.canDetach)
                                     onClicked: carouselDocument.detachSelectedRepeatedElement()
                                 }
@@ -9749,6 +10226,7 @@ Rectangle {
                                     Layout.fillWidth: true
                                     compact: true
                                     text: "Unlink all"
+                                    tooltipText: "Stop synchronizing every instance while keeping all placed layers."
                                     onClicked: carouselDocument.removeRepeatedElementLink(
                                                    String(root.selectedRepeatedElementLink.linkId || ""))
                                 }
@@ -9783,32 +10261,37 @@ Rectangle {
                             spacing: 3
 
                             ActionButton {
+                                objectName: "carouselAlignSelectionLeftButton"
                                 Layout.fillWidth: true
                                 compact: true
                                 iconName: "chevron-left"
                                 showText: false
+                                accessibleName: "Align selection left"
+                                tooltipText: "Align selection left"
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionLeft()
-                                ToolTip.visible: leftHover.containsMouse
-                                ToolTip.text: "Align Left"
-                                ToolTip.delay: 400
-                                MouseArea { id: leftHover; anchors.fill: parent; hoverEnabled: true; onClicked: parent.clicked() }
                             }
 
                             ActionButton {
+                                objectName: "carouselAlignSelectionHorizontalCenterButton"
                                 Layout.fillWidth: true
                                 compact: true
                                 iconName: "split-view"
                                 showText: false
+                                accessibleName: "Align selection horizontally centered"
+                                tooltipText: "Align selection horizontally centered"
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionHorizontalCenter()
                             }
 
                             ActionButton {
+                                objectName: "carouselAlignSelectionRightButton"
                                 Layout.fillWidth: true
                                 compact: true
                                 iconName: "chevron-right"
                                 showText: false
+                                accessibleName: "Align selection right"
+                                tooltipText: "Align selection right"
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionRight()
                             }
@@ -10196,7 +10679,7 @@ Rectangle {
                             }
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: shapeFillField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -10252,7 +10735,7 @@ Rectangle {
                             }
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: shapeSecondaryFillField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -10280,7 +10763,7 @@ Rectangle {
                             when: selection.isShape && !shapeSecondaryFillField.activeFocus
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: shapeStrokeField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -10340,6 +10823,7 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        id: carouselPhotoSection
                         width: parent.width
                         visible: root.inspectorPrimarySurface === "board" &&
                                  (selection.isImage || selection.isVideo) && !selection.hasMultipleSelection
@@ -10418,10 +10902,12 @@ Rectangle {
                         }
 
                         RowLayout {
+                            id: carouselFocusedCropControls
                             objectName: "carouselFocusedCropControls"
                             Layout.fillWidth: true
 
                             ActionButton {
+                                objectName: "carouselFocusedCropToggleButton"
                                 Layout.fillWidth: true
                                 compact: true
                                 tone: root.focusedCropMode ? "primary" : "neutral"
@@ -10540,24 +11026,30 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 3
+                            spacing: 4
 
-                            Repeater {
+                            Label {
+                                text: "Crop source"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                            }
+
+                            ToneComboBox {
+                                objectName: "carouselSelectedMediaCropSourceCombo"
+                                Layout.fillWidth: true
                                 model: [
                                     { label: "Use Edit crop", value: "edit" },
                                     { label: "Use original", value: "original" },
                                     { label: "Use Carousel crop", value: "carousel" }
                                 ]
-
-                                delegate: FilterChip {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    text: modelData.label
-                                    active: String(selection.cropSource || "edit") === modelData.value
-                                    onClicked: carouselDocument.setCurrentMediaCropSource(modelData.value)
-                                }
+                                textRole: "label"
+                                valueRole: "value"
+                                currentIndex: indexOfValue(String(selection.cropSource || "edit"))
+                                Accessible.name: "Crop source"
+                                onActivated: carouselDocument.setCurrentMediaCropSource(String(currentValue || "edit"))
                             }
                         }
 
@@ -10688,8 +11180,10 @@ Rectangle {
                         expandable: true
                         expanded: true
 
-                        TextArea {
+                        ToneTextArea {
                             id: textEditor
+                            objectName: "carouselCanvasTextEditor"
+                            accessibleLabel: "Selected canvas text"
                             Layout.fillWidth: true
                             wrapMode: TextEdit.Wrap
                             color: theme.textStrong
@@ -10701,12 +11195,26 @@ Rectangle {
                                 border.width: 1
                                 border.color: theme.alpha(theme.lineSoft, 0.5)
                             }
+                            property string editingItemId: ""
+                            property bool syncingText: false
+                            function syncFromSelection() {
+                                if (!root.selection.isText || (activeFocus && editingItemId === carouselDocument.selectedItemId)) return
+                                syncingText = true
+                                text = String(root.selection.text || "")
+                                editingItemId = carouselDocument.selectedItemId
+                                syncingText = false
+                            }
+                            Component.onCompleted: syncFromSelection()
                             onActiveFocusChanged: {
-                                if (!activeFocus && selection.isText)
-                                    carouselDocument.setSelectedText(text)
+                                if (activeFocus) editingItemId = carouselDocument.selectedItemId
+                                else {
+                                    if (root.selection.isText && editingItemId === carouselDocument.selectedItemId)
+                                        carouselDocument.setSelectedText(text)
+                                    syncFromSelection()
+                                }
                             }
                             onTextChanged: {
-                                if (activeFocus && selection.isText)
+                                if (!syncingText && activeFocus && root.selection.isText && editingItemId === carouselDocument.selectedItemId)
                                     carouselDocument.setSelectedText(text)
                             }
                         }
@@ -10727,11 +11235,9 @@ Rectangle {
                             }
                         }
 
-                        Binding {
-                            target: textEditor
-                            property: "text"
-                            value: selection.text
-                            when: selection.isText && !textEditor.activeFocus
+                        Connections {
+                            target: root
+                            function onSelectionChanged() { textEditor.syncFromSelection() }
                         }
 
                         ColumnLayout {
@@ -10940,7 +11446,7 @@ Rectangle {
                                             font.pixelSize: 9
                                         }
 
-                                        TextField {
+                                        ToneTextField {
                                             id: documentVariableField
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: 25
@@ -11043,7 +11549,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 spacing: 4
 
-                                TextField {
+                                ToneTextField {
                                     id: copySnippetNameField
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 25
@@ -11261,7 +11767,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 spacing: 4
 
-                                TextField {
+                                ToneTextField {
                                     id: newTextStyleNameField
                                     Layout.fillWidth: true
                                     placeholderText: "New style name"
@@ -11390,7 +11896,7 @@ Rectangle {
                             }
                         }
 
-                        TextField {
+                        ToneTextField {
                             id: textColorField
                             Layout.fillWidth: true
                             Layout.preferredHeight: 26
@@ -11688,14 +12194,26 @@ Rectangle {
                             }
                         }
 
-                        RowLayout {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 6
+                            spacing: theme.space6
+
+                            Label {
+                                objectName: "carouselCurrentFontLabel"
+                                Layout.fillWidth: true
+                                text: (selection.textFontAvailable ? "Current: " : "Missing: ") +
+                                      String(selection.resolvedTextFontFamily || selection.textFontFamily)
+                                color: selection.textFontAvailable ? theme.textMuted : theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: theme.typeCaption
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            }
 
                             ActionButton {
                                 objectName: "carouselOpenFontBrowserButton"
                                 Layout.fillWidth: true
                                 compact: true
+                                allowLabelWrap: true
                                 text: "Browse installed fonts"
                                 iconName: "search"
                                 tone: "primary"
@@ -11704,17 +12222,6 @@ Rectangle {
                                     root.fontBrowserSection = "all"
                                     carouselFontBrowserDialog.open()
                                 }
-                            }
-
-                            StatusChip {
-                                text: selection.textFontAvailable
-                                      ? String(selection.resolvedTextFontFamily || selection.textFontFamily)
-                                      : "Missing: " + String(selection.resolvedTextFontFamily || selection.textFontFamily)
-                                tone: selection.textFontAvailable ? "neutral" : "error"
-                                compact: true
-                                detailText: selection.textFontAvailable
-                                            ? "Current installed face"
-                                            : "Choose a fallback to preview; Looksy never substitutes silently."
                             }
                         }
 
@@ -12161,7 +12668,7 @@ Rectangle {
         edge: Qt.RightEdge
         modal: true
         interactive: root.compactWorkspace
-        enabled: root.compactWorkspace && carouselDocument.hasActiveCarousel
+        enabled: root.compactWorkspace && root.carouselInspectorVisible && carouselDocument.hasActiveCarousel
         width: Math.min(360, Math.max(280, root.width - 56))
         height: root.height
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -12169,7 +12676,12 @@ Rectangle {
             if (!enabled)
                 close()
         }
-        onClosed: carouselCompactInspectorButton.forceActiveFocus()
+        onClosed: {
+            if (carouselCompactInspectorButton.visible)
+                carouselCompactInspectorButton.forceActiveFocus()
+            else
+                carouselLayoutButton.forceActiveFocus()
+        }
 
         background: Rectangle {
             color: theme.ink900
@@ -12185,234 +12697,66 @@ Rectangle {
 
     Dialog {
         id: carouselVariantComparisonDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselVariantComparisonDialog"
         readonly property var comparison: carouselDocument.variantComparisonState || ({})
         readonly property var leftSources: comparison.leftPreviewSources || []
         readonly property var rightSources: comparison.rightPreviewSources || []
         readonly property int boardIndex: Number(comparison.boardIndex || 0)
-        readonly property int sharedBoardCount: Math.min(Number(comparison.leftBoardCount || 0),
-                                                         Number(comparison.rightBoardCount || 0))
+        readonly property int boardCount: Math.max(Number(comparison.leftBoardCount || 0),
+                                                   Number(comparison.rightBoardCount || 0))
         modal: true
         focus: true
         padding: 0
-        width: Math.min(940, root.width - 48)
-        height: Math.min(720, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        parent: Overlay.overlay
+        width: Math.min(theme.scaled(940), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48)
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onOpened: carouselDocument.refreshVariantComparison()
-
+        onOpened: Qt.callLater(function() { if (contentItem.item) contentItem.item.focusInitialTarget() })
+        onClosed: {
+            const target = focusReturnItem
+            focusReturnItem = null
+            Qt.callLater(function() {
+                if (target && target.visible && target.enabled) target.forceActiveFocus()
+                else carouselDesignVariantsSection.forceActiveFocus()
+            })
+        }
         background: Rectangle {
-            radius: theme.radius12
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.6)
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Compare design variants"
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Compare design variants"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: carouselVariantComparisonDialog.comparison.different
-                              ? "The variants differ. Review each board before choosing which state to keep."
-                              : "The rendered variants currently match."
-                        color: carouselVariantComparisonDialog.comparison.different
-                               ? theme.accentWarm300 : theme.success
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                StatusChip {
-                    compact: true
-                    tone: carouselVariantComparisonDialog.comparison.different ? "warning" : "success"
-                    text: carouselVariantComparisonDialog.comparison.different ? "Different" : "Matching"
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselVariantComparisonDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselVariantComparisonDialog: carouselVariantComparisonDialog
+                    })
             }
-
-            GridLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                columns: 2
-                columnSpacing: 10
-                rowSpacing: 8
-
-                Label {
-                    Layout.fillWidth: true
-                    text: String(carouselVariantComparisonDialog.comparison.leftName || "Left variant")
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.weight: Font.DemiBold
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    elide: Text.ElideNone
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: String(carouselVariantComparisonDialog.comparison.rightName || "Current variant")
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.weight: Font.DemiBold
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    elide: Text.ElideNone
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.minimumHeight: 300
-                    radius: theme.radius8
-                    color: theme.ink950
-                    border.width: 1
-                    border.color: theme.lineSoft
-
-                    Image {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        source: carouselVariantComparisonDialog.boardIndex <
-                                carouselVariantComparisonDialog.leftSources.length
-                                ? carouselVariantComparisonDialog.leftSources[
-                                      carouselVariantComparisonDialog.boardIndex] : ""
-                        cache: false
-                        asynchronous: true
-                        fillMode: Image.PreserveAspectFit
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.minimumHeight: 300
-                    radius: theme.radius8
-                    color: theme.ink950
-                    border.width: 1
-                    border.color: carouselVariantComparisonDialog.comparison.different
-                                  ? theme.accentWarm400 : theme.lineSoft
-
-                    Image {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        source: carouselVariantComparisonDialog.boardIndex <
-                                carouselVariantComparisonDialog.rightSources.length
-                                ? carouselVariantComparisonDialog.rightSources[
-                                      carouselVariantComparisonDialog.boardIndex] : ""
-                        cache: false
-                        asynchronous: true
-                        fillMode: Image.PreserveAspectFit
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    compact: true
-                    text: "Previous board"
-                    enabled: carouselVariantComparisonDialog.boardIndex > 0
-                    disabledReason: "Already on the first shared board."
-                    onClicked: carouselDocument.setVariantComparisonBoardIndex(
-                                   carouselVariantComparisonDialog.boardIndex - 1)
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "Board " + (carouselVariantComparisonDialog.boardIndex + 1) + " of " +
-                          carouselVariantComparisonDialog.sharedBoardCount
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideNone
-                }
-
-                ActionButton {
-                    compact: true
-                    text: "Next board"
-                    enabled: carouselVariantComparisonDialog.boardIndex + 1 <
-                             carouselVariantComparisonDialog.sharedBoardCount
-                    disabledReason: "Already on the last shared board."
-                    onClicked: carouselDocument.setVariantComparisonBoardIndex(
-                                   carouselVariantComparisonDialog.boardIndex + 1)
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                visible: Number(carouselVariantComparisonDialog.comparison.leftBoardCount || 0) !==
-                         Number(carouselVariantComparisonDialog.comparison.rightBoardCount || 0)
-                text: "Board counts differ. Navigation covers the boards shared by both variants; the chosen document version keeps its complete board set."
-                color: theme.accentWarm300
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Keep left"
-                    onClicked: {
-                        if (carouselDocument.resolveVariantComparison("keep-left"))
-                            carouselVariantComparisonDialog.close()
-                    }
-                }
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Keep right"
-                    onClicked: {
-                        if (carouselDocument.resolveVariantComparison("keep-right"))
-                            carouselVariantComparisonDialog.close()
-                    }
-                }
-
-                ActionButton {
-                    objectName: "carouselKeepBothVariantsButton"
-                    Layout.fillWidth: true
-                    tone: "primary"
-                    text: "Keep both as versions"
-                    onClicked: {
-                        if (carouselDocument.resolveVariantComparison("keep-both"))
-                            carouselVariantComparisonDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselVariantComparisonDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselLayoutRecipeDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselLayoutRecipeDialog"
         readonly property var preview: carouselDocument.layoutRecipePreview || ({})
         readonly property var beforeBoard: preview.beforeBoard || ({})
@@ -12420,428 +12764,102 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(620, root.width - 48)
-        height: Math.min(470, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        parent: Overlay.overlay
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(620), parent ? parent.height - 32 : root.height - 48)
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onClosed: carouselDocument.clearLayoutRecipePreview()
-
+        onOpened: Qt.callLater(function() { if (contentItem.item) contentItem.item.focusInitialTarget() })
+        onClosed: {
+            carouselDocument.clearLayoutRecipePreview()
+            const target = focusReturnItem
+            focusReturnItem = null
+            Qt.callLater(function() {
+                if (target && target.visible && target.enabled) target.forceActiveFocus(Qt.TabFocusReason)
+                else root.forceActiveFocus(Qt.TabFocusReason)
+            })
+        }
         background: Rectangle {
-            radius: theme.radius12
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.6)
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Layout recipe"
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            Label {
-                Layout.fillWidth: true
-                text: "Apply layout recipe"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 20
-                font.weight: Font.Bold
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselLayoutRecipeDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselLayoutRecipeDialog: carouselLayoutRecipeDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: String(carouselLayoutRecipeDialog.preview.name || "Layout") +
-                      " → board " + Number(carouselLayoutRecipeDialog.preview.boardNumber || 1)
-                color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 10
-                elide: Text.ElideNone
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: 8
-                rowSpacing: 8
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: beforeLayoutColumn.implicitHeight + 20
-                    radius: theme.radius8
-                    color: theme.alpha(theme.ink950, 0.55)
-                    ColumnLayout {
-                        id: beforeLayoutColumn
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        Label { text: "Before"; color: theme.textMuted; font.family: theme.fontUi; font.weight: Font.DemiBold }
-                        Label {
-                            Layout.fillWidth: true
-                            text: Number(carouselLayoutRecipeDialog.beforeBoard.columns || 4) + " × " +
-                                  Number(carouselLayoutRecipeDialog.beforeBoard.rows || 4) +
-                                  " · margins " + Number(carouselLayoutRecipeDialog.beforeBoard.marginX || 0) +
-                                  "/" + Number(carouselLayoutRecipeDialog.beforeBoard.marginY || 0) + " px"
-                            color: theme.textMain
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: afterLayoutColumn.implicitHeight + 20
-                    radius: theme.radius8
-                    color: theme.alpha(theme.accentCool400, 0.08)
-                    border.width: 1
-                    border.color: theme.alpha(theme.accentCool400, 0.35)
-                    ColumnLayout {
-                        id: afterLayoutColumn
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        Label { text: "Result"; color: theme.accentCool300; font.family: theme.fontUi; font.weight: Font.DemiBold }
-                        Label {
-                            Layout.fillWidth: true
-                            text: Number(carouselLayoutRecipeDialog.afterBoard.columns || 4) + " × " +
-                                  Number(carouselLayoutRecipeDialog.afterBoard.rows || 4) +
-                                  " · margins " + Number(carouselLayoutRecipeDialog.afterBoard.marginX || 0) +
-                                  "/" + Number(carouselLayoutRecipeDialog.afterBoard.marginY || 0) + " px"
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                StatusChip { compact: true; tone: "accent"; text: Number(carouselLayoutRecipeDialog.preview.guideCount || 0) + " guides" }
-                StatusChip { compact: true; tone: "success"; text: "0 style changes" }
-                StatusChip { compact: true; tone: "success"; text: "0 content changes" }
-                Item { Layout.fillWidth: true }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Applies grid, margins, gutters, repeated spacing, snapping, guides, safe areas, and bleed as one undoable layout change. Exported visual pixels stay unchanged."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            Item { Layout.fillHeight: true }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselLayoutRecipeDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplyLayoutRecipeButton"
-                    Layout.fillWidth: true
-                    tone: "primary"
-                    text: "Apply layout only"
-                    enabled: Boolean(carouselLayoutRecipeDialog.preview.canApply)
-                    onClicked: {
-                        if (carouselDocument.applyPreviewedLayoutRecipe())
-                            carouselLayoutRecipeDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselLayoutRecipeDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselClipboardPasteDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselClipboardPasteDialog"
         readonly property var preview: carouselDocument.clipboardPastePreview || ({})
+        parent: Overlay.overlay
         modal: true
         focus: true
         padding: 0
-        width: Math.min(680, root.width - 48)
-        height: Math.min(620, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onClosed: carouselDocument.clearClipboardPastePreview()
+        onOpened: if (contentItem.item) contentItem.item.focusInitialTarget()
+        onClosed: {
+            carouselDocument.clearClipboardPastePreview()
+            Qt.callLater(function() {
+                const target = carouselClipboardPasteDialog.focusReturnItem
+                if (target && target.visible && target.enabled)
+                    target.forceActiveFocus(Qt.TabFocusReason)
+                else
+                    root.forceActiveFocus(Qt.TabFocusReason)
+                carouselClipboardPasteDialog.focusReturnItem = null
+            })
+        }
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Paste Carousel content"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Paste Carousel content"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: String(carouselClipboardPasteDialog.preview.sourceDocumentName || "Another Carousel") +
-                              " · " + String(carouselClipboardPasteDialog.preview.sourceFormat || "custom")
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Cancel paste"
-                    onClicked: carouselClipboardPasteDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselClipboardPasteDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselClipboardPasteDialog: carouselClipboardPasteDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: pasteSummaryColumn.implicitHeight + 20
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.58)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.45)
-
-                ColumnLayout {
-                    id: pasteSummaryColumn
-                    anchors.fill: parent
-                    anchors.margins: 10
-                    spacing: 6
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        StatusChip {
-                            compact: true
-                            tone: "accent"
-                            text: String(carouselClipboardPasteDialog.preview.kind || "components") === "boards"
-                                  ? Number(carouselClipboardPasteDialog.preview.boardCount || 0) + " boards"
-                                  : Number(carouselClipboardPasteDialog.preview.itemCount || 0) + " layers"
-                        }
-
-                        StatusChip {
-                            compact: true
-                            tone: "success"
-                            text: "Fresh identities"
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        Label {
-                            text: Number(carouselClipboardPasteDialog.preview.itemCount || 0) + " total layers"
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Groups, explicit stacks, board order, and complete repeated-element links are retained with destination-safe IDs. Geometry adapts to this document's board size."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 10
-
-                    InspectorSection {
-                        Layout.fillWidth: true
-                        title: "Resources"
-                        expandable: true
-                        expanded: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
-                                  Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            StatusChip {
-                                compact: true
-                                tone: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) > 0
-                                      ? "warning" : "success"
-                                text: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
-                                      " missing assets"
-                            }
-                            StatusChip {
-                                compact: true
-                                tone: Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
-                                      ? "warning" : "success"
-                                text: Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) +
-                                      " missing fonts"
-                            }
-                            Item { Layout.fillWidth: true }
-                        }
-
-                        Repeater {
-                            model: carouselClipboardPasteDialog.preview.missingAssets || []
-                            delegate: Label {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                text: "Missing asset · " + String(modelData.name || modelData.path || "Unknown file")
-                                color: theme.warning
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                        }
-
-                        Repeater {
-                            model: carouselClipboardPasteDialog.preview.missingFonts || []
-                            delegate: Label {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                text: "Missing font · " + String(modelData.family || "Unknown face")
-                                color: theme.warning
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: Number(carouselClipboardPasteDialog.preview.missingAssetCount || 0) +
-                                     Number(carouselClipboardPasteDialog.preview.missingFontCount || 0) > 0
-                            text: "Missing resources remain attached to their exact layers so preflight and relink/font recovery can resolve them after paste."
-                            color: theme.textFaint
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    InspectorSection {
-                        objectName: "carouselClipboardStyleMappingSection"
-                        Layout.fillWidth: true
-                        title: "Destination styling"
-                        expandable: false
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "Preserve source"
-                                active: root.clipboardPasteStylePolicy === "preserve"
-                                onClicked: root.clipboardPasteStylePolicy = "preserve"
-                            }
-
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "Map brand roles"
-                                active: root.clipboardPasteStylePolicy === "map-brand"
-                                enabled: Boolean(carouselClipboardPasteDialog.preview.canMapBrand)
-                                onClicked: root.clipboardPasteStylePolicy = "map-brand"
-                            }
-                        }
-
-                        ToneComboBox {
-                            objectName: "carouselClipboardBrandTargetCombo"
-                            Layout.fillWidth: true
-                            visible: root.clipboardPasteStylePolicy === "map-brand"
-                            model: carouselClipboardPasteDialog.preview.brandTargets || []
-                            textRole: "name"
-                            valueRole: "brandId"
-                            onCurrentValueChanged: root.clipboardPasteBrandId = String(currentValue || "")
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.clipboardPasteStylePolicy === "map-brand"
-                                  ? "Map text roles, accent shapes, brush colors, and pasted board backgrounds to the selected destination kit."
-                                  : "Keep the source typography, colors, and board backgrounds unchanged."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselClipboardPasteDialog.close()
-                }
-
-                ActionButton {
-                    objectName: "carouselApplyClipboardPasteButton"
-                    Layout.fillWidth: true
-                    tone: "primary"
-                    text: String(carouselClipboardPasteDialog.preview.kind || "components") === "boards"
-                          ? "Paste boards"
-                          : "Paste layers"
-                    enabled: Boolean(carouselClipboardPasteDialog.preview.canApply) &&
-                             (root.clipboardPasteStylePolicy !== "map-brand" ||
-                              root.clipboardPasteBrandId.length > 0)
-                    disabledReason: Boolean(carouselClipboardPasteDialog.preview.enoughBoardCapacity)
-                                    ? "Choose a destination brand kit."
-                                    : "This paste would exceed the 20-board limit."
-                    onClicked: {
-                        if (carouselDocument.applyClipboardPaste(
-                                    root.clipboardPasteStylePolicy,
-                                    root.clipboardPasteBrandId))
-                            carouselClipboardPasteDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselClipboardPasteDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselRepeatedElementLinkDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselRepeatedElementLinkDialog"
         modal: true
         focus: true
@@ -12859,127 +12877,23 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "Link repeated element"
-                    color: theme.textStrong
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 20
-                    font.weight: Font.Bold
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Cancel repeated-element link"
-                    onClicked: carouselRepeatedElementLinkDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselRepeatedElementLinkDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselRepeatedElementLinkDialog: carouselRepeatedElementLinkDialog
+                    })
             }
-
-            ToneTextField {
-                id: carouselRepeatedElementLinkNameField
-                objectName: "carouselRepeatedElementLinkNameField"
-                Layout.fillWidth: true
-                placeholderText: "Element name"
-                text: root.repeatedElementLinkName
-                onTextEdited: root.repeatedElementLinkName = text
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Boards"
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 4
-
-                Repeater {
-                    model: [
-                        { label: "Selected", value: "selected" },
-                        { label: "Following", value: "following" },
-                        { label: "All boards", value: "all" }
-                    ]
-
-                    delegate: FilterChip {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        text: modelData.label
-                        active: root.repeatedElementLinkScope === modelData.value
-                        onClicked: root.repeatedElementLinkScope = modelData.value
-                    }
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: root.repeatedElementTargetCount() + " target board" +
-                      (root.repeatedElementTargetCount() === 1 ? "" : "s") +
-                      " · " + Number(selection.selectedCount || 0) + " linked layer" +
-                      (Number(selection.selectedCount || 0) === 1 ? "" : "s")
-                color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Geometry, content, style, and media stay synchronized. Detach any board for a local override."
-                color: theme.textFaint
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            Item { Layout.fillHeight: true }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselRepeatedElementLinkDialog.close()
-                }
-
-                ActionButton {
-                    objectName: "carouselApplyRepeatedElementLinkButton"
-                    Layout.fillWidth: true
-                    text: "Create link"
-                    tone: "primary"
-                    enabled: root.repeatedElementLinkName.trim().length > 0 &&
-                             root.repeatedElementTargetCount() > 1
-                    disabledReason: "Name the element and choose at least two target boards."
-                    onClicked: {
-                        if (carouselDocument.createRepeatedElementLink(
-                                    root.repeatedElementLinkName,
-                                    root.repeatedElementLinkScope))
-                            carouselRepeatedElementLinkDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselRepeatedElementLinkDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselCommandPalette
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
+        readonly property var searchField: contentItem.item ? contentItem.item.searchField : null
         objectName: "carouselCommandPalette"
         modal: true
         focus: true
@@ -13008,195 +12922,22 @@ Rectangle {
             border.color: theme.alpha(theme.accentWarm400, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-            Accessible.name: "Carousel command palette"
-            Accessible.description: "Search and run the same Carousel commands used by menus and keyboard shortcuts."
-            Accessible.role: Accessible.Pane
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "Commands"
-                    color: theme.textStrong
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 22
-                    font.weight: Font.Bold
-                    elide: Text.ElideNone
-                }
-
-                Label {
-                    text: "Ctrl/Meta+K"
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    elide: Text.ElideNone
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Close command palette"
-                    onClicked: carouselCommandPalette.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselCommandPaletteContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselCommandPalette: carouselCommandPalette
+                    })
             }
-
-            ToneTextField {
-                id: carouselCommandSearchField
-                objectName: "carouselCommandSearchField"
-                Layout.fillWidth: true
-                placeholderText: "Search add, transform, arrange, board, template, preflight, save, or export"
-                text: root.carouselCommandSearchText
-                Accessible.name: "Search Carousel commands"
-                onTextEdited: {
-                    root.carouselCommandSearchText = text
-                    root.carouselCommandIndex = 0
-                    carouselCommandResultList.positionViewAtBeginning()
-                }
-                Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_Down) {
-                        root.carouselCommandIndex = Math.min(carouselCommandResultList.count - 1,
-                                                             root.carouselCommandIndex + 1)
-                        carouselCommandResultList.positionViewAtIndex(root.carouselCommandIndex,
-                                                                      ListView.Contain)
-                        event.accepted = true
-                    } else if (event.key === Qt.Key_Up) {
-                        root.carouselCommandIndex = Math.max(0, root.carouselCommandIndex - 1)
-                        carouselCommandResultList.positionViewAtIndex(root.carouselCommandIndex,
-                                                                      ListView.Contain)
-                        event.accepted = true
-                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                        const matches = root.filteredCarouselCommands()
-                        if (root.carouselCommandIndex >= 0 && root.carouselCommandIndex < matches.length)
-                            root.runCarouselCommand(String(matches[root.carouselCommandIndex].commandId))
-                        event.accepted = true
-                    } else if (event.key === Qt.Key_Escape) {
-                        carouselCommandPalette.close()
-                        event.accepted = true
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.36)
-            }
-
-            ListView {
-                id: carouselCommandResultList
-                objectName: "carouselCommandResultList"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 4
-                model: root.filteredCarouselCommands()
-                currentIndex: root.carouselCommandIndex
-                boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-                delegate: ItemDelegate {
-                    id: commandResultDelegate
-                    required property var modelData
-                    required property int index
-                    width: ListView.view.width
-                    height: modelData.enabled ? 58 : 72
-                    hoverEnabled: true
-                    enabled: Boolean(modelData.enabled)
-                    Accessible.name: String(modelData.label)
-                    Accessible.description: modelData.enabled
-                                            ? String(modelData.category) + " command"
-                                            : String(modelData.disabledReason)
-                    onClicked: root.runCarouselCommand(String(modelData.commandId))
-
-                    background: Rectangle {
-                        radius: theme.radius8
-                        color: commandResultDelegate.index === root.carouselCommandIndex
-                               ? theme.alpha(theme.accentWarm400, commandResultDelegate.enabled ? 0.17 : 0.09)
-                               : commandResultDelegate.hovered
-                                 ? theme.alpha(theme.glassBase, 0.28)
-                                 : "transparent"
-                        border.width: commandResultDelegate.index === root.carouselCommandIndex ? 1 : 0
-                        border.color: theme.alpha(theme.accentWarm400, commandResultDelegate.enabled ? 0.62 : 0.28)
-                    }
-
-                    contentItem: RowLayout {
-                        spacing: 12
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: String(commandResultDelegate.modelData.label)
-                                color: commandResultDelegate.enabled ? theme.textStrong : theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: commandResultDelegate.enabled
-                                      ? String(commandResultDelegate.modelData.category)
-                                      : String(commandResultDelegate.modelData.category) + " · " +
-                                        String(commandResultDelegate.modelData.disabledReason)
-                                color: commandResultDelegate.enabled ? theme.textMuted : theme.warning
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                        }
-
-                        Label {
-                            visible: String(commandResultDelegate.modelData.shortcut || "").length > 0
-                            text: String(commandResultDelegate.modelData.shortcut || "")
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
-                            elide: Text.ElideNone
-                        }
-                    }
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                visible: carouselCommandResultList.count === 0
-                text: "No commands match this search."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 11
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideNone
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: carouselCommandResultList.count + " command" +
-                      (carouselCommandResultList.count === 1 ? "" : "s") +
-                      " · Up/Down to navigate · Enter to run · Escape to close"
-                color: theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
+            onLoaded: carouselCommandPalette.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselPreflightIgnoreDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselPreflightIgnoreDialog"
         modal: true
         focus: true
@@ -13214,71 +12955,22 @@ Rectangle {
             border.color: theme.alpha(theme.warning, 0.48)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-            Label {
-                text: "Ignore preflight warning"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 20
-                font.weight: Font.Bold
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselPreflightIgnoreDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselPreflightIgnoreDialog: carouselPreflightIgnoreDialog
+                    })
             }
-            Label {
-                Layout.fillWidth: true
-                text: String(root.pendingPreflightIgnoreIssue.message || "Warning")
-                color: theme.warning
-                font.family: theme.fontUi
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-            ToneTextField {
-                id: carouselPreflightIgnoreReasonField
-                objectName: "carouselPreflightIgnoreReasonField"
-                Layout.fillWidth: true
-                placeholderText: "Required reason for this exception"
-                text: root.preflightIgnoreReason
-                onTextEdited: root.preflightIgnoreReason = text
-            }
-            Label {
-                Layout.fillWidth: true
-                text: "The reason is saved with this carousel. Artwork is not changed."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-            Item { Layout.fillHeight: true }
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    compact: true
-                    text: "Cancel"
-                    onClicked: carouselPreflightIgnoreDialog.close()
-                }
-                ActionButton {
-                    compact: true
-                    tone: "warning"
-                    text: "Ignore with Reason"
-                    enabled: root.preflightIgnoreReason.trim().length > 0
-                    disabledReason: "A reason is required for an ignored delivery warning."
-                    onClicked: {
-                        if (carouselDocument.ignorePreflightIssue(
-                                    String(root.pendingPreflightIgnoreIssue.issueId || ""),
-                                    root.preflightIgnoreReason))
-                            carouselPreflightIgnoreDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselPreflightIgnoreDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselBrandApplicationDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselBrandApplicationDialog"
         readonly property var diff: carouselDocument.brandApplicationPreview
         modal: true
@@ -13311,307 +13003,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 18
-                spacing: 10
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Review brand application"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        text: String(carouselBrandApplicationDialog.diff.brandName || "Brand") + " · " +
-                              Number(carouselBrandApplicationDialog.diff.boardCount || 0) + " board" +
-                              (Number(carouselBrandApplicationDialog.diff.boardCount || 0) === 1 ? "" : "s") + " · " +
-                              Number(carouselBrandApplicationDialog.diff.layerCount || 0) + " styled layer" +
-                              (Number(carouselBrandApplicationDialog.diff.layerCount || 0) === 1 ? "" : "s")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                    }
-                }
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Cancel brand application"
-                    onClicked: carouselBrandApplicationDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselBrandApplicationDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselBrandApplicationDialog: carouselBrandApplicationDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 12
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.margins: 18
-                        spacing: 8
-                        Label {
-                            text: "Local overrides"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            ActionButton {
-                                Layout.fillWidth: true
-                                compact: true
-                                tone: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain" ? "primary" : "secondary"
-                                text: "Retain local values"
-                                onClicked: carouselDocument.previewBrandKitApplication(
-                                               String(carouselBrandApplicationDialog.diff.brandId || ""),
-                                               String(carouselBrandApplicationDialog.diff.scope || "current"), "retain")
-                            }
-                            ActionButton {
-                                Layout.fillWidth: true
-                                compact: true
-                                tone: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "replace" ? "primary" : "secondary"
-                                text: "Replace with brand"
-                                onClicked: carouselDocument.previewBrandKitApplication(
-                                               String(carouselBrandApplicationDialog.diff.brandId || ""),
-                                               String(carouselBrandApplicationDialog.diff.scope || "current"), "replace")
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain"
-                                  ? "Board styling changes; existing layer values remain local."
-                                  : "Every listed local layer value is replaced by its mapped brand role."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WordWrap
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 18
-                        Layout.rightMargin: 18
-                        visible: Number(carouselBrandApplicationDialog.diff.missingMappings
-                                        ? carouselBrandApplicationDialog.diff.missingMappings.length : 0) > 0 ||
-                                 Number(carouselBrandApplicationDialog.diff.contrastRegressions
-                                        ? carouselBrandApplicationDialog.diff.contrastRegressions.length : 0) > 0
-                        implicitHeight: reviewWarnings.implicitHeight + 20
-                        radius: 8
-                        color: theme.alpha(theme.warning, 0.09)
-                        border.width: 1
-                        border.color: theme.alpha(theme.warning, 0.42)
-
-                        ColumnLayout {
-                            id: reviewWarnings
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: 10
-                            spacing: 6
-                            Label {
-                                text: "Review exceptions"
-                                color: theme.warning
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.Bold
-                            }
-                            Repeater {
-                                model: carouselBrandApplicationDialog.diff.missingMappings || []
-                                delegate: ActionButton {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    compact: true
-                                    text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.message || "Missing mapping")
-                                    tooltipText: text
-                                    onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
-                                }
-                            }
-                            Repeater {
-                                model: carouselBrandApplicationDialog.diff.contrastRegressions || []
-                                delegate: ActionButton {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    compact: true
-                                    text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.message || "Contrast regression")
-                                    tooltipText: text
-                                    onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 18
-                        Layout.rightMargin: 18
-                        text: "Boards"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        font.weight: Font.Bold
-                    }
-                    Repeater {
-                        model: carouselBrandApplicationDialog.diff.affectedBoards || []
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 18
-                            Layout.rightMargin: 18
-                            implicitHeight: 48
-                            radius: 7
-                            color: theme.alpha(theme.ink850, 0.74)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.32)
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Board " + Number(modelData.boardNumber || 0) +
-                                          (String(modelData.boardName || "").length > 0 ? " · " + String(modelData.boardName) : "")
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                }
-                                Label {
-                                    text: String(modelData.beforeBackground || "") + " → " + String(modelData.afterBackground || "")
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 18
-                        Layout.rightMargin: 18
-                        text: "Layer diff"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        font.weight: Font.Bold
-                    }
-                    Repeater {
-                        model: carouselBrandApplicationDialog.diff.affectedLayers || []
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 18
-                            Layout.rightMargin: 18
-                            implicitHeight: layerDiffContent.implicitHeight + 16
-                            radius: 7
-                            color: theme.alpha(theme.ink850, 0.74)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.32)
-                            ColumnLayout {
-                                id: layerDiffContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 8
-                                spacing: 4
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: "Board " + Number(modelData.boardNumber || 0) + " · " + String(modelData.label || modelData.kind || "Layer")
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 10
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WordWrap
-                                        elide: Text.ElideNone
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Select"
-                                        onClicked: carouselDocument.selectItem(String(modelData.itemId || ""))
-                                    }
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Before: " + carouselBrandApplicationDialog.styleSummary(modelData.before) +
-                                          "\nBrand: " + carouselBrandApplicationDialog.styleSummary(modelData.target) +
-                                          "\nResult: " + carouselBrandApplicationDialog.styleSummary(modelData.result) +
-                                          " · " + String(modelData.overrideAction || "match")
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                            }
-                        }
-                    }
-                    Item { Layout.preferredHeight: 8 }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 14
-                spacing: 8
-                Label {
-                    Layout.fillWidth: true
-                    text: Number(carouselBrandApplicationDialog.diff.localOverrideCount || 0) +
-                          " local override" +
-                          (Number(carouselBrandApplicationDialog.diff.localOverrideCount || 0) === 1 ? "" : "s") +
-                          " will be " +
-                          (String(carouselBrandApplicationDialog.diff.overridePolicy || "retain") === "retain"
-                           ? "retained." : "replaced.")
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                }
-                ActionButton {
-                    compact: true
-                    text: "Cancel"
-                    onClicked: carouselBrandApplicationDialog.close()
-                }
-                ActionButton {
-                    compact: true
-                    tone: "primary"
-                    text: "Apply Reviewed Changes"
-                    onClicked: {
-                        if (carouselDocument.applyPreviewedBrandKit())
-                            carouselBrandApplicationDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselBrandApplicationDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselBrandLintDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselBrandLintDialog"
         readonly property var lint: carouselDocument.brandLintState
         modal: true
@@ -13630,1033 +13037,149 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 18
-                spacing: 10
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Brand lint"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        text: String(carouselBrandLintDialog.lint.brandName || "Brand") + " · " +
-                              Number(carouselBrandLintDialog.lint.issueCount || 0) + " active issue" +
-                              (Number(carouselBrandLintDialog.lint.issueCount || 0) === 1 ? "" : "s") + " · " +
-                              Number(carouselBrandLintDialog.lint.ignoredCount || 0) + " ignored"
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                    }
-                }
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Close brand lint"
-                    onClicked: carouselBrandLintDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselBrandLintDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselBrandLintDialog: carouselBrandLintDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.leftMargin: 18
-                Layout.rightMargin: 18
-                Layout.topMargin: 14
-                visible: Number(carouselBrandLintDialog.lint.issueCount || 0) === 0
-                implicitHeight: 74
-                radius: 8
-                color: theme.alpha(theme.success, 0.09)
-                border.width: 1
-                border.color: theme.alpha(theme.success, 0.4)
-                ColumnLayout {
-                    anchors.centerIn: parent
-                    Label {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "No active brand exceptions"
-                        color: theme.success
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        Layout.alignment: Qt.AlignHCenter
-                        text: "Lint updates whenever the document styling changes."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                    }
-                }
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 8
-                    Item { Layout.preferredHeight: 8 }
-                    Repeater {
-                        model: carouselBrandLintDialog.lint.issues || []
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 18
-                            Layout.rightMargin: 18
-                            implicitHeight: lintIssueContent.implicitHeight + 18
-                            radius: 8
-                            color: theme.alpha(theme.ink850, 0.76)
-                            border.width: 1
-                            border.color: String(modelData.severity || "info") === "warning"
-                                          ? theme.alpha(theme.warning, 0.45)
-                                          : theme.alpha(theme.lineSoft, 0.34)
-
-                            ColumnLayout {
-                                id: lintIssueContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 9
-                                spacing: 5
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.code || "brand-issue").split("-").join(" ").toUpperCase() +
-                                              (Number(modelData.boardNumber || 0) > 0
-                                               ? " · BOARD " + Number(modelData.boardNumber) : "")
-                                        color: String(modelData.severity || "info") === "warning" ? theme.warning : theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                        font.weight: Font.Bold
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Select"
-                                        enabled: Boolean(modelData.canFocus)
-                                        disabledReason: "This document-wide issue has no single layer to select."
-                                        onClicked: carouselDocument.focusBrandLintIssue(String(modelData.issueId || ""))
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Ignore"
-                                        tooltipText: "Keep this exact exception ignored in this carousel."
-                                        onClicked: carouselDocument.ignoreBrandLintIssue(String(modelData.issueId || ""))
-                                    }
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.message || "Brand exception")
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    font.weight: Font.DemiBold
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.details || "")
-                                    visible: text.length > 0
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                            }
-                        }
-                    }
-                    Item { Layout.preferredHeight: 10 }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 14
-                Label {
-                    Layout.fillWidth: true
-                    text: "Ignored exceptions are document-specific and persist after save."
-                    color: theme.textFaint
-                    font.family: theme.fontUi
-                    font.pixelSize: 9
-                }
-                ActionButton {
-                    compact: true
-                    text: "Done"
-                    onClicked: carouselBrandLintDialog.close()
-                }
-            }
+            onLoaded: carouselBrandLintDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselBrandKitEditorDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
+        onOpened: if (contentItem.item) contentItem.item.focusInitialTarget()
         objectName: "carouselBrandKitEditorDialog"
         readonly property var draft: carouselDocument.brandKitDraft
         readonly property var validation: carouselDocument.brandKitValidation
+        parent: Overlay.overlay
         modal: true
         focus: true
         padding: 0
-        width: Math.min(920, root.width - 48)
-        height: Math.min(780, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(980), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(760), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(760))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
         onClosed: {
             if (carouselDocument.brandKitEditorActive)
                 carouselDocument.cancelBrandKitEditor()
+            Qt.callLater(function() {
+                const target = carouselBrandKitEditorDialog.focusReturnItem
+                if (target && target.visible && target.enabled)
+                    target.forceActiveFocus(Qt.TabFocusReason)
+                else
+                    root.forceActiveFocus(Qt.TabFocusReason)
+                carouselBrandKitEditorDialog.focusReturnItem = null
+            })
         }
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Brand kit editor"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 18
-                spacing: 10
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: String(carouselBrandKitEditorDialog.draft.brandId || "").length > 0
-                              ? "Edit brand kit" : "New brand kit"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        text: "Define the reusable system. Nothing is written until Save."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                    }
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Discard brand kit changes"
-                    onClicked: carouselBrandKitEditorDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselBrandKitEditorDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselBrandKitEditorDialog: carouselBrandKitEditorDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                RowLayout {
-                    width: parent.width
-                    spacing: 16
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.margins: 18
-                        Layout.maximumWidth: 560
-                        spacing: 12
-
-                        Label {
-                            text: "Identity"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        ToneTextField {
-                            Layout.fillWidth: true
-                            placeholderText: "Brand kit name"
-                            text: String(carouselBrandKitEditorDialog.draft.name || "")
-                            onTextEdited: carouselDocument.setBrandKitDraftField("name", text)
-                        }
-
-                        Label {
-                            text: "Named palette"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Repeater {
-                            model: [
-                                { label: "Primary", nameKey: "primaryName", colorKey: "primaryColor",
-                                  name: String(carouselBrandKitEditorDialog.draft.primaryName || ""),
-                                  color: String(carouselBrandKitEditorDialog.draft.primaryColor || "#fbf7f1") },
-                                { label: "Secondary", nameKey: "secondaryName", colorKey: "secondaryColor",
-                                  name: String(carouselBrandKitEditorDialog.draft.secondaryName || ""),
-                                  color: String(carouselBrandKitEditorDialog.draft.secondaryColor || "#ffffff") },
-                                { label: "Accent", nameKey: "accentName", colorKey: "accentColor",
-                                  name: String(carouselBrandKitEditorDialog.draft.accentName || ""),
-                                  color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6") },
-                                { label: "Text", nameKey: "", colorKey: "textColor", name: "Primary Text",
-                                  color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17") }
-                            ]
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Rectangle {
-                                    Layout.preferredWidth: 30
-                                    Layout.preferredHeight: 30
-                                    radius: 6
-                                    color: modelData.color
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.55)
-                                }
-                                ToneTextField {
-                                    Layout.fillWidth: true
-                                    enabled: modelData.nameKey.length > 0
-                                    placeholderText: modelData.label + " token name"
-                                    text: modelData.name
-                                    onTextEdited: {
-                                        if (modelData.nameKey.length > 0)
-                                            carouselDocument.setBrandKitDraftField(modelData.nameKey, text)
-                                    }
-                                }
-                                ToneTextField {
-                                    Layout.preferredWidth: 112
-                                    placeholderText: "#RRGGBB"
-                                    text: modelData.color
-                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.colorKey, text)
-                                }
-                            }
-                        }
-
-                        Label {
-                            text: "Theme variants"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Light follows the named palette. Define the dark and campaign surfaces, text, and accent tokens here."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.Wrap
-                        }
-                        Repeater {
-                            objectName: "carouselBrandThemeVariantEditor"
-                            model: [
-                                { label: "Dark surface", key: "darkBackgroundColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.darkBackgroundColor || "#12161c") },
-                                { label: "Dark text", key: "darkTextColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.darkTextColor || "#f7f3ec") },
-                                { label: "Dark accent", key: "darkAccentColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.darkAccentColor || "#36f2a6") },
-                                { label: "Campaign surface", key: "campaignBackgroundColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.campaignBackgroundColor || "#36f2a6") },
-                                { label: "Campaign text", key: "campaignTextColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.campaignTextColor || "#1e1a17") },
-                                { label: "Campaign accent", key: "campaignAccentColor",
-                                  color: String(carouselBrandKitEditorDialog.draft.campaignAccentColor || "#1e1a17") }
-                            ]
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Rectangle {
-                                    Layout.preferredWidth: 30
-                                    Layout.preferredHeight: 30
-                                    radius: 6
-                                    color: modelData.color
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.55)
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.label
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                }
-                                ToneTextField {
-                                    Layout.preferredWidth: 112
-                                    placeholderText: "#RRGGBB"
-                                    text: modelData.color
-                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.key, text)
-                                }
-                            }
-                        }
-
-                        Label {
-                            text: "Typography roles"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Repeater {
-                            model: [
-                                { label: "Titles", fontKey: "titleFont", weightKey: "titleWeight",
-                                  family: String(carouselBrandKitEditorDialog.draft.titleFont || "display"),
-                                  weight: String(carouselBrandKitEditorDialog.draft.titleWeight || "bold") },
-                                { label: "Body", fontKey: "bodyFont", weightKey: "bodyWeight",
-                                  family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system"),
-                                  weight: String(carouselBrandKitEditorDialog.draft.bodyWeight || "regular") }
-                            ]
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Label {
-                                    Layout.preferredWidth: 52
-                                    text: modelData.label
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                }
-                                ToneTextField {
-                                    Layout.fillWidth: true
-                                    placeholderText: "Font family"
-                                    text: modelData.family
-                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.fontKey, text)
-                                }
-                                ToneTextField {
-                                    Layout.preferredWidth: 112
-                                    placeholderText: "Weight"
-                                    text: modelData.weight
-                                    onTextEdited: carouselDocument.setBrandKitDraftField(modelData.weightKey, text)
-                                }
-                            }
-                        }
-                        ToneTextField {
-                            Layout.fillWidth: true
-                            placeholderText: "Font license, source, renewal, or handoff reminder"
-                            text: String(carouselBrandKitEditorDialog.draft.fontLicenseNotes || "")
-                            onTextEdited: carouselDocument.setBrandKitDraftField("fontLicenseNotes", text)
-                        }
-
-                        Label {
-                            text: "Logo asset"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            ToneTextField {
-                                Layout.fillWidth: true
-                                placeholderText: "Logo name"
-                                text: String(carouselBrandKitEditorDialog.draft.logoName || "Primary Logo")
-                                onTextEdited: carouselDocument.setBrandKitDraftField("logoName", text)
-                            }
-                            ToolOptionToggle {
-                                label: "Required"
-                                checked: Boolean(carouselBrandKitEditorDialog.draft.logoRequired)
-                                helperText: "Required assets block saving when their file is missing."
-                                onToggled: checked => carouselDocument.setBrandKitDraftField("logoRequired", checked)
-                            }
-                        }
-                        Repeater {
-                            objectName: "carouselBrandLogoVariantEditor"
-                            model: [
-                                { label: "Primary", key: "logoPath",
-                                  path: String(carouselBrandKitEditorDialog.draft.logoPath || "") },
-                                { label: "Light on dark", key: "logoLightPath",
-                                  path: String(carouselBrandKitEditorDialog.draft.logoLightPath || "") },
-                                { label: "Dark on light", key: "logoDarkPath",
-                                  path: String(carouselBrandKitEditorDialog.draft.logoDarkPath || "") },
-                                { label: "Monochrome", key: "logoMonochromePath",
-                                  path: String(carouselBrandKitEditorDialog.draft.logoMonochromePath || "") }
-                            ]
-
-                            delegate: ColumnLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 3
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.label
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    font.weight: Font.DemiBold
-                                    elide: Text.ElideNone
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 5
-                                    ToneTextField {
-                                        Layout.fillWidth: true
-                                        placeholderText: "/path/to/logo.png"
-                                        text: modelData.path
-                                        onTextEdited: carouselDocument.setBrandKitDraftField(modelData.key, text)
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Choose"
-                                        onClicked: {
-                                            root.brandLogoDraftField = modelData.key
-                                            root.openMediaPicker("brand-logo")
-                                        }
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Clear"
-                                        enabled: modelData.path.length > 0
-                                        onClicked: carouselDocument.setBrandKitDraftField(modelData.key, "")
-                                    }
-                                }
-                            }
-                        }
-
-                        Label {
-                            text: "Logo usage rules"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Repeater {
-                            objectName: "carouselBrandLogoRuleEditor"
-                            model: [
-                                { label: "Clear space (%)", key: "logoSafeAreaPercent",
-                                  value: Number(carouselBrandKitEditorDialog.draft.logoSafeAreaPercent || 10) },
-                                { label: "Minimum width (px)", key: "logoMinimumWidth",
-                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumWidth || 96) },
-                                { label: "Minimum height (px)", key: "logoMinimumHeight",
-                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumHeight || 32) },
-                                { label: "Minimum contrast", key: "logoMinimumContrast",
-                                  value: Number(carouselBrandKitEditorDialog.draft.logoMinimumContrast || 3) }
-                            ]
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.label
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    elide: Text.ElideNone
-                                }
-                                ToneTextField {
-                                    Layout.preferredWidth: 112
-                                    inputMethodHints: Qt.ImhFormattedNumbersOnly
-                                    text: String(modelData.value)
-                                    onTextEdited: carouselDocument.setBrandKitDraftField(
-                                                      modelData.key, Number(text))
-                                }
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Logo checks only warn. They never resize, move, recolor, or swap placed artwork."
-                            color: theme.textFaint
-                            font.family: theme.fontUi
-                            font.pixelSize: 9
-                            wrapMode: Text.WordWrap
-                            elide: Text.ElideNone
-                        }
-
-                        Label {
-                            text: "Design-token scales"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Repeater {
-                            model: [
-                                { label: "Radius small", key: "cornerSmall", value: Number(carouselBrandKitEditorDialog.draft.cornerSmall || 0) },
-                                { label: "Radius medium", key: "cornerMedium", value: Number(carouselBrandKitEditorDialog.draft.cornerMedium || 0) },
-                                { label: "Radius large", key: "cornerLarge", value: Number(carouselBrandKitEditorDialog.draft.cornerLarge || 0) },
-                                { label: "Stroke hairline", key: "strokeHairline", value: Number(carouselBrandKitEditorDialog.draft.strokeHairline || 0) },
-                                { label: "Stroke standard", key: "strokeStandard", value: Number(carouselBrandKitEditorDialog.draft.strokeStandard || 0) },
-                                { label: "Stroke strong", key: "strokeStrong", value: Number(carouselBrandKitEditorDialog.draft.strokeStrong || 0) },
-                                { label: "Space XS", key: "spacingXs", value: Number(carouselBrandKitEditorDialog.draft.spacingXs || 0) },
-                                { label: "Space S", key: "spacingSm", value: Number(carouselBrandKitEditorDialog.draft.spacingSm || 0) },
-                                { label: "Space M", key: "spacingMd", value: Number(carouselBrandKitEditorDialog.draft.spacingMd || 0) },
-                                { label: "Space L", key: "spacingLg", value: Number(carouselBrandKitEditorDialog.draft.spacingLg || 0) },
-                                { label: "Space XL", key: "spacingXl", value: Number(carouselBrandKitEditorDialog.draft.spacingXl || 0) }
-                            ]
-
-                            delegate: RowLayout {
-                                required property var modelData
-                                Layout.fillWidth: true
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.label
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                }
-                                ToneTextField {
-                                    Layout.preferredWidth: 92
-                                    text: String(modelData.value)
-                                    validator: DoubleValidator { bottom: 0 }
-                                    onEditingFinished: carouselDocument.setBrandKitDraftField(modelData.key, Number(text))
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.alignment: Qt.AlignTop
-                        Layout.preferredWidth: 280
-                        Layout.rightMargin: 18
-                        Layout.topMargin: 18
-                        spacing: 10
-
-                        Label {
-                            text: "Live preview"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                        }
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 250
-                            radius: Number(carouselBrandKitEditorDialog.draft.cornerMedium || 12)
-                            color: String(carouselBrandKitEditorDialog.draft.primaryColor || "#fbf7f1")
-                            border.width: Number(carouselBrandKitEditorDialog.draft.strokeHairline || 1)
-                            border.color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
-                            clip: true
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 20
-                                spacing: 10
-                                Rectangle {
-                                    Layout.preferredWidth: 54
-                                    Layout.preferredHeight: 8
-                                    radius: 4
-                                    color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Build a distinct point of view."
-                                    color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
-                                    font.family: String(carouselBrandKitEditorDialog.draft.titleFont || "display")
-                                    font.pixelSize: 25
-                                    font.weight: Font.Bold
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Title and body roles, real palette tokens, and a reusable visual system."
-                                    color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
-                                    font.family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system")
-                                    font.pixelSize: 12
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                                Item { Layout.fillHeight: true }
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 42
-                                    radius: Number(carouselBrandKitEditorDialog.draft.cornerSmall || 4)
-                                    color: String(carouselBrandKitEditorDialog.draft.secondaryColor || "#ffffff")
-                                    border.width: Number(carouselBrandKitEditorDialog.draft.strokeStandard || 1)
-                                    border.color: String(carouselBrandKitEditorDialog.draft.accentColor || "#36f2a6")
-                                    Label {
-                                        anchors.centerIn: parent
-                                        text: "Primary action"
-                                        color: String(carouselBrandKitEditorDialog.draft.textColor || "#1e1a17")
-                                        font.family: String(carouselBrandKitEditorDialog.draft.bodyFont || "system")
-                                        font.pixelSize: 11
-                                        font.weight: Font.Bold
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            implicitHeight: validationContent.implicitHeight + 20
-                            radius: 8
-                            color: carouselBrandKitEditorDialog.validation.canSave
-                                   ? theme.alpha(theme.accentCool400, 0.08)
-                                   : theme.alpha(theme.error, 0.1)
-                            border.width: 1
-                            border.color: carouselBrandKitEditorDialog.validation.canSave
-                                          ? theme.alpha(theme.accentCool400, 0.35)
-                                          : theme.alpha(theme.error, 0.4)
-
-                            ColumnLayout {
-                                id: validationContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 10
-                                spacing: 5
-                                Label {
-                                    text: carouselBrandKitEditorDialog.validation.canSave ? "Required checks pass" : "Required checks need attention"
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    font.weight: Font.Bold
-                                }
-                                Repeater {
-                                    model: carouselBrandKitEditorDialog.validation.blockingIssues || []
-                                    delegate: Label {
-                                        required property var modelData
-                                        Layout.fillWidth: true
-                                        text: "Blocking: " + String(modelData)
-                                        color: theme.error
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 10
-                                        wrapMode: Text.WordWrap
-                                        elide: Text.ElideNone
-                                    }
-                                }
-                                Repeater {
-                                    model: carouselBrandKitEditorDialog.validation.warnings || []
-                                    delegate: Label {
-                                        required property var modelData
-                                        Layout.fillWidth: true
-                                        text: "Reminder: " + String(modelData)
-                                        color: theme.textMuted
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 10
-                                        wrapMode: Text.WordWrap
-                                        elide: Text.ElideNone
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 14
-                spacing: 8
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    compact: true
-                    text: "Cancel"
-                    onClicked: carouselBrandKitEditorDialog.close()
-                }
-                ActionButton {
-                    compact: true
-                    tone: "primary"
-                    text: "Save Brand Kit"
-                    enabled: Boolean(carouselBrandKitEditorDialog.validation.canSave)
-                    disabledReason: "Resolve required asset and naming checks before saving."
-                    onClicked: {
-                        if (carouselDocument.saveBrandKitDraft())
-                            carouselBrandKitEditorDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselBrandKitEditorDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselReadingOrderDialog
+        property bool contentCreated: false
+        property bool focusCanvasOnClose: false
+        onAboutToShow: {
+            focusCanvasOnClose = false
+            contentItem.loadContent()
+        }
+        readonly property var readingOrderList: contentItem.item ? contentItem.item.readingOrderList : null
+        readonly property var closeButton: contentItem.item ? contentItem.item.closeButton : null
         objectName: "carouselReadingOrderDialog"
         modal: true
         focus: true
         padding: 0
-        width: Math.min(820, root.width - 48)
-        height: Math.min(700, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        parent: Overlay.overlay
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(carouselDocument.readingOrderState.entryCount > 0 ? 600 : 320),
+                         parent ? parent.height - 32 : root.height - 48)
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onOpened: Qt.callLater(function() {
-            if (carouselReadingOrderList.count > 0)
-                carouselReadingOrderList.forceActiveFocus()
-            else
-                carouselReadingOrderCloseButton.forceActiveFocus()
-        })
+        onOpened: Qt.callLater(function() { if (contentItem.item) contentItem.item.focusInitialTarget() })
         onClosed: {
             const restoreItem = root.carouselReadingOrderRestoreFocusItem
             root.carouselReadingOrderRestoreFocusItem = null
-            if (restoreItem && typeof restoreItem.forceActiveFocus === "function")
+            if (focusCanvasOnClose)
+                Qt.callLater(function() { root.forceActiveFocus(Qt.TabFocusReason) })
+            else if (restoreItem && restoreItem.visible && restoreItem.enabled)
                 Qt.callLater(function() { restoreItem.forceActiveFocus() })
         }
 
         background: Rectangle {
-            radius: theme.radius12
+            radius: theme.radiusPanel
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Reading order"
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-            Accessible.name: "Accessibility reading order editor"
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Reading order · Board " +
-                              Number(carouselDocument.readingOrderState.boardNumber || 1)
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Set the narrative sequence for visible text and meaningful imagery. Decorative imagery stays in the artwork but is excluded from the delivery manifest."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-                StatusChip {
-                    text: Number(carouselDocument.readingOrderState.meaningfulEntryCount || 0) +
-                          " exported"
-                    tone: "info"
-                    compact: true
-                }
-                ActionButton {
-                    id: carouselReadingOrderCloseButton
-                    compact: true
-                    text: "Close"
-                    Accessible.name: "Close reading order editor"
-                    onClicked: carouselReadingOrderDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselReadingOrderDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselReadingOrderDialog: carouselReadingOrderDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.52)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                ListView {
-                    id: carouselReadingOrderList
-                    objectName: "carouselReadingOrderList"
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 7
-                    clip: true
-                    focus: true
-                    activeFocusOnTab: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    model: carouselDocument.readingOrderState.entries || []
-                    Accessible.name: "Ordered readable elements"
-
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: ListView.view.width
-                        height: Math.max(94, readingOrderEntryLabel.implicitHeight + 58)
-                        radius: theme.radius6
-                        color: theme.alpha(theme.ink850, 0.78)
-                        border.width: 1
-                        border.color: theme.alpha(modelData.meaningful ? theme.selectionAccent : theme.lineSoft, 0.42)
-                        Accessible.name: "Reading order position " + Number(modelData.position) +
-                                         ", " + String(modelData.kind) + ", " +
-                                         String(modelData.label)
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            Label {
-                                Layout.preferredWidth: 28
-                                text: String(modelData.position)
-                                horizontalAlignment: Text.AlignHCenter
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 15
-                                font.weight: Font.Bold
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 3
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    StatusChip {
-                                        text: String(modelData.kind).charAt(0).toUpperCase() +
-                                              String(modelData.kind).slice(1)
-                                        tone: modelData.kind === "text" ? "info" : "neutral"
-                                        compact: true
-                                    }
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: modelData.sourceType === "slot"
-                                              ? String(modelData.slot) + " board slot"
-                                              : "Canvas layer"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                        elide: Text.ElideNone
-                                    }
-                                }
-                                Label {
-                                    id: readingOrderEntryLabel
-                                    Layout.fillWidth: true
-                                    text: String(modelData.label || "Readable element")
-                                    color: modelData.meaningful ? theme.textMain : theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: Boolean(modelData.canToggleMeaningful)
-                                    text: modelData.meaningful
-                                          ? "Included in accessible delivery order"
-                                          : "Decorative · excluded from accessible delivery order"
-                                    color: modelData.meaningful ? theme.success : theme.textFaint
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                            }
-
-                            ColumnLayout {
-                                spacing: 5
-                                RowLayout {
-                                    spacing: 5
-                                    ActionButton {
-                                        objectName: "carouselReadingOrderMoveEarlierButton"
-                                        compact: true
-                                        text: "Up"
-                                        enabled: Number(modelData.position) > 1
-                                        disabledReason: "This is already the first readable element."
-                                        Accessible.name: "Move " + String(modelData.label) + " earlier"
-                                        onClicked: carouselDocument.moveReadingOrderEntry(
-                                                       String(modelData.key), -1)
-                                    }
-                                    ActionButton {
-                                        objectName: "carouselReadingOrderMoveLaterButton"
-                                        compact: true
-                                        text: "Down"
-                                        enabled: Number(modelData.position) <
-                                                 Number(carouselDocument.readingOrderState.entryCount || 0)
-                                        disabledReason: "This is already the last readable element."
-                                        Accessible.name: "Move " + String(modelData.label) + " later"
-                                        onClicked: carouselDocument.moveReadingOrderEntry(
-                                                       String(modelData.key), 1)
-                                    }
-                                }
-                                RowLayout {
-                                    spacing: 5
-                                    ActionButton {
-                                        visible: Boolean(modelData.canToggleMeaningful)
-                                        compact: true
-                                        text: modelData.meaningful ? "Meaningful" : "Decorative"
-                                        tone: modelData.meaningful ? "primary" : "neutral"
-                                        Accessible.name: (modelData.meaningful
-                                                          ? "Mark decorative: "
-                                                          : "Mark meaningful: ") +
-                                                         String(modelData.label)
-                                        onClicked: carouselDocument.setReadingOrderEntryMeaningful(
-                                                       String(modelData.key),
-                                                       !Boolean(modelData.meaningful))
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        text: "Focus"
-                                        Accessible.name: "Focus " + String(modelData.label) + " on the canvas"
-                                        onClicked: {
-                                            if (carouselDocument.focusReadingOrderEntry(
-                                                        String(modelData.key))) {
-                                                root.carouselReadingOrderRestoreFocusItem = null
-                                                carouselReadingOrderDialog.close()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        anchors.centerIn: parent
-                        visible: carouselReadingOrderList.count === 0
-                        width: Math.min(420, parent.width - 32)
-                        text: "Add visible text or imagery to this board before setting reading order."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-            }
+            onLoaded: carouselReadingOrderDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselDocumentStructureDialog
+        property bool contentCreated: false
+        property bool focusCanvasOnClose: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusCanvasOnClose = false
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselDocumentStructureDialog"
         readonly property var filteredIssues: {
             const source = root.documentStructureIssueState || []
-            if (root.documentStructureCategory === "all")
-                return source
-            const result = []
+            const blocking = []
+            const advisory = []
             for (let index = 0; index < source.length; ++index) {
-                if (String(source[index].category || "") === root.documentStructureCategory)
-                    result.push(source[index])
+                if (root.documentStructureCategory === "all" || String(source[index].category || "") === root.documentStructureCategory) {
+                    if (source[index].severity === "error") blocking.push(source[index])
+                    else advisory.push(source[index])
+                }
             }
-            return result
+            return blocking.concat(advisory)
         }
 
         function categoryCount(category) {
@@ -14674,12 +13197,23 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(820, root.width - 48)
-        height: Math.min(720, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        parent: Overlay.overlay
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(400))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onOpened: root.refreshDocumentStructureIssues()
+        onOpened: {
+            root.refreshDocumentStructureIssues()
+            Qt.callLater(function() { if (contentItem.item) contentItem.item.focusInitialTarget() })
+        }
+        onClosed: Qt.callLater(function() {
+            const target = carouselDocumentStructureDialog.focusReturnItem
+            if (carouselDocumentStructureDialog.focusCanvasOnClose) root.forceActiveFocus(Qt.TabFocusReason)
+            else if (target && target.visible && target.enabled) target.forceActiveFocus(Qt.TabFocusReason)
+            carouselDocumentStructureDialog.focusReturnItem = null
+        })
 
         Connections {
             target: carouselDocument
@@ -14694,186 +13228,59 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: theme.radius12
+            radius: theme.radiusPanel
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Document structure"
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Document structure"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Structural findings are read-only. Jump opens the exact board or layer for correction."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-                StatusChip {
-                    text: carouselDocumentStructureDialog.categoryCount("all") + " findings"
-                    tone: carouselDocumentStructureDialog.categoryCount("broken-links") > 0 ||
-                          carouselDocumentStructureDialog.categoryCount("empty-slots") > 0
-                          ? "error" : carouselDocumentStructureDialog.categoryCount("all") > 0
-                            ? "warning" : "success"
-                    compact: true
-                }
-                ActionButton {
-                    compact: true
-                    text: "Close"
-                    onClicked: carouselDocumentStructureDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselDocumentStructureDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselDocumentStructureDialog: carouselDocumentStructureDialog
+                    })
             }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: 6
-                Repeater {
-                    model: [
-                        { label: "All", value: "all" },
-                        { label: "Empty slots", value: "empty-slots" },
-                        { label: "Duplicate copy", value: "duplicate-copy" },
-                        { label: "Unmatched components", value: "unmatched-components" },
-                        { label: "Broken links", value: "broken-links" },
-                        { label: "Style outliers", value: "style-outliers" }
-                    ]
-                    delegate: FilterChip {
-                        required property var modelData
-                        text: modelData.label + " " + carouselDocumentStructureDialog.categoryCount(modelData.value)
-                        active: root.documentStructureCategory === modelData.value
-                        onClicked: root.documentStructureCategory = modelData.value
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.52)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                ListView {
-                    id: carouselDocumentStructureList
-                    objectName: "carouselDocumentStructureList"
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
-                    clip: true
-                    model: carouselDocumentStructureDialog.filteredIssues
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: ListView.view.width
-                        height: Math.max(64, structureIssueMessage.implicitHeight + 32)
-                        radius: theme.radius6
-                        color: theme.alpha(theme.ink850, 0.74)
-                        border.width: 1
-                        border.color: theme.alpha(modelData.severity === "error" ? theme.error : theme.warning, 0.34)
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            StatusChip {
-                                text: String(modelData.category || "structure").replaceAll("-", " ")
-                                tone: modelData.severity === "error" ? "error" : "warning"
-                                compact: true
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Label {
-                                    id: structureIssueMessage
-                                    Layout.fillWidth: true
-                                    text: String(modelData.message || "Structural finding")
-                                    color: theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: Number(modelData.boardNumber || 0) > 0
-                                          ? "Board " + Number(modelData.boardNumber) : "Document"
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                }
-                            }
-
-                            ActionButton {
-                                objectName: "carouselDocumentStructureJumpButton"
-                                compact: true
-                                text: String(modelData.itemId || "").length > 0 ? "Jump to layer" : "Jump to board"
-                                enabled: Boolean(modelData.canJump)
-                                onClicked: {
-                                    if (carouselDocument.focusDocumentStructureIssue(String(modelData.issueId || "")))
-                                        carouselDocumentStructureDialog.close()
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        anchors.centerIn: parent
-                        visible: carouselDocumentStructureList.count === 0
-                        text: root.documentStructureCategory === "all"
-                              ? "No structural findings" : "No findings in this category"
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    compact: true
-                    iconName: "refresh"
-                    text: "Refresh"
-                    onClicked: root.refreshDocumentStructureIssues()
-                }
-            }
+            onLoaded: carouselDocumentStructureDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselBoardRangeCommandDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselBoardRangeCommandDialog"
+        parent: Overlay.overlay
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(690, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onOpened: root.refreshBoardRangePreview()
+        onOpened: {
+            root.refreshBoardRangePreview()
+            if (contentItem.item) contentItem.item.focusInitialTarget()
+        }
+        onClosed: {
+            Qt.callLater(function() {
+                const target = carouselBoardRangeCommandDialog.focusReturnItem
+                if (target && target.visible && target.enabled)
+                    target.forceActiveFocus(Qt.TabFocusReason)
+                else
+                    root.forceActiveFocus(Qt.TabFocusReason)
+                carouselBoardRangeCommandDialog.focusReturnItem = null
+            })
+        }
 
         Connections {
             target: carouselDocument
@@ -14884,239 +13291,31 @@ Rectangle {
         }
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Apply to board range"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Apply to board range"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: "One operation, one exact range, one undo step."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-                ActionButton {
-                    compact: true
-                    text: "Close"
-                    onClicked: carouselBoardRangeCommandDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselBoardRangeCommandDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselBoardRangeCommandDialog: carouselBoardRangeCommandDialog
+                    })
             }
-
-            Label {
-                text: "Operation"
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: 6
-                Repeater {
-                    model: [
-                        { label: "Background", value: "background" },
-                        { label: "Layout", value: "template" },
-                        { label: "Brand style", value: "brand" },
-                        { label: "Spacing", value: "spacing" },
-                        { label: "Text style", value: "text-style" }
-                    ]
-                    delegate: FilterChip {
-                        required property var modelData
-                        text: modelData.label
-                        active: root.boardRangeOperation === modelData.value
-                        onClicked: root.setBoardRangeOperation(modelData.value)
-                    }
-                }
-            }
-
-            Label {
-                text: "Range"
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Repeater {
-                    model: [
-                        { label: "Current", value: "current" },
-                        { label: "Selected", value: "selected" },
-                        { label: "Following", value: "following" },
-                        { label: "All boards", value: "all" }
-                    ]
-                    delegate: FilterChip {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        text: modelData.label
-                        active: root.boardRangeScope === modelData.value
-                        onClicked: {
-                            root.boardRangeScope = modelData.value
-                            root.refreshBoardRangePreview()
-                        }
-                    }
-                }
-            }
-
-            Label {
-                text: "Value"
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 126
-                clip: true
-                contentWidth: availableWidth
-
-                Flow {
-                    width: parent.width
-                    spacing: 6
-                    Repeater {
-                        model: root.boardRangeValueOptions(root.boardRangeOperation)
-                        delegate: FilterChip {
-                            required property var modelData
-                            text: modelData.label
-                            active: root.boardRangeValue === modelData.value
-                            onClicked: {
-                                root.boardRangeValue = modelData.value
-                                root.refreshBoardRangePreview()
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                objectName: "carouselBoardRangePreview"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 150
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.72)
-                border.width: 1
-                border.color: Boolean(root.boardRangePreview.available)
-                              ? theme.alpha(theme.success, 0.46)
-                              : theme.alpha(theme.warning, 0.42)
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Label {
-                            Layout.fillWidth: true
-                            text: Number(root.boardRangePreview.affectedBoardCount || 0) +
-                                  " board" +
-                                  (Number(root.boardRangePreview.affectedBoardCount || 0) === 1 ? "" : "s") +
-                                  " targeted"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                        }
-                        StatusChip {
-                            text: Boolean(root.boardRangePreview.available) ? "Ready" : "No change"
-                            tone: Boolean(root.boardRangePreview.available) ? "success" : "warning"
-                            compact: true
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Boards · " + ((root.boardRangePreview.boardNumbers || []).join(" · "))
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: Number(root.boardRangePreview.changedBoardCount || 0) + " boards will change" +
-                              (Number(root.boardRangePreview.affectedLayerCount || 0) > 0
-                               ? " · " + Number(root.boardRangePreview.affectedLayerCount || 0) + " layers affected"
-                               : "")
-                        color: theme.textMain
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: !Boolean(root.boardRangePreview.available)
-                        text: String(root.boardRangePreview.failureReason || "Choose an operation and value.")
-                        color: theme.warning
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    compact: true
-                    text: "Cancel"
-                    onClicked: carouselBoardRangeCommandDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplyBoardRangeCommandButton"
-                    compact: true
-                    tone: "primary"
-                    text: "Apply to " + Number(root.boardRangePreview.affectedBoardCount || 0) + " boards"
-                    enabled: Boolean(root.boardRangePreview.available)
-                    disabledReason: String(root.boardRangePreview.failureReason || "Choose a range command.")
-                    onClicked: {
-                        if (carouselDocument.applyBoardRangeCommand(
-                                    root.boardRangeOperation,
-                                    root.boardRangeValue,
-                                    root.boardRangeScope))
-                            carouselBoardRangeCommandDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselBoardRangeCommandDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselNeighborComparisonDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselNeighborComparisonDialog"
 
         function openBoard(boardIndex) {
@@ -15133,17 +13332,6 @@ Rectangle {
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Left) {
-                event.accepted = carouselDocument.selectAdjacentSlide(-1)
-            } else if (event.key === Qt.Key_Right) {
-                event.accepted = carouselDocument.selectAdjacentSlide(1)
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                openBoard(Number(root.neighborComparison.currentIndex || 0))
-                event.accepted = true
-            }
-        }
-
         background: Rectangle {
             radius: theme.radius12
             color: theme.ink900
@@ -15151,210 +13339,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Neighbor comparison"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Live board previews · temporary comparison · never exports"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                ActionButton {
-                    objectName: "carouselNeighborComparisonPreviousButton"
-                    compact: true
-                    iconName: "chevron-left"
-                    text: "Previous"
-                    enabled: Boolean(root.neighborComparison.previousAvailable)
-                    onClicked: carouselDocument.selectAdjacentSlide(-1)
-                }
-
-                ActionButton {
-                    objectName: "carouselNeighborComparisonNextButton"
-                    compact: true
-                    iconName: "chevron-right"
-                    text: "Next"
-                    enabled: Boolean(root.neighborComparison.nextAvailable)
-                    onClicked: carouselDocument.selectAdjacentSlide(1)
-                }
-
-                ActionButton {
-                    compact: true
-                    text: "Close"
-                    onClicked: carouselNeighborComparisonDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselNeighborComparisonDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselNeighborComparisonDialog: carouselNeighborComparisonDialog
+                    })
             }
-
-            RowLayout {
-                objectName: "carouselNeighborComparisonSurface"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                spacing: 12
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.minimumWidth: 260
-                    radius: theme.radius10
-                    color: theme.alpha(theme.ink950, 0.78)
-                    border.width: root.neighborComparison.focusedSide === "left" ? 2 : 1
-                    border.color: root.neighborComparison.focusedSide === "left"
-                                  ? theme.accentWarm500 : theme.alpha(theme.lineSoft, 0.46)
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label {
-                                Layout.fillWidth: true
-                                text: Number(root.neighborComparison.leftBoardNumber || 0) + " · " +
-                                      String(root.neighborComparison.leftName || "")
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                            StatusChip {
-                                text: root.neighborComparison.focusedSide === "left"
-                                      ? "Current" : String(root.neighborComparison.leftRole || "content")
-                                tone: root.neighborComparison.focusedSide === "left" ? "accent" : "neutral"
-                                compact: true
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            radius: theme.radius8
-                            color: "#fbf7f1"
-                            clip: true
-
-                            Image {
-                                objectName: "carouselNeighborComparisonLeftPreview"
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                source: String(root.neighborComparison.leftPreviewSource || "")
-                                sourceSize.width: Number(root.neighborComparison.boardPixelWidth || 1080)
-                                sourceSize.height: Number(root.neighborComparison.boardPixelHeight || 1350)
-                                fillMode: Image.PreserveAspectFit
-                                asynchronous: true
-                                cache: false
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.alignment: Qt.AlignRight
-                            compact: true
-                            text: "Open board " + Number(root.neighborComparison.leftBoardNumber || 0)
-                            tone: root.neighborComparison.focusedSide === "left" ? "primary" : "neutral"
-                            onClicked: carouselNeighborComparisonDialog.openBoard(
-                                           Number(root.neighborComparison.leftBoardIndex || 0))
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.minimumWidth: 260
-                    radius: theme.radius10
-                    color: theme.alpha(theme.ink950, 0.78)
-                    border.width: root.neighborComparison.focusedSide === "right" ? 2 : 1
-                    border.color: root.neighborComparison.focusedSide === "right"
-                                  ? theme.accentWarm500 : theme.alpha(theme.lineSoft, 0.46)
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label {
-                                Layout.fillWidth: true
-                                text: Number(root.neighborComparison.rightBoardNumber || 0) + " · " +
-                                      String(root.neighborComparison.rightName || "")
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                            StatusChip {
-                                text: root.neighborComparison.focusedSide === "right"
-                                      ? "Current" : String(root.neighborComparison.rightRole || "content")
-                                tone: root.neighborComparison.focusedSide === "right" ? "accent" : "neutral"
-                                compact: true
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            radius: theme.radius8
-                            color: "#fbf7f1"
-                            clip: true
-
-                            Image {
-                                objectName: "carouselNeighborComparisonRightPreview"
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                source: String(root.neighborComparison.rightPreviewSource || "")
-                                sourceSize.width: Number(root.neighborComparison.boardPixelWidth || 1080)
-                                sourceSize.height: Number(root.neighborComparison.boardPixelHeight || 1350)
-                                fillMode: Image.PreserveAspectFit
-                                asynchronous: true
-                                cache: false
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.alignment: Qt.AlignRight
-                            compact: true
-                            text: "Open board " + Number(root.neighborComparison.rightBoardNumber || 0)
-                            tone: root.neighborComparison.focusedSide === "right" ? "primary" : "neutral"
-                            onClicked: carouselNeighborComparisonDialog.openBoard(
-                                           Number(root.neighborComparison.rightBoardIndex || 0))
-                        }
-                    }
-                }
-            }
+            onLoaded: carouselNeighborComparisonDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselContinuityPreviewDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselContinuityPreviewDialog"
         modal: true
         focus: true
@@ -15372,270 +13372,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Continuity preview"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Rendered boards " + (Number(root.continuityPreview.leftBoardIndex || 0) + 1) +
-                              " and " + (Number(root.continuityPreview.rightBoardIndex || 1) + 1) +
-                              " · actual export cut at " + Number(root.continuityPreview.actualCutX || 0) + " px"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                StatusChip {
-                    text: root.continuityPreview.hasCriticalSeamContent
-                          ? root.continuityPreview.criticalSeamCount + " seam warning" +
-                            (root.continuityPreview.criticalSeamCount === 1 ? "" : "s")
-                          : "Cut clear"
-                    tone: root.continuityPreview.hasCriticalSeamContent ? "warning" : "success"
-                    compact: true
-                    detailText: root.continuityPreview.hasCriticalSeamContent
-                                ? "One or more editable layers cross the exact exported cut."
-                                : "No editable layer crosses the exact exported cut."
-                }
-
-                ActionButton {
-                    compact: true
-                    text: "Close"
-                    onClicked: carouselContinuityPreviewDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselContinuityPreviewDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselContinuityPreviewDialog: carouselContinuityPreviewDialog
+                    })
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Label {
-                    text: "Simulated platform gutter"
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                }
-
-                Repeater {
-                    model: [
-                        { label: "None", pixels: 0 },
-                        { label: "Tight 8 px", pixels: 8 },
-                        { label: "Standard 16 px", pixels: 16 },
-                        { label: "Wide 24 px", pixels: 24 }
-                    ]
-
-                    delegate: FilterChip {
-                        required property var modelData
-                        text: modelData.label
-                        active: root.continuityGutterPixels === modelData.pixels
-                        onClicked: root.continuityGutterPixels = modelData.pixels
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                Label {
-                    text: "Simulation only · never exported"
-                    color: theme.textFaint
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
-            }
-
-            Rectangle {
-                id: continuityPreviewStage
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 300
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.86)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.4)
-                clip: true
-
-                Row {
-                    id: continuityBoardRow
-                    anchors.centerIn: parent
-                    spacing: root.continuityGutterPixels
-                    readonly property real boardAspect: Number(root.continuityPreview.boardPixelWidth || 1080) /
-                                                        Math.max(1, Number(root.continuityPreview.boardPixelHeight || 1350))
-                    height: Math.min(parent.height - 42,
-                                     (parent.width - spacing - 42) / Math.max(0.1, boardAspect * 2))
-                    width: height * boardAspect * 2 + spacing
-
-                    Repeater {
-                        model: [
-                            {
-                                source: String(root.continuityPreview.leftPreviewSource || ""),
-                                boardNumber: Number(root.continuityPreview.leftBoardIndex || 0) + 1,
-                                side: "left"
-                            },
-                            {
-                                source: String(root.continuityPreview.rightPreviewSource || ""),
-                                boardNumber: Number(root.continuityPreview.rightBoardIndex || 1) + 1,
-                                side: "right"
-                            }
-                        ]
-
-                        delegate: Item {
-                            id: continuityBoard
-                            required property var modelData
-                            width: continuityBoardRow.height * continuityBoardRow.boardAspect
-                            height: continuityBoardRow.height
-
-                            Rectangle {
-                                anchors.fill: parent
-                                color: "#0a0a0a"
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.72)
-                            }
-
-                            Image {
-                                anchors.fill: parent
-                                source: continuityBoard.modelData.source
-                                fillMode: Image.PreserveAspectFit
-                                cache: false
-                                asynchronous: true
-                                smooth: true
-                                sourceSize.width: Number(root.continuityPreview.boardPixelWidth || 1080)
-                                sourceSize.height: Number(root.continuityPreview.boardPixelHeight || 1350)
-                            }
-
-                            Rectangle {
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.right: continuityBoard.modelData.side === "left" ? parent.right : undefined
-                                anchors.left: continuityBoard.modelData.side === "right" ? parent.left : undefined
-                                width: Math.max(3, Number(root.continuityPreview.unsafeBandPixels || 48) /
-                                                Math.max(1, Number(root.continuityPreview.boardPixelWidth || 1080)) * parent.width)
-                                color: theme.alpha(theme.warning, root.continuityPreview.hasCriticalSeamContent ? 0.22 : 0.10)
-                                border.width: 1
-                                border.color: theme.alpha(theme.warning, 0.72)
-                            }
-
-                            Rectangle {
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.right: continuityBoard.modelData.side === "left" ? parent.right : undefined
-                                anchors.left: continuityBoard.modelData.side === "right" ? parent.left : undefined
-                                width: 2
-                                color: root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success
-                            }
-
-                            StatusChip {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.margins: 8
-                                text: "Board " + continuityBoard.modelData.boardNumber
-                                compact: true
-                                detailText: "Exact rendered board preview"
-                            }
-                        }
-                    }
-                }
-
-                Label {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 10
-                    text: root.continuityGutterPixels === 0
-                          ? "Exact exported edges touching"
-                          : root.continuityGutterPixels + " px simulated feed gutter between exact exported edges"
-                    color: theme.textFaint
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                    elide: Text.ElideNone
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: continuityWarningContent.implicitHeight + 20
-                radius: theme.radius8
-                color: theme.alpha(root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success, 0.10)
-                border.width: 1
-                border.color: theme.alpha(root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success, 0.42)
-
-                ColumnLayout {
-                    id: continuityWarningContent
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.margins: 10
-                    spacing: 5
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.continuityPreview.hasCriticalSeamContent
-                              ? "Critical content crosses the unsafe seam"
-                              : "No editable content crosses the unsafe seam"
-                        color: root.continuityPreview.hasCriticalSeamContent ? theme.warning : theme.success
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    Repeater {
-                        model: root.continuityPreview.seamWarnings || []
-
-                        delegate: RowLayout {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: String(modelData.message || "Layer crosses the exported cut.")
-                                color: theme.textMain
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-
-                            ActionButton {
-                                compact: true
-                                text: "Select layer"
-                                onClicked: {
-                                    carouselDocument.focusPreflightIssue(
-                                                Number(modelData.boardIndex || 0),
-                                                String(modelData.itemId || ""))
-                                    carouselContinuityPreviewDialog.close()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            onLoaded: carouselContinuityPreviewDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselStatusNoticesDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselStatusNoticesDialog"
         modal: true
         focus: true
@@ -15653,144 +13405,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "Carousel Status Details"
-                    color: theme.textStrong
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 20
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideNone
-                }
-
-                ActionButton {
-                    text: "Clear All"
-                    compact: true
-                    onClicked: carouselDocument.clearStatusNotices()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselStatusNoticesDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselStatusNoticesDialog: carouselStatusNoticesDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Failures stay here until dismissed, even after later operations replace the live status line."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-
-                ColumnLayout {
-                    width: Math.max(0, carouselStatusNoticesDialog.width - 32)
-                    spacing: 8
-
-                    Repeater {
-                        model: carouselDocument.statusNotices
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: noticeContent.implicitHeight + 18
-                            radius: theme.radius6
-                            color: theme.alpha(theme.ink850, 0.76)
-                            border.width: 1
-                            border.color: modelData.severity === "error"
-                                          ? theme.alpha(theme.error, 0.5)
-                                          : theme.alpha(theme.warning, 0.46)
-
-                            ColumnLayout {
-                                id: noticeContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 9
-                                spacing: 6
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-
-                                    StatusChip {
-                                        text: String(modelData.category || "details")
-                                        tone: modelData.severity === "error" ? "error" : "warning"
-                                        compact: true
-                                        detailText: String(modelData.message || "")
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.createdAt || "")
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                        horizontalAlignment: Text.AlignRight
-                                        elide: Text.ElideNone
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.message || "")
-                                    color: modelData.severity === "error" ? theme.error : theme.warning
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-
-                                    Item { Layout.fillWidth: true }
-
-                                    ActionButton {
-                                        text: "Dismiss"
-                                        compact: true
-                                        onClicked: carouselDocument.dismissStatusNotice(
-                                                       Number(modelData.noticeId || 0))
-                                    }
-
-                                    ActionButton {
-                                        text: String(modelData.actionLabel || "Inspect")
-                                        compact: true
-                                        tone: "primary"
-                                        enabled: String(modelData.actionKey || "") !== "inspect"
-                                        disabledReason: "Use the visible message and affected surface for inspection."
-                                        onClicked: {
-                                            root.handleStatusNoticeAction(String(modelData.actionKey || ""))
-                                            carouselStatusNoticesDialog.close()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            ActionButton {
-                Layout.alignment: Qt.AlignRight
-                text: "Close"
-                compact: true
-                onClicked: carouselStatusNoticesDialog.close()
-            }
+            onLoaded: carouselStatusNoticesDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselRecoveryDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselRecoveryDialog"
         readonly property var recovery: carouselDocument.recoveryState
         modal: true
@@ -15809,96 +13439,22 @@ Rectangle {
             border.color: theme.alpha(theme.warning, 0.58)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 20
-            spacing: 12
-
-            Label {
-                Layout.fillWidth: true
-                text: "Recover Carousel"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 22
-                font.weight: Font.DemiBold
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselRecoveryDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselRecoveryDialog: carouselRecoveryDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "A crash-safe snapshot exists for “" + String(carouselRecoveryDialog.recovery.documentName || "Untitled Carousel") + "”."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 12
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: (carouselRecoveryDialog.recovery.usingLastGood ? "Using last good snapshot  " : "Snapshot  ") +
-                      String(carouselRecoveryDialog.recovery.capturedAt || "time unavailable")
-                color: carouselRecoveryDialog.recovery.usingLastGood ? theme.warning : theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            Item { Layout.fillHeight: true }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    text: "Discard"
-                    tone: "danger"
-                    compact: true
-                    onClicked: {
-                        carouselDocument.discardRecovery()
-                        carouselRecoveryDialog.close()
-                        if (!carouselDocument.hasActiveCarousel)
-                            root.beginCarouselSetup()
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    text: "Open Saved Version"
-                    compact: true
-                    visible: Boolean(carouselRecoveryDialog.recovery.hasCurrentSavedVersion)
-                    onClicked: {
-                        if (carouselDocument.openCurrentSavedVersion())
-                            carouselRecoveryDialog.close()
-                    }
-                }
-
-                ActionButton {
-                    text: "Open As Copy"
-                    compact: true
-                    onClicked: {
-                        if (carouselDocument.openRecoveryCopy())
-                            carouselRecoveryDialog.close()
-                    }
-                }
-
-                ActionButton {
-                    text: "Restore"
-                    tone: "primary"
-                    compact: true
-                    onClicked: {
-                        if (carouselDocument.restoreRecovery())
-                            carouselRecoveryDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselRecoveryDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselRelinkDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselRelinkDialog"
         readonly property var missingEntries: carouselDocument.missingMediaEntries
         readonly property var plan: carouselDocument.relinkPlan
@@ -15927,189 +13483,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 76
-                color: "transparent"
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 16
-                    spacing: 4
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Relink Missing Media"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.DemiBold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: carouselRelinkDialog.missingEntries.length + " missing instance" +
-                              (carouselRelinkDialog.missingEntries.length === 1 ? "" : "s") +
-                              ". Only unique metadata matches can be applied."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselRelinkDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselRelinkDialog: carouselRelinkDialog
+                    })
             }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-
-                ColumnLayout {
-                    width: Math.max(0, carouselRelinkDialog.width - 32)
-                    spacing: 8
-
-                    Repeater {
-                        model: carouselRelinkDialog.plan.length > 0
-                               ? carouselRelinkDialog.plan
-                               : carouselRelinkDialog.missingEntries
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: relinkEntryContent.implicitHeight + 18
-                            radius: theme.radius6
-                            color: theme.alpha(theme.ink850, 0.76)
-                            border.width: 1
-                            border.color: Boolean(modelData.safeToApply)
-                                          ? theme.alpha(theme.success, 0.5)
-                                          : modelData.matchState === "ambiguous" ||
-                                            modelData.matchState === "metadata-mismatch"
-                                            ? theme.alpha(theme.warning, 0.52)
-                                            : theme.alpha(theme.lineSoft, 0.34)
-
-                            ColumnLayout {
-                                id: relinkEntryContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 9
-                                spacing: 4
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: "Board " + (Number(modelData.boardIndex || 0) + 1) +
-                                              "  •  " + String(modelData.displayLabel || "Missing media")
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    StatusChip {
-                                        compact: true
-                                        text: Boolean(modelData.safeToApply) ? "Verified"
-                                              : modelData.matchState === "ambiguous" ? "Ambiguous"
-                                              : modelData.matchState === "metadata-mismatch" ? "Mismatch"
-                                              : "Missing"
-                                        tone: Boolean(modelData.safeToApply) ? "success"
-                                              : modelData.matchState === "not-found" ? "error" : "warning"
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.originalPath || "")
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: String(modelData.candidatePath || "").length > 0
-                                    text: "Candidate  " + String(modelData.candidatePath || "")
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: String(modelData.matchReason || "").length > 0
-                                    text: String(modelData.matchReason || "") +
-                                          "  Source " + Number(modelData.sourceWidth || 0) + "×" + Number(modelData.sourceHeight || 0) +
-                                          ", " + Number(modelData.sourceFileSize || 0) + " bytes."
-                                    color: Boolean(modelData.safeToApply) ? theme.success : theme.warning
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 66
-                color: theme.alpha(theme.ink850, 0.72)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.32)
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 8
-
-                    ActionButton {
-                        text: "Cancel"
-                        compact: true
-                        onClicked: carouselRelinkDialog.close()
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    ActionButton {
-                        text: "Scan Folder"
-                        compact: true
-                        onClicked: carouselDocument.chooseRelinkDirectory()
-                    }
-
-                    ActionButton {
-                        text: "Relink " + carouselRelinkDialog.verifiedCount + " Verified"
-                        compact: true
-                        tone: "primary"
-                        enabled: carouselRelinkDialog.verifiedCount > 0
-                        disabledReason: "Scan a folder and resolve ambiguous or mismatched candidates first."
-                        onClicked: {
-                            if (carouselDocument.applyRelinkPlan())
-                                carouselRelinkDialog.close()
-                        }
-                    }
-                }
-            }
+            onLoaded: carouselRelinkDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselCopyProofDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselCopyProofDialog"
         modal: true
         focus: true
@@ -16127,676 +13516,160 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Copy proof"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 21
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Reviews spelling, repeated words, and spacing. It never changes authored copy."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                StatusChip {
-                    text: carouselDocument.copyProofIssues.length > 0
-                          ? carouselDocument.copyProofIssues.length + " open"
-                          : "Clear"
-                    tone: carouselDocument.copyProofIssues.length > 0 ? "warning" : "success"
-                    compact: true
-                    detailText: "Review only; no automatic rewriting."
-                }
-
-                ActionButton {
-                    text: "Close"
-                    compact: true
-                    onClicked: carouselCopyProofDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselCopyProofDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselCopyProofDialog: carouselCopyProofDialog
+                    })
             }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Label {
-                    text: "Language"
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                }
-
-                Repeater {
-                    model: carouselDocument.copyProofLanguageOptions
-
-                    delegate: FilterChip {
-                        required property string modelData
-                        text: modelData
-                        active: carouselDocument.copyProofLanguage === modelData
-                        onClicked: carouselDocument.setCopyProofLanguage(modelData)
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    objectName: "carouselNextCopyProofIssueButton"
-                    text: "Next issue"
-                    compact: true
-                    enabled: carouselDocument.copyProofIssues.length > 0
-                    disabledReason: "No copy proof issues remain."
-                    onClicked: carouselDocument.nextCopyProofIssue()
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.52)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                ListView {
-                    id: carouselCopyProofIssueList
-                    objectName: "carouselCopyProofIssueList"
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    clip: true
-                    spacing: 6
-                    model: carouselDocument.copyProofIssues
-                    reuseItems: true
-
-                    delegate: Rectangle {
-                        id: copyProofIssueRow
-                        required property var modelData
-                        width: ListView.view ? ListView.view.width : 600
-                        height: copyProofIssueContent.implicitHeight + 18
-                        radius: theme.radius6
-                        color: theme.alpha(theme.ink850, 0.8)
-                        border.width: 1
-                        border.color: theme.alpha(theme.warning, 0.36)
-
-                        ColumnLayout {
-                            id: copyProofIssueContent
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.margins: 9
-                            spacing: 5
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 7
-
-                                StatusChip {
-                                    text: String(copyProofIssueRow.modelData.code || "copy")
-                                    tone: "warning"
-                                    compact: true
-                                    detailText: "Board " + (Number(copyProofIssueRow.modelData.boardIndex || 0) + 1) +
-                                                " · " + String(copyProofIssueRow.modelData.layerLabel || "Text layer")
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(copyProofIssueRow.modelData.message || "Review this copy.")
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                visible: (copyProofIssueRow.modelData.suggestions || []).length > 0
-                                text: "Suggestion: " + (copyProofIssueRow.modelData.suggestions || []).join(", ")
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                ActionButton {
-                                    text: "Select layer"
-                                    compact: true
-                                    onClicked: carouselDocument.focusPreflightIssue(
-                                                   Number(copyProofIssueRow.modelData.boardIndex || 0),
-                                                   String(copyProofIssueRow.modelData.itemId || ""))
-                                }
-
-                                Item { Layout.fillWidth: true }
-
-                                ActionButton {
-                                    visible: Boolean(copyProofIssueRow.modelData.canAddToDictionary)
-                                    text: "Add word"
-                                    compact: true
-                                    onClicked: carouselDocument.addCopyProofWord(
-                                                   String(copyProofIssueRow.modelData.word || ""))
-                                }
-
-                                ActionButton {
-                                    text: "Ignore"
-                                    compact: true
-                                    onClicked: carouselDocument.ignoreCopyProofIssue(
-                                                   String(copyProofIssueRow.modelData.issueId || ""))
-                                }
-                            }
-                        }
-
-                        TapHandler {
-                            onTapped: carouselDocument.focusPreflightIssue(
-                                          Number(copyProofIssueRow.modelData.boardIndex || 0),
-                                          String(copyProofIssueRow.modelData.itemId || ""))
-                        }
-                    }
-
-                    Label {
-                        anchors.centerIn: parent
-                        width: Math.max(120, parent.width - 40)
-                        visible: carouselCopyProofIssueList.count === 0
-                        text: "No copy proof issues in visible text layers."
-                        color: theme.textFaint
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Ignored issues stay with this document. Added words persist in your Carousel dictionary."
-                color: theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
+            onLoaded: carouselCopyProofDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselFontBrowserDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        property bool handoffToRecovery: false
+        onAboutToShow: {
+            handoffToRecovery = false
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
+        onOpened: if (contentItem.item) contentItem.item.focusInitialTarget()
+        onClosed: {
+            if (!handoffToRecovery) {
+                Qt.callLater(function() {
+                    const target = carouselFontBrowserDialog.focusReturnItem
+                    if (target && target.visible && target.enabled)
+                        target.forceActiveFocus(Qt.TabFocusReason)
+                    else
+                        root.forceActiveFocus(Qt.TabFocusReason)
+                    carouselFontBrowserDialog.focusReturnItem = null
+                })
+            } else {
+                focusReturnItem = null
+            }
+        }
         objectName: "carouselFontBrowserDialog"
+        parent: Overlay.overlay
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(720, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Installed fonts"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Installed fonts"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 21
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: selection.textFontAvailable
-                              ? "Choose an installed family for this text layer."
-                              : "“" + String(selection.resolvedTextFontFamily || selection.textFontFamily) +
-                                "” is missing. Choosing a face below opens a layout-diff preview before substitution."
-                        color: selection.textFontAvailable ? theme.textMuted : theme.warning
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                StatusChip {
-                    text: selection.textFontAvailable ? "Installed" : "Missing font"
-                    tone: selection.textFontAvailable ? "success" : "error"
-                    compact: true
-                    detailText: selection.textFontAvailable
-                                ? String(selection.resolvedTextFontFamily || selection.textFontFamily)
-                                : "No silent fallback is applied."
-                }
-
-                ActionButton {
-                    text: "Close"
-                    compact: true
-                    onClicked: carouselFontBrowserDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselFontBrowserDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselFontBrowserDialog: carouselFontBrowserDialog
+                    })
             }
-
-            TextField {
-                id: carouselFontSearchField
-                objectName: "carouselFontSearchField"
-                Layout.fillWidth: true
-                Layout.preferredHeight: 34
-                placeholderText: "Search installed font names"
-                text: root.fontBrowserSearchText
-                color: theme.textStrong
-                font.family: theme.fontUi
-                font.pixelSize: 11
-                selectByMouse: true
-                onTextEdited: root.fontBrowserSearchText = text
-                background: Rectangle {
-                    radius: theme.radius6
-                    color: theme.alpha(theme.ink850, 0.9)
-                    border.width: 1
-                    border.color: carouselFontSearchField.activeFocus
-                                  ? theme.alpha(theme.accentCool400, 0.72)
-                                  : theme.alpha(theme.lineSoft, 0.45)
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-
-                Repeater {
-                    model: [
-                        { label: "All installed", value: "all", count: carouselDocument.installedFontFamilies.length },
-                        { label: "Favorites", value: "favorites", count: carouselDocument.favoriteFontFamilies.length },
-                        { label: "Recent", value: "recent", count: carouselDocument.recentFontFamilies.length }
-                    ]
-
-                    delegate: FilterChip {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        text: modelData.label + "  " + modelData.count
-                        active: root.fontBrowserSection === modelData.value
-                        onClicked: root.fontBrowserSection = modelData.value
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.52)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                ListView {
-                    id: carouselFontFamilyList
-                    objectName: "carouselFontFamilyList"
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    clip: true
-                    spacing: 5
-                    model: root.fontBrowserFamilies()
-                    reuseItems: true
-
-                    delegate: Rectangle {
-                        id: fontFamilyRow
-                        required property string modelData
-                        width: ListView.view ? ListView.view.width : 600
-                        height: 78
-                        radius: theme.radius6
-                        color: fontRowHover.hovered
-                               ? theme.alpha(theme.accentCool400, 0.12)
-                               : selection.textFontAvailable &&
-                                 String(selection.resolvedTextFontFamily || selection.textFontFamily).toLowerCase() ===
-                                 modelData.toLowerCase()
-                                 ? theme.alpha(theme.accentWarm400, 0.12)
-                                 : theme.alpha(theme.ink850, 0.78)
-                        border.width: 1
-                        border.color: selection.textFontAvailable &&
-                                      String(selection.resolvedTextFontFamily || selection.textFontFamily).toLowerCase() ===
-                                      modelData.toLowerCase()
-                                      ? theme.alpha(theme.accentWarm400, 0.68)
-                                      : theme.alpha(theme.lineSoft, 0.32)
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.margins: 9
-                            spacing: 10
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 3
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: fontFamilyRow.modelData
-                                    color: theme.textStrong
-                                    font.family: fontFamilyRow.modelData
-                                    font.pixelSize: 16
-                                    font.weight: Font.DemiBold
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(selection.text || "Aa Bb Cc 0123 — Live font preview")
-                                    color: theme.textMuted
-                                    font.family: fontFamilyRow.modelData
-                                    font.pixelSize: 14
-                                    maximumLineCount: 2
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                            }
-
-                            ActionButton {
-                                compact: true
-                                text: root.fontFamilyInList(
-                                          fontFamilyRow.modelData,
-                                          carouselDocument.favoriteFontFamilies) ? "★" : "☆"
-                                tooltipText: root.fontFamilyInList(
-                                                 fontFamilyRow.modelData,
-                                                 carouselDocument.favoriteFontFamilies)
-                                             ? "Remove from favorite fonts"
-                                             : "Add to favorite fonts"
-                                onClicked: carouselDocument.toggleFavoriteFontFamily(fontFamilyRow.modelData)
-                            }
-
-                            ActionButton {
-                                compact: true
-                                text: selection.textFontAvailable ? "Use font" : "Preview fallback"
-                                tone: "primary"
-                                onClicked: root.chooseFontBrowserFamily(fontFamilyRow.modelData)
-                            }
-                        }
-
-                        HoverHandler {
-                            id: fontRowHover
-                            cursorShape: Qt.PointingHandCursor
-                        }
-
-                        TapHandler {
-                            onTapped: root.chooseFontBrowserFamily(fontFamilyRow.modelData)
-                        }
-                    }
-
-                    Label {
-                        anchors.centerIn: parent
-                        width: Math.max(120, parent.width - 40)
-                        visible: carouselFontFamilyList.count === 0
-                        text: root.fontBrowserSearchText.length > 0
-                              ? "No installed fonts match this search."
-                              : root.fontBrowserSection === "favorites"
-                                ? "No favorite fonts yet. Star any installed family."
-                                : "No recent fonts yet. Choosing a font adds it here."
-                        color: theme.textFaint
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: selection.textFontAvailable
-                      ? "Favorites and the last 12 chosen faces persist in the Carousel library."
-                      : "Fallback remains unapplied until the next screen's exact layout preview is accepted."
-                color: theme.textFaint
-                font.family: theme.fontMono
-                font.pixelSize: 9
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
+            onLoaded: carouselFontBrowserDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselFontRecoveryDialog
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        property bool preserveFocusReturnItem: false
+        onAboutToShow: {
+            if (!preserveFocusReturnItem)
+                focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            preserveFocusReturnItem = false
+            contentItem.loadContent()
+        }
+        onOpened: if (contentItem.item) contentItem.item.focusInitialTarget()
         objectName: "carouselFontRecoveryDialog"
         readonly property var missingEntries: carouselDocument.missingFontEntries
         readonly property var previewEntries: carouselDocument.fontSubstitutionPreview
+        parent: Overlay.overlay
         modal: true
         focus: true
         padding: 0
-        width: Math.min(650, root.width - 48)
-        height: Math.min(580, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
-        onClosed: carouselDocument.clearFontSubstitutionPreview()
+        onClosed: {
+            carouselDocument.clearFontSubstitutionPreview()
+            Qt.callLater(function() {
+                const target = carouselFontRecoveryDialog.focusReturnItem
+                if (target && target.visible && target.enabled)
+                    target.forceActiveFocus(Qt.TabFocusReason)
+                else
+                    root.forceActiveFocus(Qt.TabFocusReason)
+                carouselFontRecoveryDialog.focusReturnItem = null
+            })
+        }
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Resolve fonts"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: "Resolve Missing Fonts"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 20
-                font.weight: Font.DemiBold
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselFontRecoveryDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselFontRecoveryDialog: carouselFontRecoveryDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Export stays blocked until each unavailable face is installed or an explicit layout preview is accepted."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ToneComboBox {
-                    id: missingFontCombo
-                    Layout.fillWidth: true
-                    model: carouselFontRecoveryDialog.missingEntries
-                    textRole: "resolvedFontFamily"
-                    valueRole: "fontFamily"
-                }
-
-                Label {
-                    text: "→"
-                    color: theme.textFaint
-                    font.family: theme.fontUi
-                }
-
-                ToneComboBox {
-                    id: replacementFontCombo
-                    Layout.fillWidth: true
-                    editable: true
-                    model: carouselDocument.installedFontFamilies
-                }
-
-                ActionButton {
-                    text: "Preview"
-                    compact: true
-                    enabled: missingFontCombo.currentIndex >= 0 && replacementFontCombo.currentText.length > 0
-                    disabledReason: "Choose a missing face and an installed replacement."
-                    onClicked: carouselDocument.previewFontSubstitution(
-                                   String(missingFontCombo.currentValue || ""),
-                                   replacementFontCombo.currentText)
-                }
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-
-                ColumnLayout {
-                    width: Math.max(0, carouselFontRecoveryDialog.width - 32)
-                    spacing: 7
-
-                    Repeater {
-                        model: carouselFontRecoveryDialog.previewEntries.length > 0
-                               ? carouselFontRecoveryDialog.previewEntries
-                               : carouselFontRecoveryDialog.missingEntries
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: fontRecoveryRow.implicitHeight + 18
-                            radius: theme.radius6
-                            color: theme.alpha(theme.ink850, 0.76)
-                            border.width: 1
-                            border.color: Boolean(modelData.overflowAfter)
-                                          ? theme.alpha(theme.error, 0.55)
-                                          : Boolean(modelData.layoutChanged)
-                                            ? theme.alpha(theme.warning, 0.5)
-                                            : theme.alpha(theme.lineSoft, 0.34)
-
-                            ColumnLayout {
-                                id: fontRecoveryRow
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 9
-                                spacing: 4
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Board " + (Number(modelData.boardIndex || 0) + 1) +
-                                          "  •  " + String(modelData.layerLabel || "Text layer")
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    font.weight: Font.DemiBold
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: carouselFontRecoveryDialog.previewEntries.length > 0
-                                          ? String(modelData.sourceFontFamily) + " → " + String(modelData.replacementFontFamily) +
-                                            "  •  height " + Number(modelData.beforeHeight || 0).toFixed(1) + " → " +
-                                            Number(modelData.afterHeight || 0).toFixed(1) +
-                                            (Boolean(modelData.overflowAfter) ? "  •  OVERFLOW" : "")
-                                          : "Missing “" + String(modelData.resolvedFontFamily || modelData.fontFamily) +
-                                            "”  •  " + Number(modelData.pointSize || 0) + " pt"
-                                    color: Boolean(modelData.overflowAfter) ? theme.error
-                                          : Boolean(modelData.layoutChanged) ? theme.warning : theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.text || "")
-                                    color: theme.textFaint
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                ActionButton {
-                    text: "Open Font Book"
-                    compact: true
-                    onClicked: carouselDocument.openFontManagement()
-                }
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: carouselFontRecoveryDialog.close()
-                }
-
-                ActionButton {
-                    text: "Apply Previewed Substitution"
-                    compact: true
-                    tone: "primary"
-                    enabled: carouselFontRecoveryDialog.previewEntries.length > 0
-                    disabledReason: "Preview the exact layout effect before applying a replacement."
-                    onClicked: {
-                        if (carouselDocument.applyFontSubstitution())
-                            carouselFontRecoveryDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselFontRecoveryDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselExportSheet
+        property bool contentCreated: false
+        property Item focusReturnItem: null
+        property int activePage: 0
+        property bool boardReviewExpanded: false
+        onAboutToShow: {
+            focusReturnItem = root.Window.window ? root.Window.window.activeFocusItem : null
+            contentItem.loadContent()
+        }
         objectName: "carouselExportSheet"
         readonly property var summary: carouselDocument.exportSummary
         readonly property var presetState: carouselDocument.exportPresetState
         readonly property var progress: carouselDocument.exportProgress
-        readonly property var preflightIssues: carouselDocument.exportPreflightIssues
+        readonly property var preflightIssues: {
+            const issues = carouselDocument.exportPreflightIssues
+            const blocking = []
+            const advisory = []
+            for (let index = 0; index < issues.length; ++index) {
+                if (Boolean(issues[index].blocking)) blocking.push(issues[index])
+                else advisory.push(issues[index])
+            }
+            return blocking.concat(advisory)
+        }
         property string inspectedPresetId: ""
         property bool preservePresetOverrides: true
         readonly property var inspectedPreset: {
@@ -16823,1291 +13696,58 @@ Rectangle {
         readonly property string exportPresetContract: "carousel-export-presets:v1|built-ins:tiktok-vertical,tiktok-square,youtube-square,review,archive|versioned:true|compatibility:strict-no-stretch|apply:one-undo-step|overrides:preserve-reset-visible|resolved-settings:all-visible|persistence:document-schema-11|manifest:identity-version-override-count|guidance:first-party-source-last-reviewed-review-due-stale-state|no-elide:true"
         modal: true
         focus: true
+        parent: Overlay.overlay
         padding: 0
-        width: Math.min(620, root.width - 48)
-        height: Math.min(720, root.height - 48)
-        x: Math.round((root.width - width) / 2)
-        y: Math.round((root.height - height) / 2)
+        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
+        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
         onOpened: {
+            activePage = 0
+            boardReviewExpanded = false
             if (inspectedPresetId.length === 0 && String(presetState.activePresetId || "").length > 0)
                 inspectedPresetId = String(presetState.activePresetId)
+            if (contentItem.item) contentItem.item.focusInitialTarget()
+        }
+        onClosed: {
+            Qt.callLater(function() {
+                const target = carouselExportSheet.focusReturnItem
+                if (target && target.visible && target.enabled)
+                    target.forceActiveFocus(Qt.TabFocusReason)
+                else
+                    root.forceActiveFocus(Qt.TabFocusReason)
+                carouselExportSheet.focusReturnItem = null
+            })
         }
 
         background: Rectangle {
-            radius: theme.radius12
+            Accessible.role: Accessible.Dialog
+            Accessible.name: "Export carousel"
+            Accessible.ignored: false
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 70
-                color: "transparent"
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 20
-                    anchors.rightMargin: 14
-                    spacing: 12
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-
-                        Label {
-                            text: "Export Carousel"
-                            color: theme.textStrong
-                            font.family: theme.fontDisplay
-                            font.pixelSize: 20
-                            font.weight: Font.Bold
-                        }
-
-                        Label {
-                            text: carouselExportSheet.summary.boardCount + " ordered board" +
-                                  (carouselExportSheet.summary.boardCount === 1 ? "" : "s")
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                        }
-                    }
-
-                    ActionButton {
-                        compact: true
-                        showText: false
-                        iconName: "close"
-                        tooltipText: "Close export sheet"
-                        onClicked: carouselExportSheet.close()
-                    }
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselExportSheetContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselExportSheet: carouselExportSheet
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.45)
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                enabled: !carouselDocument.exportBusy
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 14
-
-                    GridLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        Layout.topMargin: 18
-                        columns: 2
-                        columnSpacing: 22
-                        rowSpacing: 9
-
-                        Label { text: "Boards"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
-                        Label { text: carouselExportSheet.summary.boardCount + " · order " + carouselExportSheet.summary.boardOrder; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
-                        Label { text: "Canvas"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
-                        Label { text: carouselExportSheet.summary.ratio + " · " + carouselExportSheet.summary.pixelSize + " px per board"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
-                        Label { text: "Files"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
-                        Label { text: carouselExportSheet.summary.fileTypes; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
-                        Label { text: "Color"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
-                        Label { text: carouselExportSheet.summary.colorSpace; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
-                        Label { text: "Estimate"; color: theme.textMuted; font.family: theme.fontUi; font.pixelSize: 11 }
-                        Label { text: carouselExportSheet.summary.estimatedOutput; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: 11; wrapMode: Text.WrapAtWordBoundaryOrAnywhere; elide: Text.ElideNone; Layout.fillWidth: true }
-                    }
-
-                    ColumnLayout {
-                        id: carouselExportPresetSection
-                        objectName: "carouselExportPresetSection"
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 8
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Label {
-                                text: "Delivery presets"
-                                color: theme.textMain
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.DemiBold
-                                Layout.fillWidth: true
-                            }
-
-                            StatusChip {
-                                visible: Boolean(carouselExportSheet.presetState.hasActivePreset)
-                                text: String(carouselExportSheet.presetState.activePresetName || "Custom") +
-                                      " · v" + Number(carouselExportSheet.presetState.activePresetVersion || 0) +
-                                      (Number(carouselExportSheet.presetState.overrideCount || 0) > 0
-                                       ? " · " + Number(carouselExportSheet.presetState.overrideCount) + " overridden"
-                                       : " · exact")
-                                tone: Number(carouselExportSheet.presetState.overrideCount || 0) > 0
-                                      ? "warning" : "success"
-                                compact: true
-                            }
-                        }
-
-                        ListView {
-                            objectName: "carouselExportPresetBrowser"
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 132
-                            orientation: ListView.Horizontal
-                            spacing: 8
-                            clip: true
-                            model: carouselDocument.exportPresets
-
-                            delegate: Rectangle {
-                                required property var modelData
-                                width: 184
-                                height: 128
-                                radius: theme.radius8
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: String(carouselExportSheet.presetState.activePresetId || "") ===
-                                              String(modelData.presetId || "") ? 2 : 1
-                                border.color: String(carouselExportSheet.presetState.activePresetId || "") ===
-                                              String(modelData.presetId || "")
-                                              ? theme.accentWarm400
-                                              : carouselExportSheet.inspectedPresetId === String(modelData.presetId || "")
-                                                ? theme.alpha(theme.accentCool400, 0.75)
-                                                : theme.alpha(theme.lineSoft, 0.5)
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 3
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.name || "Preset")
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 10
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.category || "") + " · v" +
-                                              Number(modelData.presetVersion || 0) + " · " +
-                                              String(modelData.requiredRatio || "")
-                                        color: theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.compatibilityMessage || "")
-                                        color: Boolean(modelData.compatible) ? theme.textFaint : theme.warning
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 8
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    Item { Layout.fillHeight: true }
-
-                                    ActionButton {
-                                        Layout.fillWidth: true
-                                        text: String(carouselExportSheet.presetState.activePresetId || "") ===
-                                              String(modelData.presetId || "") ? "Reapply" : "Apply"
-                                        compact: true
-                                        tone: String(carouselExportSheet.presetState.activePresetId || "") ===
-                                              String(modelData.presetId || "") ? "secondary" : "primary"
-                                        enabled: Boolean(modelData.compatible)
-                                        disabledReason: String(modelData.compatibilityMessage || "This preset is incompatible.")
-                                        onClicked: {
-                                            carouselExportSheet.inspectedPresetId = String(modelData.presetId || "")
-                                            carouselDocument.applyExportPreset(
-                                                String(modelData.presetId || ""),
-                                                carouselExportSheet.preservePresetOverrides)
-                                        }
-                                    }
-                                }
-
-                                TapHandler {
-                                    onTapped: carouselExportSheet.inspectedPresetId =
-                                                  String(parent.modelData.presetId || "")
-                                }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            FilterChip {
-                                text: "Preserve existing overrides when applying"
-                                active: carouselExportSheet.preservePresetOverrides
-                                onClicked: carouselExportSheet.preservePresetOverrides =
-                                               !carouselExportSheet.preservePresetOverrides
-                            }
-
-                            Item { Layout.fillWidth: true }
-
-                            ActionButton {
-                                objectName: "carouselResetExportPresetOverridesButton"
-                                text: "Reset Overrides"
-                                compact: true
-                                enabled: Boolean(carouselExportSheet.presetState.hasActivePreset) &&
-                                         Number(carouselExportSheet.presetState.overrideCount || 0) > 0
-                                disabledReason: "The active preset has no user overrides."
-                                onClicked: carouselDocument.resetExportPresetOverrides()
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: exportPresetGuidance.implicitHeight + 16
-                            radius: theme.radius6
-                            color: theme.alpha(theme.ink800, 0.72)
-                            border.width: 1
-                            border.color: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
-                                          ? theme.alpha(theme.warning, 0.72)
-                                          : theme.alpha(theme.lineSoft, 0.38)
-
-                            ColumnLayout {
-                                id: exportPresetGuidance
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: 8
-                                spacing: 4
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(carouselExportSheet.inspectedPreset.name || "Preset") +
-                                              " guidance · last reviewed " +
-                                              String(carouselExportSheet.inspectedPreset.guidanceLastReviewed || "not dated")
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    StatusChip {
-                                        visible: Boolean(carouselExportSheet.inspectedPreset.timeSensitive)
-                                        text: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
-                                              ? "Review overdue" : "Review current"
-                                        tone: Boolean(carouselExportSheet.inspectedPreset.guidanceStale)
-                                              ? "warning" : "success"
-                                        compact: true
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(carouselExportSheet.inspectedPreset.guidanceSummary || "")
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(carouselExportSheet.inspectedPreset.appChosenDefaults || "")
-                                    color: theme.textFaint
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 8
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    visible: String(carouselExportSheet.inspectedPreset.guidanceSourceUrl || "").length > 0
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: "Source updated " +
-                                              String(carouselExportSheet.inspectedPreset.guidanceSourceUpdated || "unknown") +
-                                              " · review due " +
-                                              String(carouselExportSheet.inspectedPreset.guidanceReviewDue || "not scheduled")
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    ActionButton {
-                                        text: "Open First-Party Source"
-                                        compact: true
-                                        onClicked: Qt.openUrlExternally(
-                                                       String(carouselExportSheet.inspectedPreset.guidanceSourceUrl || ""))
-                                    }
-                                }
-                            }
-                        }
-
-                        Label {
-                            text: "Resolved settings"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            font.weight: Font.DemiBold
-                        }
-
-                        GridLayout {
-                            objectName: "carouselExportPresetResolvedSettings"
-                            Layout.fillWidth: true
-                            columns: 2
-                            columnSpacing: 14
-                            rowSpacing: 4
-
-                            Repeater {
-                                model: carouselExportSheet.presetState.resolvedRows || []
-
-                                delegate: RowLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    Layout.columnSpan: 2
-                                    spacing: 7
-
-                                    Label {
-                                        Layout.preferredWidth: 138
-                                        text: String(modelData.label || "Setting")
-                                        color: theme.textMuted
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(modelData.value || "")
-                                        color: theme.textStrong
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-
-                                    StatusChip {
-                                        visible: Boolean(modelData.overridden)
-                                        text: "Override"
-                                        tone: "warning"
-                                        compact: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 7
-
-                        Label {
-                            text: "Boards to export"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 5
-
-                            Repeater {
-                                model: carouselDocument.exportBoardScopeOptions
-
-                                delegate: FilterChip {
-                                    required property string modelData
-                                    Layout.fillWidth: true
-                                    text: modelData === "current" ? "Current board" :
-                                          modelData === "selected" ? "Selected (" + carouselDocument.selectedSlideCount + ")" :
-                                          "All boards"
-                                    active: carouselDocument.exportBoardScope === modelData
-                                    onClicked: carouselDocument.setExportBoardScope(modelData)
-                                }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                text: "Exact ordered output · boards " + carouselExportSheet.summary.boardOrder
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                Layout.fillWidth: true
-                            }
-
-                            StatusChip {
-                                text: carouselExportSheet.summary.boardCount + " file" +
-                                      (carouselExportSheet.summary.boardCount === 1 ? "" : "s")
-                                tone: "neutral"
-                                compact: true
-                            }
-                        }
-
-                        ListView {
-                            objectName: "carouselExportOrderedBoardReview"
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 154
-                            orientation: ListView.Horizontal
-                            spacing: 8
-                            clip: true
-                            model: carouselExportSheet.boardReview
-
-                            delegate: Rectangle {
-                                required property var modelData
-                                width: 126
-                                height: 150
-                                radius: theme.radius8
-                                color: theme.alpha(theme.ink850, 0.9)
-                                border.width: 1
-                                border.color: modelData.collision
-                                              ? theme.alpha(theme.warning, 0.8)
-                                              : theme.alpha(theme.lineSoft, 0.5)
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 6
-                                    spacing: 4
-
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 92
-                                        radius: theme.radius4
-                                        color: String(modelData.backgroundColor || "#fbf7f1")
-                                        clip: true
-
-                                        Image {
-                                            anchors.fill: parent
-                                            source: String(modelData.previewSource || "")
-                                            fillMode: Image.PreserveAspectFit
-                                            asynchronous: true
-                                            cache: false
-                                            visible: source.toString().length > 0
-                                        }
-
-                                        Rectangle {
-                                            anchors.left: parent.left
-                                            anchors.top: parent.top
-                                            anchors.margins: 4
-                                            width: boardNumberLabel.implicitWidth + 8
-                                            height: boardNumberLabel.implicitHeight + 4
-                                            radius: height / 2
-                                            color: theme.alpha(theme.ink950, 0.82)
-
-                                            Label {
-                                                id: boardNumberLabel
-                                                anchors.centerIn: parent
-                                                text: String(modelData.boardNumber || "")
-                                                color: theme.textStrong
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 9
-                                            }
-                                        }
-                                    }
-
-                                    Label {
-                                        text: String(modelData.boardName || "").length > 0
-                                              ? String(modelData.boardName)
-                                              : "Board " + String(modelData.boardNumber || "")
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 9
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                        maximumLineCount: 2
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Label {
-                                        text: String(modelData.resolvedName || "")
-                                        color: modelData.collision ? theme.warning : theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                        maximumLineCount: 2
-                                        Layout.fillWidth: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 6
-
-                        Label {
-                            text: "Export resolution"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 5
-
-                            Repeater {
-                                model: carouselDocument.exportSizeModeOptions
-
-                                delegate: FilterChip {
-                                    required property string modelData
-                                    Layout.fillWidth: true
-                                    text: modelData === "1x" ? "1×" :
-                                          modelData === "2x" ? "2×" : "Custom"
-                                    active: carouselDocument.exportSizeSettings.mode === modelData
-                                    onClicked: carouselDocument.setExportSizeMode(modelData)
-                                }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Composer preview · " + carouselDocument.exportSizeSettings.previewResolution + " px"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                            }
-
-                            Label {
-                                text: "Rendered export · " + carouselDocument.exportSizeSettings.exportResolution + " px"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-                            visible: carouselDocument.exportSizeSettings.mode === "custom"
-
-                            TextField {
-                                id: exportCustomWidthField
-                                Layout.fillWidth: true
-                                placeholderText: "Width"
-                                selectByMouse: true
-                                validator: IntValidator { bottom: 64; top: 16384 }
-                                onEditingFinished: carouselDocument.setExportCustomPixelSize(
-                                                       Number(text),
-                                                       Number(carouselDocument.exportSizeSettings.customHeight))
-                            }
-
-                            Label {
-                                text: "×"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 11
-                            }
-
-                            TextField {
-                                id: exportCustomHeightField
-                                Layout.fillWidth: true
-                                placeholderText: "Height"
-                                selectByMouse: true
-                                validator: IntValidator { bottom: 64; top: 16384 }
-                                onEditingFinished: carouselDocument.setExportCustomPixelSize(
-                                                       Number(carouselDocument.exportSizeSettings.customWidth),
-                                                       Number(text))
-                            }
-
-                            FilterChip {
-                                text: carouselDocument.exportSizeSettings.aspectLocked
-                                      ? "Aspect locked" : "Aspect unlocked"
-                                active: carouselDocument.exportSizeSettings.aspectLocked
-                                onClicked: carouselDocument.setExportAspectLocked(
-                                               !carouselDocument.exportSizeSettings.aspectLocked)
-                            }
-                        }
-
-                        Binding {
-                            target: exportCustomWidthField
-                            property: "text"
-                            value: String(carouselDocument.exportSizeSettings.customWidth)
-                            when: !exportCustomWidthField.activeFocus
-                        }
-
-                        Binding {
-                            target: exportCustomHeightField
-                            property: "text"
-                            value: String(carouselDocument.exportSizeSettings.customHeight)
-                            when: !exportCustomHeightField.activeFocus
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: String(carouselDocument.exportSizeSettings.warning || "").length > 0
-                            text: String(carouselDocument.exportSizeSettings.warning || "")
-                            color: theme.warning
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 6
-
-                        Label {
-                            text: "File naming"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        TextField {
-                            id: exportFilenameField
-                            Layout.fillWidth: true
-                            selectByMouse: true
-                            color: theme.textStrong
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            background: Rectangle {
-                                radius: theme.radius6
-                                color: theme.alpha(theme.ink850, 0.85)
-                                border.width: 1
-                                border.color: exportFilenameField.activeFocus
-                                              ? theme.alpha(theme.accentWarm400, 0.75)
-                                              : theme.alpha(theme.lineSoft, 0.45)
-                            }
-                            onEditingFinished: carouselDocument.setExportFilenamePattern(text)
-                        }
-
-                        Binding {
-                            target: exportFilenameField
-                            property: "text"
-                            value: carouselDocument.exportFilenamePattern
-                            when: !exportFilenameField.activeFocus
-                        }
-
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 4
-
-                            Repeater {
-                                model: ["{document}", "{board_number}", "{board_role}", "{ratio}", "{version}", "{date}"]
-
-                                delegate: ActionButton {
-                                    required property string modelData
-                                    text: modelData
-                                    compact: true
-                                    onClicked: {
-                                        exportFilenameField.insert(exportFilenameField.cursorPosition, modelData)
-                                        carouselDocument.setExportFilenamePattern(exportFilenameField.text)
-                                    }
-                                }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Label {
-                                text: "Version"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                            }
-
-                            ActionButton {
-                                objectName: "carouselDecreaseExportVersionButton"
-                                text: "Decrease export version"
-                                showText: false
-                                iconName: "minus"
-                                tooltipText: "Decrease export version"
-                                compact: true
-                                enabled: carouselDocument.exportVersion > 1
-                                onClicked: carouselDocument.setExportVersion(carouselDocument.exportVersion - 1)
-                            }
-
-                            Label {
-                                text: "v" + carouselDocument.exportVersion
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 11
-                            }
-
-                            ActionButton {
-                                objectName: "carouselIncreaseExportVersionButton"
-                                text: "Increase export version"
-                                showText: false
-                                iconName: "plus"
-                                tooltipText: "Increase export version"
-                                compact: true
-                                enabled: carouselDocument.exportVersion < 999
-                                onClicked: carouselDocument.setExportVersion(carouselDocument.exportVersion + 1)
-                            }
-
-                            Item { Layout.fillWidth: true }
-                        }
-
-                        Label {
-                            text: "If a file exists"
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 5
-
-                            Repeater {
-                                model: carouselDocument.exportCollisionPolicyOptions
-
-                                delegate: FilterChip {
-                                    required property string modelData
-                                    Layout.fillWidth: true
-                                    text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                                    active: carouselDocument.exportCollisionPolicy === modelData
-                                    onClicked: carouselDocument.setExportCollisionPolicy(modelData)
-                                }
-                            }
-                        }
-
-                        FilterChip {
-                            Layout.fillWidth: true
-                            text: "Delivery manifest"
-                            active: carouselDocument.exportManifestEnabled
-                            onClicked: carouselDocument.setExportManifestEnabled(
-                                           !carouselDocument.exportManifestEnabled)
-                            ToolTip.visible: manifestHover.hovered
-                            ToolTip.delay: 350
-                            ToolTip.text: "Include ordered output metadata, hashes, profiles, board roles, accessibility text, warnings, and export time."
-
-                            HoverHandler { id: manifestHover }
-                        }
-
-                        FilterChip {
-                            id: carouselPdfProofToggle
-                            objectName: "carouselPdfProofToggle"
-                            Layout.fillWidth: true
-                            text: "PDF Review Contact Sheet"
-                            active: carouselDocument.exportProofSheetEnabled
-                            onClicked: carouselDocument.setExportProofSheetEnabled(
-                                           !carouselDocument.exportProofSheetEnabled)
-                            ToolTip.visible: pdfProofHover.hovered
-                            ToolTip.delay: 350
-                            ToolTip.text: "Create a separate A4 landscape review PDF with four color-managed board thumbnails per page."
-
-                            HoverHandler { id: pdfProofHover }
-                        }
-
-                        FilterChip {
-                            id: carouselPdfProofNotesToggle
-                            objectName: "carouselPdfProofNotesToggle"
-                            Layout.fillWidth: true
-                            visible: carouselDocument.exportProofSheetEnabled
-                            text: "Include Board Notes"
-                            active: carouselDocument.exportProofIncludeNotes
-                            onClicked: carouselDocument.setExportProofIncludeNotes(
-                                           !carouselDocument.exportProofIncludeNotes)
-                        }
-
-                        Label {
-                            objectName: "carouselPdfProofResolvedSettings"
-                            Layout.fillWidth: true
-                            visible: carouselDocument.exportProofSheetEnabled
-                            text: "A4 landscape · 4 boards per page · board number, name, role, and resolved file name · " +
-                                  (carouselDocument.exportProofIncludeNotes
-                                   ? "notes included · " : "notes omitted · ") +
-                                  carouselDocument.exportColorSpace + " thumbnails converted to sRGB proof space · review only"
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-
-                            Repeater {
-                                model: carouselDocument.exportOutputPreview
-
-                                delegate: RowLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Label {
-                                        text: String(modelData.resolvedName || "")
-                                        color: modelData.collision ? theme.warning : theme.textMain
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                        Layout.fillWidth: true
-                                    }
-
-                                    StatusChip {
-                                        visible: Boolean(modelData.collision)
-                                        text: String(modelData.action || "write")
-                                        tone: "warning"
-                                        compact: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 6
-
-                        Label {
-                            text: "Image output"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Repeater {
-                                model: carouselDocument.exportImageFormatOptions
-
-                                delegate: FilterChip {
-                                    required property string modelData
-                                    Layout.fillWidth: true
-                                    text: modelData === "jpeg" ? "JPEG" : modelData.toUpperCase()
-                                    active: carouselDocument.exportImageFormat === modelData
-                                    onClicked: carouselDocument.setExportImageFormat(modelData)
-                                }
-                            }
-                        }
-
-                        InspectorSlider {
-                            Layout.fillWidth: true
-                            label: "Quality"
-                            valueText: carouselDocument.exportImageQuality + "%"
-                            from: 1
-                            to: 100
-                            stepSize: 1
-                            value: carouselDocument.exportImageQuality
-                            accent: theme.accentCool400
-                            onValueDragged: function(value) {
-                                carouselDocument.setExportImageQuality(Math.round(value))
-                            }
-                            onResetRequested: carouselDocument.setExportImageQuality(92)
-                        }
-
-                        FilterChip {
-                            Layout.fillWidth: true
-                            text: carouselDocument.exportImageFormat === "jpeg"
-                                  ? "Transparency unavailable in JPEG"
-                                  : "Preserve transparency"
-                            active: carouselDocument.exportImageFormat !== "jpeg" &&
-                                    carouselDocument.exportPreserveTransparency
-                            enabled: carouselDocument.exportImageFormat !== "jpeg"
-                            onClicked: carouselDocument.setExportPreserveTransparency(
-                                           !carouselDocument.exportPreserveTransparency)
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: carouselExportSheet.summary.formatWarning
-                            color: carouselDocument.exportImageFormat === "png"
-                                   ? theme.textMuted
-                                   : theme.warning
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 6
-
-                        Label {
-                            text: "Output color profile"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Repeater {
-                                model: carouselDocument.exportColorSpaceOptions
-
-                                delegate: FilterChip {
-                                    required property string modelData
-                                    Layout.fillWidth: true
-                                    text: modelData
-                                    active: carouselDocument.exportColorSpace === modelData
-                                    onClicked: carouselDocument.setExportColorSpace(modelData)
-                                }
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "The selected profile is embedded in every image and verified after writing."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        spacing: 6
-
-                        Label {
-                            text: "Destination"
-                            color: theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            TextField {
-                                Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: true
-                                text: carouselDocument.exportDirectory
-                                placeholderText: "Choose a folder"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                background: Rectangle {
-                                    radius: theme.radius6
-                                    color: theme.alpha(theme.ink850, 0.85)
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.45)
-                                }
-                            }
-
-                            ActionButton {
-                                text: "Choose Folder"
-                                compact: true
-                                onClicked: carouselDocument.chooseExportDirectory()
-                            }
-                        }
-                    }
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 20
-                        Layout.rightMargin: 20
-                        Layout.bottomMargin: 18
-                        spacing: 7
-
-                        RowLayout {
-                            Layout.fillWidth: true
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Preflight"
-                                color: theme.textMain
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.DemiBold
-                            }
-
-                            StatusChip {
-                                text: carouselExportSheet.summary.blockingIssueCount > 0
-                                      ? carouselExportSheet.summary.blockingIssueCount + " blocking"
-                                      : "Ready"
-                                tone: carouselExportSheet.summary.blockingIssueCount > 0 ? "error" : "success"
-                                compact: true
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: carouselExportSheet.preflightIssues.length === 0
-                            text: "No export issues detected."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                        }
-
-                        Repeater {
-                            model: carouselExportSheet.preflightIssues
-
-                            delegate: ExportPreflightIssueRow {
-                                required property var modelData
-                                issue: modelData
-                                showTextResolutionActions: modelData.code === "text-overflow" ||
-                                                           modelData.code === "text-too-small"
-                                onInspectRequested: carouselDocument.resolveTextPreflightIssue(
-                                                        String(modelData.itemId || ""),
-                                                        String(modelData.code || ""),
-                                                        "inspect")
-                                onResizeFrameRequested: carouselDocument.resolveTextPreflightIssue(
-                                                            String(modelData.itemId || ""),
-                                                            String(modelData.code || ""),
-                                                            "resize-frame")
-                                onFitTextRequested: carouselDocument.resolveTextPreflightIssue(
-                                                       String(modelData.itemId || ""),
-                                                       String(modelData.code || ""),
-                                                       "fit-text")
-                                onIgnoreRequested: carouselDocument.resolveTextPreflightIssue(
-                                                      String(modelData.itemId || ""),
-                                                      String(modelData.code || ""),
-                                                      "ignore")
-                                TapHandler {
-                                    onTapped: {
-                                        carouselDocument.focusPreflightIssue(
-                                                    Number(modelData.boardIndex || 0),
-                                                    String(modelData.itemId || ""))
-                                        carouselExportSheet.close()
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                id: carouselExportProgressSurface
-                objectName: "carouselExportProgressSurface"
-                Layout.fillWidth: true
-                Layout.preferredHeight: progressColumn.implicitHeight + 20
-                visible: String(carouselExportSheet.progress.state || "idle") !== "idle"
-                color: theme.alpha(theme.ink850, 0.78)
-                border.width: 1
-                border.color: String(carouselExportSheet.progress.state || "") === "failed"
-                              ? theme.alpha(theme.error, 0.52)
-                              : String(carouselExportSheet.progress.state || "") === "cancelled"
-                                ? theme.alpha(theme.warning, 0.48)
-                                : theme.alpha(theme.lineSoft, 0.36)
-
-                ColumnLayout {
-                    id: progressColumn
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 10
-                    spacing: 7
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        StatusChip {
-                            text: String(carouselExportSheet.progress.state || "idle")
-                            tone: carouselExportSheet.progress.state === "failed"
-                                  ? "error"
-                                  : carouselExportSheet.progress.state === "completed"
-                                    ? "success"
-                                    : "warning"
-                            compact: true
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: carouselDocument.exportBusy
-                                  ? "Board " + carouselExportSheet.progress.currentBoard + " · " +
-                                    carouselExportSheet.progress.completedCount + " / " +
-                                    carouselExportSheet.progress.totalCount + " complete"
-                                  : carouselExportSheet.progress.completedCount + " / " +
-                                    carouselExportSheet.progress.totalCount + " boards completed"
-                            color: theme.textMain
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        from: 0
-                        to: 1
-                        value: Number(carouselExportSheet.progress.fraction || 0)
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: String(carouselExportSheet.progress.failureReason || "").length > 0
-                        text: String(carouselExportSheet.progress.failureReason || "")
-                        color: carouselExportSheet.progress.state === "failed" ? theme.error : theme.warning
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 5
-
-                        Label {
-                            text: "Partial files"
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                        }
-
-                        Repeater {
-                            model: carouselDocument.exportPartialCleanupPolicyOptions
-
-                            delegate: FilterChip {
-                                required property string modelData
-                                text: modelData === "remove" ? "Remove on stop" : "Keep on stop"
-                                active: carouselDocument.exportPartialCleanupPolicy === modelData
-                                enabled: !carouselDocument.exportBusy
-                                onClicked: carouselDocument.setExportPartialCleanupPolicy(modelData)
-                            }
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        ActionButton {
-                            text: "Cancel Export"
-                            compact: true
-                            visible: Boolean(carouselExportSheet.progress.canCancel)
-                            tone: "danger"
-                            onClicked: carouselDocument.cancelExport()
-                        }
-
-                        ActionButton {
-                            text: "Retry Failed"
-                            compact: true
-                            visible: Boolean(carouselExportSheet.progress.canRetry)
-                            onClicked: carouselDocument.retryFailedExport()
-                        }
-
-                        ActionButton {
-                            text: "Clean Partial"
-                            compact: true
-                            visible: Number(carouselExportSheet.progress.partialFileCount || 0) > 0 &&
-                                     !carouselDocument.exportBusy
-                            onClicked: carouselDocument.cleanupPartialExport()
-                        }
-
-                        ActionButton {
-                            text: "Reveal Output"
-                            compact: true
-                            visible: Boolean(carouselExportSheet.progress.canReveal)
-                            onClicked: carouselDocument.revealExportOutput()
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 64
-                color: theme.alpha(theme.ink850, 0.72)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.32)
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 8
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: carouselExportSheet.summary.blockingIssueCount > 0
-                              ? "Resolve blocking issues to export."
-                              : carouselDocument.exportDirectory.length === 0
-                                ? "Choose a destination to export."
-                                : "Ready to render " + carouselExportSheet.summary.boardCount + " board" +
-                                  (carouselExportSheet.summary.boardCount === 1 ? "." : "s.")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    ActionButton {
-                        text: "Cancel"
-                        compact: true
-                        onClicked: carouselExportSheet.close()
-                    }
-
-                    ActionButton {
-                        objectName: "carouselStartExportButton"
-                        text: carouselDocument.exportBusy ? "Exporting" :
-                              carouselExportSheet.progress.state === "completed" ? "Export Again" : "Start Export"
-                        tone: "primary"
-                        compact: true
-                        enabled: !carouselDocument.exportBusy &&
-                                 carouselExportSheet.summary.blockingIssueCount === 0 &&
-                                 carouselDocument.exportDirectory.length > 0
-                        disabledReason: carouselExportSheet.summary.blockingIssueCount > 0
-                                        ? "Resolve blocking preflight issues first."
-                                        : carouselDocument.exportDirectory.length === 0
-                                          ? "Choose an export destination first."
-                                          : "Export is already running."
-                        onClicked: {
-                            carouselDocument.startConfiguredExport()
-                        }
-                    }
-                }
-            }
+            onLoaded: carouselExportSheet.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselCutoutRefineDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselCutoutRefineDialog"
         modal: true
         focus: true
@@ -18125,111 +13765,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: "Refine cutout edge"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 21
-                font.weight: Font.DemiBold
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselCutoutRefineDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselCutoutRefineDialog: carouselCutoutRefineDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Changes update the result and remain reversible through Undo. Use Matte or Edges in the inspector to audit the boundary."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-
-            InspectorSlider {
-                Layout.fillWidth: true
-                label: "Feather"
-                valueText: Number(value).toFixed(1) + " px"
-                from: 0
-                to: 16
-                stepSize: 0.5
-                value: Number(root.selection.cutoutFeather || 0)
-                accent: theme.accentCool400
-                onValueDragged: function(nextValue) {
-                    carouselDocument.setSelectedMediaCutoutRefinement(
-                                nextValue,
-                                Number(root.selection.cutoutExpand || 0),
-                                Number(root.selection.cutoutEdgeContrast || 0))
-                }
-                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
-                                      0,
-                                      Number(root.selection.cutoutExpand || 0),
-                                      Number(root.selection.cutoutEdgeContrast || 0))
-            }
-
-            InspectorSlider {
-                Layout.fillWidth: true
-                label: "Expand"
-                valueText: Number(value).toFixed(1) + " px"
-                from: -16
-                to: 16
-                stepSize: 0.5
-                value: Number(root.selection.cutoutExpand || 0)
-                accent: theme.accentWarm400
-                onValueDragged: function(nextValue) {
-                    carouselDocument.setSelectedMediaCutoutRefinement(
-                                Number(root.selection.cutoutFeather || 0),
-                                nextValue,
-                                Number(root.selection.cutoutEdgeContrast || 0))
-                }
-                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
-                                      Number(root.selection.cutoutFeather || 0),
-                                      0,
-                                      Number(root.selection.cutoutEdgeContrast || 0))
-            }
-
-            InspectorSlider {
-                Layout.fillWidth: true
-                label: "Edge contrast"
-                valueText: Math.round(value) + "%"
-                from: -45
-                to: 100
-                stepSize: 1
-                value: Number(root.selection.cutoutEdgeContrast || 0)
-                accent: theme.success
-                onValueDragged: function(nextValue) {
-                    carouselDocument.setSelectedMediaCutoutRefinement(
-                                Number(root.selection.cutoutFeather || 0),
-                                Number(root.selection.cutoutExpand || 0),
-                                nextValue)
-                }
-                onResetRequested: carouselDocument.setSelectedMediaCutoutRefinement(
-                                      Number(root.selection.cutoutFeather || 0),
-                                      Number(root.selection.cutoutExpand || 0),
-                                      0)
-            }
-
-            Item { Layout.fillHeight: true }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Done"
-                    tone: "primary"
-                    compact: true
-                    onClicked: carouselCutoutRefineDialog.close()
-                }
-            }
+            onLoaded: carouselCutoutRefineDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselTemplatePackUpdateDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselTemplatePackUpdateDialog"
         modal: true
         focus: true
@@ -18248,167 +13799,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: String(carouselDocument.templatePackUpdatePreview.templateName || "Template pack")
-                      + " · v" + Number(carouselDocument.templatePackUpdatePreview.fromVersion || 0)
-                      + " → v" + Number(carouselDocument.templatePackUpdatePreview.toVersion || 0)
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 21
-                font.weight: Font.DemiBold
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselTemplatePackUpdateDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselTemplatePackUpdateDialog: carouselTemplatePackUpdateDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "This review is non-mutating. Only unchanged v1 components are eligible; local overrides and missing components are never recreated or overwritten."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 11
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: 5
-                StatusChip {
-                    text: Number(carouselDocument.templatePackUpdatePreview.updateCount || 0) + " updates"
-                    compact: true
-                }
-                StatusChip {
-                    text: Number(carouselDocument.templatePackUpdatePreview.preservedOverrideCount || 0)
-                          + " local overrides preserved"
-                    tone: Number(carouselDocument.templatePackUpdatePreview.preservedOverrideCount || 0) > 0
-                          ? "warning" : "success"
-                    compact: true
-                }
-                StatusChip {
-                    text: "Boards "
-                          + ((carouselDocument.templatePackUpdatePreview.affectedBoardNumbers || []).join(", ") || "metadata only")
-                    compact: true
-                }
-            }
-
-            Flickable {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                contentWidth: width
-                contentHeight: updateChangeColumn.implicitHeight
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-
-                ColumnLayout {
-                    id: updateChangeColumn
-                    width: parent.width
-                    spacing: 7
-
-                    Repeater {
-                        model: carouselDocument.templatePackUpdatePreview.changes || []
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            implicitHeight: 112
-                            radius: 8
-                            color: theme.alpha(theme.ink850, 0.72)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.35)
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 9
-                                spacing: 4
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.label || "Component change")
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    font.weight: Font.DemiBold
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(modelData.summary || "")
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: Number(modelData.updateCount || 0) + " update · "
-                                          + Number(modelData.preservedOverrideCount || 0) + " preserved · "
-                                          + Number(modelData.missingCount || 0) + " missing — "
-                                          + String(modelData.migrationPolicy || "")
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WordWrap
-                                    elide: Text.ElideNone
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 48
-                radius: 7
-                color: theme.alpha(theme.warning, 0.10)
-                border.width: 1
-                border.color: theme.alpha(theme.warning, 0.42)
-                Label {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    text: "No automatic migration. Apply approved update creates one undo step and records the migration in this document."
-                    color: theme.textMain
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    wrapMode: Text.WordWrap
-                    elide: Text.ElideNone
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Keep current version"
-                    compact: true
-                    onClicked: carouselTemplatePackUpdateDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplyTemplatePackUpdateButton"
-                    text: "Apply approved update"
-                    tone: "primary"
-                    compact: true
-                    enabled: Boolean(carouselDocument.templatePackUpdatePreview.available)
-                    onClicked: {
-                        if (carouselDocument.applyPreviewedTemplatePackUpdate())
-                            carouselTemplatePackUpdateDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselTemplatePackUpdateDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselSequenceTemplateDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselSequenceTemplateDialog"
         modal: true
         focus: true
@@ -18426,182 +13832,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 18
-            spacing: 12
-
-            Label {
-                Layout.fillWidth: true
-                text: String(root.sequenceTemplatePreview.name || "Sequence template")
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 22
-                font.weight: Font.DemiBold
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselSequenceTemplateDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselSequenceTemplateDialog: carouselSequenceTemplateDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: String(root.sequenceTemplatePreview.purpose || "")
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: 6
-                StatusChip {
-                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
-                          ? Number(root.sequenceTemplatePreview.itemCount || 0) + " editable layers"
-                          : Number(root.sequenceTemplatePreview.boardCount || 0) + " boards"
-                    compact: true
-                }
-                StatusChip {
-                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
-                          ? String(root.sequenceTemplatePreview.entryKind || "board")
-                          : Number(root.sequenceTemplatePreview.requiredMedia || 0) + " media slots"
-                    compact: true
-                }
-                StatusChip {
-                    text: String(root.sequenceTemplatePreview.supportedRatios || "")
-                    compact: true
-                }
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                visible: String(root.sequenceTemplatePreview.sourceSection) !== "custom"
-                columns: root.width > 760 ? 4 : 3
-                columnSpacing: 8
-                rowSpacing: 8
-
-                Repeater {
-                    model: root.sequenceTemplatePreview.previewRoles || []
-                    delegate: Rectangle {
-                        id: fullSequenceBoardPreview
-                        required property int index
-                        required property var modelData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.minimumHeight: 132
-                        Layout.maximumHeight: 205
-                        radius: 7
-                        color: index % 4 === 0 ? "#d8c8b3"
-                             : index % 4 === 1 ? "#243038"
-                             : index % 4 === 2 ? "#dce8e5" : "#eee8df"
-                        border.width: 1
-                        border.color: theme.alpha("#ffffff", 0.18)
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 5
-                            Label {
-                                text: String(fullSequenceBoardPreview.index + 1).padStart(2, "0")
-                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#b9c7ce" : "#5c554d"
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-                            Item { Layout.fillHeight: true }
-                            Label {
-                                Layout.fillWidth: true
-                                text: String(fullSequenceBoardPreview.modelData)
-                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#ffffff" : "#171717"
-                                font.family: theme.fontDisplay
-                                font.pixelSize: 16
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WordWrap
-                                elide: Text.ElideNone
-                            }
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 4
-                                radius: 2
-                                color: fullSequenceBoardPreview.index % 4 === 1 ? "#8df0b5" : "#8b6548"
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                visible: String(root.sequenceTemplatePreview.sourceSection) === "custom"
-                radius: 8
-                color: theme.alpha(theme.ink950, 0.72)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.35)
-                clip: true
-
-                Image {
-                    anchors.centerIn: parent
-                    width: Math.min(parent.width - 24, 320)
-                    height: Math.min(parent.height - 24, 400)
-                    source: String(root.sequenceTemplatePreview.previewSource || "")
-                    sourceSize: Qt.size(320, 400)
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    cache: false
-                }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: String(root.sequenceTemplatePreview.previewSource || "").length === 0
-                    text: String(root.sequenceTemplatePreview.entryKind) === "component"
-                          ? "Reusable component" : "Saved board"
-                    color: theme.textMuted
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 18
-                    wrapMode: Text.WordWrap
-                    elide: Text.ElideNone
-                }
-            }
-
-            Label {
-                Layout.fillWidth: true
-                text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
-                      ? "Applying adds this saved template to the current board. Its layers receive unique identities and remain editable; Undo removes the complete application."
-                      : "Applying replaces the current board sequence. Every generated text, shape, role, media slot, and linked spread remains editable; Undo restores the prior document."
-                color: theme.textFaint
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WordWrap
-                elide: Text.ElideNone
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Cancel"
-                    compact: true
-                    onClicked: carouselSequenceTemplateDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplyTemplateLibraryEntryButton"
-                    text: String(root.sequenceTemplatePreview.sourceSection) === "custom"
-                          ? "Add to current board" : "Apply complete sequence"
-                    tone: "primary"
-                    compact: true
-                    onClicked: {
-                        if (carouselDocument.applyTemplateLibraryEntry(
-                                    String(root.sequenceTemplatePreview.templateId || "")))
-                            carouselSequenceTemplateDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselSequenceTemplateDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselStoryboardDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselStoryboardDialog"
         modal: true
         focus: true
@@ -18619,317 +13865,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: "Storyboard overview"
-                    color: theme.textStrong
-                    font.family: theme.fontDisplay
-                    font.pixelSize: 20
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideNone
-                }
-                StatusChip {
-                    text: carouselDocument.selectedSlideCount + " selected"
-                    compact: true
-                }
-                StatusChip {
-                    text: carouselDocument.boardSections.length + " sections"
-                    compact: true
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselStoryboardDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselStoryboardDialog: carouselStoryboardDialog
+                    })
             }
-
-            RowLayout {
-                objectName: "carouselCreateBoardSectionControls"
-                Layout.fillWidth: true
-                spacing: 6
-
-                ToneTextField {
-                    id: storyboardSectionNameField
-                    objectName: "carouselStoryboardSectionNameField"
-                    Layout.fillWidth: true
-                    placeholderText: "Section name for selected consecutive boards"
-                    text: root.storyboardSectionName
-                    onTextEdited: root.storyboardSectionName = text
-                    onAccepted: {
-                        if (carouselDocument.createBoardSection(root.storyboardSectionName)) {
-                            root.storyboardSectionName = ""
-                            text = ""
-                        }
-                    }
-                }
-
-                ActionButton {
-                    objectName: "carouselCreateBoardSectionButton"
-                    compact: true
-                    tone: "primary"
-                    text: "Create section"
-                    enabled: carouselDocument.selectedSlideCount >= 2 &&
-                             root.storyboardSectionName.trim().length > 0
-                    disabledReason: "Select at least two consecutive boards and enter a name."
-                    onClicked: {
-                        if (carouselDocument.createBoardSection(root.storyboardSectionName)) {
-                            root.storyboardSectionName = ""
-                            storyboardSectionNameField.text = ""
-                        }
-                    }
-                }
-            }
-
-            ScrollView {
-                objectName: "carouselBoardSectionsOverview"
-                Layout.fillWidth: true
-                Layout.preferredHeight: carouselDocument.boardSections.length > 0 ? 104 : 0
-                visible: carouselDocument.boardSections.length > 0
-                clip: true
-                contentHeight: availableHeight
-
-                Row {
-                    height: parent.height
-                    spacing: 8
-
-                    Repeater {
-                        model: carouselDocument.boardSections
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: 286
-                            height: 96
-                            radius: theme.radius8
-                            color: theme.alpha(theme.ink950, 0.66)
-                            border.width: 1
-                            border.color: theme.alpha(theme.accentWarm400, 0.34)
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                spacing: 4
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    ToneTextField {
-                                        objectName: "carouselBoardSectionRenameField"
-                                        Layout.fillWidth: true
-                                        text: String(modelData.name || "Section")
-                                        onEditingFinished: {
-                                            if (text.trim().length > 0 && text.trim() !== String(modelData.name || ""))
-                                                carouselDocument.renameBoardSection(String(modelData.sectionId || ""), text)
-                                        }
-                                    }
-                                    StatusChip {
-                                        text: Number(modelData.span || 0) + " boards"
-                                        compact: true
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 3
-                                    ActionButton {
-                                        compact: true
-                                        text: "Select"
-                                        onClicked: carouselDocument.selectBoardSection(String(modelData.sectionId || ""))
-                                    }
-                                    ActionButton {
-                                        objectName: "carouselBoardSectionCollapseButton"
-                                        compact: true
-                                        text: Boolean(modelData.collapsed) ? "Expand" : "Collapse"
-                                        onClicked: carouselDocument.setBoardSectionCollapsed(
-                                                       String(modelData.sectionId || ""),
-                                                       !Boolean(modelData.collapsed))
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        showText: false
-                                        iconName: "chevron-left"
-                                        tooltipText: "Move complete section earlier"
-                                        enabled: Boolean(modelData.canMoveEarlier)
-                                        onClicked: carouselDocument.moveBoardSection(String(modelData.sectionId || ""), -1)
-                                    }
-                                    ActionButton {
-                                        compact: true
-                                        showText: false
-                                        iconName: "chevron-right"
-                                        tooltipText: "Move complete section later"
-                                        enabled: Boolean(modelData.canMoveLater)
-                                        onClicked: carouselDocument.moveBoardSection(String(modelData.sectionId || ""), 1)
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    ActionButton {
-                                        objectName: "carouselBoardSectionUngroupButton"
-                                        compact: true
-                                        tone: "danger"
-                                        text: "Ungroup"
-                                        onClicked: carouselDocument.removeBoardSection(String(modelData.sectionId || ""))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: 4
-                Repeater {
-                    model: root.boardRoleButtons
-                    delegate: FilterChip {
-                        required property var modelData
-                        text: modelData.label
-                        onClicked: carouselDocument.setSelectedSlidesRole(modelData.value)
-                    }
-                }
-            }
-
-            GridView {
-                id: carouselStoryboardGrid
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                cellWidth: 176
-                cellHeight: 224
-                clip: true
-                model: carouselDocument.storyboardEntries
-
-                delegate: Item {
-                    required property int index
-                    required property var modelData
-                    readonly property int boardIndex: Number(modelData.index || 0)
-                    width: carouselStoryboardGrid.cellWidth
-                    height: carouselStoryboardGrid.cellHeight
-
-                    CarouselBoardThumb {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 6
-                        height: 184
-                        index: parent.boardIndex
-                        modelData: parent.modelData
-                        onSelectedRequested: function(boardIndex, modifiers) {
-                            if (Boolean(parent.modelData.sectionCollapsed))
-                                carouselDocument.selectBoardSection(String(parent.modelData.sectionId || ""))
-                            else if (root.hasRangeSelectModifier(modifiers))
-                                carouselDocument.selectSlideRange(boardIndex)
-                            else if (root.hasMultiSelectModifier(modifiers))
-                                carouselDocument.toggleSlideSelection(boardIndex)
-                            else
-                                carouselDocument.selectSlide(boardIndex)
-                        }
-                        onDuplicateRequested: function(boardIndex) {
-                            if (Boolean(parent.modelData.sectionCollapsed)) {
-                                carouselDocument.selectBoardSection(String(parent.modelData.sectionId || ""))
-                                carouselDocument.duplicateSelectedSlides()
-                            } else {
-                                carouselDocument.selectSlide(boardIndex)
-                                carouselDocument.duplicateCurrentSlide()
-                            }
-                        }
-                        onReorderRequested: function(fromIndex, toIndex) {
-                            if (String(parent.modelData.sectionId || "").length > 0)
-                                carouselDocument.moveBoardSection(
-                                            String(parent.modelData.sectionId || ""),
-                                            toIndex < parent.boardIndex ? -1 : 1)
-                            else
-                                carouselDocument.moveSlide(
-                                            fromIndex,
-                                            Math.min(carouselDocument.slideCount - 1, toIndex))
-                        }
-                        onMediaDropRequested: function(boardIndex, drop) {
-                            root.applyMediaDrop(drop, boardIndex, "thumbnail", "primary", 0.5, 0.5)
-                        }
-                    }
-
-                    StatusChip {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.leftMargin: 12
-                        anchors.topMargin: 12
-                        visible: Boolean(parent.modelData.sectionFirst)
-                        text: String(parent.modelData.sectionName || "Section")
-                        tone: "accent"
-                        compact: true
-                        z: 20
-                    }
-
-                    Rectangle {
-                        objectName: "carouselCollapsedBoardSectionSummary"
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 42
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 12
-                        height: 30
-                        radius: theme.radius6
-                        visible: Boolean(parent.modelData.sectionCollapsed)
-                        color: theme.alpha(theme.ink950, 0.88)
-                        border.width: 1
-                        border.color: theme.alpha(theme.accentWarm400, 0.5)
-                        z: 20
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: Number(parent.parent.modelData.sectionSpan || 0) +
-                                  " boards collapsed · click to select section"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 9
-                        }
-
-                        TapHandler {
-                            onTapped: carouselDocument.selectBoardSection(
-                                          String(parent.parent.modelData.sectionId || ""))
-                        }
-                    }
-
-                    ActionButton {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        anchors.margins: 6
-                        compact: true
-                        text: "Open in composer"
-                        onClicked: {
-                            carouselDocument.selectSlide(parent.boardIndex)
-                            carouselStoryboardDialog.close()
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ActionButton {
-                    text: "Duplicate selected"
-                    enabled: carouselDocument.canAddSlide
-                    onClicked: carouselDocument.duplicateSelectedSlides()
-                }
-                ActionButton {
-                    text: "Delete selected"
-                    tone: "danger"
-                    enabled: carouselDocument.slideCount > carouselDocument.selectedSlideCount
-                    onClicked: carouselDocument.removeSelectedSlides()
-                }
-                Item { Layout.fillWidth: true }
-                ActionButton {
-                    text: "Return to composer"
-                    tone: "primary"
-                    onClicked: carouselStoryboardDialog.close()
-                }
-            }
+            onLoaded: carouselStoryboardDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselRepeatGridDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselRepeatGridDialog"
         readonly property var preview: carouselDocument.repeatGridPreview
 
@@ -18957,247 +13908,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: "Repeat grid"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.DemiBold
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Repeat the selected layer or grouped cell as ordinary, independently editable layers."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Cancel repeat grid"
-                    onClicked: carouselRepeatGridDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselRepeatGridDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselRepeatGridDialog: carouselRepeatGridDialog
+                    })
             }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 2
-                columnSpacing: 10
-                rowSpacing: 6
-
-                InspectorSlider {
-                    Layout.fillWidth: true
-                    label: "Rows"
-                    valueText: Math.round(value).toString()
-                    from: 1
-                    to: 10
-                    stepSize: 1
-                    value: root.repeatGridRows
-                    onValueDragged: function(nextValue) {
-                        root.repeatGridRows = Math.round(nextValue)
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-                InspectorSlider {
-                    Layout.fillWidth: true
-                    label: "Columns"
-                    valueText: Math.round(value).toString()
-                    from: 1
-                    to: 10
-                    stepSize: 1
-                    value: root.repeatGridColumns
-                    onValueDragged: function(nextValue) {
-                        root.repeatGridColumns = Math.round(nextValue)
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-                InspectorSlider {
-                    Layout.fillWidth: true
-                    label: "Gap X"
-                    valueText: Math.round(value) + " px"
-                    from: 0
-                    to: 320
-                    stepSize: 1
-                    value: root.repeatGridGapX
-                    onValueDragged: function(nextValue) {
-                        root.repeatGridGapX = nextValue
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-                InspectorSlider {
-                    Layout.fillWidth: true
-                    label: "Gap Y"
-                    valueText: Math.round(value) + " px"
-                    from: 0
-                    to: 320
-                    stepSize: 1
-                    value: root.repeatGridGapY
-                    onValueDragged: function(nextValue) {
-                        root.repeatGridGapY = nextValue
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 5
-                Label {
-                    text: "Ordering"
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                }
-                FilterChip {
-                    Layout.fillWidth: true
-                    text: "Across rows"
-                    active: root.repeatGridOrdering === "row-major"
-                    onClicked: {
-                        root.repeatGridOrdering = "row-major"
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-                FilterChip {
-                    Layout.fillWidth: true
-                    text: "Down columns"
-                    active: root.repeatGridOrdering === "column-major"
-                    onClicked: {
-                        root.repeatGridOrdering = "column-major"
-                        carouselRepeatGridDialog.refreshPreview()
-                    }
-                }
-            }
-
-            Rectangle {
-                id: repeatGridPreviewSurface
-                objectName: "carouselRepeatGridPreviewSurface"
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumHeight: 180
-                radius: theme.radius8
-                color: theme.mediaCanvas
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.5)
-                clip: true
-
-                Item {
-                    id: repeatGridResultBounds
-                    anchors.centerIn: parent
-                    width: {
-                        const resultWidth = Math.max(1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
-                        const resultHeight = Math.max(1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
-                        const scale = Math.min((repeatGridPreviewSurface.width - 36) / resultWidth,
-                                               (repeatGridPreviewSurface.height - 36) / resultHeight)
-                        return resultWidth * Math.max(0.01, scale)
-                    }
-                    height: {
-                        const resultWidth = Math.max(1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
-                        const resultHeight = Math.max(1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
-                        const scale = Math.min((repeatGridPreviewSurface.width - 36) / resultWidth,
-                                               (repeatGridPreviewSurface.height - 36) / resultHeight)
-                        return resultHeight * Math.max(0.01, scale)
-                    }
-
-                    Repeater {
-                        model: carouselRepeatGridDialog.preview.cells || []
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            readonly property real resultWidth: Math.max(
-                                                                    1, Number(carouselRepeatGridDialog.preview.resultWidth || 1))
-                            readonly property real resultHeight: Math.max(
-                                                                     1, Number(carouselRepeatGridDialog.preview.resultHeight || 1))
-                            x: (Number(modelData.x || 0) -
-                                Number(carouselRepeatGridDialog.preview.resultX || 0)) /
-                               resultWidth * repeatGridResultBounds.width
-                            y: (Number(modelData.y || 0) -
-                                Number(carouselRepeatGridDialog.preview.resultY || 0)) /
-                               resultHeight * repeatGridResultBounds.height
-                            width: repeatGridResultBounds.width /
-                                   Math.max(1, Number(carouselRepeatGridDialog.preview.columns || 1)) * 0.92
-                            height: repeatGridResultBounds.height /
-                                    Math.max(1, Number(carouselRepeatGridDialog.preview.rows || 1)) * 0.92
-                            radius: 4
-                            color: Boolean(modelData.sourceCell)
-                                   ? theme.alpha(theme.accentWarm400, 0.35)
-                                   : theme.alpha(theme.accentCool400, 0.24)
-                            border.width: Boolean(modelData.sourceCell) ? 2 : 1
-                            border.color: Boolean(modelData.sourceCell)
-                                          ? theme.accentWarm400 : theme.accentCool400
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: Number(modelData.cellIndex || 0) + 1
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Label {
-                    Layout.fillWidth: true
-                    text: Number(carouselRepeatGridDialog.preview.cellCount || 0) + " cells · " +
-                          Number(carouselRepeatGridDialog.preview.projectedLayerCount || 0) +
-                          " editable layers · " +
-                          Math.round(Number(carouselRepeatGridDialog.preview.resultWidth || 0)) + " × " +
-                          Math.round(Number(carouselRepeatGridDialog.preview.resultHeight || 0)) + " px"
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    elide: Text.ElideNone
-                }
-                StatusChip {
-                    compact: true
-                    tone: "success"
-                    text: "Detached + editable"
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselRepeatGridDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplyRepeatGridButton"
-                    Layout.fillWidth: true
-                    text: "Create repeat grid"
-                    tone: "primary"
-                    enabled: Boolean(carouselRepeatGridDialog.preview.active)
-                    onClicked: {
-                        if (carouselDocument.applyRepeatGrid())
-                            carouselRepeatGridDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselRepeatGridDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselSelectionBatchDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselSelectionBatchDialog"
         readonly property var preview: carouselDocument.selectionBatchPreview
         modal: true
@@ -19217,144 +13943,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        text: String(carouselSelectionBatchDialog.preview.operationLabel || "Batch change") + " preview"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.DemiBold
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Anchor: " + String(carouselSelectionBatchDialog.preview.anchorLabel || "layer") +
-                              " · " + Number(carouselSelectionBatchDialog.preview.affectedCount || 0) +
-                              " affected" +
-                              (Number(carouselSelectionBatchDialog.preview.skippedCount || 0) > 0
-                               ? " · " + Number(carouselSelectionBatchDialog.preview.skippedCount) + " incompatible skipped"
-                               : "")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Cancel batch change"
-                    onClicked: carouselSelectionBatchDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselSelectionBatchDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselSelectionBatchDialog: carouselSelectionBatchDialog
+                    })
             }
-
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 5
-                model: carouselSelectionBatchDialog.preview.entries || []
-
-                delegate: Rectangle {
-                    id: batchPreviewRow
-                    required property var modelData
-                    width: ListView.view.width
-                    height: batchPreviewContent.implicitHeight + 14
-                    radius: theme.radius6
-                    color: theme.alpha(theme.ink850, 0.82)
-                    border.width: 1
-                    border.color: Boolean(modelData.compatible)
-                                  ? theme.alpha(theme.lineSoft, 0.4)
-                                  : theme.alpha(theme.warning, 0.55)
-
-                    ColumnLayout {
-                        id: batchPreviewContent
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 7
-                        spacing: 3
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Board " + Number(batchPreviewRow.modelData.boardNumber || 1) +
-                                      " · " + String(batchPreviewRow.modelData.displayLabel || "Layer")
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.DemiBold
-                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                elide: Text.ElideNone
-                            }
-                            StatusChip {
-                                compact: true
-                                tone: Boolean(batchPreviewRow.modelData.compatible) ? "success" : "warning"
-                                text: Boolean(batchPreviewRow.modelData.compatible) ? "Will change" : "Skipped"
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Before · " + String(batchPreviewRow.modelData.before || "")
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Result · " + String(batchPreviewRow.modelData.result || "")
-                            color: Boolean(batchPreviewRow.modelData.compatible) ? theme.textMain : theme.warning
-                            font.family: theme.fontMono
-                            font.pixelSize: 9
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselSelectionBatchDialog.close()
-                }
-                ActionButton {
-                    objectName: "carouselApplySelectionBatchButton"
-                    Layout.fillWidth: true
-                    text: "Apply in one step"
-                    tone: "primary"
-                    enabled: Boolean(carouselSelectionBatchDialog.preview.active) &&
-                             Number(carouselSelectionBatchDialog.preview.affectedCount || 0) > 0
-                    onClicked: {
-                        if (carouselDocument.applySelectionBatchOperation())
-                            carouselSelectionBatchDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselSelectionBatchDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselMediaUsageDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselMediaUsageDialog"
         modal: true
         focus: true
@@ -19374,282 +13978,23 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        text: "Media usage"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Every source, crop reuse, offline dependency, and dependent board in this Carousel."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                ActionButton {
-                    compact: true
-                    text: "Refresh"
-                    onClicked: root.mediaUsageReportState = carouselDocument.mediaUsageReport(
-                                   carouselDocument.mediaAutofillPlan || [])
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Close media usage"
-                    onClicked: carouselMediaUsageDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselMediaUsageDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselMediaUsageDialog: carouselMediaUsageDialog
+                    })
             }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: 5
-                columnSpacing: 5
-                rowSpacing: 5
-
-                Repeater {
-                    model: [
-                        { label: "Sources", value: Number(root.mediaUsageReportState.sourceCount || 0), tone: "neutral" },
-                        { label: "Placements", value: Number(root.mediaUsageReportState.placementCount || 0), tone: "neutral" },
-                        { label: "Duplicates", value: Number(root.mediaUsageReportState.duplicateSourceCount || 0), tone: Number(root.mediaUsageReportState.duplicateSourceCount || 0) > 0 ? "warning" : "neutral" },
-                        { label: "Offline", value: Number(root.mediaUsageReportState.offlineSourceCount || 0), tone: Number(root.mediaUsageReportState.offlineSourceCount || 0) > 0 ? "danger" : "neutral" },
-                        { label: "Unused", value: Number(root.mediaUsageReportState.unusedSelectionCount || 0), tone: Number(root.mediaUsageReportState.unusedSelectionCount || 0) > 0 ? "warning" : "neutral" }
-                    ]
-
-                    delegate: Rectangle {
-                        required property var modelData
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 48
-                        radius: theme.radius6
-                        color: theme.alpha(theme.ink850, 0.82)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.35)
-
-                        Column {
-                            anchors.centerIn: parent
-                            spacing: 1
-                            Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: String(modelData.value)
-                                color: modelData.tone === "danger" ? theme.error
-                                      : modelData.tone === "warning" ? theme.warning
-                                      : theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 14
-                                font.weight: Font.DemiBold
-                            }
-                            Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: modelData.label
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                            }
-                        }
-                    }
-                }
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 7
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: Number(root.mediaUsageReportState.sourceCount || 0) === 0
-                        text: "No media sources are placed in this document."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-
-                    Repeater {
-                        model: root.mediaUsageReportState.entries || []
-
-                        delegate: Rectangle {
-                            id: mediaUsageCard
-                            required property var modelData
-                            Layout.fillWidth: true
-                            implicitHeight: mediaUsageCardContent.implicitHeight + 16
-                            radius: theme.radius8
-                            color: theme.alpha(theme.ink850, 0.82)
-                            border.width: 1
-                            border.color: Boolean(modelData.offline)
-                                          ? theme.alpha(theme.error, 0.75)
-                                          : theme.alpha(theme.lineSoft, 0.4)
-
-                            ColumnLayout {
-                                id: mediaUsageCardContent
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 8
-                                spacing: 4
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: String(mediaUsageCard.modelData.displayLabel || "Media")
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                        elide: Text.ElideNone
-                                    }
-                                    StatusChip {
-                                        compact: true
-                                        visible: Boolean(mediaUsageCard.modelData.duplicate)
-                                        tone: "warning"
-                                        text: Number(mediaUsageCard.modelData.placementCount || 0) + " placements"
-                                    }
-                                    StatusChip {
-                                        compact: true
-                                        visible: Boolean(mediaUsageCard.modelData.hasReusedCrop)
-                                        tone: "neutral"
-                                        text: Number(mediaUsageCard.modelData.reusedCropCount || 0) + " reused crop"
-                                    }
-                                    StatusChip {
-                                        compact: true
-                                        visible: Boolean(mediaUsageCard.modelData.offline)
-                                        tone: "error"
-                                        text: "Offline"
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(mediaUsageCard.modelData.sourcePath || "")
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: "Boards " + String(mediaUsageCard.modelData.boardNumbersLabel || "—") +
-                                          " · " + Number(mediaUsageCard.modelData.cropVariantCount || 0) +
-                                          " crop variant" +
-                                          (Number(mediaUsageCard.modelData.cropVariantCount || 0) === 1 ? "" : "s")
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 9
-                                    elide: Text.ElideNone
-                                }
-
-                                Flow {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
-                                    Repeater {
-                                        model: mediaUsageCard.modelData.placements || []
-
-                                        delegate: ActionButton {
-                                            required property var modelData
-                                            compact: true
-                                            text: "Board " + Number(modelData.boardNumber || 1) +
-                                                  (String(modelData.slot || "").length > 0
-                                                   ? " · " + String(modelData.slot) : " · layer")
-                                            onClicked: {
-                                                carouselDocument.focusMediaUsagePlacement(
-                                                    Number(modelData.boardIndex || 0),
-                                                    String(modelData.itemId || ""),
-                                                    String(modelData.slot || "primary"))
-                                                carouselMediaUsageDialog.close()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: Number(root.mediaUsageReportState.unusedSelectionCount || 0) > 0
-                        text: "Unused autofill selection"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                    }
-
-                    Repeater {
-                        model: root.mediaUsageReportState.unusedSelections || []
-
-                        delegate: Rectangle {
-                            id: unusedMediaCard
-                            required property var modelData
-                            Layout.fillWidth: true
-                            implicitHeight: unusedMediaRow.implicitHeight + 12
-                            radius: theme.radius6
-                            color: theme.alpha(theme.warning, 0.08)
-                            border.width: 1
-                            border.color: theme.alpha(theme.warning, 0.35)
-
-                            RowLayout {
-                                id: unusedMediaRow
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 6
-                                spacing: 8
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: String(unusedMediaCard.modelData.displayLabel || "Media") +
-                                          " · " + String(unusedMediaCard.modelData.reason || "Not used")
-                                    color: theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                                    elide: Text.ElideNone
-                                }
-                                StatusChip {
-                                    compact: true
-                                    tone: Boolean(unusedMediaCard.modelData.offline) ? "error" : "warning"
-                                    text: Boolean(unusedMediaCard.modelData.offline) ? "Offline" : "Unused"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            onLoaded: carouselMediaUsageDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselVideoPreviewDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
+        readonly property var player: contentItem.item ? contentItem.item.player : null
         objectName: "carouselVideoPreviewDialog"
         property url sourceUrl: ""
         property real trimInSeconds: 0
@@ -19684,15 +14029,17 @@ Rectangle {
         }
 
         function seekPoster() {
-            carouselVideoPreviewPlayer.pause()
-            carouselVideoPreviewPlayer.position = Math.round(posterSeconds * 1000)
+            if (!carouselVideoPreviewDialog.player) return
+            carouselVideoPreviewDialog.player.pause()
+            carouselVideoPreviewDialog.player.position = Math.round(posterSeconds * 1000)
         }
 
         function playTrimmed() {
-            const positionSeconds = carouselVideoPreviewPlayer.position / 1000
+            if (!carouselVideoPreviewDialog.player) return
+            const positionSeconds = carouselVideoPreviewDialog.player.position / 1000
             if (positionSeconds < trimInSeconds || positionSeconds >= trimOutSeconds - 0.01)
-                carouselVideoPreviewPlayer.position = Math.round(trimInSeconds * 1000)
-            carouselVideoPreviewPlayer.play()
+                carouselVideoPreviewDialog.player.position = Math.round(trimInSeconds * 1000)
+            carouselVideoPreviewDialog.player.play()
         }
 
         modal: true
@@ -19704,7 +14051,7 @@ Rectangle {
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onOpened: Qt.callLater(seekPoster)
-        onClosed: carouselVideoPreviewPlayer.stop()
+        onClosed: { if (carouselVideoPreviewDialog.player) carouselVideoPreviewDialog.player.stop() }
 
         background: Rectangle {
             radius: theme.radius12
@@ -19713,171 +14060,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            RowLayout {
-                Layout.fillWidth: true
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-
-                    Label {
-                        text: "Board video playback"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 20
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Previewing " + root.formatVideoTime(
-                                  carouselVideoPreviewDialog.trimOutSeconds -
-                                  carouselVideoPreviewDialog.trimInSeconds) +
-                              " from the active board or video layer"
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        elide: Text.ElideNone
-                    }
-                }
-
-                ActionButton {
-                    compact: true
-                    showText: false
-                    iconName: "close"
-                    tooltipText: "Close video preview"
-                    onClicked: carouselVideoPreviewDialog.close()
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselVideoPreviewDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselVideoPreviewDialog: carouselVideoPreviewDialog
+                    })
             }
-
-            Rectangle {
-                id: carouselVideoBoardFrame
-                objectName: "carouselVideoBoardPlaybackSurface"
-                Layout.alignment: Qt.AlignHCenter
-                Layout.fillHeight: true
-                Layout.preferredWidth: Math.min(parent.width, height * carouselVideoPreviewDialog.boardAspect)
-                Layout.minimumWidth: 220
-                Layout.maximumWidth: parent.width
-                radius: theme.radius8
-                color: "#000000"
-                clip: true
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.6)
-
-                VideoOutput {
-                    id: carouselVideoPreviewOutput
-                    anchors.fill: parent
-                    fillMode: VideoOutput.PreserveAspectCrop
-                }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: carouselVideoPreviewPlayer.mediaStatus === MediaPlayer.InvalidMedia ||
-                             carouselVideoPreviewDialog.sourceUrl.toString().length === 0
-                    text: "Video preview unavailable"
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 11
-                }
-            }
-
-            MediaPlayer {
-                id: carouselVideoPreviewPlayer
-                source: carouselVideoPreviewDialog.sourceUrl
-                videoOutput: carouselVideoPreviewOutput
-                audioOutput: carouselVideoPreviewAudio
-
-                onMediaStatusChanged: {
-                    if (mediaStatus === MediaPlayer.LoadedMedia ||
-                            mediaStatus === MediaPlayer.BufferedMedia)
-                        Qt.callLater(carouselVideoPreviewDialog.seekPoster)
-                }
-                onPositionChanged: {
-                    const trimInMs = Math.round(carouselVideoPreviewDialog.trimInSeconds * 1000)
-                    const trimOutMs = Math.round(carouselVideoPreviewDialog.trimOutSeconds * 1000)
-                    if (position < trimInMs - 2) {
-                        position = trimInMs
-                    } else if (position >= trimOutMs) {
-                        if (carouselVideoPreviewDialog.loopIntent) {
-                            position = trimInMs
-                            play()
-                        } else {
-                            pause()
-                            if (Math.abs(position - trimOutMs) > 2)
-                                position = trimOutMs
-                        }
-                    }
-                }
-            }
-
-            AudioOutput {
-                id: carouselVideoPreviewAudio
-                muted: carouselVideoPreviewDialog.audioPolicy === "mute"
-                volume: 1.0
-            }
-
-            ToolValueSlider {
-                id: carouselVideoPreviewScrubber
-                objectName: "carouselVideoPreviewScrubber"
-                Layout.fillWidth: true
-                label: "Video preview position"
-                valueText: root.formatVideoTime(value / 1000)
-                tooltipText: "Scrub the trimmed video preview"
-                from: carouselVideoPreviewDialog.trimInSeconds * 1000
-                to: carouselVideoPreviewDialog.trimOutSeconds * 1000
-                value: carouselVideoPreviewPlayer.position
-                onMoved: carouselVideoPreviewPlayer.position = Math.round(value)
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    Layout.fillWidth: true
-                    text: root.formatVideoTime(carouselVideoPreviewPlayer.position / 1000) +
-                          "  ·  " +
-                          (carouselVideoPreviewDialog.audioPolicy === "preserve" ? "Audio on" : "Muted") +
-                          "  ·  " +
-                          (carouselVideoPreviewDialog.loopIntent ? "Loops" : "Plays once")
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    elide: Text.ElideNone
-                }
-
-                ActionButton {
-                    compact: true
-                    text: "Poster frame"
-                    onClicked: carouselVideoPreviewDialog.seekPoster()
-                }
-
-                ActionButton {
-                    compact: true
-                    tone: "primary"
-                    iconName: carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState
-                              ? "pause" : "play"
-                    text: carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState
-                          ? "Pause" : "Play trim"
-                    onClicked: {
-                        if (carouselVideoPreviewPlayer.playbackState === MediaPlayer.PlayingState)
-                            carouselVideoPreviewPlayer.pause()
-                        else
-                            carouselVideoPreviewDialog.playTrimmed()
-                    }
-                }
-            }
+            onLoaded: carouselVideoPreviewDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselMediaAutofillDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselMediaAutofillDialog"
         modal: true
         focus: true
@@ -19896,113 +14094,22 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
-        contentItem: ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            Label {
-                Layout.fillWidth: true
-                text: "Autofill media sequence"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 20
-                font.weight: Font.DemiBold
-                elide: Text.ElideNone
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselMediaAutofillDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselMediaAutofillDialog: carouselMediaAutofillDialog
+                    })
             }
-
-            Label {
-                Layout.fillWidth: true
-                text: "Review the exact ordered source-to-slot mapping. Reorder or skip any source before one atomic apply."
-                color: theme.textMuted
-                font.family: theme.fontUi
-                font.pixelSize: 10
-                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                elide: Text.ElideNone
-            }
-
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 5
-                model: carouselDocument.mediaAutofillPlan
-
-                delegate: Rectangle {
-                    required property int index
-                    required property var modelData
-                    width: ListView.view.width
-                    height: 46
-                    radius: theme.radius6
-                    color: theme.alpha(theme.ink850, 0.8)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.35)
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 7
-                        spacing: 6
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: Number(modelData.boardIndex) < 0
-                                  ? String(modelData.displayLabel || "Media") +
-                                    "  →  Unused · no open Carousel target"
-                                  : String(modelData.displayLabel || "Media") + "  →  Board " +
-                                    Number(modelData.boardNumber || 1) + " · " + String(modelData.slot || "primary")
-                            color: Boolean(modelData.skipped) ? theme.textFaint : theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                            elide: Text.ElideNone
-                        }
-
-                        ActionButton {
-                            compact: true
-                            text: "Up"
-                            enabled: index > 0
-                            onClicked: carouselDocument.moveMediaAutofillEntry(index, index - 1)
-                        }
-                        ActionButton {
-                            compact: true
-                            text: "Down"
-                            enabled: index + 1 < carouselDocument.mediaAutofillPlan.length
-                            onClicked: carouselDocument.moveMediaAutofillEntry(index, index + 1)
-                        }
-                        FilterChip {
-                            text: "Skip"
-                            enabled: Number(modelData.boardIndex) >= 0
-                            active: Boolean(modelData.skipped)
-                            onClicked: carouselDocument.setMediaAutofillEntrySkipped(index, !Boolean(modelData.skipped))
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: carouselMediaAutofillDialog.close()
-                }
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Apply mapping"
-                    tone: "primary"
-                    enabled: carouselDocument.mediaAutofillPlan.length > 0
-                    onClicked: {
-                        if (carouselDocument.applyMediaAutofillPlan())
-                            carouselMediaAutofillDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselMediaAutofillDialog.contentCreated = true
         }
     }
 
     Dialog {
         id: carouselDesignPackageImportDialog
+        property bool contentCreated: false
+        onAboutToShow: contentItem.loadContent()
         objectName: "carouselDesignPackageImportDialog"
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -20019,184 +14126,26 @@ Rectangle {
             border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
-        contentItem: ColumnLayout {
-            spacing: 0
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 18
-                spacing: 10
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    Label {
-                        Layout.fillWidth: true
-                        text: "Import design package"
-                        color: theme.textStrong
-                        font.family: theme.fontDisplay
-                        font.pixelSize: 21
-                        font.weight: Font.Bold
-                        elide: Text.ElideNone
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: String(carouselDocument.designPackageImportPreview.name || "Design artifact")
-                              + " · "
-                              + String(carouselDocument.designPackageImportPreview.artifactType || "package")
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WordWrap
-                        elide: Text.ElideNone
-                    }
-                }
-                StatusChip {
-                    text: Boolean(carouselDocument.designPackageImportPreview.checksumValid)
-                          ? "Checksums valid" : "Checksum failed"
-                    tone: Boolean(carouselDocument.designPackageImportPreview.checksumValid)
-                          ? "success" : "danger"
-                    compact: true
-                }
+        contentItem: Loader {
+            function loadContent() {
+                if (!source.toString().length)
+                    setSource(Qt.resolvedUrl("carousel/CarouselDesignPackageImportDialogContent.qml"), {
+                        root: root, theme: theme,
+                        carouselDocument: carouselDocument, carouselDesignPackageImportDialog: carouselDesignPackageImportDialog
+                    })
             }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 1
-                color: theme.alpha(theme.lineSoft, 0.4)
-            }
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                contentWidth: availableWidth
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 9
-                    Label {
-                        Layout.fillWidth: true
-                        Layout.margins: 18
-                        text: "Package v" + Number(carouselDocument.designPackageImportPreview.packageVersion || 0)
-                              + " · " + Number(carouselDocument.designPackageImportPreview.assetCount || 0)
-                              + " manifested assets · "
-                              + Number(carouselDocument.designPackageImportPreview.embeddedAssetCount || 0)
-                              + " embedded brand assets"
-                        color: theme.textStrong
-                        font.family: theme.fontMono
-                        font.pixelSize: 9
-                        wrapMode: Text.WordWrap
-                        elide: Text.ElideNone
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 18
-                        Layout.rightMargin: 18
-                        implicitHeight: excludedMediaLabel.implicitHeight + 16
-                        radius: 8
-                        color: theme.alpha(theme.accentWarm400, 0.08)
-                        border.width: 1
-                        border.color: theme.alpha(theme.accentWarm400, 0.4)
-                        Label {
-                            id: excludedMediaLabel
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            text: Number(carouselDocument.designPackageImportPreview.excludedPrivateMediaCount || 0)
-                                  + " private project media assets were intentionally not embedded. Imported component media remains unresolved until explicitly relinked."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 10
-                            wrapMode: Text.WordWrap
-                            elide: Text.ElideNone
-                        }
-                    }
-                    Rectangle {
-                        objectName: "carouselDesignPackageConflictReview"
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 18
-                        Layout.rightMargin: 18
-                        implicitHeight: conflictReviewColumn.implicitHeight + 16
-                        radius: 8
-                        color: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
-                               ? theme.alpha(theme.warning, 0.10)
-                               : theme.alpha(theme.success, 0.08)
-                        border.width: 1
-                        border.color: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
-                                      ? theme.alpha(theme.warning, 0.5)
-                                      : theme.alpha(theme.success, 0.4)
-                        ColumnLayout {
-                            id: conflictReviewColumn
-                            anchors.fill: parent
-                            anchors.margins: 8
-                            spacing: 3
-                            Label {
-                                Layout.fillWidth: true
-                                text: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
-                                      ? "Conflict review required" : "No library conflict"
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideNone
-                            }
-                            Label {
-                                Layout.fillWidth: true
-                                text: (Boolean(carouselDocument.designPackageImportPreview.idConflict)
-                                       ? "The artifact ID already exists. " : "")
-                                      + (Boolean(carouselDocument.designPackageImportPreview.nameConflict)
-                                         ? "The artifact name already exists. " : "")
-                                      + "Keep Both creates a new identity; Replace uses the reviewed package. Nothing changes until you choose."
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                                wrapMode: Text.WordWrap
-                                elide: Text.ElideNone
-                            }
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.margins: 14
-                spacing: 7
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Cancel"
-                    onClicked: {
-                        carouselDocument.clearDesignPackageImportPreview()
-                        carouselDesignPackageImportDialog.close()
-                    }
-                }
-                ActionButton {
-                    objectName: "carouselImportPackageKeepBothButton"
-                    Layout.fillWidth: true
-                    text: "Keep Both"
-                    enabled: Boolean(carouselDocument.designPackageImportPreview.canImport)
-                    onClicked: {
-                        if (carouselDocument.applyDesignPackageImport("keep-both"))
-                            carouselDesignPackageImportDialog.close()
-                    }
-                }
-                ActionButton {
-                    objectName: "carouselImportPackageReplaceButton"
-                    Layout.fillWidth: true
-                    visible: Boolean(carouselDocument.designPackageImportPreview.hasConflict)
-                    text: "Replace"
-                    tone: "primary"
-                    enabled: Boolean(carouselDocument.designPackageImportPreview.canImport)
-                    onClicked: {
-                        if (carouselDocument.applyDesignPackageImport("replace"))
-                            carouselDesignPackageImportDialog.close()
-                    }
-                }
-            }
+            onLoaded: carouselDesignPackageImportDialog.contentCreated = true
         }
     }
 
     GalleryPickerDialog {
         id: mediaPickerDialog
+        onVisibleChanged: {
+            if (!visible)
+                mediaPickerRefreshTimer.stop()
+            else if (root.mediaPickerAssetsDirty)
+                root.requestMediaPickerRefresh()
+        }
         theme: theme
         dialogTitle: "Gallery"
         subtitle: root.mediaPickerSubtitle()

@@ -16,7 +16,7 @@ Control {
 
     readonly property string resolvedStatusText: statusText.length > 0 ? statusText : "Open Looksy Agent Studio"
     readonly property string residentAgentContract:
-        "looksy-agent-entry:v4|placement:left-rail|icon:terminal-rgb|character:agent-workspace-only|activation:full-screen-agent-studio"
+        "looksy-agent-entry:v5|placement:left-rail|icon:line-character|character:shared-activity|activation:full-screen-agent-studio"
 
     implicitWidth: 36
     implicitHeight: 36
@@ -26,10 +26,11 @@ Control {
     Accessible.name: "Open Looksy Agent Studio"
     Accessible.description: resolvedStatusText
     Accessible.onPressAction: root.activated()
-    ToolTip.visible: root.buttonHovered
-    ToolTip.delay: 350
-    ToolTip.timeout: 3200
-    ToolTip.text: "Looksy Agent · " + root.resolvedStatusText
+    AppToolTip {
+        targetItem: root
+        visible: root.buttonHovered
+        text: "Looksy Agent · " + root.resolvedStatusText
+    }
 
     Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
@@ -48,22 +49,16 @@ Control {
     }
 
     contentItem: Item {
-        AppIcon {
+        LooksyAgentCharacter {
             anchors.centerIn: parent
-            width: 18
-            height: 18
-            name: "agent-terminal"
-            color: root.buttonHovered || root.active ? theme.brandPaper : theme.textMain
-        }
-
-        LooksyMark {
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.rightMargin: 3
-            anchors.bottomMargin: 3
-            width: 9
-            height: 9
-            framed: false
+            width: 22
+            height: 22
+            glyphOnly: true
+            animated: root.active
+            mode: root.active ? "scan" : "idle"
+            lineColor: root.buttonHovered || root.active ? theme.brandPaper : theme.textMain
+            accentColor: theme.opticalLight
+            Accessible.ignored: true
         }
 
         HoverHandler {

@@ -20,11 +20,29 @@ including client deliverables, on computers that purchaser owns or controls.
 Each additional user needs a separate license. Keep your receipt as proof of
 purchase. A support payment alone does not purchase this license.
 
-The purchased major version may continue to be used without a subscription or
-periodic online activation. Maintenance updates released for that major version
-are included. Future major versions are separate purchases unless your order
-expressly includes them. This does not promise future features, a particular
-update schedule, or indefinite support for operating systems or hardware.
+For new managed-license purchases, checkout identifies either a one-time license
+for the purchased major version or a subscription. A one-time license does not
+require a recurring purchase; maintenance updates for its purchased major version
+are included. A subscription permits the features and versions identified by its
+plan while access remains active. Future major versions for a one-time license
+are separate purchases unless the order expressly includes them.
+
+Managed access requires license-key activation and periodic online verification.
+The default limit is two active installations and up to seven days of verified
+offline access; the applicable limits and renewal terms must be shown before
+checkout. When verified access expires, new edits and new assistant operations
+are unavailable, while viewing, saving, and exporting existing work remain
+available. Refunds, revoked installations, and disabled licenses can remove
+editing access on the next verification; an already issued offline lease remains
+bounded by its signed expiry. Subscription cancellation retains access through
+the provider's verified paid-through date unless the purchase is refunded or
+otherwise disabled. No customer documents are deleted because access ends.
+
+Previously granted receipt-only licenses retain their original rights, including
+use of the purchased major version without a subscription or periodic activation.
+They are not silently converted to managed licenses or subscriptions. This does
+not promise future features, a particular update schedule, or indefinite support
+for operating systems or hardware.
 
 Restrictions and third parties
 

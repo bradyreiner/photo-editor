@@ -26,27 +26,34 @@ Rectangle {
 
     Theme { id: theme }
 
-    radius: theme.radius10
-    color: theme.alpha(theme.glassBase, 0.68)
-    border.width: 1
-    border.color: theme.alpha(root.accent, 0.38)
+    radius: theme.radiusControl
+    color: theme.ink900
+    border.width: theme.hairlineWidth
+    border.color: theme.alpha(theme.lineSoft, 0.72)
 
     implicitWidth: contentRow.implicitWidth + 16
-    implicitHeight: 30
+    implicitHeight: Math.max(theme.controlHeightDense, contentRow.implicitHeight + theme.space8)
 
     RowLayout {
         id: contentRow
         anchors.fill: parent
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 8
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        spacing: theme.gapDense
 
-        Rectangle {
-            implicitWidth: 6
-            implicitHeight: 6
-            radius: width / 2
+        OpticalActivityIndicator {
+            visible: !root.retryable && root.progressValue < 1
+            active: visible
             color: root.accent
-            opacity: 0.9
+            progress: root.progressValue
+        }
+
+        AppIcon {
+            visible: root.retryable || root.progressValue >= 1
+            name: root.retryable ? "error" : "check"
+            color: root.retryable ? theme.error : theme.success
+            Layout.preferredWidth: theme.scaled(16)
+            Layout.preferredHeight: theme.scaled(16)
         }
 
         Label {
@@ -54,7 +61,7 @@ Rectangle {
             text: root.summaryText
             color: theme.textStrong
             font.family: theme.fontUi
-            font.pixelSize: 10
+            font.pixelSize: theme.typeControl
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8
             elide: Text.ElideNone
@@ -62,6 +69,7 @@ Rectangle {
         }
 
         ProgressStrip {
+            visible: !root.retryable
             Layout.preferredWidth: 54
             Layout.preferredHeight: 3
             progress: root.progressValue
@@ -73,6 +81,7 @@ Rectangle {
             objectName: "activityCancelButton"
             visible: root.cancelable || root.retryable
             text: root.retryable ? "Retry" : "Cancel"
+            iconName: root.retryable ? "retry" : "close"
             compact: true
             embedded: true
             accent: root.accent

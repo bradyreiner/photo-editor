@@ -13,18 +13,24 @@ namespace photo_editor::desktop {
 
 [[nodiscard]] inline bool canonical_working_surface_request_is_eligible(
     const RenderRequest& request) {
-  // Scopes may materialize the completed working surface. Only the zero-readback
-  // display suffix requires them to be hidden; color-stage fusion does not.
+  // CPU-only consumers still use the existing materialization route. Scopes can
+  // sample a retained working surface without copying the complete image.
   return request.use_in_memory_preview && !request.require_cpu_preview_image &&
          !request.full_resolution && request.tile_size <= 0 &&
-         !request.compare_mode && !request.generate_proof_gamut_warning_mask &&
+         (!request.compare_mode || request.require_cpu_display_image) &&
+         !request.generate_proof_gamut_warning_mask &&
          request.canonical_render_plan.has_value();
 }
 
 [[nodiscard]] inline bool canonical_native_surface_request_is_eligible(
     const RenderRequest& request) {
-  return canonical_working_surface_request_is_eligible(request) &&
-         !request.scopes_visible;
+  if (!canonical_working_surface_request_is_eligible(request)) return false;
+  if (!request.scopes_visible) return true;
+  if (!request.canonical_scope_plan.has_value() || request.canonical_scope_plan->stages.empty()) return false;
+  using photo_editor::pipeline::RenderStageKind;
+  const auto stop = request.canonical_scope_plan->stages.back().kind;
+  return stop == RenderStageKind::CameraCharacterization || stop == RenderStageKind::Geometry ||
+         stop == RenderStageKind::PhotographicOutput || stop == RenderStageKind::Publish;
 }
 
 [[nodiscard]] inline bool canonical_native_suffix_is_eligible(

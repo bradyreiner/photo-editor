@@ -52,6 +52,7 @@ class PhotoTextDocumentStyle : public QObject {
     result.setUnderline(decoded->underline);
     result.setLetterSpacing(QFont::AbsoluteSpacing, decoded->tracking);
     result.setHintingPreference(QFont::PreferNoHinting);
+    apply_photo_text_variable_axes(result, *decoded);
     return result;
   }
   void setDocument(QQuickTextDocument* value) {
@@ -92,6 +93,13 @@ class PhotoTextDocumentStyle : public QObject {
     const auto height_type = decoded ? QTextBlockFormat::FixedHeight : QTextBlockFormat::SingleHeight;
     QTextCursor transaction(text);
     transaction.joinPreviousEditBlock();
+    QTextCharFormat decoration;
+    decoration.setTextOutline(decoded && decoded->stroke_width > 0
+        ? QPen(decoded->stroke_color, decoded->stroke_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)
+        : QPen(Qt::NoPen));
+    QTextCursor characters(text);
+    characters.select(QTextCursor::Document);
+    characters.mergeCharFormat(decoration);
     for (auto block = text->begin(); block.isValid(); block = block.next()) {
       auto format = block.blockFormat();
       const auto spacing = decoded && block.next().isValid() ? decoded->paragraph_spacing : 0;

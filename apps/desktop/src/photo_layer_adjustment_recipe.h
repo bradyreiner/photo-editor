@@ -10,6 +10,7 @@ namespace photo_editor::desktop {
 [[nodiscard]] QString layer_adjustment_recipe_schema_contract();
 [[nodiscard]] QString layer_adjustment_recipe_compatibility_contract();
 [[nodiscard]] QVariantMap photo_layer_adjustment_recipe(const QVariantMap& layer);
+[[nodiscard]] bool photo_layer_supports_adjustment_recipe(const QVariantMap& layer);
 bool replace_photo_layer_adjustment_recipe(
     QVariantMap* layer,
     const QVariantMap& recipe);

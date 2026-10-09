@@ -21,6 +21,9 @@ inline constexpr auto kRunDirectoryEnv = "PHOTO_EDITOR_OBSERVABILITY_RUN_DIR";
 
 bool enabled();
 void initialize();
+// Wait for records already admitted to the writer. Returns false on file I/O
+// failure. This drains QFile buffers, preserving the existing non-fsync contract.
+bool flush();
 QString sessionId();
 QString logLevel();
 QString runDirectory();

@@ -300,6 +300,110 @@ int main() {
         "source-area policy must participate in stage identity and typed descriptors");
   }
 
+  auto text_transform_request = request_fixture();
+  text_transform_request.plan.plan_cache_key = "plan:text-position-before";
+  text_transform_request.plan.stages = {
+      RenderStagePlan{.kind = RenderStageKind::Decode,
+                      .cache_identity = "decode:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::CameraCharacterization,
+                      .cache_identity = "camera:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::SceneAdjustments,
+                      .cache_identity = "scene:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::Tone,
+                      .cache_identity = "tone:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::Curves,
+                      .cache_identity = "curves:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::Look,
+                      .cache_identity = "look:text-source"},
+      RenderStagePlan{.kind = RenderStageKind::Layers,
+                      .cache_identity = "layers:text-position-before"},
+      RenderStagePlan{.kind = RenderStageKind::Detail,
+                      .cache_identity = "detail:text-position-before"},
+      RenderStagePlan{.kind = RenderStageKind::Geometry,
+                      .cache_identity = "geometry:text-position-before"},
+      RenderStagePlan{.kind = RenderStageKind::PhotographicOutput,
+                      .cache_identity = "output:text-position-before"},
+      RenderStagePlan{.kind = RenderStageKind::DeviceTransform,
+                      .cache_identity = "device:text-position-before"},
+      RenderStagePlan{.kind = RenderStageKind::Publish,
+                      .cache_identity = "publish:text-position-before"},
+  };
+  constexpr auto kLayersStageIndex = std::size_t{6};
+  text_transform_request.cache_write_stage_index_exclusive_limit =
+      kLayersStageIndex;
+  auto moved_text_transform_request = text_transform_request;
+  moved_text_transform_request.plan.plan_cache_key =
+      "plan:text-position-after";
+  moved_text_transform_request.plan.stages[6].cache_identity =
+      "layers:text-position-after";
+  moved_text_transform_request.plan.stages[7].cache_identity =
+      "detail:text-position-after";
+  moved_text_transform_request.plan.stages[8].cache_identity =
+      "geometry:text-position-after";
+  moved_text_transform_request.plan.stages[9].cache_identity =
+      "output:text-position-after";
+  moved_text_transform_request.plan.stages[10].cache_identity =
+      "device:text-position-after";
+  moved_text_transform_request.plan.stages[11].cache_identity =
+      "publish:text-position-after";
+
+  RenderExecutor text_transform_executor(1024);
+  auto text_transform_callback_count = 0;
+  const auto text_transform_callback =
+      [&](const RenderStageInvocation& invocation,
+          std::optional<RenderSurface> input) {
+        ++text_transform_callback_count;
+        auto pixels = input.has_value()
+                          ? std::move(input->pixels)
+                          : std::vector<ColorPixel>{
+                                ColorPixel{0.2F, 0.4F, 0.6F, 1.0F},
+                                ColorPixel{0.6F, 0.4F, 0.2F, 1.0F}};
+        return RenderStageExecution{
+            .output = RenderSurface{
+                .descriptor = invocation.expected_output,
+                .pixels = std::move(pixels),
+                .identity = "surface:" + invocation.stage_cache_key,
+            },
+            .backend = "cpu-reference",
+        };
+      };
+  const auto before_transform = text_transform_executor.execute(
+      text_transform_request, text_transform_callback);
+  if (!before_transform.ok() ||
+      text_transform_callback_count !=
+          static_cast<int>(text_transform_request.plan.stages.size()) ||
+      text_transform_executor.cache_entries() != kLayersStageIndex ||
+      std::any_of(
+          before_transform.completed_stages.cbegin() +
+              static_cast<std::ptrdiff_t>(kLayersStageIndex),
+          before_transform.completed_stages.cend(),
+          [](const auto& stage) { return stage.cache_hit; })) {
+    return fail(
+        "exclusive stage limit should cache only the pre-Layers prefix");
+  }
+
+  text_transform_callback_count = 0;
+  const auto after_transform = text_transform_executor.execute(
+      moved_text_transform_request, text_transform_callback);
+  if (!after_transform.ok() ||
+      text_transform_callback_count !=
+          static_cast<int>(moved_text_transform_request.plan.stages.size() -
+                           kLayersStageIndex) ||
+      after_transform.plan_cache_key == before_transform.plan_cache_key ||
+      text_transform_executor.cache_entries() != kLayersStageIndex) {
+    return fail(
+        "text movement should reuse only unchanged prefix stages without caching Layers or its suffix");
+  }
+  for (auto index = std::size_t{0};
+       index < moved_text_transform_request.plan.stages.size(); ++index) {
+    const auto expected_cache_hit = index < kLayersStageIndex;
+    if (after_transform.completed_stages[index].cache_hit !=
+        expected_cache_hit) {
+      return fail(
+          "text movement should hit every unchanged pre-Layers stage and miss Layers onward");
+    }
+  }
+
   auto cancelled_request = request;
   cancelled_request.cancelled = []() { return true; };
   const auto cancelled = executor.execute(cancelled_request, callback);

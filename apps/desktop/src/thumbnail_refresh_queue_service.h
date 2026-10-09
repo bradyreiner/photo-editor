@@ -36,6 +36,7 @@ struct ThumbnailRefreshQueueRequest final {
   QVariantList photo_layers;
   QVariantList mask_stack;
   QVariantList mask_sets;
+  int photo_layer_revision = -1;
   bool mask_thumbnail_dirty = false;
   bool photo_layer_thumbnail_dirty = false;
   std::shared_ptr<std::atomic_bool> cancellation;
@@ -72,7 +73,7 @@ struct ThumbnailRefreshQueueRequestFacts final {
   int generation = 0;
   int edit_intent_revision = 0;
   int mask_revision = 0;
-  int photo_layer_revision = 0;
+  int photo_layer_revision = -1;
   bool mask_thumbnail_dirty = false;
   bool photo_layer_thumbnail_dirty = false;
   std::shared_ptr<std::atomic_bool> cancellation;
@@ -299,10 +300,18 @@ QImage scaled_square_thumbnail_image(QImage image, int edge);
 QImage scaled_layer_thumbnail_image(QImage image);
 QString rendered_photo_layer_thumbnail_source(const QVariantMap& layer);
 QString photo_layer_thumbnail_kind(const QVariantMap& layer);
-QString non_adjustment_photo_layer_thumbnail_recipe_hash(const QVariantMap& layer);
-QString non_adjustment_photo_layer_thumbnail_entry_recipe_hash(const QVariantMap& layer);
-QString photo_layer_thumbnail_recipe_hash(const QVariantMap& layer);
-QString photo_layer_thumbnail_entry_recipe_hash(const QVariantMap& layer);
+QString non_adjustment_photo_layer_thumbnail_recipe_hash(
+    const QVariantMap& layer,
+    int photo_layer_revision = -1);
+QString non_adjustment_photo_layer_thumbnail_entry_recipe_hash(
+    const QVariantMap& layer,
+    int photo_layer_revision = -1);
+QString photo_layer_thumbnail_recipe_hash(
+    const QVariantMap& layer,
+    int photo_layer_revision = -1);
+QString photo_layer_thumbnail_entry_recipe_hash(
+    const QVariantMap& layer,
+    int photo_layer_revision = -1);
 QStringList selection_mask_set_ids_for_layer(const QVariantMap& layer);
 QStringList selection_mask_set_names_for_layer(const QVariantMap& layer);
 QString selection_mask_set_identity_signature(const QVariantMap& layer);

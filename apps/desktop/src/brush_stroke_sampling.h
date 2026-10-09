@@ -14,7 +14,8 @@ namespace photo_editor::desktop {
     double brush_size, double brush_flow, double pressure_size_response,
     double pressure_flow_response, double pressure_opacity_response,
     double brush_spacing, double brush_smoothing, bool erase,
-    double pressure = 1.0, double tilt_x = 0.0, double tilt_y = 0.0);
+    double pressure = 1.0, double tilt_x = 0.0, double tilt_y = 0.0,
+    double image_aspect = 0.0);
 
 [[nodiscard]] BrushPreviewPoint interpolated_brush_preview_point(
     const BrushPreviewPoint& start, const BrushPreviewPoint& end, double t);

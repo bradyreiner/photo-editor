@@ -4,6 +4,14 @@ Worker + D1 service, Cloudflare Access staff dashboard, Lemon Squeezy purchase
 validation, and device-bound Ed25519 desktop entitlements. No production resources
 have been created. The checked-in configuration intentionally cannot issue leases.
 
+For the guided account/guest/key/role setup, start with
+[Customer platform setup](../../docs/customer-platform-setup.md). `npm run
+setup:prepare` prepares staging files, `npm run setup:check` checks configuration
+and signing-key consistency without printing values, and `npm run setup:staff`
+generates audited enrollment/removal SQL for review. These commands do not deploy
+or contact a remote database. Customer sign-in remains license-key activation;
+email/password login is not implemented.
+
 ## Product policy
 
 - Both one-time licenses and subscriptions. A perpetual license covers its
@@ -24,8 +32,9 @@ have been created. The checked-in configuration intentionally cannot issue lease
   this design deliberately avoids hardware serials and invasive fingerprinting.
 
 These are implementation defaults, not published pricing or a replacement for
-rights already granted by an earlier receipt-only license. Before enabling the
-managed-license build for sale, finish the policy changes listed below.
+rights already granted by an earlier receipt-only license. Revised LICENSE and
+website policies distinguish managed purchases and preserve earlier rights;
+commercial approval remains false until operator review and approval.
 
 ## Local verification
 
@@ -56,15 +65,15 @@ port 8788; it is only a visual fixture and never an authentication fallback.
 
    ```json
    {
-     "101": {"productId":"10","plan":"studio","mode":"perpetual","major":1,"features":["editor","agent"],"deviceLimit":2},
-     "102": {"productId":"11","plan":"studio-monthly","mode":"subscription","major":1,"features":["editor","agent"],"deviceLimit":2}
+     "101": {"productId":"10","plan":"studio","mode":"perpetual","major":0,"features":["editor","agent"],"deviceLimit":2},
+     "102": {"productId":"11","plan":"studio-monthly","mode":"subscription","major":0,"features":["editor","agent"],"deviceLimit":2}
    }
    ```
 
    Enable license-key generation and key delivery for both provider products.
    Set `ALLOW_TEST_PURCHASES=true` only in staging. The production environment
    must have separate database, keys, secrets and store mappings, with this false.
-5. Apply `migrations/0001_customers.sql` with `wrangler d1 migrations apply` against
+5. Apply all files in `migrations/` with `wrangler d1 migrations apply` against
    the intended environment. These tables must never be added to a local photo
    catalog. The only schema in this service is hosted customer operations.
 6. Create an Access application for `/admin*`, enforce MFA, and set its exact
@@ -81,14 +90,18 @@ port 8788; it is only a visual fixture and never an authentication fallback.
    until the purchase, cancellation, refund and recovery checks pass.
 
 Canonical state is fetched from the provider, not trusted from event attributes.
-Duplicates are deduplicated by digest. Failed receipts retry hourly, with a cap
-of 20 per invocation; 20 stale licenses are reconciled per invocation. At larger
-volumes replace this bounded polling with a queue and monitor backlog age.
+Duplicates are deduplicated by digest. Failed receipts persist attempts and a
+retry deadline, with exponential backoff and a maximum of eight failed attempts.
+The hourly job processes at most 20 due receipts and 20 stale licenses. Exhausted
+receipts need an audited manual retry. At larger volumes use a queue and monitor backlog age.
 
 ## Desktop build
 
 Configure `LOOKSY_CUSTOMER_API_URL`, `LOOKSY_ENTITLEMENT_PUBLIC_KEY` (base64 raw
-32-byte public key), and `LOOKSY_ENTITLEMENT_KEY_ID`. OpenSSL Crypto is required.
+32-byte public key), `LOOKSY_ENTITLEMENT_KEY_ID`, and
+`LOOKSY_CUSTOMER_POLICY_MAJOR` matching the desktop major in `VERSION`. Setup
+checks every perpetual variant against that major; explicit `--app-version X.Y.Z`
+prepares a separate future release. OpenSSL Crypto is required.
 An empty API URL deliberately retains the existing receipt-only build. Invalid
 managed configuration cannot unlock editing. Never ship a private signing key.
 
@@ -98,6 +111,23 @@ preferences. A failed activation of a different key preserves valid existing
 access; a confirmed refresh revocation removes it. An outage never extends the
 original signed expiry. Customer IDs come from the provider; raw license keys
 are transient request fields and are not stored in D1 or diagnostic logs.
+
+The Account panel lists devices and confirms revoke/deactivate actions. Purchase
+recovery verifies the key, creates a fresh random bearer, retains the old
+installation as revoked, and respects the paid device cap. The desktop replaces
+secure credentials and cached access only after verifying the returned signed
+lease. Recovery does not restart a trial. Set `LOOKSY_PURCHASE_URL`,
+`LOOKSY_SUBSCRIPTION_PURCHASE_URL` and `LOOKSY_BILLING_PORTAL_URL` for reviewed
+HTTPS checkout and hosted subscription management links. Customers complete
+payment changes and cancellation in the hosted portal.
+
+Rotation supports up to four additional compiled public keys in
+`LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON` (`{"previous-kid":"base64-public-key"}`).
+Ship an overlap client trusting the next public key before switching the Worker
+signer, verify both key IDs in staging, then retire the old key in a later client.
+Old clients that never received the next public key cannot verify its leases.
+Setup input `trustedKeys` writes public overlap metadata and the CMake cache;
+the Worker still signs with one selected `SIGNING_KEY_ID`/private key.
 
 The admission inventory is `release/customer-edit-admission.json`; run
 `scripts/check-customer-edit-admission.py` when adding QML APIs. Review every
@@ -160,29 +190,65 @@ last-seen/version is refreshed at startup and every six hours, not continuous
 user activity tracking. Staff access and actions need periodic review.
 
 Use D1 Time Travel and an encrypted, access-controlled export for disaster
-recovery. Restore into staging, compare customer/license/device counts, replay
-billing state and staff revocations, then test leases before switching traffic.
+recovery. Create private artifacts outside this checkout:
+
+```sh
+# Use the real reviewed config; select local or remote explicitly.
+npm run database:recovery -- backup --config wrangler.staging.local.jsonc --directory /private/backups/looksy-snapshot-new --remote
+npm run database:recovery -- rehearse --backup /private/backups/looksy-snapshot-new --directory /private/backups/looksy-restore-new
+```
+
+Backup is read-only and checks SQLite integrity/foreign keys. Its manifest records
+SHA-256 plus counts and content fingerprints for every table. Rehearsal checks
+the checksum before importing into fresh isolated local D1 state and comparing
+every restored row. It never restores remote data or overwrites existing artifacts.
+Keep artifacts encrypted and apply a reviewed retention schedule. Before any
+production recovery, replay current billing and staff/device revocations and test
+leases in staging before switching traffic.
 Restoring an older database must not silently undo refunds or support blocks.
-Back up signing keys separately. The current app pins one key: rotation requires
-an app update/overlap migration; losing the key is not fixed by changing a server
-environment variable. Plan this before issuing long-lived public clients.
+Back up signing keys separately. Losing a key cannot be fixed just by changing a
+server environment variable; use the compiled overlap procedure above.
 
 Rate-limit buckets expire after two minutes; successful webhook receipts after
 90 days. Customer/license/device and staff audit records are retained until an
-operator processes a verified retention/deletion request. No automatic customer
-purge or legally determined retention schedule is configured. For a request,
-verify purchase ownership, export only that customer's records, revoke devices,
-and coordinate provider/Sentry deletion subject to required transaction records.
-Use a reviewed database transaction and preserve the deletion audit separately.
+operator processes a verified retention/deletion request. No legally determined
+retention schedule is configured. Staff may export a scoped customer record;
+admin-only anonymization removes personal fields, revokes installations and retains a
+tombstone preventing reconciliation from repopulating email. Transaction IDs,
+blocks, revocations and audit history remain for recovery/accounting needs. This
+is anonymization, not deletion of every transaction. Verify ownership first,
+review the audit reason for personal data and coordinate provider/Sentry deletion
+separately. Backups and historical audit reasons need separate retention handling.
+
+## Operational alerts
+
+`GET /admin/api/operations` requires verified Access identity and an enrolled staff
+role. It reports counts, retry/backlog age and stale license reconciliation. Run
+`npm run operations:check -- response.json` on a private response file, or
+`npm run operations:monitor` with `LOOKSY_OPERATIONS_ORIGIN`,
+`LOOKSY_ACCESS_CLIENT_ID` and `LOOKSY_ACCESS_CLIENT_SECRET` from a secret manager.
+The monitor refuses redirects, bounds responses and prints only alert codes.
+Exit 1 means operational alerts; exit 2 means invalid input/auth/service failure.
+
+The `customer-operations.yml` workflow polls hourly after configuring the origin
+repository variable and `LOOKSY_MONITOR_ACCESS_CLIENT_ID`/
+`LOOKSY_MONITOR_ACCESS_CLIENT_SECRET` secrets. Create a dedicated Access service
+token and a Service Auth policy on the same Access application as human staff.
+Enroll `service:<CF-Access-Client-Id>` as support using the staff SQL tool.
+The Worker verifies the signed `common_name` claim and confines service identities
+to GET `/admin/api/operations`. Human identities keep their JWT `sub` and MFA.
+See [Access application token claims](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/application-token/).
+Enable repository
+failure notifications. No remote monitor/token is configured by these changes.
+Service health does not establish backup freshness: schedule encrypted backups
+separately and review restore reports.
 
 ## Remaining launch gates
 
 - Real products, prices, key-email delivery and both checkout journeys.
-- New terms/privacy/refund disclosures for activation, recurring billing,
-  offline grace, device limits, diagnostic processor/retention and cancellation.
-  `LICENSE` and current terms still describe the earlier receipt-only perpetual
-  offer: revise them for new purchases and explicitly preserve existing rights.
-  Do not approve commerce while this discrepancy remains.
+- Operator approval of the revised terms/privacy/refund disclosures for activation,
+  recurring billing, offline grace, devices, retention and cancellation. Earlier
+  receipt-only rights are preserved; commercial approval remains false.
 - A migration/entitlement path for any existing receipt-only customers.
 - Live Access/MFA, billing webhooks and outages, signed desktop activation,
   device recovery, and data deletion/restore exercises.

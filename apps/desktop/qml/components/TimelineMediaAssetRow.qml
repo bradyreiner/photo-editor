@@ -30,9 +30,13 @@ Rectangle {
     property bool binVisible: true
     property bool smartCollectionVisible: true
     property bool selected: false
+    property int trailingScrollbarWidth: 0
     property var mediaMetadata: ({})
     readonly property string libraryType: "timeline-media"
     readonly property string titleText: cameraLabel.length > 0 ? cameraLabel : assetId
+    readonly property int rowPadding: theme.scaled(theme.densityComfortable ? 8 : theme.densityCompact ? 4 : 6)
+    readonly property int rowBaselineHeight: theme.scaled(theme.densityComfortable ? 88 : theme.densityCompact ? 68 : 78)
+    readonly property int thumbnailHeight: theme.scaled(theme.densityComfortable ? 58 : theme.densityCompact ? 44 : 52)
     readonly property var catalogSearchMetadata: ({
         "cameraLabel": cameraLabel,
         "filePath": filePath,
@@ -59,12 +63,12 @@ Rectangle {
     }
     readonly property bool matchesSearch: mediaSearchResult.matches === true
     readonly property int previewColumnWidth: 84
-    readonly property int actionZoneWidth: 92
+    readonly property int actionMenuWidth: theme.scaled(34)
     readonly property bool hoverScrubActive: mediaType === "video" && durationSeconds > 0
                                                && previewDragArea.containsMouse
-    readonly property string timelineMediaAssetRowContract: "timeline-media-asset-row:v4|preview:true|source-insert-overwrite:true|selection:batch-ready|rating-favorite-reject-color-tags:contextual|search:controller-indexed-with-match-scope|hover-scrub:debounced-bounded-low-resolution-cache|filmstrip-density:5-9-15|keyboard:0-5-f-x|hover:true|readable-text:true|no-elide:true"
+    readonly property string timelineMediaAssetRowContract: "timeline-media-asset-row:v5|preview:true|row-actions:more-menu|selection:click|double-click:preview-source|rating-favorite-reject-color-tags:contextual|search:controller-indexed-with-match-scope|hover-scrub:debounced-bounded-low-resolution-cache|filmstrip-density:5-9-15|keyboard:0-5-f-x|hover:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-wrap:true|metadata-wrap:true|tooltip-full:true|accessibility-full:true"
-    readonly property string rowAnatomyContract: "row-anatomy:v1|preview-zone:fixed-84|content:title-metadata-wrap|action-zone:fixed-92|actions:source-insert-overwrite|hover:neutral|focus:ring"
+    readonly property string rowAnatomyContract: "row-anatomy:v2|preview-zone:fixed-84|content:title-metadata-wrap|action-zone:more-menu-34|actions:source-insert-overwrite|selection:left-edge|hover:neutral|focus:ring"
 
     signal sourceRequested(string assetId, string filePath, string titleText, string thumbnailSource)
     signal insertRequested(string assetId, string filePath, string titleText, string thumbnailSource)
@@ -90,22 +94,26 @@ Rectangle {
 
     visible: (mediaType === "video" || mediaType === "photo" || mediaType === "audio")
              && matchesSearch && binVisible && smartCollectionVisible
-    width: ListView.view ? ListView.view.width : 360
-    implicitHeight: Math.max(112, mediaRow.implicitHeight + theme.space16)
+    width: ListView.view ? Math.max(0, ListView.view.width - trailingScrollbarWidth) : 360
+    implicitHeight: Math.max(rowBaselineHeight, mediaRow.implicitHeight + rowPadding * 2)
     height: visible ? implicitHeight : 0
-    radius: theme.radius8
-    color: selected ? theme.alpha(theme.accentCool500, 0.13)
-           : rowHover.hovered || activeFocus
-           ? theme.alpha(theme.ink850, 0.96)
-           : theme.alpha(theme.ink900, 0.9)
-    border.width: activeFocus ? theme.focusBorderWidth : 0
+    radius: theme.scaled(3)
+    color: selected ? theme.alpha(theme.interactionFill, 0.52)
+           : rowHover.hovered ? theme.alpha(theme.ink750, 0.28)
+           : activeFocus ? theme.alpha(theme.ink800, 0.36)
+           : "transparent"
+    border.width: activeFocus ? theme.focusBorderWidth : selected ? theme.hairlineWidth : 0
     border.color: activeFocus
                   ? theme.alpha(theme.focusRing, 0.9)
+                  : selected ? theme.alpha(theme.accentCool400, 0.3)
                   : "transparent"
     clip: true
     activeFocusOnTab: true
     Accessible.name: titleText
-    Accessible.description: "Video clip, " + durationText
+    Accessible.description: (mediaType === "audio" ? "Audio" : mediaType === "photo" ? "Photo" : "Video")
+                            + (durationText.length > 0 ? ", " + durationText : "")
+                            + ". Click to select; double-click or press Return to preview in Source. "
+                            + "Use More for timeline actions."
     Accessible.role: Accessible.ListItem
     Keys.onReturnPressed: root.sourceRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
     Keys.onEnterPressed: root.sourceRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
@@ -132,7 +140,18 @@ Rectangle {
     ToolTip.timeout: 3600
     ToolTip.text: titleText
 
-    HoverHandler { id: rowHover }
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        gesturePolicy: TapHandler.DragThreshold
+        onTapped: root.selectionRequested(root.assetId, Qt.NoModifier)
+        onDoubleTapped: root.sourceRequested(root.assetId, root.filePath,
+                                             root.titleText, root.thumbnailSource)
+    }
+
+    HoverHandler {
+        id: rowHover
+        cursorShape: Qt.PointingHandCursor
+    }
 
     Connections {
         target: root.documentController
@@ -171,6 +190,17 @@ Rectangle {
         color: theme.accentCool400
     }
 
+    Rectangle {
+        visible: !root.selected && !rowHover.hovered && !root.activeFocus
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: root.rowPadding
+        anchors.rightMargin: root.rowPadding
+        height: theme.hairlineWidth
+        color: theme.alpha(theme.ink700, 0.56)
+    }
+
     Item {
         id: mediaDragProxy
         width: 1
@@ -185,15 +215,17 @@ Rectangle {
     RowLayout {
         id: mediaRow
         anchors.fill: parent
-        anchors.margins: theme.space8
-        spacing: theme.space8
+        anchors.margins: root.rowPadding
+        spacing: theme.scaled(theme.densityComfortable ? 8 : theme.densityCompact ? 5 : 6)
 
         Rectangle {
             objectName: "timelineMediaAssetThumbnail"
             Layout.preferredWidth: root.previewColumnWidth
             Layout.minimumWidth: root.previewColumnWidth
-            Layout.preferredHeight: 64
-            radius: theme.radius6
+            Layout.preferredHeight: root.thumbnailHeight
+            Layout.minimumHeight: root.thumbnailHeight
+            Layout.maximumHeight: root.thumbnailHeight
+            radius: theme.radius4
             color: theme.mediaCanvas
             clip: true
 
@@ -302,11 +334,6 @@ Rectangle {
             Layout.fillWidth: true
             spacing: theme.space3
 
-            TapHandler {
-                acceptedButtons: Qt.LeftButton
-                onTapped: root.selectionRequested(root.assetId, Qt.NoModifier)
-            }
-
             Label {
                 id: titleLabel
                 Layout.fillWidth: true
@@ -323,9 +350,18 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
 
+                MediaTypeIcon {
+                    mediaType: root.mediaType
+                    color: theme.textMuted
+                    Layout.preferredWidth: theme.scaled(14)
+                    Layout.preferredHeight: theme.scaled(14)
+                }
+
                 Label {
                     Layout.fillWidth: true
-                    text: "Video  •  " + root.durationText
+                    text: (root.mediaType === "audio" ? "Audio" : root.mediaType === "photo" ? "Photo"
+                          : root.mediaType === "timeline" ? "Timeline" : root.mediaType === "carousel" ? "Carousel" : "Video")
+                          + (root.durationText.length > 0 ? "  •  " + root.durationText : "")
                     color: theme.textMuted
                     font.family: theme.fontMono
                     font.pixelSize: theme.typeCaption
@@ -339,8 +375,8 @@ Rectangle {
                     text: root.online ? "Ready" : "Offline"
                     tone: root.online ? "neutral" : "error"
                     compact: true
-                    minimumReadableWidth: 48
-                    maximumReadableWidth: 58
+                    minimumReadableWidth: 58
+                    maximumReadableWidth: 72
                 }
             }
 
@@ -367,13 +403,22 @@ Rectangle {
                          || (root.mediaMetadata.tags || []).length > 0
                 spacing: theme.space4
 
-                Label {
+                RowLayout {
                     visible: Number(root.mediaMetadata.rating || 0) > 0
-                    text: "★" + String(root.mediaMetadata.rating || 0)
-                    color: theme.accentWarm300
-                    font.family: theme.fontUi
-                    font.pixelSize: theme.typeCaption
-                    font.weight: Font.DemiBold
+                    spacing: theme.space2
+                    AppIcon {
+                        name: "rating"
+                        color: theme.accentWarm300
+                        Layout.preferredWidth: theme.scaled(12)
+                        Layout.preferredHeight: theme.scaled(12)
+                    }
+                    Label {
+                        text: String(root.mediaMetadata.rating || 0)
+                        color: theme.accentWarm300
+                        font.family: theme.fontUi
+                        font.pixelSize: theme.typeCaption
+                        font.weight: Font.DemiBold
+                    }
                 }
 
                 StatusChip {
@@ -414,43 +459,36 @@ Rectangle {
             }
         }
 
-        ColumnLayout {
-            Layout.minimumWidth: root.actionZoneWidth
-            Layout.preferredWidth: root.actionZoneWidth
+        MenuButton {
+            objectName: "timelineMediaAssetActionsMenu"
+            Layout.preferredWidth: root.actionMenuWidth
+            Layout.minimumWidth: root.actionMenuWidth
+            Layout.preferredHeight: theme.controlHeightDense
             Layout.alignment: Qt.AlignVCenter
-            spacing: theme.space4
-
-            ActionButton {
-                text: "Source"
-                compact: true
-                minimumReadableWidth: root.actionZoneWidth
-                enabled: root.online
-                disabledReason: "Relink this media before loading it into Source."
-                tooltipText: "Load this clip into the source monitor."
-                Layout.fillWidth: true
-                onClicked: root.sourceRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
-            }
-
-            ActionButton {
-                text: "Insert"
-                compact: true
-                minimumReadableWidth: root.actionZoneWidth
-                enabled: root.online
-                disabledReason: "Relink this media before inserting it."
-                tooltipText: "Insert at playhead."
-                Layout.fillWidth: true
-                onClicked: root.insertRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
-            }
-
-            ActionButton {
-                text: "Overwrite"
-                compact: true
-                minimumReadableWidth: root.actionZoneWidth
-                enabled: root.online
-                disabledReason: "Relink this media before overwriting."
-                tooltipText: "Overwrite at playhead."
-                Layout.fillWidth: true
-                onClicked: root.overwriteRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
+            text: "More"
+            iconName: "menu"
+            showText: false
+            compact: true
+            primaryOpensMenu: true
+            secondaryActionMenu: true
+            accessibleName: "Actions for " + root.titleText
+            menuTooltipText: "Media actions for " + root.titleText
+            tooltipText: "Preview, add, or overwrite this media."
+            enabled: root.online
+            disabledReason: "Relink this media before using media actions."
+            menuItems: [
+                {"key": "preview", "label": "Preview in Source", "iconName": "play"},
+                {"key": "insert", "label": "Add to Timeline at Playhead", "iconName": "plus"},
+                {"key": "overwrite", "label": "Overwrite at Playhead", "iconName": "edit", "danger": true}
+            ]
+            menuWidth: 238
+            onMenuItemTriggered: function(key) {
+                if (key === "preview")
+                    root.sourceRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
+                else if (key === "insert")
+                    root.insertRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
+                else if (key === "overwrite")
+                    root.overwriteRequested(root.assetId, root.filePath, root.titleText, root.thumbnailSource)
             }
         }
     }

@@ -2,6 +2,7 @@
 #include "photo_editor/pipeline/local_mask_sampling.h"
 
 #include "color_blur_runtime.h"
+#include "color_adjustment_scheduler.h"
 #include "color_math_runtime.h"
 #include "color_spatial_runtime.h"
 
@@ -294,10 +295,11 @@ void apply_mask_edge_cleanup(
   for (std::size_t i = 0, j = point_count - 1; i < point_count; j = i++) {
     const auto& pi = mask.polygon_points[i];
     const auto& pj = mask.polygon_points[j];
+    // The straddle test excludes horizontal edges, so the signed delta is nonzero.
     const auto intersects =
         ((pi.y > normalized_y) != (pj.y > normalized_y)) &&
         (normalized_x <
-         ((pj.x - pi.x) * (normalized_y - pi.y) / std::max(1e-9, pj.y - pi.y)) + pi.x);
+         ((pj.x - pi.x) * (normalized_y - pi.y) / (pj.y - pi.y)) + pi.x);
     if (intersects) {
       inside = !inside;
     }
@@ -3164,9 +3166,10 @@ std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
   const auto neutral_pixel = ColorPixel{0.5F, 0.5F, 0.5F, 1.0F};
 
   std::vector<std::uint8_t> alpha(pixel_count, 0);
-  for (int y = 0; y < safe_height; ++y) {
+  run_color_adjustment_parallel_for(safe_height, [&](int y) {
+    const auto row_offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(safe_width);
     for (int x = 0; x < safe_width; ++x) {
-      const auto index = static_cast<std::size_t>(y * safe_width + x);
+      const auto index = row_offset + static_cast<std::size_t>(x);
       const auto& pixel = has_source_pixels ? source_pixels[index] : neutral_pixel;
       const auto normalized_x =
           safe_width > 1 ? static_cast<double>(x) / static_cast<double>(safe_width - 1) : 0.5;
@@ -3182,7 +3185,7 @@ std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
                          source_context_ptr)) *
                      255.0));
     }
-  }
+  });
   return alpha;
 }
 

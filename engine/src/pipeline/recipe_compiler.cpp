@@ -652,9 +652,10 @@ RecipeCompileResult RecipeCompiler::compile(
   upstream_identity = append_stage(
       &plan,
       RenderStageKind::PhotographicOutput,
-      "photographic-output-aces2-v4",
+      "photographic-output-aces2-v6-display-text-policy",
       upstream_identity,
       stage_payload([&](std::ostream& stream) {
+        write_string(stream, "display-referred-text-suffix-v2");
         write_enum(stream, recipe.look.renderer);
         write_enum(stream, recipe.output.renderer_transition_look);
         write_enum(stream, recipe.output.rendering_target);

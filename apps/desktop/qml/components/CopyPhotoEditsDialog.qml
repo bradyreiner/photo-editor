@@ -10,6 +10,8 @@ Popup {
     property string sourcePatch: ""
     property var selectedGroups: ["tone", "color", "detail"]
     property string errorText: ""
+    property Item focusReturnItem: null
+    property Item focusFallbackItem: null
     signal copyRequested(string patch, var groups)
     readonly property var choices: [
         { key: "tone", title: "Light", detail: "Exposure, contrast, levels and curves" },
@@ -19,6 +21,34 @@ Popup {
         { key: "raw", title: "RAW", detail: "RAW processing and calibration" },
         { key: "masks", title: "Masks & Layers", detail: "Replace masks and layers, including local adjustments" }
     ]
+
+    onAboutToShow: {
+        const popupWindow = root.parent ? root.parent.Window.window : null
+        if (!root.focusReturnItem && popupWindow)
+            root.focusReturnItem = popupWindow.activeFocusItem
+    }
+
+    onOpened: {
+        const firstGroup = groupChoices.itemAt(0)
+        if (firstGroup)
+            firstGroup.forceActiveFocus(Qt.TabFocusReason)
+    }
+
+    onClosed: focusRestoreTimer.restart()
+
+    Timer {
+        id: focusRestoreTimer
+        interval: 1
+        repeat: false
+        onTriggered: {
+            if (root.focusReturnItem && root.focusReturnItem.visible && root.focusReturnItem.enabled) {
+                root.focusReturnItem.forceActiveFocus(Qt.TabFocusReason)
+            } else if (root.focusFallbackItem && root.focusFallbackItem.visible && root.focusFallbackItem.enabled) {
+                root.focusFallbackItem.forceActiveFocus(Qt.TabFocusReason)
+            }
+            root.focusReturnItem = null
+        }
+    }
 
     function toggleGroup(key) {
         const groups = selectedGroups.slice()
@@ -37,13 +67,22 @@ Popup {
     y: parent ? Math.max(16, (parent.height - height) / 2) : 0
     padding: 24
     Theme { id: theme }
-    background: Rectangle { color: theme.ink900; radius: 18; border.color: theme.lineSoft }
+    background: Rectangle {
+        color: theme.ink900
+        radius: theme.radiusPanel
+        border.color: theme.lineSoft
+        Accessible.name: qsTr("Copy Edits")
+        Accessible.description: qsTr("Choose the edit groups to copy to selected photos.")
+        Accessible.role: Accessible.Dialog
+        Accessible.ignored: false
+    }
     contentItem: ColumnLayout {
         spacing: 12
         Label {
             text: "Copy Edits"
             color: theme.textStrong
-            font.pixelSize: 22
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeDialogTitle
             font.weight: Font.DemiBold
         }
         Label {
@@ -72,19 +111,26 @@ Popup {
             }
         }
         Repeater {
+            id: groupChoices
             model: root.choices
-            CheckBox {
+            ToneCheckBox {
                 id: choice
                 required property var modelData
                 objectName: "copyPhotoEditsGroup_" + modelData.key
                 Layout.fillWidth: true
                 checked: root.selectedGroups.indexOf(modelData.key) >= 0
                 text: modelData.title
+                Accessible.name: modelData.title
+                Accessible.description: modelData.detail
+                Accessible.role: Accessible.CheckBox
+                Accessible.checked: checked
                 onClicked: root.toggleGroup(modelData.key)
                 padding: 6
                 spacing: 12
+                implicitHeight: Math.max(theme.controlHeightDense, groupCaption.implicitHeight + topPadding + bottomPadding)
                 contentItem: Column {
-                    leftPadding: choice.indicator.width + choice.spacing
+                    id: groupCaption
+                    leftPadding: 0
                     spacing: 3
                     Label { text: choice.modelData.title; color: theme.textStrong; font.weight: Font.Medium }
                     Label {

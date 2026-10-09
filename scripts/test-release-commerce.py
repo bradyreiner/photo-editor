@@ -30,10 +30,33 @@ def paid_environment():
 
 
 class CommerceTests(unittest.TestCase):
+    def test_cmake_checkout_and_rotation_configuration_rejects_unsafe_build_values(self):
+        import base64
+        source = (ROOT / "cmake/CustomerPlatform.cmake").read_text()
+        validators = source.split('option(LOOKSY_ENABLE_CRASH_REPORTING', 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "validate.cmake"
+            script.write_text('set(PROJECT_VERSION_MAJOR 0)\n' + validators)
+            def check(**values):
+                return subprocess.run(['cmake', *(f'-D{name}={value}' for name, value in values.items()),
+                                       '-P', str(script)], capture_output=True, text=True)
+            good = check(LOOKSY_CUSTOMER_POLICY_MAJOR='0', LOOKSY_PURCHASE_URL='https://checkout.test/buy/one',
+                         LOOKSY_SUBSCRIPTION_PURCHASE_URL='https://checkout.test/buy/monthly',
+                         LOOKSY_BILLING_PORTAL_URL='https://checkout.test/billing')
+            self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+            for values in ({'LOOKSY_CUSTOMER_POLICY_MAJOR': '1'},
+                           {'LOOKSY_BILLING_PORTAL_URL': 'https://user:password@checkout.test/billing'},
+                           {'LOOKSY_PURCHASE_URL': 'http://checkout.test/buy'},
+                           {'LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON': '[]'},
+                           {'LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON': json.dumps({'looksy-1': base64.b64encode(bytes(32)).decode()})}):
+                with self.subTest(values=values):
+                    self.assertNotEqual(check(**values).returncode, 0)
+
     def test_managed_release_requires_a_real_origin_and_pinned_public_key(self):
         import base64
         values = {"LOOKSY_CUSTOMER_API_URL": "https://accounts.example.test",
-                  "LOOKSY_ENTITLEMENT_PUBLIC_KEY": base64.b64encode(bytes(range(32))).decode()}
+                  "LOOKSY_ENTITLEMENT_PUBLIC_KEY": base64.b64encode(bytes(range(32))).decode(),
+                  "LOOKSY_CUSTOMER_POLICY_MAJOR": (ROOT / "VERSION").read_text().strip().split(".")[0]}
         validate_customer_build_config(values.get)
         for override in ({"LOOKSY_CUSTOMER_API_URL": ""},
                          {"LOOKSY_CUSTOMER_API_URL": "https://accounts.example.invalid"},
@@ -69,7 +92,26 @@ class CommerceTests(unittest.TestCase):
             self.config(values)
         values.update(LOOKSY_SUBSCRIPTION_PURCHASE_URL="https://fixture.lemonsqueezy.com/buy/monthly",
                       LOOKSY_SUBSCRIPTION_PRICE_LABEL="Fixture monthly price")
+        with self.assertRaisesRegex(ValueError, "LOOKSY_BILLING_PORTAL_URL"):
+            self.config(values)
+        values["LOOKSY_BILLING_PORTAL_URL"] = "https://fixture.lemonsqueezy.com/billing"
         self.assertEqual(self.config(values)["accessMode"], "paid-both")
+
+    def test_rotation_keys_fail_closed_and_policy_matches_build_major(self):
+        import base64
+        values = {"LOOKSY_CUSTOMER_API_URL": "https://accounts.example.test",
+                  "LOOKSY_ENTITLEMENT_PUBLIC_KEY": base64.b64encode(bytes(range(32))).decode(),
+                  "LOOKSY_ENTITLEMENT_KEY_ID": "active",
+                  "LOOKSY_CUSTOMER_POLICY_MAJOR": (ROOT / "VERSION").read_text().strip().split(".")[0]}
+        old_key = base64.b64encode(bytes(range(31, -1, -1))).decode()
+        validate_customer_build_config(dict(values, LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON=json.dumps({"old": old_key})).get)
+        for extra in ({"LOOKSY_CUSTOMER_POLICY_MAJOR": "999"},
+                      {"LOOKSY_CUSTOMER_POLICY_MAJOR": ""},
+                      {"LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON": "[]"},
+                      {"LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON": json.dumps({"old": "bad"})},
+                      {"LOOKSY_ENTITLEMENT_TRUSTED_KEYS_JSON": json.dumps({"active": old_key})}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                validate_customer_build_config(dict(values, **extra).get)
 
     def test_invalid_links_rejected_even_in_preview(self):
         for value in ("javascript:alert(1)", "http://example.com", "https://secret@example.com", "https://bad host/a"):

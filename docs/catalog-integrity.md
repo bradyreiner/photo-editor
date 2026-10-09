@@ -20,6 +20,8 @@ functions in `rust/crates/catalog/src/lib.rs`.
 | Drive | ID, display name, mount path, online state | Not null | Required typed values |
 | Project | name, formatted creation time, aggregated asset IDs | Not null; aggregation is always a JSON array | Array must contain only strings; malformed shape or elements are integrity errors |
 | Review state | asset ID, rating, picked, rejected, color label | Not null; migration 0013 bounds rating and makes flags exclusive | Rating must be 0-5 and picked/rejected cannot both be true |
+| Descriptive metadata | asset ID, metadata JSON, updated time | Migration 0015 owns an object-valued JSON record with a cascading asset foreign key | Bounded keywords and descriptive fields; valid ISO capture timestamps; transactional batches return applied/missing asset receipts |
+| Original capture time | `assets.capture_timestamp` | Nullable ISO timestamp added by migration 0016; legacy rows retain NULL | EXIF Original time keeps subseconds and a valid offset; unknown offset remains local time. Sort and two-second burst groups use this value when available |
 | Relink | asset ID, path | Not null | Path is decoded through `Option<String>` so a legacy null reports the asset ID |
 | Export job | all job strings, optional recipe/metadata JSON, progress, timestamps | Strings/progress/times not null; recipe and metadata optional | Typed values; progress must be 0-100 |
 | Timeline document | IDs, paths, duration, optional JSON, timestamps | Required except selected JSON; migration 0013 bounds duration | Duration must be finite and non-negative |

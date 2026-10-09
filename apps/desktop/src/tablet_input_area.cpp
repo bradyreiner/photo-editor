@@ -22,7 +22,9 @@ bool is_eraser_event(const QTabletEvent& event) {
 
 TabletInputArea::TabletInputArea(QQuickItem* parent)
     : QQuickItem(parent) {
-  setAcceptHoverEvents(true);
+  // This item handles tablet events, not mouse hover. Accepting hover here
+  // blocks the MouseArea underneath from updating its brush outline.
+  setAcceptHoverEvents(false);
 }
 
 bool TabletInputArea::event(QEvent* generic_event) {

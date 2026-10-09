@@ -1,14 +1,15 @@
 # Observability
 
-This application now writes structured diagnostics for each desktop session into a dedicated run
-directory under the app log root, but only when development observability is enabled.
+This application writes structured diagnostics for each desktop session into a dedicated run
+directory under the app log root when development observability or local diagnostics is enabled.
 
 - `logs/runs/<timestamp>-<session>/session.json`
 - `logs/runs/<timestamp>-<session>/desktop.jsonl`
 - `logs/runs/<timestamp>-<session>/<rust-helper>.jsonl`
 
-By default this is enabled for `Debug` builds and disabled for `Release`/`RelWithDebInfo` builds.
-The build toggle is `PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY`.
+`PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY` defaults on for `Debug` and off for
+`Release`/`RelWithDebInfo`. The separate `PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS` build
+toggle defaults on, including production builds. Either enables the desktop logger.
 
 The current implementation is intentionally minimal and vendor-neutral:
 
@@ -34,7 +35,8 @@ The current implementation is intentionally minimal and vendor-neutral:
   - Supported values: `auto` (default), `always`, `never`
   - `auto` colorizes local terminal output, but respects `NO_COLOR` and `TERM=dumb`.
 - `PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY`
-  - Set to `1` by the desktop app in supported dev builds so helper binaries participate in the same run.
+  - Set to `1` by the desktop app when either logging build toggle is enabled, so helper binaries
+    participate in the same run. The environment name is retained for compatibility.
 - `PHOTO_EDITOR_SESSION_ID`
   - Optional session correlation id. The desktop app generates one when not provided.
 - `PHOTO_EDITOR_OBSERVABILITY_RUN_DIR`
@@ -104,6 +106,37 @@ need the previous full-message terminal stream. Use `over_budget` when you only 
 attention for slow renders, failures, cancellations, and warnings. Repeated Qt warnings are still
 written to JSONL every time, but the terminal prints only milestone repeats so image-format noise
 does not bury performance events.
+
+## Desktop Delivery and Backpressure
+
+Routine Qt records are queued to one writer. It owns the file, prepares JSONL and console output,
+and flushes both outputs in batches of up to 64 records. Sparse routine records can wait up to
+2 ms to collect a batch. Timestamps, source context, and thread identity are captured on the
+producer. `logInfo` and `logWarning` reuse their prepared JSON object inside the desktop handler;
+Qt category filtering and the message text seen by custom handlers remain unchanged.
+
+The pending budget is 4,096 records and 8 MiB of **estimated captured data**, including the active
+batch. This is not a total process-memory limit: encoded batch buffers and Qt allocations add
+memory. One oversized record may be admitted alone. Full queues block producers until space is
+available; records are not sampled or dropped to make room.
+
+Warnings, critical errors, and Qt fatal messages bypass the coalescing wait and wait for all
+earlier admitted records plus their own file/console output. Repeated Qt warnings are still
+retained in JSONL even when console repetitions are suppressed. A file failure is reported on
+stderr, and complete subsequent batches fall back to stderr for that session.
+
+`observability::flush()` waits for records already admitted and returns false on file I/O failure.
+Use it before reading a live log as an assertion or snapshot. Desktop shutdown calls it after
+the shutdown event, and the process-exit hook drains the remaining queue and joins the worker.
+These flushes retain the existing `QFile::flush()` behavior; they do not perform an `fsync`.
+Abrupt termination, including a crash that bypasses Qt fatal handling, can lose queued routine
+records. A slow or blocked sink can still delay full-queue producers and synchronous flushes.
+
+The focused `observability_writer_test` covers bounded admission, ordering, context lifetime,
+console modes and patterns, custom handlers, normal exit, Qt fatal delivery, and file-open
+failure. [Measured logging comparisons](evidence/performance-2026-09-28/observability-writer.json)
+use real Qt/file output with stderr redirected to a regular file. Interactive-terminal and
+native editing latency remain separate acceptance work.
 
 ## Summarize Performance Runs
 

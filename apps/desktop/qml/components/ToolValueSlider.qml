@@ -8,6 +8,7 @@ Slider {
     property string valueText: ""
     property string tooltipText: ""
     property string disabledReason: ""
+    property bool showCaption: false
     property color accent: theme.focusRing
     property bool modified: false
     property int railTrackHeight: 2
@@ -32,15 +33,47 @@ Slider {
     implicitHeight: theme.controlHeightDense
     hoverEnabled: true
     activeFocusOnTab: true
+    topPadding: root.showCaption ? Math.max(root.padding, 22) : root.padding
     Accessible.name: label.length > 0 ? label : tooltipText
     Accessible.description: !root.enabled && root.disabledReason.length > 0
                             ? root.disabledReason
                             : (valueText.length > 0 ? valueText : tooltipText)
 
-    ToolTip.visible: hovered && resolvedTooltipText.length > 0
-    ToolTip.delay: 250
-    ToolTip.timeout: 2600
-    ToolTip.text: resolvedTooltipText
+    Item {
+        objectName: root.objectName + "Caption"
+        x: root.leftPadding
+        width: root.availableWidth
+        height: 20
+        visible: root.showCaption
+
+        Label {
+            anchors.left: parent.left
+            anchors.right: captionValue.left
+            anchors.rightMargin: 5
+            text: root.label
+            color: root.enabled ? theme.textMain : theme.textFaint
+            font.family: theme.fontUi
+            font.pixelSize: theme.typeCaption
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 8
+        }
+
+        Label {
+            id: captionValue
+            anchors.right: parent.right
+            text: root.valueText
+            color: root.enabled ? theme.textMain : theme.textFaint
+            font.family: theme.fontMono
+            font.pixelSize: theme.typeCaption
+        }
+    }
+
+
+    AppToolTip {
+        targetItem: root
+        visible: root.hovered && root.resolvedTooltipText.length > 0
+        text: root.resolvedTooltipText
+    }
 
     background: Item {
         x: root.leftPadding

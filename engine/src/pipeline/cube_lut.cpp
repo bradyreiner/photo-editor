@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
+#include <ostream>
 #include <sstream>
 #include <span>
 
@@ -113,16 +113,96 @@ constexpr int kMaxCubeLutSize = 128;
   return true;
 }
 
+[[nodiscard]] bool read_two_doubles(
+    const std::string& text,
+    std::array<double, 2>* values,
+    std::string* error_message) {
+  std::istringstream stream(text);
+  double minimum = 0.0;
+  double maximum = 0.0;
+  std::string extra;
+  if (!(stream >> minimum >> maximum) || (stream >> extra)) {
+    if (error_message != nullptr) {
+      *error_message = "Expected two numeric values.";
+    }
+    return false;
+  }
+  if (!std::isfinite(minimum) || !std::isfinite(maximum) || maximum <= minimum) {
+    if (error_message != nullptr) {
+      *error_message = "The 1D input range must be finite and increasing.";
+    }
+    return false;
+  }
+  *values = {minimum, maximum};
+  return true;
+}
+
 [[nodiscard]] std::string line_error(int line_number, std::string_view message) {
   return "Line " + std::to_string(line_number) + ": " + std::string(message);
 }
 
 [[nodiscard]] bool valid_lut_shape(const ColorLut3D& lut) {
-  if (!lut.valid || lut.size < kMinCubeLutSize || lut.size > kMaxCubeLutSize) {
+  if (!lut.valid) {
     return false;
   }
-  const auto size = static_cast<std::size_t>(lut.size);
-  return lut.table.size() == size * size * size;
+  const auto has_3d = lut.size > 0;
+  const auto has_1d = lut.shaper_size > 0;
+  const auto valid_3d = has_3d
+                            ? lut.size >= kMinCubeLutSize &&
+                                  lut.size <= kMaxCubeLutSize &&
+                                  lut.table.size() ==
+                                      static_cast<std::size_t>(lut.size) *
+                                          static_cast<std::size_t>(lut.size) *
+                                          static_cast<std::size_t>(lut.size)
+                            : lut.table.empty();
+  const auto valid_1d = has_1d
+                            ? lut.shaper_size >= 2 && lut.shaper_size <= 65536 &&
+                                  lut.shaper_table.size() ==
+                                      static_cast<std::size_t>(lut.shaper_size) &&
+                                  std::isfinite(lut.shaper_input_range[0]) &&
+                                  std::isfinite(lut.shaper_input_range[1]) &&
+                                  lut.shaper_input_range[1] > lut.shaper_input_range[0]
+                            : lut.shaper_table.empty();
+  return (has_3d || has_1d) && valid_3d && valid_1d;
+}
+
+[[nodiscard]] bool write_cube_lut_stream(
+    std::ostream& output,
+    const ColorLut3D& lut,
+    std::string_view title) {
+  if (!valid_lut_shape(lut)) {
+    return false;
+  }
+  output << "# PhotoEditor cube LUT\n";
+  if (!title.empty()) {
+    output << "TITLE " << quote_title(title) << '\n';
+  }
+  if (!lut.input_color_space.empty()) {
+    output << "# PHOTO_EDITOR_INPUT_COLOR_SPACE " << lut.input_color_space << '\n';
+  }
+  if (!lut.output_color_space.empty()) {
+    output << "# PHOTO_EDITOR_OUTPUT_COLOR_SPACE " << lut.output_color_space << '\n';
+  }
+  output << std::setprecision(9);
+  if (lut.shaper_size > 0) {
+    output << "LUT_1D_SIZE " << lut.shaper_size << '\n';
+    output << "LUT_1D_INPUT_RANGE " << lut.shaper_input_range[0] << ' '
+           << lut.shaper_input_range[1] << '\n';
+  }
+  if (lut.size > 0) {
+    output << "LUT_3D_SIZE " << lut.size << '\n';
+    output << "DOMAIN_MIN " << lut.domain_min[0] << ' ' << lut.domain_min[1] << ' '
+           << lut.domain_min[2] << '\n';
+    output << "DOMAIN_MAX " << lut.domain_max[0] << ' ' << lut.domain_max[1] << ' '
+           << lut.domain_max[2] << '\n';
+  }
+  for (const auto& entry : lut.shaper_table) {
+    output << entry.red << ' ' << entry.green << ' ' << entry.blue << '\n';
+  }
+  for (const auto& entry : lut.table) {
+    output << entry.red << ' ' << entry.green << ' ' << entry.blue << '\n';
+  }
+  return output.good();
 }
 
 [[nodiscard]] std::string lut_format_for_extension(std::string extension) {
@@ -150,16 +230,20 @@ constexpr int kMaxCubeLutSize = 128;
 
 }  // namespace
 
-CubeLutParseResult parse_cube_lut(std::string_view text) {
+static CubeLutParseResult parse_cube_lut_stream(std::istream& lines) {
   CubeLutParseResult result;
   auto domain_min = std::array<double, 3>{0.0, 0.0, 0.0};
   auto domain_max = std::array<double, 3>{1.0, 1.0, 1.0};
+  auto shaper_input_range = std::array<double, 2>{0.0, 1.0};
   auto input_color_space = std::string{"sRGB"};
   auto output_color_space = std::string{"sRGB"};
-  auto size = 0;
+  auto size_1d = 0;
+  auto size_3d = 0;
+  auto shaper_range_declared = false;
+  auto saw_table_data = false;
+  std::vector<ColorPixel> shaper_table;
   std::vector<ColorPixel> table;
 
-  std::istringstream lines{std::string(text)};
   std::string raw_line;
   auto line_number = 0;
   while (std::getline(lines, raw_line)) {
@@ -196,9 +280,40 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
       result.title = unquote_title(title_text);
       continue;
     }
+    if (upper_keyword == "LUT_1D_SIZE") {
+      int parsed_size = 0;
+      std::string extra;
+      if (saw_table_data) {
+        result.error_message = line_error(line_number, "LUT_1D_SIZE must appear before table values.");
+        return result;
+      }
+      if (size_1d != 0) {
+        result.error_message = line_error(line_number, "Cube LUT contains more than one LUT_1D_SIZE directive.");
+        return result;
+      }
+      if (!(tokens >> parsed_size) || (tokens >> extra)) {
+        result.error_message = line_error(line_number, "Expected LUT_1D_SIZE followed by one integer.");
+        return result;
+      }
+      if (parsed_size < 2 || parsed_size > 65536) {
+        result.error_message = line_error(line_number, "LUT_1D_SIZE must be between 2 and 65536.");
+        return result;
+      }
+      size_1d = parsed_size;
+      shaper_table.reserve(static_cast<std::size_t>(size_1d));
+      continue;
+    }
     if (upper_keyword == "LUT_3D_SIZE") {
       int parsed_size = 0;
       std::string extra;
+      if (saw_table_data) {
+        result.error_message = line_error(line_number, "LUT_3D_SIZE must appear before table values.");
+        return result;
+      }
+      if (size_3d != 0) {
+        result.error_message = line_error(line_number, "Cube LUT contains more than one LUT_3D_SIZE directive.");
+        return result;
+      }
       if (!(tokens >> parsed_size) || (tokens >> extra)) {
         result.error_message = line_error(line_number, "Expected LUT_3D_SIZE followed by one integer.");
         return result;
@@ -207,10 +322,29 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
         result.error_message = line_error(line_number, "LUT_3D_SIZE must be between 2 and 128.");
         return result;
       }
-      size = parsed_size;
-      const auto entry_count = static_cast<std::size_t>(size) * static_cast<std::size_t>(size) *
-                               static_cast<std::size_t>(size);
+      size_3d = parsed_size;
+      const auto edge = static_cast<std::size_t>(size_3d);
+      const auto entry_count = edge * edge * edge;
       table.reserve(entry_count);
+      continue;
+    }
+    if (upper_keyword == "LUT_1D_INPUT_RANGE") {
+      auto values_text = std::string{};
+      std::getline(tokens, values_text);
+      std::string error;
+      if (saw_table_data) {
+        result.error_message = line_error(line_number, "LUT_1D_INPUT_RANGE must appear before table values.");
+        return result;
+      }
+      if (shaper_range_declared ||
+          !read_two_doubles(values_text, &shaper_input_range, &error)) {
+        result.error_message = line_error(
+            line_number,
+            shaper_range_declared ? "Cube LUT contains more than one LUT_1D_INPUT_RANGE directive."
+                                  : error);
+        return result;
+      }
+      shaper_range_declared = true;
       continue;
     }
     if (upper_keyword == "DOMAIN_MIN" || upper_keyword == "DOMAIN_MAX") {
@@ -218,6 +352,10 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
       std::getline(tokens, values_text);
       std::array<double, 3> values{};
       std::string error;
+      if (saw_table_data) {
+        result.error_message = line_error(line_number, "CUBE domain directives must appear before table values.");
+        return result;
+      }
       if (!read_three_doubles(values_text, &values, &error)) {
         result.error_message = line_error(line_number, error);
         return result;
@@ -229,10 +367,6 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
       }
       continue;
     }
-    if (upper_keyword == "LUT_1D_SIZE") {
-      result.error_message = line_error(line_number, "1D cube LUTs are not supported.");
-      return result;
-    }
 
     std::array<double, 3> values{};
     std::string error;
@@ -240,26 +374,44 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
       result.error_message = line_error(line_number, "Unsupported cube LUT directive.");
       return result;
     }
-    if (size == 0) {
-      result.error_message = line_error(line_number, "LUT_3D_SIZE must appear before table values.");
+    if (size_1d == 0 && size_3d == 0) {
+      result.error_message = line_error(line_number, "LUT_1D_SIZE or LUT_3D_SIZE must appear before table values.");
       return result;
     }
-    const auto expected_count =
-        static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * static_cast<std::size_t>(size);
-    if (table.size() >= expected_count) {
-      result.error_message = line_error(line_number, "Cube LUT contains more table rows than LUT_3D_SIZE allows.");
-      return result;
-    }
-    table.push_back(ColorPixel{
+    saw_table_data = true;
+    const auto edge = static_cast<std::size_t>(size_3d);
+    const auto expected_3d_count = size_3d > 0 ? edge * edge * edge : 0U;
+    const auto pixel = ColorPixel{
         .red = static_cast<float>(values[0]),
         .green = static_cast<float>(values[1]),
         .blue = static_cast<float>(values[2]),
         .alpha = 1.0F,
-    });
+    };
+    if (size_1d > 0 && shaper_table.size() < static_cast<std::size_t>(size_1d)) {
+      shaper_table.push_back(pixel);
+      continue;
+    }
+    if (size_3d == 0) {
+      result.error_message = line_error(line_number, "Cube LUT contains more table rows than LUT_1D_SIZE allows.");
+      return result;
+    }
+    if (table.size() >= expected_3d_count) {
+      result.error_message = line_error(line_number, "Cube LUT contains more table rows than LUT_3D_SIZE allows.");
+      return result;
+    }
+    table.push_back(pixel);
   }
 
-  if (size == 0) {
-    result.error_message = "Cube LUT is missing LUT_3D_SIZE.";
+  if (size_1d == 0 && size_3d == 0) {
+    result.error_message = "Cube LUT is missing LUT_1D_SIZE and LUT_3D_SIZE.";
+    return result;
+  }
+  if (shaper_range_declared && size_1d == 0) {
+    result.error_message = "LUT_1D_INPUT_RANGE requires LUT_1D_SIZE.";
+    return result;
+  }
+  if (size_1d > 0 && shaper_table.size() != static_cast<std::size_t>(size_1d)) {
+    result.error_message = "Cube LUT shaper row count does not match LUT_1D_SIZE.";
     return result;
   }
   for (std::size_t index = 0; index < domain_min.size(); ++index) {
@@ -269,21 +421,33 @@ CubeLutParseResult parse_cube_lut(std::string_view text) {
       return result;
     }
   }
-  const auto expected_count =
-      static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * static_cast<std::size_t>(size);
-  if (table.size() != expected_count) {
+  const auto edge = static_cast<std::size_t>(size_3d);
+  const auto expected_3d_count = size_3d > 0 ? edge * edge * edge : 0U;
+  if (table.size() != expected_3d_count) {
     result.error_message = "Cube LUT table row count does not match LUT_3D_SIZE.";
     return result;
   }
 
   result.lut.table = std::move(table);
-  result.lut.size = size;
+  result.lut.size = size_3d;
   result.lut.domain_min = domain_min;
   result.lut.domain_max = domain_max;
   result.lut.input_color_space = input_color_space;
   result.lut.output_color_space = output_color_space;
+  result.lut.shaper_table = std::move(shaper_table);
+  result.lut.shaper_size = size_1d;
+  result.lut.shaper_input_range = shaper_input_range;
   result.lut.valid = true;
+  if (!valid_lut_shape(result.lut)) {
+    result.error_message = "Cube LUT payload is invalid.";
+    result.lut.valid = false;
+  }
   return result;
+}
+
+CubeLutParseResult parse_cube_lut(std::string_view text) {
+  std::istringstream lines{std::string(text)};
+  return parse_cube_lut_stream(lines);
 }
 
 CubeLutParseResult load_cube_lut_file(std::string_view file_path) {
@@ -293,33 +457,13 @@ CubeLutParseResult load_cube_lut_file(std::string_view file_path) {
     result.error_message = "Unable to open cube LUT file.";
     return result;
   }
-  const auto text = std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-  result = parse_cube_lut(text);
-  return result;
+  return parse_cube_lut_stream(file);
 }
 
 std::string serialize_cube_lut(const ColorLut3D& lut, std::string_view title) {
-  if (!valid_lut_shape(lut)) {
-    return {};
-  }
-
   std::ostringstream output;
-  output << "# PhotoEditor cube LUT\n";
-  if (!title.empty()) {
-    output << "TITLE " << quote_title(title) << '\n';
-  }
-  if (!lut.input_color_space.empty()) {
-    output << "# PHOTO_EDITOR_INPUT_COLOR_SPACE " << lut.input_color_space << '\n';
-  }
-  if (!lut.output_color_space.empty()) {
-    output << "# PHOTO_EDITOR_OUTPUT_COLOR_SPACE " << lut.output_color_space << '\n';
-  }
-  output << "LUT_3D_SIZE " << lut.size << '\n';
-  output << std::setprecision(9);
-  output << "DOMAIN_MIN " << lut.domain_min[0] << ' ' << lut.domain_min[1] << ' ' << lut.domain_min[2] << '\n';
-  output << "DOMAIN_MAX " << lut.domain_max[0] << ' ' << lut.domain_max[1] << ' ' << lut.domain_max[2] << '\n';
-  for (const auto& entry : lut.table) {
-    output << entry.red << ' ' << entry.green << ' ' << entry.blue << '\n';
+  if (!write_cube_lut_stream(output, lut, title)) {
+    return {};
   }
   return output.str();
 }
@@ -329,8 +473,7 @@ bool save_cube_lut_file(
     const ColorLut3D& lut,
     std::string_view title,
     std::string* error_message) {
-  const auto text = serialize_cube_lut(lut, title);
-  if (text.empty()) {
+  if (!valid_lut_shape(lut)) {
     if (error_message != nullptr) {
       *error_message = "Cannot export an invalid cube LUT.";
     }
@@ -343,8 +486,7 @@ bool save_cube_lut_file(
     }
     return false;
   }
-  file << text;
-  if (!file) {
+  if (!write_cube_lut_stream(file, lut, title)) {
     if (error_message != nullptr) {
       *error_message = "Cube LUT file write failed.";
     }
@@ -400,9 +542,10 @@ bool serialize_hald_lut(
     }
     return false;
   }
-  if (!valid_lut_shape(lut)) {
+  if (!valid_lut_shape(lut) || lut.size < kMinCubeLutSize ||
+      lut.shaper_size > 0) {
     if (error_message != nullptr) {
-      *error_message = "Cannot export an invalid HALD LUT.";
+      *error_message = "HALD export requires a valid 3D LUT without a 1D shaper.";
     }
     return false;
   }

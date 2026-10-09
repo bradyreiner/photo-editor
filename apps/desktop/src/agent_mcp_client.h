@@ -16,11 +16,17 @@ class AgentMcpClient final : public QObject {
  public:
   explicit AgentMcpClient(QObject* parent = nullptr);
 
+  // Internal tools use the same schemas and allowlists without a network listener.
+  static QString registerInProcessEndpoint(
+      QObject* owner, std::function<QVariantMap(const QVariantMap&)> handler);
+  static void unregisterInProcessEndpoint(const QString& endpoint);
+
   [[nodiscard]] QString endpoint() const;
   void setEndpoint(const QString& endpoint);
   void setBearerToken(const QString& token);
 
   [[nodiscard]] int timeoutMs() const;
+  // Negative values disable the work deadline; cancellation remains available.
   void setTimeoutMs(int timeout_ms);
 
   [[nodiscard]] QStringList allowedTools() const;
@@ -44,7 +50,7 @@ class AgentMcpClient final : public QObject {
 
   QString endpoint_;
   QString bearer_token_;
-  int timeout_ms_ = 30000;
+  int timeout_ms_ = -1;
   QStringList allowed_tools_;
   QVariantList cached_tools_;
   QString cached_run_id_;

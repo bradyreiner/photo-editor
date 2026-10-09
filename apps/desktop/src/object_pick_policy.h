@@ -36,4 +36,9 @@ namespace photo_editor::desktop {
     double normalized_x,
     double normalized_y);
 
+[[nodiscard]] bool smart_select_result_honors_prompts(
+    const SegmentationResult& result,
+    const QVector<SmartSelectPrompt>& prompts,
+    bool allow_multiple_prompt_components = false);
+
 }  // namespace photo_editor::desktop

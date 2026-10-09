@@ -81,11 +81,11 @@ Rectangle {
     implicitWidth: commandBarContent.implicitWidth + 18
     implicitHeight: commandHeight
     height: commandHeight
-    radius: 4
-    color: theme.alpha(theme.ink950, 0.86)
-    border.width: theme.chromeBorderWidth
-    border.color: theme.alpha(root.accent, 0.72)
-    clip: true
+    radius: 0
+    color: "transparent"
+    border.width: 0
+    border.color: "transparent"
+    clip: false
     opacity: visible ? 1.0 : 0.0
 
     Behavior on opacity {

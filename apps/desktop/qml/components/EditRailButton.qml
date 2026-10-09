@@ -15,10 +15,11 @@ Item {
     Theme { id: theme }
 
     readonly property string editRailButtonContract: "edit-rail-button:v2|active-state:true|rounded:true|centered-icons:true|hover:true|keyboard:true|tooltip-full:true|accessibility-full:true|icon-only:true"
+    readonly property string editRailButtonVisualContract: "edit-rail-button-visual:v2|pressed:true|focus-ring:2px|target:density-aware-compact|selection:neutral-fill-and-accent-icon|motion:reduced-motion-aware"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|tooltip-full:true|accessibility-full:true"
 
-    implicitWidth: 30
-    implicitHeight: 30
+    implicitWidth: theme.railButtonSizeCompact
+    implicitHeight: theme.railButtonSizeCompact
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.label
@@ -29,29 +30,31 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: Math.round(Math.min(width, height) / 2)
-        color: root.active
-               ? theme.alpha(root.accent, 0.13)
-               : (buttonMouse.containsMouse || root.activeFocus
-                  ? theme.alpha(theme.glassLift, 0.32)
-                  : "transparent")
-        border.width: root.activeFocus ? 1 : 0
-        border.color: root.activeFocus ? theme.focusRing : "transparent"
+        radius: theme.radiusControl
+        color: theme.commandFill("secondary", root.active, buttonMouse.containsMouse,
+                                 buttonMouse.pressed, root.enabled, true)
+        border.width: theme.commandBorderWidth(root.activeFocus)
+        border.color: root.activeFocus ? theme.focusRing : theme.controlEdge
+
+        Behavior on color {
+            ColorAnimation { duration: theme.reducedMotion ? 0 : theme.durationFast; easing.type: Easing.OutCubic }
+        }
     }
 
     AppIcon {
         anchors.centerIn: parent
         name: root.iconName
-        width: 14
-        height: 14
+        width: theme.scaled(18)
+        height: theme.scaled(18)
         color: root.active ? root.accent
-                           : (buttonMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
+                           : (buttonMouse.pressed || buttonMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
     }
 
     MouseArea {
         id: buttonMouse
         anchors.fill: parent
         hoverEnabled: true
+        enabled: root.enabled
         cursorShape: Qt.PointingHandCursor
         onClicked: root.triggered()
     }

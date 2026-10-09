@@ -2,14 +2,17 @@
 #include "edit_adjustment_patch.h"
 #include "edit_recipe_v13_persistence.h"
 #include "desktop_recipe_persistence_service.h"
+#include "editor_recipe_persistence_launcher.h"
 #include "photo_layer_effect_codec.h"
 #include "photo_pixel_stroke.h"
 
 #include "photo_editor/pipeline/edit_recipe_v13.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
@@ -22,6 +25,110 @@ namespace {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
+}
+
+bool prepared_recipe_payload_contracts(
+    const photo_editor::desktop::EditRecipeState& canonical_state,
+    const QString& app_data_root) {
+  using namespace photo_editor::desktop;
+  const QString asset_id = QStringLiteral("asset:prepared-payload");
+  const DecoderProvenanceResult provenance{
+      .provenance = QStringLiteral("raster:test-v1"),
+      .raw_source = false,
+  };
+  const auto recipe_asset_root =
+      QDir(app_data_root).filePath(QStringLiteral("recipe-assets"));
+
+  auto legacy_state = canonical_state;
+  legacy_state.photographic_rendering_model = QStringLiteral("legacy-oklch-v1");
+  const auto legacy_service = prepare_desktop_recipe_persistence(
+      asset_id, legacy_state, provenance, recipe_asset_root);
+  const auto legacy_prepared = prepare_editor_recipe_persistence_payload(
+      asset_id, legacy_state, provenance, {}, app_data_root, false);
+  const QStringList legacy_arguments{
+      QStringLiteral("--legacy-v1"), asset_id,
+      legacy_service.legacy_recipe_json};
+  if (!legacy_service.ok() || !legacy_service.legacy_only ||
+      !legacy_prepared.ok() || legacy_prepared.migration_acceptance ||
+      legacy_prepared.payload != catalog_helper_argument_payload(legacy_arguments)) {
+    return false;
+  }
+
+  const auto canonical_service = prepare_desktop_recipe_persistence(
+      asset_id, canonical_state, provenance, recipe_asset_root);
+  const auto canonical_prepared = prepare_editor_recipe_persistence_payload(
+      asset_id, canonical_state, provenance, {}, app_data_root, false);
+  const QStringList canonical_arguments{
+      asset_id,
+      canonical_service.legacy_recipe_json,
+      canonical_service.canonical_document.recipe_payload,
+      canonical_service.canonical_document.cache_key,
+      canonical_service.canonical_document.provenance_payload,
+  };
+  if (!canonical_service.ok() || canonical_service.legacy_only ||
+      !canonical_prepared.ok() || canonical_prepared.migration_acceptance ||
+      canonical_prepared.payload != catalog_helper_argument_payload(canonical_arguments)) {
+    return false;
+  }
+
+  const QVariantMap migration_evidence{
+      {QStringLiteral("planCacheKey"),
+       QString::fromUtf8("plan \"quoted\" \\ path α\n")},
+      {QStringLiteral("evidenceSha256"), QString(64, QLatin1Char('a'))},
+      {QStringLiteral("referenceModel"),
+       QString::fromUtf8("reference \"model\" α\n")},
+      {QStringLiteral("candidateModel"),
+       QString::fromUtf8("candidate \\ renderer")},
+      {QStringLiteral("approvalTime"),
+       QString::fromUtf8("approved \"today\" α")},
+      {QStringLiteral("auditNote"),
+       QString::fromUtf8("metadata \"escape\" \\ α\n")},
+  };
+  const auto migration_prepared = prepare_editor_recipe_persistence_payload(
+      asset_id, canonical_state, provenance, migration_evidence,
+      app_data_root, true);
+  QJsonArray profiles;
+  for (const auto& identity : canonical_v13_profile_identities(
+           canonical_service.canonical_document)) {
+    profiles.append(identity);
+  }
+  const QStringList migration_arguments{
+      asset_id,
+      canonical_service.legacy_recipe_json,
+      canonical_service.canonical_document.recipe_payload,
+      canonical_service.canonical_document.cache_key,
+      canonical_service.canonical_document.provenance_payload,
+      QStringLiteral("12"),
+      migration_evidence.value(QStringLiteral("referenceModel")).toString(),
+      migration_evidence.value(QStringLiteral("candidateModel")).toString(),
+      QString::fromUtf8(QJsonDocument(profiles).toJson(QJsonDocument::Compact)),
+      migration_evidence.value(QStringLiteral("planCacheKey")).toString(),
+      migration_evidence.value(QStringLiteral("evidenceSha256")).toString(),
+      migration_evidence.value(QStringLiteral("approvalTime")).toString(),
+      QString::fromUtf8(
+          canonical_rendering_migration_evidence_payload(migration_evidence)),
+  };
+  const auto decoded_arguments = QJsonDocument::fromJson(
+      migration_prepared.payload).object().value(QStringLiteral("arguments")).toArray();
+  if (!migration_prepared.ok() || !migration_prepared.migration_acceptance ||
+      migration_prepared.payload != catalog_helper_argument_payload(migration_arguments) ||
+      decoded_arguments != QJsonArray::fromStringList(migration_arguments)) {
+    return false;
+  }
+
+  auto malformed_evidence = migration_evidence;
+  malformed_evidence.insert(QStringLiteral("evidenceSha256"), QStringLiteral("short"));
+  const auto malformed_prepared = prepare_editor_recipe_persistence_payload(
+      asset_id, canonical_state, provenance, malformed_evidence,
+      app_data_root, true);
+  const auto legacy_migration = prepare_editor_recipe_persistence_payload(
+      asset_id, legacy_state, provenance, migration_evidence,
+      app_data_root, true);
+  return !malformed_prepared.ok() && malformed_prepared.payload.isEmpty() &&
+         malformed_prepared.error == QStringLiteral("Measured migration evidence is incomplete.") &&
+         !legacy_migration.ok() && legacy_migration.payload.isEmpty() &&
+         legacy_migration.error ==
+             QStringLiteral("Rendering migration requires a canonical target recipe.");
 }
 
 }  // namespace
@@ -57,6 +164,11 @@ int main(int argc, char** argv) {
   state.vibrance = 12.0;
   state.renderer_transition_look =
       QStringLiteral("preserve-legacy-direct-luminance-v1");
+  QTemporaryDir prepared_payload_root;
+  if (!prepared_payload_root.isValid() ||
+      !prepared_recipe_payload_contracts(state, prepared_payload_root.path())) {
+    return fail("prepared legacy/canonical/migration payload bytes must match the synchronous contract");
+  }
   state.preset_applications = {
       QVariantMap{
           {QStringLiteral("schema"),

@@ -8,7 +8,14 @@
     "typecheck": "tsc --noEmit",
     "dev": "wrangler dev --local",
     "types": "wrangler types",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm run test:setup && npm test",
+    "test:setup": "node --test scripts/tests/*.test.mjs",
+    "setup:prepare": "node scripts/prepare-setup.mjs",
+    "setup:check": "node scripts/check-setup.mjs",
+    "setup:staff": "node scripts/staff-access.mjs",
+    "operations:check": "node scripts/check-operations.mjs",
+    "operations:monitor": "node scripts/monitor-operations.mjs",
+    "database:recovery": "node scripts/database-recovery.mjs"
   },
   "dependencies": {
     "jose": "6.2.12"

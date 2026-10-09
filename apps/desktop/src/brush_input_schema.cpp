@@ -104,6 +104,8 @@ QVariantMap brush_stroke_variant(
   }
 
   QVariantMap settings;
+  if (mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch"))
+    settings.insert(QStringLiteral("rasterVersion"), 2);
   settings.insert(QStringLiteral("preset"), mask.value(QStringLiteral("brushPreset")).toString());
   settings.insert(QStringLiteral("size"), mask.value(QStringLiteral("brushSize")).toDouble());
   settings.insert(QStringLiteral("flow"), mask.value(QStringLiteral("brushFlow")).toDouble());

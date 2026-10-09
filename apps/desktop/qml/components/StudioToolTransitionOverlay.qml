@@ -22,7 +22,7 @@ Rectangle {
     opacity: visible ? 1 : 0
 
     Behavior on opacity {
-        NumberAnimation { duration: overlay.motionDuration; easing.type: Easing.OutCubic }
+        OpacityAnimator { duration: overlay.motionDuration; easing.type: Easing.OutCubic }
     }
 
     MouseArea {

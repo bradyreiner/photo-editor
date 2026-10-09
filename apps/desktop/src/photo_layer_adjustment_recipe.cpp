@@ -2,6 +2,13 @@
 
 namespace photo_editor::desktop {
 
+bool photo_layer_supports_adjustment_recipe(const QVariantMap& layer) {
+  const auto kind = layer.value(QStringLiteral("kind")).toString();
+  return !layer.value(QStringLiteral("baseImageEdit")).toBool() &&
+      (kind == QStringLiteral("adjustment") || kind == QStringLiteral("group") ||
+       kind == QStringLiteral("pixel") || kind == QStringLiteral("source"));
+}
+
 const QStringList& photo_layer_adjustment_recipe_keys() {
   static const QStringList keys{
       QStringLiteral("exposure"),

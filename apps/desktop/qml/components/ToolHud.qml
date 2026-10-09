@@ -39,11 +39,11 @@ Rectangle {
 
     implicitWidth: hudContent.implicitWidth + theme.space18
     implicitHeight: root.hudHeight
-    radius: theme.radiusControl
-    color: theme.alpha(theme.ink950, 0.90)
-    border.width: theme.chromeBorderWidth
-    border.color: theme.alpha(root.accent, 0.42)
-    clip: true
+    radius: 0
+    color: "transparent"
+    border.width: 0
+    border.color: "transparent"
+    clip: false
     activeFocusOnTab: true
     Accessible.name: root.title
     Accessible.description: root.subtitle

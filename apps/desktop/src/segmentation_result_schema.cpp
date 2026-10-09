@@ -14,12 +14,21 @@ QVariantMap segmentation_mask_variant(
           result.mask_data, result.width, result.height)) {
     return {};
   }
-  return QVariantMap{
+  auto mask = QVariantMap{
       {QStringLiteral("kind"), normalized_mask_kind(kind)},
       {QStringLiteral("segmentationData"), result.mask_data},
       {QStringLiteral("segmentationWidth"), result.width},
       {QStringLiteral("segmentationHeight"), result.height},
   };
+  if (result.refinement_logits_width > 0 && result.refinement_logits_height > 0 &&
+      result.refinement_logits.size() ==
+          result.refinement_logits_width * result.refinement_logits_height *
+              static_cast<int>(sizeof(float))) {
+    mask.insert(QStringLiteral("smartSelectRefinementLogits"), result.refinement_logits);
+    mask.insert(QStringLiteral("smartSelectRefinementLogitsWidth"), result.refinement_logits_width);
+    mask.insert(QStringLiteral("smartSelectRefinementLogitsHeight"), result.refinement_logits_height);
+  }
+  return mask;
 }
 
 bool segmentation_result_has_confidence_map(
@@ -78,6 +87,20 @@ SegmentationResult segmentation_result_from_mask_variant(
       mask.value(QStringLiteral("segmentationData")).toByteArray();
   result.width = mask.value(QStringLiteral("segmentationWidth")).toInt();
   result.height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+  const auto refinement_logits =
+      mask.value(QStringLiteral("smartSelectRefinementLogits")).toByteArray();
+  const auto refinement_logits_width =
+      mask.value(QStringLiteral("smartSelectRefinementLogitsWidth")).toInt();
+  const auto refinement_logits_height =
+      mask.value(QStringLiteral("smartSelectRefinementLogitsHeight")).toInt();
+  if (refinement_logits_width > 0 && refinement_logits_height > 0 &&
+      refinement_logits.size() ==
+          refinement_logits_width * refinement_logits_height *
+              static_cast<int>(sizeof(float))) {
+    result.refinement_logits = refinement_logits;
+    result.refinement_logits_width = refinement_logits_width;
+    result.refinement_logits_height = refinement_logits_height;
+  }
   result.success = valid_segmentation_payload(
       result.mask_data, result.width, result.height);
   if (!result.success) {

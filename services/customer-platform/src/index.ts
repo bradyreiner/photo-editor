@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { ApiError, authenticate, body, boundedInt, boundedText, DAY, hash, hmacKey, id, issueLease, json, now, object, rateLimit, str, type Installation, type ServiceEnv } from './core';
 import { processEvent, syncLicense, validatePurchase } from './billing';
+import { adminOperations } from './operations';
 
 async function startTrial(request: Request, env: ServiceEnv): Promise<Response> {
   await rateLimit(request, env, 'trial', 5);
@@ -24,25 +25,39 @@ async function registerInstallation(env: ServiceEnv, credential: string): Promis
   return device;
 }
 
-async function staffIdentity(request: Request, env: ServiceEnv): Promise<{subject: string; role: string}> {
+async function staffIdentity(request: Request, env: ServiceEnv): Promise<{subject: string; role: string; service: boolean}> {
   if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(env.ACCESS_TEAM_DOMAIN) || !env.ACCESS_AUDIENCE) throw new ApiError(503, 'staff_auth_not_configured');
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
   if (!token) throw new ApiError(401, 'staff_auth_required');
   const issuer = `https://${env.ACCESS_TEAM_DOMAIN}`;
-  let subject: string;
+  let subject: string, service: boolean;
   try {
     const { payload } = await jwtVerify(token, createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`)), {
       issuer, audience: env.ACCESS_AUDIENCE, algorithms: ['RS256'], requiredClaims: ['sub', 'exp', 'iat'],
     });
-    subject = str(payload.sub);
+    if (payload.sub === '') {
+      const commonName = payload.common_name;
+      if (payload.type !== 'app' || typeof commonName !== 'string' || !/^[A-Za-z0-9._-]{8,200}$/.test(commonName)) {
+        throw new Error('invalid service identity');
+      }
+      subject = `service:${commonName}`;
+      service = true;
+    } else {
+      subject = str(payload.sub);
+      service = false;
+    }
   } catch { throw new ApiError(401, 'invalid_staff_identity'); }
   const staff = await env.DB.prepare('SELECT role FROM staff WHERE subject=?').bind(subject).first<{role: string}>();
   if (!staff) throw new ApiError(403, 'staff_role_required');
-  return { subject, role: staff.role };
+  if (service && staff.role !== 'support') throw new ApiError(403, 'service_support_role_required');
+  return { subject, role: staff.role, service };
 }
 
 async function admin(request: Request, env: ServiceEnv, path: string): Promise<Response> {
   const actor = await staffIdentity(request, env);
+  if (actor.service && path !== '/admin/api/operations') throw new ApiError(403, 'service_read_scope_required');
+  const operational = await adminOperations(request, env, actor, path);
+  if (operational) return operational;
   if (request.method === 'GET' && path === '/admin/api/customers') {
     const url = new URL(request.url), query = (url.searchParams.get('q') || '').slice(0, 320);
     const after = (url.searchParams.get('after') || '').slice(0, 100);
@@ -105,12 +120,92 @@ async function webhook(request: Request, env: ServiceEnv): Promise<Response> {
   if (meta.test_mode !== (env.ALLOW_TEST_PURCHASES === 'true')) throw new ApiError(403, 'wrong_billing_environment');
   await env.DB.prepare('INSERT OR IGNORE INTO webhook_receipts(digest,event,resource_id,received_at) VALUES(?,?,?,?)')
     .bind(digest, event, resourceId, now()).run();
-  const receipt = await env.DB.prepare('SELECT processed_at FROM webhook_receipts WHERE digest=?').bind(digest).first<{processed_at: number | null}>();
+  const receipt = await env.DB.prepare('SELECT processed_at,attempts,next_retry_at FROM webhook_receipts WHERE digest=?')
+    .bind(digest).first<{processed_at: number | null; attempts: number; next_retry_at: number}>();
   if (receipt?.processed_at) return json({ duplicate: true });
+  if ((receipt?.attempts ?? 0) >= 8) return json({ pendingReview: true }, 202);
+  if ((receipt?.attempts ?? 0) > 0 && (receipt?.next_retry_at ?? 0) > now()) return json({ retryScheduled: true }, 202);
   // Fetch current provider state, never apply stale event contents to permissions.
-  await processEvent(env, event, resourceId);
-  await env.DB.prepare('UPDATE webhook_receipts SET processed_at=? WHERE digest=?').bind(now(), digest).run();
+  try {
+    await processEvent(env, event, resourceId);
+    await env.DB.prepare('UPDATE webhook_receipts SET processed_at=?,last_error_code=NULL WHERE digest=?').bind(now(), digest).run();
+  } catch (error) {
+    await markWebhookFailure(env, digest);
+    throw error;
+  }
   return json({ ok: true });
+}
+
+async function markWebhookFailure(env: ServiceEnv, digest: string): Promise<void> {
+  const time = now();
+  await env.DB.prepare(`UPDATE webhook_receipts SET attempts=attempts+1,
+    next_retry_at=?+min(86400,60*(1 << min(attempts,10))),last_error_code='processing_failed'
+    WHERE digest=? AND processed_at IS NULL`).bind(time, digest).run();
+}
+
+async function recover(request: Request, env: ServiceEnv): Promise<Response> {
+  await rateLimit(request, env, 'recovery', 10);
+  const input = await body(request), license = await validatePurchase(env, str(input.licenseKey, 128));
+  const credential = str(input.credential, 43);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(credential)) throw new ApiError(400, 'invalid_credential');
+  if (!['perpetual', 'subscription'].includes(license.mode)) throw new ApiError(403, 'paid_license_required');
+  const digest = await hash(credential);
+  const existing = await env.DB.prepare('SELECT * FROM installations WHERE credential_hash=?').bind(digest).first<Installation>();
+  if (existing) {
+    if (existing.customer_id !== license.customer_id || existing.license_id !== license.id || existing.revoked) {
+      throw new ApiError(409, 'credential_already_used');
+    }
+    return json({ lease: await issueLease(env, existing), installationId: existing.id });
+  }
+  const previous = input.previousCredential === undefined ? null : str(input.previousCredential, 43);
+  let previousDevice: Installation | null = null;
+  if (previous !== null) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(previous)) throw new ApiError(400, 'invalid_previous_credential');
+    if (previous === credential) throw new ApiError(400, 'credential_must_rotate');
+    previousDevice = await env.DB.prepare('SELECT * FROM installations WHERE credential_hash=?').bind(await hash(previous)).first<Installation>();
+    const paidMatch = previousDevice?.license_id === license.id && previousDevice.customer_id === license.customer_id;
+    const guestMatch = previousDevice?.license_id === null && previousDevice.customer_id.startsWith('guest:');
+    if (!previousDevice || (!paidMatch && !guestMatch)) {
+      throw new ApiError(403, 'previous_device_not_eligible');
+    }
+  }
+  const time = now(), installationId = crypto.randomUUID();
+  const device: Installation = {
+    id: installationId, credential_hash: digest, customer_id: license.customer_id,
+    license_id: license.id, trial_ends_at: time, revoked: 0,
+  };
+  // Verify live paid entitlement before consuming a seat. The INSERT trigger below
+  // applies the device cap in the same database transaction as old-device revoke.
+  await issueLease(env, device);
+  const statements: D1PreparedStatement[] = [];
+  if (previousDevice && !previousDevice.revoked) {
+    if (previousDevice.license_id === null) {
+      statements.push(env.DB.prepare(`UPDATE installations SET revoked=1 WHERE id=? AND revoked=0 AND license_id IS NULL
+        AND EXISTS(SELECT 1 FROM licenses WHERE id=? AND customer_id=? AND blocked=0 AND status IN ('active','inactive'))`)
+        .bind(previousDevice.id, license.id, license.customer_id));
+    } else {
+      statements.push(env.DB.prepare(`UPDATE installations SET revoked=1 WHERE id=? AND revoked=0 AND license_id=?
+        AND EXISTS(SELECT 1 FROM licenses WHERE id=? AND customer_id=? AND blocked=0 AND status IN ('active','inactive'))`)
+        .bind(previousDevice.id, license.id, license.id, license.customer_id));
+    }
+  }
+  statements.push(env.DB.prepare(`INSERT INTO installations(id,credential_hash,customer_id,license_id,trial_ends_at,created_at,last_seen_at)
+    SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM licenses WHERE id=? AND customer_id=? AND blocked=0
+      AND status IN ('active','inactive'))`).bind(installationId, digest, license.customer_id, license.id,
+      time, time, time, license.id, license.customer_id));
+  try { await env.DB.batch(statements); }
+  catch (error) {
+    if (String(error).includes('device_limit')) throw new ApiError(409, 'device_limit');
+    if (String(error).includes('license_inactive')) throw new ApiError(409, 'license_no_longer_active');
+    throw error;
+  }
+  const inserted = await env.DB.prepare('SELECT * FROM installations WHERE id=?').bind(installationId).first<Installation>();
+  if (!inserted) throw new ApiError(409, 'license_no_longer_active');
+  try { return json({ lease: await issueLease(env, inserted), installationId }); }
+  catch (error) {
+    await env.DB.prepare('UPDATE installations SET revoked=1 WHERE id=?').bind(installationId).run();
+    throw error;
+  }
 }
 
 async function route(request: Request, env: ServiceEnv): Promise<Response> {
@@ -119,6 +214,7 @@ async function route(request: Request, env: ServiceEnv): Promise<Response> {
   if (request.method === 'GET' && path === '/health') return json({ service: 'looksy-customers', version: 1 });
   if (request.method === 'POST' && path === '/v1/webhooks/lemon') return webhook(request, env);
   if (request.method === 'POST' && path === '/v1/trial') return startTrial(request, env);
+  if (request.method === 'POST' && path === '/v1/recover') return recover(request, env);
   await rateLimit(request, env, 'account', 30);
   if (request.method === 'POST' && path === '/v1/activate') {
     const token = request.headers.get('Authorization')?.replace(/^Bearer /, '');
@@ -180,13 +276,14 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: ServiceEnv): Promise<void> {
     const time = now();
-    const pending = await env.DB.prepare('SELECT digest,event,resource_id FROM webhook_receipts WHERE processed_at IS NULL ORDER BY received_at LIMIT 20')
+    const pending = await env.DB.prepare(`SELECT digest,event,resource_id FROM webhook_receipts
+      WHERE processed_at IS NULL AND attempts<8 AND next_retry_at<=? ORDER BY next_retry_at,received_at LIMIT 20`).bind(time)
       .all<{digest: string; event: string; resource_id: string}>();
     for (const item of pending.results) {
       try {
         await processEvent(env, item.event, item.resource_id);
-        await env.DB.prepare('UPDATE webhook_receipts SET processed_at=? WHERE digest=?').bind(now(), item.digest).run();
-      } catch { console.error(JSON.stringify({ event: 'billing_retry_failed', receipt: item.digest })); }
+        await env.DB.prepare('UPDATE webhook_receipts SET processed_at=?,last_error_code=NULL WHERE digest=?').bind(now(), item.digest).run();
+      } catch { await markWebhookFailure(env, item.digest); console.error(JSON.stringify({ event: 'billing_retry_failed', receipt: item.digest })); }
     }
     const licenses = await env.DB.prepare('SELECT id FROM licenses WHERE checked_at<? ORDER BY checked_at LIMIT 20').bind(time - DAY).all<{id: string}>();
     for (const license of licenses.results) {

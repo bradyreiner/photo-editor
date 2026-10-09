@@ -16,6 +16,12 @@ SCHEMA = "framehouse-ai-model-bundle-v1"
 ALLOWED_ROLES = {"inpaint", "selection"}
 REQUIRED_INPAINT_PATH = "inpaint/lama.onnx"
 REQUIRED_INPAINT_CONTRACT = "opencv-lama-image-mask-nchw-float32-512-v1"
+SELECTION_ARTIFACTS = {
+    "sam2-hiera-tiny-image-encoder-fp32-1024-v1":
+        "selection/sam2_hiera_tiny_image_encoder.onnx",
+    "sam2-hiera-tiny-image-decoder-fp32-1024-v1":
+        "selection/sam2_hiera_tiny_image_decoder.onnx",
+}
 
 
 class BundleError(ValueError):
@@ -71,6 +77,7 @@ def validate_bundle(root: Path, require_inpaint: bool = False) -> dict[str, Any]
     seen_ids: set[str] = set()
     seen_paths: set[str] = set()
     roles: set[str] = set()
+    selection_contracts: set[str] = set()
     verified: list[dict[str, Any]] = []
     for index, artifact in enumerate(artifacts):
         label = f"artifact {index}"
@@ -89,6 +96,17 @@ def validate_bundle(root: Path, require_inpaint: bool = False) -> dict[str, Any]
             raise BundleError(
                 f"{label} contract must be {REQUIRED_INPAINT_CONTRACT} for inpaint"
             )
+        if role == "inpaint" and artifact.get("path") != REQUIRED_INPAINT_PATH:
+            raise BundleError(
+                f"{label} inpaint path must be {REQUIRED_INPAINT_PATH}"
+            )
+        if role == "selection":
+            expected_path = SELECTION_ARTIFACTS.get(contract)
+            if expected_path is None or artifact.get("path") != expected_path:
+                raise BundleError(f"{label} has an unsupported SAM2 selection contract or path")
+            if contract in selection_contracts:
+                raise BundleError(f"duplicate SAM2 selection component: {contract}")
+            selection_contracts.add(contract)
         relative, artifact_path = verified_relative_path(
             root, artifact.get("path"), f"{label} path"
         )
@@ -135,15 +153,13 @@ def validate_bundle(root: Path, require_inpaint: bool = False) -> dict[str, Any]
         )
 
     if require_inpaint:
-        matching = [
-            artifact
-            for artifact in verified
-            if artifact["role"] == "inpaint" and artifact["path"] == REQUIRED_INPAINT_PATH
-        ]
+        matching = [artifact for artifact in verified if artifact["role"] == "inpaint"]
         if len(matching) != 1:
             raise BundleError(
                 f"the bundle must contain exactly one inpaint artifact at {REQUIRED_INPAINT_PATH}"
             )
+    if selection_contracts and selection_contracts != set(SELECTION_ARTIFACTS):
+        raise BundleError("SAM2 selection requires exactly one encoder and one decoder artifact")
     return {
         "ok": True,
         "schema": SCHEMA,
@@ -185,6 +201,57 @@ def run_self_test() -> None:
         report = validate_bundle(root, require_inpaint=True)
         if report["artifactCount"] != 1 or report["roles"] != ["inpaint"]:
             raise BundleError("valid self-test bundle did not produce the expected report")
+        encoder_path = root / SELECTION_ARTIFACTS[
+            "sam2-hiera-tiny-image-encoder-fp32-1024-v1"
+        ]
+        decoder_path = root / SELECTION_ARTIFACTS[
+            "sam2-hiera-tiny-image-decoder-fp32-1024-v1"
+        ]
+        encoder_path.parent.mkdir(parents=True, exist_ok=True)
+        encoder_bytes = b"deterministic-sam2-encoder-fixture"
+        decoder_bytes = b"deterministic-sam2-decoder-fixture"
+        encoder_path.write_bytes(encoder_bytes)
+        decoder_path.write_bytes(decoder_bytes)
+        manifest["artifacts"].extend(
+            [
+                {
+                    "id": "sam2-tiny-encoder",
+                    "role": "selection",
+                    "contract": "sam2-hiera-tiny-image-encoder-fp32-1024-v1",
+                    "path": SELECTION_ARTIFACTS[
+                        "sam2-hiera-tiny-image-encoder-fp32-1024-v1"
+                    ],
+                    "bytes": len(encoder_bytes),
+                    "sha256": hashlib.sha256(encoder_bytes).hexdigest(),
+                    "sourceUrl": "https://example.invalid/sam2-encoder.onnx",
+                    "license": {"name": "fixture-license", "url": "https://example.invalid/license"},
+                },
+                {
+                    "id": "sam2-tiny-decoder",
+                    "role": "selection",
+                    "contract": "sam2-hiera-tiny-image-decoder-fp32-1024-v1",
+                    "path": SELECTION_ARTIFACTS[
+                        "sam2-hiera-tiny-image-decoder-fp32-1024-v1"
+                    ],
+                    "bytes": len(decoder_bytes),
+                    "sha256": hashlib.sha256(decoder_bytes).hexdigest(),
+                    "sourceUrl": "https://example.invalid/sam2-decoder.onnx",
+                    "license": {"name": "fixture-license", "url": "https://example.invalid/license"},
+                },
+            ]
+        )
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        if validate_bundle(root, require_inpaint=True)["artifactCount"] != 3:
+            raise BundleError("paired SAM2 artifacts did not validate with the inpaint artifact")
+        manifest["artifacts"].pop()
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        try:
+            validate_bundle(root, require_inpaint=True)
+        except BundleError as error:
+            if "exactly one encoder and one decoder" not in str(error):
+                raise
+        else:
+            raise BundleError("a partial SAM2 model pair was accepted")
         model_path.write_bytes(b"corrupted")
         try:
             validate_bundle(root, require_inpaint=True)

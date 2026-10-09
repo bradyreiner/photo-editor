@@ -14,7 +14,7 @@ Item {
     readonly property string toneCurveChannelButtonContract: "tone-curve-channel-button:v1|selected-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
-    implicitHeight: 34
+    implicitHeight: theme.controlHeightDense
     activeFocusOnTab: true
     Accessible.role: Accessible.Button
     Accessible.name: root.channelName.length > 0 ? root.channelName + " curve channel" : "Curve channel"
@@ -26,15 +26,24 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius8
+        radius: 3
         color: root.selected
-               ? theme.editorSelectionFill
+               ? theme.alpha(root.accent, 0.12)
                : (channelMouse.containsMouse || root.activeFocus
-                  ? theme.alpha(theme.glassLift, 0.42)
-                  : theme.alpha(theme.glassBase, 0.54))
-        border.width: root.activeFocus || root.selected ? 1 : 0
-        border.color: root.activeFocus || root.selected ? theme.controlEdge
-                      : "transparent"
+                  ? theme.alpha(theme.glassLift, 0.30)
+                  : "transparent")
+        border.width: root.activeFocus ? 1 : 0
+        border.color: theme.focusRing
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 2
+            radius: 1
+            color: root.accent
+            visible: root.selected
+        }
     }
 
     Text {
@@ -47,7 +56,7 @@ Item {
         color: root.selected ? theme.textStrong : (channelMouse.containsMouse || root.activeFocus ? theme.textMain : theme.textMuted)
         font.family: theme.fontUi
         font.pixelSize: theme.typeControl
-        font.weight: Font.DemiBold
+        font.weight: root.selected ? Font.DemiBold : Font.Medium
         font.letterSpacing: 0
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

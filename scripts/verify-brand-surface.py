@@ -63,6 +63,16 @@ ALLOWED_ENGINEERING_LITERALS = {
     # QML module identity is an internal compatibility contract, not displayed copy.
     "apps/desktop/src/main.cpp": ('loadFromModule(QStringLiteral("PhotoEditor")',),
 }
+# Exact compatibility statements may read old application-data directories.
+# Keep them separate from displayed copy and do not allow arbitrary literals
+# elsewhere in the catalog model.
+ALLOWED_ENGINEERING_STATEMENTS = {
+    "apps/desktop/src/catalog_asset_model.cpp": (
+        'if (root_info.fileName() == QStringLiteral("PhotoEditor")) {',
+        'const auto nested = QDir(app_data_root).filePath(QStringLiteral("PhotoEditor"));',
+        'if (QFileInfo(root_info.absolutePath()).fileName() == QStringLiteral("PhotoEditor"))',
+    ),
+}
 REQUIRED_FILES = (
     "apps/desktop/assets/looksy-mark.svg",
     "apps/desktop/assets/looksy-logo.svg",
@@ -134,6 +144,7 @@ def main() -> int:
                     relative.startswith("apps/desktop/src/")
                     and PUBLIC_ENGINEERING_NAME.search(line)
                     and not any(token in line for token in ALLOWED_ENGINEERING_LITERALS.get(relative, ()))
+                    and line.strip() not in ALLOWED_ENGINEERING_STATEMENTS.get(relative, ())
                 ):
                     errors.append(
                         f"internal PhotoEditor identity leaked into public copy in {relative}:{line_number}: {line.strip()}"
