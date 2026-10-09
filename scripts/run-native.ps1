@@ -68,14 +68,14 @@ function Import-VisualStudioEnvironment {
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-        Fail "MSVC was not found. Install Visual Studio 2022 Build Tools with the 'Desktop development with C++' workload."
+        Fail "MSVC was not found. Install Visual Studio 2019 or newer Build Tools with the 'Desktop development with C++' workload."
     }
 
     $installation = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath
     if ($LASTEXITCODE -ne 0 -or -not $installation) {
-        Fail "Visual Studio 2022 is installed without the Desktop development with C++ workload."
+        Fail "Visual Studio is installed without the Desktop development with C++ workload."
     }
 
     $script:vsInstallPath = ([string]$installation).Trim()
@@ -136,7 +136,7 @@ function Resolve-QtRoot {
         }
     }
 
-    Fail "Qt was not found. Install Qt 6.7.3 for MSVC 2022 64-bit with Qt Multimedia, Shader Tools, Qt 5 Compatibility, and Qt Image Formats; then set QT_ROOT to that kit (for example C:\Qt\6.7.3\msvc2022_64)."
+    Fail "Qt was not found. Install Qt 6.7.3 for MSVC 2019 64-bit with Qt Multimedia, Shader Tools, Qt 5 Compatibility, and Qt Image Formats; then set QT_ROOT to that kit (for example C:\Qt\6.7.3\msvc2019_64)."
 }
 
 function Resolve-VcpkgRoot {
