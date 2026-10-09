@@ -338,7 +338,6 @@ if (-not $NoBuild) {
     $vcpkgRoot = Resolve-VcpkgRoot
     $toolchain = Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"
     $windeployqt = Join-Path $qtRoot "bin\windeployqt.exe"
-    $pythonForCMake = $python -replace '\\', '/'
 
     $qtBin = Join-Path $qtRoot "bin"
     if (($env:Path -split ';') -notcontains $qtBin) {
@@ -347,6 +346,13 @@ if (-not $NoBuild) {
     $pythonBin = Split-Path -Parent $python
     if (($env:Path -split ';') -notcontains $pythonBin) {
         $env:Path = "$pythonBin;$env:Path"
+    }
+    if (($env:VCPKG_KEEP_ENV_VARS -split ';') -notcontains "PATH") {
+        $env:VCPKG_KEEP_ENV_VARS = if ($env:VCPKG_KEEP_ENV_VARS) {
+            "$env:VCPKG_KEEP_ENV_VARS;PATH"
+        } else {
+            "PATH"
+        }
     }
     if ($env:CMAKE_PREFIX_PATH) {
         $env:CMAKE_PREFIX_PATH = "$qtRoot;$env:CMAKE_PREFIX_PATH"
@@ -380,10 +386,10 @@ if (-not $NoBuild) {
         Write-Step "Windows desktop configure"
         $configureArguments = @(
             "--preset", $configurePreset,
+            "-UVCPKG_INSTALL_OPTIONS",
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
             "-DCMAKE_MAKE_PROGRAM=$ninja",
             "-DVCPKG_TARGET_TRIPLET=x64-windows",
-            "-DVCPKG_INSTALL_OPTIONS=--cmake-args=-DPYTHON3=$pythonForCMake",
             "-DCMAKE_PREFIX_PATH=$qtRoot",
             "-DPHOTO_EDITOR_RUST_BINARY_DIR=$rustBinDir"
         )
