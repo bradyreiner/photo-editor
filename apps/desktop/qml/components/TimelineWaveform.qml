@@ -119,6 +119,10 @@ Item {
 
     HoverHandler { id: waveformHover }
 
-    ToolTip.visible: waveformHover.hovered && generationState === "generating"
-    ToolTip.text: "Building cached waveform detail in the background"
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (waveformHover.hovered && root.generationState === "generating")
+        text: "Building cached waveform detail in the background"
+    }
 }

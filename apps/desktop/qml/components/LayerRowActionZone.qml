@@ -51,6 +51,7 @@ RowLayout {
     }
 
     Rectangle {
+        id: popupTooltipAnchor1
         objectName: "photoLayerMaskStatePill"
         visible: false
         Layout.preferredWidth: 42
@@ -63,10 +64,13 @@ RowLayout {
         border.color: root.hasMask || root.maskSelected
                       ? theme.alpha(root.accent, 0.52)
                       : theme.alpha(theme.textMuted, 0.24)
-        ToolTip.visible: photoLayerMaskStateHover.hovered
-        ToolTip.delay: 300
-        ToolTip.text: root.hasMask ? "Layer mask enabled." : "No layer mask."
-
+        AppToolTip {
+            id: sharedTooltip2
+            targetItem: popupTooltipAnchor1
+            visible: popupTooltipAnchor1.visible && (photoLayerMaskStateHover.hovered)
+            delay: 300
+            text: root.hasMask ? "Layer mask enabled." : "No layer mask."
+        }
         HoverHandler { id: photoLayerMaskStateHover }
 
         Label {

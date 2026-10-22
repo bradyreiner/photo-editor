@@ -4462,6 +4462,28 @@ QVariantMap compact_prompt_columnar_rows(
   return result;
 }
 
+QVariantMap text_typography_with_native_color_channels(QVariantMap typography) {
+  const QStringList color_keys{
+      QStringLiteral("color"), QStringLiteral("strokeColor"),
+      QStringLiteral("shadowColor"), QStringLiteral("materialTint")};
+  QVariantMap native_color_channels;
+  for (const auto& key : color_keys) {
+    const auto value = typography.value(key);
+    if (!typography.contains(key) || value.metaType().id() != QMetaType::QString || value.isNull())
+      continue;
+    const QColor color(value.toString());
+    if (!color.isValid()) continue;
+    native_color_channels.insert(key, QVariantList{
+        color.red(), color.green(), color.blue(), color.alpha()});
+  }
+  // This field is host-derived metadata. Do not trust a same-named value from
+  // the inspect payload, and only emit it when at least one native color parsed.
+  typography.remove(QStringLiteral("nativeColorChannels"));
+  if (!native_color_channels.isEmpty())
+    typography.insert(QStringLiteral("nativeColorChannels"), native_color_channels);
+  return typography;
+}
+
 QVariantMap compact_prompt_expected_graphic_rows(const QVariantList& rows) {
   if (rows.isEmpty()) return {};
   QVariantList compact_rows;
@@ -4482,7 +4504,7 @@ QVariantMap compact_prompt_expected_graphic_rows(const QVariantList& rows) {
       break;
     }
     identities.insert(id);
-    auto typography = typography_value.toMap();
+    auto typography = text_typography_with_native_color_channels(typography_value.toMap());
     auto layout = layout_value.toMap();
     typography.insert(QStringLiteral("id"), id_value);
     layout.insert(QStringLiteral("id"), id_value);
@@ -4492,8 +4514,24 @@ QVariantMap compact_prompt_expected_graphic_rows(const QVariantList& rows) {
     row.remove(QStringLiteral("layoutMetrics"));
     compact_rows.append(row);
   }
-  if (!tables_are_bindable)
-    return compact_prompt_columnar_rows(rows, QStringLiteral("id"));
+  if (!tables_are_bindable) {
+    QVariantList rows_with_native_color_channels;
+    rows_with_native_color_channels.reserve(rows.size());
+    for (const auto& row_value : rows) {
+      auto row = row_value.toMap();
+      const auto typography_value = row.value(QStringLiteral("textTypography"));
+      if (row.contains(QStringLiteral("textTypography")) &&
+          typography_value.metaType().id() == QMetaType::QVariantMap) {
+        row.insert(QStringLiteral("textTypography"),
+            text_typography_with_native_color_channels(typography_value.toMap()));
+        rows_with_native_color_channels.append(row);
+      } else {
+        rows_with_native_color_channels.append(row_value);
+      }
+    }
+    return compact_prompt_columnar_rows(
+        rows_with_native_color_channels, QStringLiteral("id"));
+  }
 
   auto result = compact_prompt_columnar_rows(compact_rows, QStringLiteral("id"));
   result.insert(QStringLiteral("textTypographyByLayerId"),
@@ -5460,6 +5498,7 @@ QVariantMap compact_current_composition_details(QVariantMap current) {
       QVariantMap compact_typography;
       for (const auto& key : text_typography_keys)
         if (typography.contains(key)) compact_typography.insert(key, typography.value(key));
+      compact_typography = text_typography_with_native_color_channels(compact_typography);
       layer.insert(QStringLiteral("textTypography"), compact_typography);
     }
     layer_value = layer;
@@ -5662,8 +5701,17 @@ QString prior_tool_results_prompt_json(const QVariantList& raw_values) {
         const auto& layer_value = source_layers.at(layer_index);
         const auto layer = layer_value.toMap();
         QVariantMap compact_layer;
-        for (const auto& key : layer_keys)
-          if (layer.contains(key)) compact_layer.insert(key, compact_prompt_evidence(layer.value(key), key));
+        for (const auto& key : layer_keys) {
+          if (!layer.contains(key)) continue;
+          const auto layer_value = layer.value(key);
+          if (key == QStringLiteral("textTypography") &&
+              layer_value.metaType().id() == QMetaType::QVariantMap) {
+            compact_layer.insert(key, compact_prompt_evidence(
+                text_typography_with_native_color_channels(layer_value.toMap()), key));
+          } else {
+            compact_layer.insert(key, compact_prompt_evidence(layer_value, key));
+          }
+        }
         layers.append(compact_layer);
       }
       if (source_layers.size() > layers.size())
@@ -6129,7 +6177,7 @@ QString font_discovery_instruction(const AgentLocalModelPlanRequest& request) {
       });
   if (!inspection_available) return {};
   auto instruction = QStringLiteral(
-      "For typography discovery, make only one initial no-values photo.inspect_composition inventory read per asset; if a successful inventory is already in prior results, reuse it. Pass exactly {assetId} on that inventory read. Use returned fonts and fontFaces entries shaped as {family, faces} as supported native choices. Do not use inspect values to probe alternative candidates. After a mutation, a fresh photo.inspect_composition readback for the changed layer IDs is mandatory before any completion decision; if it is absent, request that readback. This state readback is distinct from the one-time font inventory and does not count as rediscovering fonts. Compare the latest textTypography fields against every explicit brief requirement and use tool_call_plan to repair any mismatch. For numeric relationships, calculate the actual ratio from readback values and check the requested threshold exactly. A minimum hierarchy ratio does not fix absolute font sizes. If the current smaller roles force a headline that cannot fit, reduce all involved sizes proportionally in one tool plan, unless the brief protects those sizes. Do not alternate enlarging a clipped headline and shrinking only that headline. Preserve revision-protected roles and geometry. An empty fontAxes list can describe a valid static font. When the user delegates design choices, choose a returned supported family and face. If the brief explicitly requires a native family and face and no returned face is available, ask or stop safely rather than using a default or substitution; use a default face only when the face is optional. For every typography value required by the brief, include it in the actual tool arguments; a summary does not apply a value. Default text is neutral white. When a color is requested, including warm white, explicitly set the intended color on every relevant text layer; a family/size-only update does not recolor it. Serialize typography values in canonical schema order: color, face, family, then later properties. If the brief explicitly requires both family and face, include both exact strings from the same returned inventory entry in every relevant typography call, with face before family; do not rely on a native default.");
+      "For typography discovery, make only one initial no-values photo.inspect_composition inventory read per asset; if a successful inventory is already in prior results, reuse it. Pass exactly {assetId} on that inventory read. Use returned fonts and fontFaces entries shaped as {family, faces} as supported native choices. Do not use inspect values to probe alternative candidates. After a mutation, a fresh photo.inspect_composition readback for the changed layer IDs is mandatory before any completion decision; if it is absent, request that readback. This state readback is distinct from the one-time font inventory and does not count as rediscovering fonts. Compare the latest textTypography fields against every explicit brief requirement and use tool_call_plan to repair any mismatch. For numeric relationships, calculate the actual ratio from readback values and check the requested threshold exactly. A minimum hierarchy ratio does not fix absolute font sizes. If the current smaller roles force a headline that cannot fit, reduce all involved sizes proportionally in one tool plan, unless the brief protects those sizes. Do not alternate enlarging a clipped headline and shrinking only that headline. Preserve revision-protected roles and geometry. An empty fontAxes list can describe a valid static font. When the user delegates design choices, choose a returned supported family and face. If the brief explicitly requires a native family and face and no returned face is available, ask or stop safely rather than using a default or substitution; use a default face only when the face is optional. For every typography value required by the brief, include it in the actual tool arguments; a summary does not apply a value. Default text is neutral white. When a color is requested, including warm white, explicitly set the intended color on every relevant text layer; a family/size-only update does not recolor it. Prefer opaque six-digit #RRGGBB, for example #FFF8F0 for warm white. Eight-digit hex is Qt #AARRGGBB for intentional alpha, never CSS #RRGGBBAA. Read nativeColorChannels as red, green, blue, alpha; compare the actual parsed color to the requested appearance. Serialize typography values in canonical schema order: color, face, family, then later properties. If the brief explicitly requires both family and face, include both exact strings from the same returned inventory entry in every relevant typography call, with face before family; do not rely on a native default.");
   if (explicit_font_face_pair_required(request))
     instruction += QStringLiteral(
         " This task's active instructions explicitly require a native font family and face, so generated typography operations must provide both fields.");
@@ -8469,8 +8517,16 @@ QVariantList agent_graphic_proof_layers(
     for (const auto& key : {QStringLiteral("id"), QStringLiteral("name"), QStringLiteral("text"),
              QStringLiteral("x"), QStringLiteral("y"), QStringLiteral("pixelWidth"), QStringLiteral("pixelHeight"),
              QStringLiteral("canvasWidth"), QStringLiteral("canvasHeight"), QStringLiteral("scale"),
-             QStringLiteral("rotation"), QStringLiteral("textTypography")})
-      if (layer.contains(key)) metadata.insert(key, layer.value(key));
+             QStringLiteral("rotation"), QStringLiteral("textTypography")}) {
+      if (!layer.contains(key)) continue;
+      const auto value = layer.value(key);
+      if (key == QStringLiteral("textTypography") &&
+          value.metaType().id() == QMetaType::QVariantMap) {
+        metadata.insert(key, text_typography_with_native_color_channels(value.toMap()));
+      } else {
+        metadata.insert(key, value);
+      }
+    }
     const auto layout_metrics = agent_graphic_proof_layout_metrics(layer);
     if (!metadata.contains(QStringLiteral("scale")))
       metadata.insert(QStringLiteral("scale"), layout_metrics.value(QStringLiteral("scale"), 1.0));

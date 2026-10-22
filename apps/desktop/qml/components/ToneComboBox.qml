@@ -197,7 +197,8 @@ ComboBox {
         border.color: root.visualFocus ? theme.focusRing : theme.controlEdge
     }
 
-    popup: Popup {
+    popup: AppPopup {
+        margins: theme.space8
         objectName: root.objectName.length > 0 ? root.objectName + "Popup" : "toneComboBoxPopup"
         parent: root.Overlay.overlay
         x: root.popupOverlay
@@ -209,17 +210,10 @@ ComboBox {
         y: root.popupOpensAbove
            ? root.popupAnchorY - height - theme.space4
            : root.popupAnchorY + root.height + theme.space4
-        width: Math.min(root.popupMaximumWidth, Math.max(root.width, theme.menuMinWidth))
-        height: Math.min(dropdownList.contentHeight + padding * 2, root.resolvedPopupHeight)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(root.popupMaximumWidth, Math.max(root.width, theme.menuMinWidth))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(dropdownList.contentHeight + padding * 2, root.resolvedPopupHeight)))
         padding: theme.space4
         onAboutToShow: root.updatePopupAnchor()
-        enter: Transition {
-            ParallelAnimation {
-                NumberAnimation { property: "opacity"; from: 0; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
-                NumberAnimation { property: "scale"; from: theme.reducedMotion ? 1 : 0.985; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
-            }
-        }
-        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: theme.reducedMotion ? 0 : 80 } }
 
         contentItem: ListView {
             id: dropdownList
@@ -229,10 +223,6 @@ ComboBox {
             currentIndex: root.highlightedIndex
         }
 
-        background: PopupSurface {
-            radius: theme.radiusControl
-            fillColor: theme.popupFill
-            borderColor: theme.alpha(theme.controlEdge, 0.72)
-        }
+        background: PopupSurface {}
     }
 }

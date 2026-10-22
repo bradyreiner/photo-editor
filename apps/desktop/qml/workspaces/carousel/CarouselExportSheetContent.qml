@@ -725,6 +725,7 @@ ColumnLayout {
                 }
 
                 ToneCheckBox {
+                    id: popupTooltipAnchor1
                     allowLabelWrap: true
                     Layout.fillWidth: true
                     text: "Delivery manifest"
@@ -732,10 +733,13 @@ ColumnLayout {
                     checked: content.carouselDocument.exportManifestEnabled
                     onClicked: content.carouselDocument.setExportManifestEnabled(
                                    !content.carouselDocument.exportManifestEnabled)
-                    ToolTip.visible: manifestHover.hovered
-                    ToolTip.delay: 350
-                    ToolTip.text: "Include ordered output metadata, hashes, profiles, board roles, accessibility text, warnings, and export time."
-
+                    AppToolTip {
+                        id: sharedTooltip2
+                        targetItem: popupTooltipAnchor1
+                        visible: popupTooltipAnchor1.visible && (manifestHover.hovered)
+                        delay: 350
+                        text: "Include ordered output metadata, hashes, profiles, board roles, accessibility text, warnings, and export time."
+                    }
                     HoverHandler { id: manifestHover }
                 }
 
@@ -748,10 +752,13 @@ ColumnLayout {
                     checked: content.carouselDocument.exportProofSheetEnabled
                     onClicked: content.carouselDocument.setExportProofSheetEnabled(
                                    !content.carouselDocument.exportProofSheetEnabled)
-                    ToolTip.visible: pdfProofHover.hovered
-                    ToolTip.delay: 350
-                    ToolTip.text: "Create a separate A4 landscape review PDF with four color-managed board thumbnails per page."
-
+                    AppToolTip {
+                        id: sharedTooltip3
+                        targetItem: carouselPdfProofToggle
+                        visible: carouselPdfProofToggle.visible && (pdfProofHover.hovered)
+                        delay: 350
+                        text: "Create a separate A4 landscape review PDF with four color-managed board thumbnails per page."
+                    }
                     HoverHandler { id: pdfProofHover }
                 }
 
@@ -1234,13 +1241,11 @@ ColumnLayout {
             font.pixelSize: content.theme.typeCaption
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
         }
-        ProgressBar {
+        ProgressStrip {
             objectName: "carouselExportProgressBar"
             Layout.fillWidth: true
             visible: content.carouselDocument.exportBusy
-            from: 0
-            to: 1
-            value: Number(content.carouselExportSheet.progress.fraction || 0)
+            progress: Number(content.carouselExportSheet.progress.fraction || 0)
         }
     }
     RowLayout {

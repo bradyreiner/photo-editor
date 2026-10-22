@@ -84,6 +84,10 @@ std::optional<std::string> serialize_photo_effect_stack(
       values << std::setprecision(std::numeric_limits<double>::max_digits10)
           << effect.grain.size << ' ' << effect.grain.strength << ' ' << effect.grain.color << ' '
           << effect.grain.seed;
+      if (!effect.grain.stock.empty() || effect.grain.roughness != 0.4 ||
+          effect.grain.shadows != 1.0 || effect.grain.highlights != 1.0)
+        values << ' ' << std::quoted(effect.grain.stock) << ' ' << effect.grain.roughness
+            << ' ' << effect.grain.shadows << ' ' << effect.grain.highlights;
       parameters = values.str();
     } else if (effect.type_id == "light_leak" && effect.algorithm_version == 1) {
       std::ostringstream values;
@@ -214,10 +218,15 @@ std::optional<std::vector<PhotoEffectInstance>> deserialize_photo_effect_stack(
       values.imbue(std::locale::classic());
       std::int64_t seed = 0;
       if (!(values >> effect.grain.size >> effect.grain.strength >> effect.grain.color >> seed) ||
-          seed < 0 || seed > std::numeric_limits<std::uint32_t>::max() || !exhausted(values)) {
+          seed < 0 || seed > std::numeric_limits<std::uint32_t>::max()) {
         fail(error, "Malformed film grain parameters."); return std::nullopt;
       }
       effect.grain.seed = static_cast<std::uint32_t>(seed);
+      if (!exhausted(values) &&
+          (!(values >> std::quoted(effect.grain.stock) >> effect.grain.roughness >>
+              effect.grain.shadows >> effect.grain.highlights) || !exhausted(values))) {
+        fail(error, "Malformed film grain stock parameters."); return std::nullopt;
+      }
     } else if (effect.type_id == "light_leak" && effect.algorithm_version == 1) {
       std::istringstream values{parameters};
       values.imbue(std::locale::classic());

@@ -12,9 +12,13 @@ layout(std140, binding = 0) uniform buf {
     float itemHeight;
     float perspectiveX;
     float perspectiveY;
+    vec4 fadeColor;
+    float fadeAmount;
 } ubuf;
 
 void main()
 {
-    fragmentColor = texture(source, textureCoordinate) * ubuf.qt_Opacity;
+    vec4 pixel = texture(source, textureCoordinate);
+    pixel.rgb = mix(pixel.rgb, ubuf.fadeColor.rgb * pixel.a, clamp(ubuf.fadeAmount, 0.0, 1.0));
+    fragmentColor = pixel * ubuf.qt_Opacity;
 }

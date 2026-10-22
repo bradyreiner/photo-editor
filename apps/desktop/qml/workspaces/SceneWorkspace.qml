@@ -145,14 +145,14 @@ Item {
             root.actionError = String(result.error || "")
         }
     }
-    Popup {
+    AppPopup {
         id: timedFilmPopup
         objectName: "sceneTimedFilmPopup"
         anchors.centerIn: Overlay.overlay
-        width: Math.min(theme.scaled(520), root.width - theme.space24)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(520), root.width - theme.space24)))
         modal: true
-        padding: theme.space16
-        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
+        padding: standardPopupPadding
+        background: PopupSurface {}
         onOpened: {
             filmSceneStart.text = "0"
             filmSceneEnd.text = String(viewport.status.timeDurationSeconds || 0)
@@ -201,14 +201,14 @@ Item {
             }
         }
     }
-    Popup {
+    AppPopup {
         id: pathPopup
         objectName: "sceneCameraPathPopup"
         anchors.centerIn: Overlay.overlay
-        width: Math.min(theme.scaled(520), root.width - theme.space24)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(520), root.width - theme.space24)))
         modal: true
-        padding: theme.space16
-        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
+        padding: standardPopupPadding
+        background: PopupSurface {}
         onOpened: {
             const settings = viewport.status.cameraPath || {}
             root.pathDraft = (settings.viewIds || []).slice()
@@ -305,15 +305,15 @@ Item {
         }
     }
     Theme { id: theme }
-    Popup {
+    AppPopup {
         id: saveViewPopup
         objectName: "sceneSaveViewPopup"
         anchors.centerIn: Overlay.overlay
-        width: Math.min(theme.scaled(360), root.width - theme.space24)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(360), root.width - theme.space24)))
         modal: true
-        padding: theme.space16
+        padding: standardPopupPadding
         onOpened: { viewName.clear(); viewName.forceActiveFocus() }
-        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             spacing: 16
             Label { text: "Save this camera view"; color: theme.textStrong; font.family: theme.fontUi; font.pixelSize: theme.typeSection; font.weight: Font.DemiBold }
@@ -492,12 +492,12 @@ Item {
                         root.actionError = String(result.error || "")
                     }
                 }
-                ProgressBar {
+                ProgressStrip {
                     objectName: "sceneBuildProgress"
                     Layout.fillWidth: true
                     visible: Boolean(root.scene.busy)
-                    indeterminate: root.scene.state !== "training-gaussians" && root.scene.state !== "extracting-video"
-                    value: root.scene.state === "extracting-video"
+                    progress: root.scene.state !== "training-gaussians" && root.scene.state !== "extracting-video" ? -1
+                        : root.scene.state === "extracting-video"
                         ? Math.min(1, Number(root.scene.extractedFrames || 0) / Math.max(1, Number(root.scene.requestedFrames || 1)))
                         : Math.min(1, Number(root.scene.iteration || 0) / Math.max(1, Number(root.scene.trainingSteps || 1)))
                 }
@@ -540,16 +540,16 @@ Item {
             GradientStop { position: 1; color: "transparent" }
         }
     }
-    Popup {
+    AppPopup {
         id: sceneControls
         objectName: "sceneControlsPopup"
         anchors.centerIn: Overlay.overlay
-        width: Math.min(880, root.width - 48)
-        height: Math.min(sceneControlContents.implicitHeight + padding * 2, root.height - 48)
-        padding: theme.space16
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(880, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(sceneControlContents.implicitHeight + padding * 2, root.height - 48)))
+        padding: standardPopupPadding
         modal: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
+        background: PopupSurface {}
         contentItem: Flickable {
             clip: true
             contentWidth: width
@@ -557,7 +557,7 @@ Item {
             ScrollBar.vertical: ScrollBar {}
         }
     }
-    Popup {
+    AppPopup {
         id: photoControls
         objectName: "scenePhotoControlsPopup"
         property int page: 0
@@ -566,12 +566,12 @@ Item {
         onPageChanged: { if (contentItem) contentItem.contentY = 0 }
         x: Math.max(12, root.width - width - 20)
         y: 72
-        width: Math.min(370, root.width - 24)
-        height: Math.min(photoControlContents.implicitHeight + topPadding + bottomPadding, Math.max(100, root.height - y - 20))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(370, root.width - 24)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(photoControlContents.implicitHeight + topPadding + bottomPadding, Math.max(100, root.height - y - 20))))
         padding: theme.space16
         modal: false
         closePolicy: Popup.CloseOnEscape
-        background: PopupSurface { radius: theme.radiusSurface; fillColor: theme.ink900 }
+        background: PopupSurface {}
         contentItem: Flickable {
             objectName: "scenePhotoControlsScroll"
             clip: true

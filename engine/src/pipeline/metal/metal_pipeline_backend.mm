@@ -8,6 +8,8 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 
+#include "color_adjustments_metal_source.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -205,6 +207,7 @@ struct CurveStageUniforms final {
 struct LookStageUniforms final {
   std::array<float, 9> rgb_to_xyz_d65{};
   std::array<float, 9> xyz_d65_to_rgb{};
+  std::array<float, 9> rgb_to_selection_rgb{};
   std::array<float, 3> luminance_coefficients{};
   std::array<float, 9> rgb_mixer{};
   std::array<float, kColorMixerChannelCount> black_and_white_mixer{};
@@ -240,7 +243,7 @@ struct LookStageUniforms final {
   std::uint32_t active_mask = 0U;
   std::uint32_t pixel_count = 0U;
 };
-static_assert(sizeof(LookStageUniforms) == 508U);
+static_assert(sizeof(LookStageUniforms) == 544U);
 
 [[nodiscard]] LookStageUniforms make_look_stage_uniforms(
     const CompiledLookStageProgram& program,
@@ -288,6 +291,8 @@ static_assert(sizeof(LookStageUniforms) == 508U);
         static_cast<float>(program.rgb_to_xyz_d65.values[index]);
     uniforms.xyz_d65_to_rgb[index] =
         static_cast<float>(program.xyz_d65_to_rgb.values[index]);
+    uniforms.rgb_to_selection_rgb[index] =
+        static_cast<float>(program.rgb_to_selection_rgb.values[index]);
   }
   return uniforms;
 }
@@ -487,6 +492,8 @@ struct RetainedFineDetailUniforms final {
   std::array<float, 9> xyz_d65_to_rgb{};
   float sharpen_strength = 0.0F;
   float sharpen_gain = 1.9F;
+  float sharpen_radius_fraction = 0.0F;
+  float sharpen_subpixel_scale = 1.0F;
   float sharpen_mask_strength = 0.0F;
   float luminance_nr_strength = 0.0F;
   float color_nr_strength = 0.0F;
@@ -1613,877 +1620,11 @@ struct MetalPipelineBackend::Impl {
   }
 
   NSString* load_shader_source() {
-    // Look for the shader relative to the executable
-    NSBundle* bundle = [NSBundle mainBundle];
-    NSString* path = [bundle pathForResource:@"color_adjustments" ofType:@"metal"];
-    if (path) {
-      return [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    }
-
-    // Development/test fallback: load the checked-in source next to this file.
-    NSString* backend_source = [NSString stringWithUTF8String:__FILE__];
-    NSString* source_tree_path =
-        [[backend_source stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"color_adjustments.metal"];
-    NSString* source_tree_shader =
-        [NSString stringWithContentsOfFile:[source_tree_path stringByStandardizingPath]
-                                  encoding:NSUTF8StringEncoding
-                                     error:nil];
-    if (source_tree_shader) {
-      return source_tree_shader;
-    }
-
-    // Keep each literal below the portable compiler length limit.
-    // Fallback: embed the shader source inline for development builds.
-    return [@R"(
-#include <metal_stdlib>
-using namespace metal;
-
-struct ColorAdjustmentUniforms {
-  float exposure_gain;
-  float wb_red; float wb_green; float wb_blue;
-  float contrast; float highlights; float shadows; float whites; float blacks;
-  float curve_shadows; float curve_darks; float curve_lights; float curve_highlights;
-  float saturation_strength; float vibrance_strength; float dehaze_sat_contrib;
-  float hue_adjustment; float saturation_adjustment; float luminance_adjustment;
-  int lut_size; int width; int height;
-};
-
-struct SceneExposureUniforms {
-  float gain;
-  uint pixel_count;
-};
-
-struct ToneStageUniforms {
-  float luminance_red;
-  float luminance_green;
-  float luminance_blue;
-  float minimum_stops;
-  float stop_step;
-  float middle_gray;
-  float output_headroom;
-  uint sample_count;
-  uint pixel_count;
-};
-
-struct CurveStageUniforms {
-  float luminance_red;
-  float luminance_green;
-  float luminance_blue;
-  float output_headroom;
-  uint sample_count;
-  uint pixel_count;
-  uint active_mask;
-  uint padding;
-};
-
-struct LookStageUniforms {
-  float rgb_to_xyz_d65[9]; float xyz_d65_to_rgb[9]; float luminance_coefficients[3];
-  float rgb_mixer[9]; float black_and_white_mixer[8];
-  float grading_hue[3]; float grading_saturation[3]; float grading_luminance[3];
-  float mixer_hue[8]; float mixer_saturation[8]; float mixer_luminance[8];
-  float selective_cyan[8]; float selective_magenta[8]; float selective_yellow[8]; float selective_black[8];
-  float harmony_anchors[4];
-  float saturation_strength; float vibrance_strength; float grading_amount; float grading_balance; float harmony_strength; float output_headroom;
-  float replacement_source_hue; float replacement_target_oklab_hue; float replacement_range; float replacement_softness;
-  float replacement_strength; float skin_hue; float skin_range; float skin_strength;
-  uint mixer_model; uint harmony_anchor_count; uint replacement_preserve_luminance; uint replacement_preserve_saturation;
-  uint active_mask; uint pixel_count;
-};
-
-struct UserLutStageUniforms {
-  float working_to_input[9]; float output_to_working[9];
-  float domain_min[3]; float domain_max[3]; float strength;
-  uint input_transfer; uint output_transfer; uint lut_size; uint pixel_count;
-  float shaper_input_min; float shaper_input_max; uint shaper_size; uint shaper_offset;
-};
-
-struct GeometryStageUniforms {
-  float distortion_strength; float chromatic_aberration_strength;
-  float vertical_perspective; float horizontal_perspective;
-  float transform_rotation; float transform_scale;
-  float transform_skew_x; float transform_skew_y;
-  float liquify_strength; float liquify_center_x; float liquify_center_y;
-  float liquify_radius; float center_x; float center_y; float maximum_radius;
-  uint width; uint height; uint content_aware_crop_fill;
-};
-
-struct HdrLocalToneUniforms {
-  float luminance_red; float luminance_green; float luminance_blue;
-  float strength; float output_headroom; uint width; uint height;
-};
-
-struct CompiledFillLayerUniform {
-  float4 color; float opacity; uint blend_mode; uint mask_offset; uint mask_width;
-  uint mask_height; uint mask_inverted; float mask_opacity; float mask_density;
-  uint has_mask; uint clipping_mask; uint kind; uint pixel_offset;
-  uint pixel_width; uint pixel_height; int x; int y;
-  float transform_scale; float transform_rotation; float exposure_gain;
-  uint tone_offset; uint has_tone; uint has_white_balance;
-  float white_balance[9]; uint has_look; float rgb_to_xyz_d65[9];
-  float xyz_d65_to_rgb[9]; float look_luminance[3]; float saturation_strength;
-  float vibrance_strength; float look_output_headroom; uint has_local_chroma;
-  float hue_shift; float saturation_shift; float colorize_hue; float colorize_amount;
-  uint advanced_tone_offset; uint has_advanced_tone; uint curve_offsets[6];
-  uint curve_active_mask; uint has_curves; uint has_downstream_look;
-  float lens_vignette; float dehaze; uint erase_base_image;
-};
-struct FillLayerUniforms {
-  CompiledFillLayerUniform layers[16]; float blend_headroom; uint layer_count;
-  uint width; uint height; float luminance_red; float luminance_green;
-  float luminance_blue; float tone_stop_step; float output_headroom;
-  float rgb_to_xyz_d65[9]; float xyz_d65_to_rgb[9];
-  uint layer_begin; uint layer_end; uint source_only; uint composite_only;
-  uint perceptual_blend_gamut_mode;
-};
-
-struct RetainedSpatialDetailUniforms {
-  float luminance_red; float luminance_green; float luminance_blue;
-  float texture_strength; float clarity_strength; float dehaze_strength;
-  float output_headroom; uint width; uint height; uint active_mask;
-};
-
-struct RetainedFineDetailUniforms {
-  float rgb_to_xyz_d65[9]; float xyz_d65_to_rgb[9];
-  float sharpen_strength; float sharpen_gain; float sharpen_mask_strength;
-  float luminance_nr_strength; float color_nr_strength;
-  uint width; uint height; uint active_mask;
-};
-
-kernel void apply_scene_exposure(
-    device float4* pixels [[buffer(0)]],
-    constant SceneExposureUniforms& u [[buffer(1)]],
-    uint gid [[thread_position_in_grid]]) {
-  if (gid >= u.pixel_count) return;
-  float4 pixel = pixels[gid];
-  pixels[gid] = float4(pixel.rgb * u.gain, pixel.a);
-}
-
-static float tone_stage_luminance(float3 rgb, constant ToneStageUniforms& u) {
-  return rgb.r * u.luminance_red + rgb.g * u.luminance_green + rgb.b * u.luminance_blue;
-}
-
-static float tone_stage_target(float luminance_value, device const float* samples,
-    constant ToneStageUniforms& u) {
-  if (luminance_value <= 0.0f) return 0.0f;
-  float stops = log2(max(1.0e-8f, luminance_value) / u.middle_gray);
-  float position = clamp((stops - u.minimum_stops) / u.stop_step, 0.0f,
-      float(u.sample_count - 1u));
-  uint lower = min(uint(position), u.sample_count - 2u);
-  return mix(samples[lower], samples[lower + 1u], position - float(lower));
-}
-
-kernel void apply_global_tone_luminance(device float4* pixels [[buffer(0)]],
-    device const float* samples [[buffer(1)]], constant ToneStageUniforms& u [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]) {
-  if (gid >= u.pixel_count) return;
-  float4 source = pixels[gid];
-  float source_luminance = tone_stage_luminance(source.rgb, u);
-  float target_luminance = max(0.0f, tone_stage_target(source_luminance, samples, u));
-  float maximum_channel = max(source.r, max(source.g, source.b));
-  float safe_target = target_luminance;
-  if (maximum_channel <= 1.0e-9f || source_luminance <= 1.0e-9f) {
-    safe_target = min(safe_target, u.output_headroom);
-  } else {
-    safe_target = min(safe_target, max(0.0f, u.output_headroom * source_luminance / maximum_channel));
+    // The shader and CPU payload are compiled from the same source snapshot.
+    // No separately maintained fallback or runtime source-tree override can drift.
+    return photo_editor_bundled_color_shader_source();
   }
-  float maximum_magnitude = max(abs(source.r), max(abs(source.g), abs(source.b)));
-  float3 adjusted = source.rgb;
-  if (maximum_magnitude <= 1.0e-9f) {
-    adjusted = float3(safe_target);
-  } else if (source_luminance > 1.0e-6f) {
-    adjusted *= safe_target / source_luminance;
-  }
-  float adjusted_luminance = max(0.0f, tone_stage_luminance(adjusted, u));
-  float nonnegative_source_luminance = max(0.0f, source_luminance);
-  float lift_stops = log2((adjusted_luminance + 1.0e-6f) /
-      (nonnegative_source_luminance + 1.0e-6f));
-  if (lift_stops > 0.0f) {
-    float channel_spread = max(abs(source.r - source.g),
-        max(abs(source.g - source.b), abs(source.r - source.b)));
-    float shadow_weight = 1.0f - smoothstep(0.012f, 0.16f, nonnegative_source_luminance);
-    float lift_weight = smoothstep(0.12f, 1.20f, lift_stops);
-    float contamination_weight = 1.0f - smoothstep(0.025f, 0.12f, channel_spread);
-    float attenuation = clamp(shadow_weight * lift_weight * contamination_weight * 0.56f,
-        0.0f, 0.56f);
-    adjusted = adjusted_luminance + (adjusted - adjusted_luminance) * (1.0f - attenuation);
-  }
-  pixels[gid] = float4(adjusted, source.a);
-}
 
-static float hdr_local_luminance(float3 rgb,constant HdrLocalToneUniforms& u){
-  return rgb.r*u.luminance_red+rgb.g*u.luminance_green+rgb.b*u.luminance_blue;
-}
-kernel void extract_retained_hdr_local_tone(device const float4* pixels [[buffer(0)]],
-    device float* log_luminance [[buffer(1)]],constant HdrLocalToneUniforms& u [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]){
-  uint total=u.width*u.height;if(gid>=total)return;
-  log_luminance[gid]=log2(max(1.0e-6f,hdr_local_luminance(pixels[gid].rgb,u)));
-}
-kernel void apply_retained_hdr_local_tone(device float4* pixels [[buffer(0)]],
-    device const float* log_luminance [[buffer(1)]],device const float* local_log [[buffer(2)]],
-    constant HdrLocalToneUniforms& u [[buffer(3)]],uint gid [[thread_position_in_grid]]){
-  uint total=u.width*u.height;if(gid>=total)return;float4 source=pixels[gid];
-  float target_log=log_luminance[gid];float local=local_log[gid];
-  constexpr float start=-0.4739311883324123f;
-  float excess=max(0.0f,local-start);float weight=smoothstep(start,start+2.2f,local);
-  float mapped=exp2(target_log-excess*u.strength*0.58f+(target_log-local)*u.strength*weight*0.45f);
-  float source_y=hdr_local_luminance(source.rgb,u);float maximum=max(source.r,max(source.g,source.b));
-  float safe=max(0.0f,mapped);
-  if(maximum<=1.0e-9f||source_y<=1.0e-9f)safe=min(safe,u.output_headroom);
-  else safe=min(safe,max(0.0f,u.output_headroom*source_y/maximum));
-  float magnitude=max(abs(source.r),max(abs(source.g),abs(source.b)));float3 adjusted=source.rgb;
-  if(magnitude<=1.0e-9f)adjusted=float3(safe);else if(source_y>1.0e-6f)adjusted*=safe/source_y;
-  pixels[gid]=float4(adjusted,source.a);
-}
-
-static float retained_fill_blend(float base,float source,float headroom,uint mode){
-  if(mode==0u)return source;float b=max(0.0f,base);float s=max(0.0f,source);
-  if(mode==1u)return b*s;if(mode==2u)return headroom-(headroom-b)*(headroom-s)/headroom;
-  if(mode==3u)return abs(b-s);if(mode==4u)return max(b,s);if(mode==5u)return min(b,s);
-  float bn=clamp(b/headroom,0.0f,1.0f);float sn=clamp(s/headroom,0.0f,1.0f);
-  if(mode==6u)return (bn<=0.5f?2.0f*bn*sn:1.0f-2.0f*(1.0f-bn)*(1.0f-sn))*headroom;
-  if(mode==7u){float d=bn<=0.25f?((16.0f*bn-12.0f)*bn+4.0f)*bn:sqrt(bn);
-    return (sn<=0.5f?bn-(1.0f-2.0f*sn)*bn*(1.0f-bn):bn+(2.0f*sn-1.0f)*(d-bn))*headroom;}
-  if(mode==8u)return (sn<=0.5f?2.0f*sn*bn:1.0f-2.0f*(1.0f-sn)*(1.0f-bn))*headroom;
-  return clamp(b+2.0f*s-headroom,0.0f,headroom);
-}
-static float3 retained_blend_multiply(constant float* matrix,float3 value){return float3(
-  matrix[0]*value.r+matrix[1]*value.g+matrix[2]*value.b,
-  matrix[3]*value.r+matrix[4]*value.g+matrix[5]*value.b,
-  matrix[6]*value.r+matrix[7]*value.g+matrix[8]*value.b);}
-static float retained_blend_cbrt(float value){return copysign(pow(abs(value),1.0f/3.0f),value);}
-static float3 retained_blend_rgb_to_oklab(float3 rgb,constant FillLayerUniforms& u){float3 xyz=retained_blend_multiply(u.rgb_to_xyz_d65,rgb);
-  float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z,m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z;
-  float s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z,lr=retained_blend_cbrt(l),mr=retained_blend_cbrt(m),sr=retained_blend_cbrt(s);
-  return float3(0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr,1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr,
-    0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr);}
-static float3 retained_blend_oklab_to_rgb(float lightness,float chroma,float hue,constant FillLayerUniforms& u){float a=chroma*cos(hue),b=chroma*sin(hue);
-  float lr=lightness+0.3963377774f*a+0.2158037573f*b,mr=lightness-0.1055613458f*a-0.0638541728f*b,sr=lightness-0.0894841775f*a-1.2914855480f*b;
-  float l=lr*lr*lr,m=mr*mr*mr,s=sr*sr*sr;float3 xyz=float3(1.2270138511f*l-0.5577999807f*m+0.2812561490f*s,
-    -0.0405801784f*l+1.1122568696f*m-0.0716766787f*s,-0.0763812845f*l-0.4214819784f*m+1.5861632204f*s);
-  return retained_blend_multiply(u.xyz_d65_to_rgb,xyz);}
-static bool retained_blend_in_gamut(float3 rgb,constant FillLayerUniforms& u){return all(rgb>=float3(-1.0e-6f))&&all(rgb<=float3(u.blend_headroom+1.0e-6f));}
-static float3 retained_blend_fit(float3 rgb,constant FillLayerUniforms& u){rgb=max(rgb,float3(0.0f));float maximum=max(rgb.r,max(rgb.g,rgb.b));
-  return maximum>u.blend_headroom?rgb*(u.blend_headroom/maximum):rgb;}
-static float4 retained_blend_search_chroma(float lightness,float chroma,float hue,constant FillLayerUniforms& u){float ceiling=pow(u.blend_headroom,1.0f/3.0f);
-  lightness=clamp(lightness,0.0f,ceiling);chroma=max(0.0f,chroma);float3 candidate=retained_blend_oklab_to_rgb(lightness,chroma,hue,u);
-  if(u.perceptual_blend_gamut_mode==1u||retained_blend_in_gamut(candidate,u))return float4(retained_blend_fit(candidate,u),chroma);
-  float low=0.0f,high=chroma;for(uint iteration=0u;iteration<16u;++iteration){float mid=(low+high)*0.5f;
-    candidate=retained_blend_oklab_to_rgb(lightness,mid,hue,u);if(retained_blend_in_gamut(candidate,u))low=mid;else high=mid;}
-  return float4(retained_blend_fit(retained_blend_oklab_to_rgb(lightness,low,hue,u),u),low);}
-static float3 retained_fill_blend_pixel(float3 base,float3 source,uint mode,constant FillLayerUniforms& u){if(mode<10u)return float3(
-  retained_fill_blend(base.r,source.r,u.blend_headroom,mode),retained_fill_blend(base.g,source.g,u.blend_headroom,mode),
-  retained_fill_blend(base.b,source.b,u.blend_headroom,mode));float3 base_lab=retained_blend_rgb_to_oklab(base,u),source_lab=retained_blend_rgb_to_oklab(source,u);
-  float ceiling=pow(u.blend_headroom,1.0f/3.0f),lightness=clamp(base_lab.x,0.0f,ceiling),chroma=length(base_lab.yz),hue=atan2(base_lab.z,base_lab.y);
-  float source_chroma=length(source_lab.yz),source_hue=source_chroma>1.0e-6f?atan2(source_lab.z,source_lab.y):hue;
-  if(mode==10u)hue=source_hue;else if(mode==11u)chroma=source_chroma;else if(mode==12u){hue=source_hue;chroma=source_chroma;}
-  else lightness=clamp(source_lab.x,0.0f,ceiling);if(chroma<=1.0e-9f)return retained_blend_fit(retained_blend_oklab_to_rgb(lightness,0.0f,0.0f,u),u);
-  float4 best=retained_blend_search_chroma(lightness,chroma,hue,u);float best_lightness=lightness;
-  if(best.w>max(1.0e-4f,chroma*0.02f)||u.perceptual_blend_gamut_mode==2u)return best.rgb;
-  for(uint iteration=1u;iteration<=12u;++iteration){float candidate_lightness=mix(lightness,0.5f,float(iteration)/12.0f);
-    float4 candidate=retained_blend_search_chroma(candidate_lightness,chroma,hue,u);if(candidate.w>best.w+1.0e-6f||
-      (abs(candidate.w-best.w)<=1.0e-6f&&abs(candidate_lightness-lightness)<abs(best_lightness-lightness))){best=candidate;best_lightness=candidate_lightness;}}
-  return best.rgb;}
-static float retained_layer_luminance(float3 rgb,constant FillLayerUniforms& u){
-  return rgb.r*u.luminance_red+rgb.g*u.luminance_green+rgb.b*u.luminance_blue;}
-static float retained_layer_tone_target(float value,device const float* samples,uint offset,constant FillLayerUniforms& u){
-  if(value<=0.0f)return 0.0f;float stops=log2(max(1.0e-8f,value)/0.18f);
-  float position=clamp((stops+20.0f)/u.tone_stop_step,0.0f,16384.0f);uint lower=min(uint(position),16383u);
-  return mix(samples[offset+lower],samples[offset+lower+1u],position-float(lower));}
-static float3 retained_layer_tone(float3 source,device const float* samples,uint offset,constant FillLayerUniforms& u){
-  float source_luminance=retained_layer_luminance(source,u);float target=max(0.0f,retained_layer_tone_target(source_luminance,samples,offset,u));
-  float maximum_channel=max(source.r,max(source.g,source.b));float safe_target=target;
-  if(maximum_channel<=1.0e-9f||source_luminance<=1.0e-9f)safe_target=min(safe_target,u.output_headroom);
-  else safe_target=min(safe_target,max(0.0f,u.output_headroom*source_luminance/maximum_channel));
-  float maximum_magnitude=max(abs(source.r),max(abs(source.g),abs(source.b)));float3 adjusted=source;
-  if(maximum_magnitude<=1.0e-9f)adjusted=float3(safe_target);else if(source_luminance>1.0e-6f)adjusted*=safe_target/source_luminance;
-  float adjusted_luminance=max(0.0f,retained_layer_luminance(adjusted,u));float nonnegative_source=max(0.0f,source_luminance);
-  float lift_stops=log2((adjusted_luminance+1.0e-6f)/(nonnegative_source+1.0e-6f));
-  if(lift_stops>0.0f){float spread=max(abs(source.r-source.g),max(abs(source.g-source.b),abs(source.r-source.b)));
-    float attenuation=clamp((1.0f-smoothstep(0.012f,0.16f,nonnegative_source))*smoothstep(0.12f,1.20f,lift_stops)*(1.0f-smoothstep(0.025f,0.12f,spread))*0.56f,0.0f,0.56f);
-    adjusted=adjusted_luminance+(adjusted-adjusted_luminance)*(1.0f-attenuation);}return adjusted;}
-static float retained_layer_curve_sample(device const float* samples,uint offset,float value){
-  if(value>1.0f)return value*samples[offset+4096u];
-  if(value<0.0f)return value+samples[offset];
-  float position=clamp(value,0.0f,1.0f)*4096.0f;uint lower=min(uint(position),4095u);
-  return mix(samples[offset+lower],samples[offset+lower+1u],position-float(lower));}
-static float3 retained_layer_curve_scale(float3 source,float target,constant FillLayerUniforms& u){
-  float source_luminance=retained_layer_luminance(source,u);float maximum_channel=max(source.r,max(source.g,source.b));float safe_target=max(0.0f,target);
-  if(maximum_channel<=1.0e-9f||source_luminance<=1.0e-9f)safe_target=min(safe_target,u.output_headroom);
-  else safe_target=min(safe_target,max(0.0f,u.output_headroom*source_luminance/maximum_channel));
-  float maximum_magnitude=max(abs(source.r),max(abs(source.g),abs(source.b)));float3 adjusted=source;
-  if(maximum_magnitude<=1.0e-9f)adjusted=float3(safe_target);else if(source_luminance>1.0e-6f)adjusted*=safe_target/source_luminance;
-  float adjusted_luminance=max(0.0f,retained_layer_luminance(adjusted,u));float nonnegative_source=max(0.0f,source_luminance);
-  float lift_stops=log2((adjusted_luminance+1.0e-6f)/(nonnegative_source+1.0e-6f));if(lift_stops<=0.0f)return adjusted;
-  float spread=max(abs(source.r-source.g),max(abs(source.g-source.b),abs(source.r-source.b)));
-  float attenuation=clamp((1.0f-smoothstep(0.012f,0.16f,nonnegative_source))*smoothstep(0.12f,1.20f,lift_stops)*(1.0f-smoothstep(0.025f,0.12f,spread))*0.56f,0.0f,0.56f);
-  return adjusted_luminance+(adjusted-adjusted_luminance)*(1.0f-attenuation);}
-static float3 retained_layer_curves(float3 adjusted,device const float* samples,thread const CompiledFillLayerUniform& layer,constant FillLayerUniforms& u){
-  if((layer.curve_active_mask&1u)!=0u){float luminance=retained_layer_luminance(adjusted,u);float target=luminance>1.0f?clamp(luminance,0.0f,u.output_headroom):retained_layer_curve_sample(samples,layer.curve_offsets[0],luminance);adjusted=retained_layer_curve_scale(adjusted,target,u);}
-  if((layer.curve_active_mask&2u)!=0u)adjusted=float3(retained_layer_curve_sample(samples,layer.curve_offsets[1],adjusted.r),retained_layer_curve_sample(samples,layer.curve_offsets[1],adjusted.g),retained_layer_curve_sample(samples,layer.curve_offsets[1],adjusted.b));
-  if((layer.curve_active_mask&4u)!=0u)adjusted=retained_layer_curve_scale(adjusted,retained_layer_curve_sample(samples,layer.curve_offsets[2],retained_layer_luminance(adjusted,u)),u);
-  if((layer.curve_active_mask&8u)!=0u)adjusted.r=retained_layer_curve_sample(samples,layer.curve_offsets[3],adjusted.r);
-  if((layer.curve_active_mask&16u)!=0u)adjusted.g=retained_layer_curve_sample(samples,layer.curve_offsets[4],adjusted.g);
-  if((layer.curve_active_mask&32u)!=0u)adjusted.b=retained_layer_curve_sample(samples,layer.curve_offsets[5],adjusted.b);return adjusted;}
-static float3 look_multiply(constant float* matrix,float3 value);
-static float look_luminance(float3 rgb,constant LookStageUniforms& u);
-static float look_rgb_hue(float3 rgb);
-static float look_channel_weight(float hue,uint channel);
-static float3 look_apply_saturation_vibrance(float3 input,constant LookStageUniforms& u);
-static float3 retained_layer_downstream_look(float3 adjusted,constant LookStageUniforms& u){
-  if((u.active_mask&1u)!=0u)adjusted=max(float3(0.0f),look_multiply(u.rgb_mixer,adjusted));
-  if((u.active_mask&2u)!=0u){float gray=look_luminance(adjusted,u);float hue=look_rgb_hue(adjusted);
-    if(hue>=0.0f)for(uint channel=0u;channel<8u;++channel)gray*=max(0.0f,1.0f+look_channel_weight(hue,channel)*u.black_and_white_mixer[channel]*0.85f);
-    adjusted=float3(max(0.0f,gray));}
-  if((u.active_mask&(4u|8u|32u|64u|128u))!=0u)adjusted=look_apply_saturation_vibrance(adjusted,u);return adjusted;}
-static float3 retained_layer_point_effects(float3 input,thread const CompiledFillLayerUniform& layer,uint x,uint y,constant FillLayerUniforms& u){
-  float3 output=input;if(abs(layer.lens_vignette)>1.0e-6f&&u.width>1u&&u.height>1u){float2 center=float2(u.width-1u,u.height-1u)*0.5f;
-    float radius=length(float2(x,y)-center)/max(1.0f,length(center));output*=max(0.20f,1.0f+layer.lens_vignette*smoothstep(0.22f,1.0f,radius)*0.85f);}
-  if(abs(layer.dehaze)>1.0e-9f){float3 xyz=look_multiply(u.rgb_to_xyz_d65,output);float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z;
-    float m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z,s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z;
-    float lr=retained_blend_cbrt(l),mr=retained_blend_cbrt(m),sr=retained_blend_cbrt(s),lightness=0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr;
-    float a=1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr,b=0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr;
-    if(length(float2(a,b))>1.0e-6f){float scale=max(0.0f,1.0f+layer.dehaze*0.10f);a*=scale;b*=scale;
-      float nl=lightness+0.3963377774f*a+0.2158037573f*b,nm=lightness-0.1055613458f*a-0.0638541728f*b,ns=lightness-0.0894841775f*a-1.2914855480f*b;
-      output=max(float3(0.0f),look_multiply(u.xyz_d65_to_rgb,float3(1.2270138511f*nl*nl*nl-0.5577999807f*nm*nm*nm+0.2812561490f*ns*ns*ns,
-        -0.0405801784f*nl*nl*nl+1.1122568696f*nm*nm*nm-0.0716766787f*ns*ns*ns,-0.0763812845f*nl*nl*nl-0.4214819784f*nm*nm*nm+1.5861632204f*ns*ns*ns)));
-      float maximum=max(output.r,max(output.g,output.b));if(maximum>u.output_headroom)output*=u.output_headroom/maximum;}}
-  return output;}
-static float3 retained_layer_multiply(thread const float* m,float3 v){return float3(
-  m[0]*v.x+m[1]*v.y+m[2]*v.z,m[3]*v.x+m[4]*v.y+m[5]*v.z,m[6]*v.x+m[7]*v.y+m[8]*v.z);}
-static float3 retained_layer_look(float3 input,thread const CompiledFillLayerUniform& layer){
-  float spread=max(abs(input.r-input.g),max(abs(input.g-input.b),abs(input.r-input.b)));if(spread<=1.0e-6f)return input;
-  float3 xyz=retained_layer_multiply(layer.rgb_to_xyz_d65,input);
-  float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z;
-  float m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z;
-  float s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z;
-  float lr=retained_blend_cbrt(l),mr=retained_blend_cbrt(m),sr=retained_blend_cbrt(s);float lightness=clamp(0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr,0.0f,retained_blend_cbrt(layer.look_output_headroom));
-  float a=1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr,b=0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr;
-  float original=length(float2(a,b)),chroma=original<=1.0e-4f?0.0f:original;
-  chroma*=max(0.0f,1.0f+layer.vibrance_strength*(1.0f-smoothstep(0.035f,0.24f,chroma))*0.82f);
-  float scale=original>1.0e-9f?chroma/original:0.0f;a*=scale;b*=scale;
-  chroma*=layer.saturation_strength>=0.0f?max(0.0f,1.0f+layer.saturation_strength*0.85f):max(0.0f,1.0f+layer.saturation_strength);
-  float current=length(float2(a,b));scale=current>1.0e-9f?chroma/current:0.0f;a*=scale;b*=scale;
-  float nl=lightness+0.3963377774f*a+0.2158037573f*b,nm=lightness-0.1055613458f*a-0.0638541728f*b,ns=lightness-0.0894841775f*a-1.2914855480f*b;
-  float3 output=retained_layer_multiply(layer.xyz_d65_to_rgb,float3(
-    1.2270138511f*nl*nl*nl-0.5577999807f*nm*nm*nm+0.2812561490f*ns*ns*ns,
-    -0.0405801784f*nl*nl*nl+1.1122568696f*nm*nm*nm-0.0716766787f*ns*ns*ns,
-    -0.0763812845f*nl*nl*nl-0.4214819784f*nm*nm*nm+1.5861632204f*ns*ns*ns));
-  if(layer.saturation_strength<=-0.999999f){float neutral=output.r*layer.look_luminance[0]+output.g*layer.look_luminance[1]+output.b*layer.look_luminance[2];output=float3(neutral);}return output;}
-static float retained_layer_wrap(float value){value=fmod(value,6.28318530717958647692f);return value<0.0f?value+6.28318530717958647692f:value;}
-static float retained_layer_delta(float from,float to){float d=fmod(to-from,6.28318530717958647692f);if(d>3.14159265358979323846f)d-=6.28318530717958647692f;if(d< -3.14159265358979323846f)d+=6.28318530717958647692f;return d;}
-static float3 retained_layer_local_chroma(float3 input,thread const CompiledFillLayerUniform& layer){
-  float3 xyz=retained_layer_multiply(layer.rgb_to_xyz_d65,input);
-  float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z,m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z,s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z;
-  float lr=retained_blend_cbrt(l),mr=retained_blend_cbrt(m),sr=retained_blend_cbrt(s),lightness=0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr;
-  float a=1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr,b=0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr;
-  float chroma=length(float2(a,b)),hue=retained_layer_wrap(atan2(b,a));
-  if(chroma<=1.0e-6f)hue=layer.colorize_hue;else{chroma*=max(0.0f,1.0f+layer.vibrance_strength*(1.0f-smoothstep(0.035f,0.24f,chroma))*0.82f);
-    chroma*=layer.saturation_strength>=0.0f?max(0.0f,1.0f+layer.saturation_strength*0.85f):max(0.0f,1.0f+layer.saturation_strength);
-    chroma*=clamp(1.0f-0.20f*smoothstep(0.78f,0.98f,lightness)*smoothstep(0.035f,0.22f,chroma),0.78f,1.0f);}
-  hue=retained_layer_wrap(hue+layer.hue_shift);chroma*=max(0.0f,1.0f+layer.saturation_shift);
-  if(layer.colorize_amount>1.0e-6f){hue=retained_layer_wrap(hue+retained_layer_delta(hue,layer.colorize_hue)*layer.colorize_amount);chroma=mix(chroma,max(chroma,0.18f),layer.colorize_amount);}
-  float na=chroma*cos(hue),nb=chroma*sin(hue),nl=lightness+0.3963377774f*na+0.2158037573f*nb,nm=lightness-0.1055613458f*na-0.0638541728f*nb,ns=lightness-0.0894841775f*na-1.2914855480f*nb;
-  return retained_layer_multiply(layer.xyz_d65_to_rgb,float3(1.2270138511f*nl*nl*nl-0.5577999807f*nm*nm*nm+0.2812561490f*ns*ns*ns,-0.0405801784f*nl*nl*nl+1.1122568696f*nm*nm*nm-0.0716766787f*ns*ns*ns,-0.0763812845f*nl*nl*nl-0.4214819784f*nm*nm*nm+1.5861632204f*ns*ns*ns));}
-)" stringByAppendingString:@R"(
-kernel void apply_retained_fill_layers(device float4* pixels [[buffer(0)]],
-    device const uchar* masks [[buffer(1)]],device const float4* layer_pixels [[buffer(2)]],
-    device const float* tone_samples [[buffer(3)]],device const float* curve_samples [[buffer(4)]],
-    constant LookStageUniforms* layer_looks [[buffer(5)]],
-    constant FillLayerUniforms& u [[buffer(6)]],
-    device float* layer_alpha [[buffer(7)]],device float4* layer_intermediate [[buffer(8)]],
-    uint gid [[thread_position_in_grid]]){
-  float4 pixel=pixels[gid];float previous_alpha=u.layer_begin==0u?1.0f:layer_alpha[gid];uint x=gid%u.width;uint y=gid/u.width;
-  if(u.source_only==2u||u.source_only==3u){CompiledFillLayerUniform layer=u.layers[u.layer_begin];
-    if(u.source_only==2u)layer.dehaze=0.0f;else layer.lens_vignette=0.0f;
-    float4 source=layer_intermediate[gid];layer_intermediate[gid]=float4(retained_layer_point_effects(source.rgb,layer,x,y,u),source.a);return;}
-  for(uint i=u.layer_begin;i<u.layer_end;++i){CompiledFillLayerUniform layer=u.layers[i];bool adjustment=layer.kind==2u;
-    float4 source=u.composite_only!=0u?layer_intermediate[gid]:(adjustment?pixel:layer.color);
-    if(u.composite_only==0u&&adjustment&&layer.has_white_balance!=0u){float3 rgb=source.rgb;source.rgb=float3(
-      layer.white_balance[0]*rgb.r+layer.white_balance[1]*rgb.g+layer.white_balance[2]*rgb.b,
-      layer.white_balance[3]*rgb.r+layer.white_balance[4]*rgb.g+layer.white_balance[5]*rgb.b,
-      layer.white_balance[6]*rgb.r+layer.white_balance[7]*rgb.g+layer.white_balance[8]*rgb.b);}
-    if(u.composite_only==0u&&adjustment)source.rgb*=layer.exposure_gain;
-    if(layer.kind==1u){
-      float cx=float(layer.x)+float(layer.pixel_width)*layer.transform_scale*0.5f;
-      float cy=float(layer.y)+float(layer.pixel_height)*layer.transform_scale*0.5f;
-      float dx=float(x)+0.5f-cx,dy=float(y)+0.5f-cy;
-      float cosine=cos(layer.transform_rotation),sine=sin(layer.transform_rotation);
-      float lx=(dx*cosine-dy*sine)/layer.transform_scale+float(layer.pixel_width)*0.5f-0.5f;
-      float ly=(dx*sine+dy*cosine)/layer.transform_scale+float(layer.pixel_height)*0.5f-0.5f;
-      float radius=max(1.0f,1.0f/layer.transform_scale);
-      if(lx<= -radius||ly<= -radius||lx>=float(layer.pixel_width-1u)+radius||ly>=float(layer.pixel_height-1u)+radius){previous_alpha=0.0f;continue;}
-      if(layer.transform_scale<1.0f){int2 lower=int2(ceil(float2(lx,ly)-radius)),upper=int2(floor(float2(lx,ly)+radius));
-        float nx=0.0f,ny=0.0f;
-        for(int sx=lower.x;sx<=upper.x;++sx)nx+=max(0.0f,1.0f-abs(lx-float(sx))/radius);
-        for(int sy=lower.y;sy<=upper.y;++sy)ny+=max(0.0f,1.0f-abs(ly-float(sy))/radius);
-        float4 associated=float4(0.0f);
-        for(int sy=max(lower.y,0);sy<=min(upper.y,int(layer.pixel_height)-1);++sy){float wy=max(0.0f,1.0f-abs(ly-float(sy))/radius);
-          for(int sx=max(lower.x,0);sx<=min(upper.x,int(layer.pixel_width)-1);++sx){
-            float4 texel=layer_pixels[layer.pixel_offset+uint(sy)*layer.pixel_width+uint(sx)];
-            float weight=wy*max(0.0f,1.0f-abs(lx-float(sx))/radius)*clamp(texel.a,0.0f,1.0f);
-            if(weight>0.0f)associated+=float4(texel.rgb*weight,weight);}}
-        source=associated.a>0.0f?float4(associated.rgb/associated.a,associated.a/(nx*ny)):float4(0.0f);
-      }else{
-      int2 origin=int2(floor(float2(lx,ly)));float2 fraction=float2(lx,ly)-float2(origin);
-      if(all(fraction==float2(0.0f)))source=layer_pixels[layer.pixel_offset+uint(origin.y)*layer.pixel_width+uint(origin.x)];
-      else{float4 associated=float4(0.0f);
-        for(int iy=0;iy<2;++iy)for(int ix=0;ix<2;++ix){int2 p=origin+int2(ix,iy);
-          if(p.x<0||p.y<0||p.x>=int(layer.pixel_width)||p.y>=int(layer.pixel_height))continue;
-          float4 texel=layer_pixels[layer.pixel_offset+uint(p.y)*layer.pixel_width+uint(p.x)];
-          float weight=(ix?fraction.x:1.0f-fraction.x)*(iy?fraction.y:1.0f-fraction.y)*clamp(texel.a,0.0f,1.0f);
-          if(weight>0.0f)associated+=float4(texel.rgb*weight,weight);}
-        source=associated.a>0.0f?float4(associated.rgb/associated.a,associated.a):float4(0.0f);}}}
-    if(u.composite_only==0u&&adjustment&&layer.has_tone!=0u)source=float4(retained_layer_tone(source.rgb,tone_samples,layer.tone_offset,u),source.a);
-    if(u.composite_only==0u&&adjustment&&layer.has_local_chroma!=0u)source=float4(retained_layer_local_chroma(source.rgb,layer),source.a);
-    else if(u.composite_only==0u&&adjustment&&layer.has_look!=0u)source=float4(retained_layer_look(source.rgb,layer),source.a);
-    if(u.composite_only==0u&&adjustment&&layer.has_advanced_tone!=0u)source=float4(retained_layer_tone(source.rgb,tone_samples,layer.advanced_tone_offset,u),source.a);
-    if(u.composite_only==0u&&adjustment&&layer.has_curves!=0u)source=float4(retained_layer_curves(source.rgb,curve_samples,layer,u),source.a);
-    if(u.composite_only==0u&&adjustment&&layer.has_downstream_look!=0u)source=float4(retained_layer_downstream_look(source.rgb,layer_looks[i]),source.a);
-    if(u.composite_only==0u&&u.source_only==0u&&adjustment)source=float4(retained_layer_point_effects(source.rgb,layer,x,y,u),source.a);
-    if(u.source_only!=0u){layer_intermediate[gid]=source;return;}
-    float mask_weight=1.0f;if(layer.has_mask!=0u){
-      float nx=u.width>1u?float(x)/float(u.width-1u):0.0f;float ny=u.height>1u?float(y)/float(u.height-1u):0.0f;
-      uint mx=min(uint(floor(nx*float(layer.mask_width-1u)+0.5f)),layer.mask_width-1u);
-      uint my=min(uint(floor(ny*float(layer.mask_height-1u)+0.5f)),layer.mask_height-1u);
-      mask_weight=float(masks[layer.mask_offset+my*layer.mask_width+mx])/255.0f;
-      if(layer.mask_inverted!=0u)mask_weight=1.0f-mask_weight;
-      mask_weight=clamp(min(mask_weight,layer.mask_density)*layer.mask_opacity,0.0f,1.0f);}
-    float weight=clamp(layer.opacity*mask_weight*(layer.clipping_mask!=0u?previous_alpha:1.0f),0.0f,1.0f);
-    float alpha=adjustment?weight:clamp(source.a*weight,0.0f,1.0f);
-    previous_alpha=alpha;
-    if(layer.erase_base_image!=0u){if(alpha>1.0e-6f){pixel.a*=1.0f-alpha;if(pixel.a<=1.0e-6f)pixel=float4(0.0f);}previous_alpha=pixel.a;continue;}
-    float3 blended=retained_fill_blend_pixel(
-      pixel.rgb,source.rgb,layer.blend_mode,u);
-    if(adjustment)pixel=float4(mix(pixel.rgb,blended,alpha),pixel.a);
-    else if(alpha>0.0f){
-      float ba=clamp(pixel.a,0.0f,1.0f),output_alpha=alpha+ba*(1.0f-alpha);
-      if(ba>=1.0f)pixel=float4(mix(pixel.rgb,blended,alpha),output_alpha);
-      else if(ba<=0.0f)pixel=float4(source.rgb,alpha);
-      else pixel=float4((alpha*mix(source.rgb,blended,ba)+(1.0f-alpha)*ba*pixel.rgb)/output_alpha,output_alpha);}}
-  layer_alpha[gid]=previous_alpha;pixels[gid]=pixel;
-}
-
-static float curve_stage_luminance(float3 rgb, constant CurveStageUniforms& u) {
-  return rgb.r * u.luminance_red + rgb.g * u.luminance_green + rgb.b * u.luminance_blue;
-}
-static float sample_curve_stage_lut(device const float* samples,
-    constant CurveStageUniforms& u, uint block, float value) {
-  uint offset = block * u.sample_count;
-  if (value > 1.0f) return value * samples[offset + u.sample_count - 1u];
-  if (value < 0.0f) return value + samples[offset];
-  float position = clamp(value, 0.0f, 1.0f) * float(u.sample_count - 1u);
-  uint lower = min(uint(position), u.sample_count - 2u);
-  return mix(samples[offset + lower], samples[offset + lower + 1u], position - float(lower));
-}
-static float3 curve_stage_scale_to_luminance(float3 source, float target,
-    constant CurveStageUniforms& u) {
-  float source_luminance = curve_stage_luminance(source, u);
-  float maximum_channel = max(source.r, max(source.g, source.b));
-  float safe_target = max(0.0f, target);
-  if (maximum_channel <= 1.0e-9f || source_luminance <= 1.0e-9f) {
-    safe_target = min(safe_target, u.output_headroom);
-  } else {
-    safe_target = min(safe_target, max(0.0f, u.output_headroom * source_luminance / maximum_channel));
-  }
-  float maximum_magnitude = max(abs(source.r), max(abs(source.g), abs(source.b)));
-  float3 adjusted = source;
-  if (maximum_magnitude <= 1.0e-9f) adjusted = float3(safe_target);
-  else if (source_luminance > 1.0e-6f) adjusted *= safe_target / source_luminance;
-  float adjusted_luminance = max(0.0f, curve_stage_luminance(adjusted, u));
-  float nonnegative_source = max(0.0f, source_luminance);
-  float lift_stops = log2((adjusted_luminance + 1.0e-6f) / (nonnegative_source + 1.0e-6f));
-  if (lift_stops > 0.0f) {
-    float spread = max(abs(source.r - source.g), max(abs(source.g - source.b), abs(source.r - source.b)));
-    float attenuation = clamp((1.0f - smoothstep(0.012f, 0.16f, nonnegative_source)) *
-        smoothstep(0.12f, 1.20f, lift_stops) * (1.0f - smoothstep(0.025f, 0.12f, spread)) * 0.56f,
-        0.0f, 0.56f);
-    adjusted = adjusted_luminance + (adjusted - adjusted_luminance) * (1.0f - attenuation);
-  }
-  return adjusted;
-}
-kernel void apply_compiled_curve_stage(device float4* pixels [[buffer(0)]],
-    device const float* samples [[buffer(1)]], constant CurveStageUniforms& u [[buffer(2)]],
-    uint gid [[thread_position_in_grid]]) {
-  if (gid >= u.pixel_count) return;
-  float alpha = pixels[gid].a;
-  float3 adjusted = pixels[gid].rgb;
-  if ((u.active_mask & 1u) != 0u) {
-    float source_luminance = curve_stage_luminance(adjusted, u);
-    float target = source_luminance > 1.0f ? clamp(source_luminance, 0.0f, u.output_headroom)
-        : sample_curve_stage_lut(samples, u, 0u, source_luminance);
-    adjusted = curve_stage_scale_to_luminance(adjusted, target, u);
-  }
-  if ((u.active_mask & 2u) != 0u) adjusted = float3(sample_curve_stage_lut(samples, u, 1u, adjusted.r),
-      sample_curve_stage_lut(samples, u, 1u, adjusted.g), sample_curve_stage_lut(samples, u, 1u, adjusted.b));
-  if ((u.active_mask & 4u) != 0u) adjusted = curve_stage_scale_to_luminance(adjusted,
-      sample_curve_stage_lut(samples, u, 2u, curve_stage_luminance(adjusted, u)), u);
-  if ((u.active_mask & 8u) != 0u) adjusted.r = sample_curve_stage_lut(samples, u, 3u, adjusted.r);
-  if ((u.active_mask & 16u) != 0u) adjusted.g = sample_curve_stage_lut(samples, u, 4u, adjusted.g);
-  if ((u.active_mask & 32u) != 0u) adjusted.b = sample_curve_stage_lut(samples, u, 5u, adjusted.b);
-  pixels[gid] = float4(adjusted, alpha);
-}
-
-static float3 look_multiply(constant float* m, float3 v) {
-  return float3(m[0]*v.r+m[1]*v.g+m[2]*v.b, m[3]*v.r+m[4]*v.g+m[5]*v.b,
-      m[6]*v.r+m[7]*v.g+m[8]*v.b);
-}
-static float look_luminance(float3 rgb, constant LookStageUniforms& u) {
-  return rgb.r*u.luminance_coefficients[0]+rgb.g*u.luminance_coefficients[1]+rgb.b*u.luminance_coefficients[2];
-}
-static float look_rgb_hue(float3 rgb) {
-  float3 n=max(rgb,float3(0.0f)); float hi=max(n.r,max(n.g,n.b)), lo=min(n.r,min(n.g,n.b));
-  float d=hi-lo; if(d<=1.0e-9f)return -1.0f; float h=0.0f;
-  if(hi==n.r){h=(n.g-n.b)/d;if(h<0.0f)h+=6.0f;}else if(hi==n.g)h=(n.b-n.r)/d+2.0f;
-  else h=(n.r-n.g)/d+4.0f; return h/6.0f;
-}
-static float look_channel_weight(float hue,uint channel){
-  float c=0.0f,i=0.05f,o=0.10f;
-  switch(channel){case 1:c=0.09f;i=0.04f;o=0.09f;break;case 2:c=0.15f;i=0.04f;o=0.08f;break;
-    case 3:c=0.32f;i=0.10f;o=0.18f;break;case 4:c=0.50f;i=0.06f;o=0.10f;break;
-    case 5:c=0.64f;i=0.08f;o=0.13f;break;case 6:c=0.78f;i=0.06f;o=0.10f;break;
-    case 7:c=0.88f;i=0.05f;o=0.10f;break;default:break;}
-  float d=abs(hue-c);d=min(d,1.0f-d);if(d<=i)return 1.0f;
-  if(d>=o)return 0.0f;return 1.0f-smoothstep(i,o,d);
-}
-static float look_wrap_radians(float v){v=fmod(v,6.28318530717958647692f);return v<0.0f?v+6.28318530717958647692f:v;}
-static float look_circular_weight(float v,float center,float radius){float d=abs(v-center);d=min(d,1.0f-d);
-  if(d>=radius)return 0.0f;float u=1.0f-d/radius;return u*u*(3.0f-2.0f*u);}
-static float look_feathered_weight(float v,float center,float radius,float softness){float d=abs(v-center);d=min(d,1.0f-d);
-  if(d>=radius)return 0.0f;float feather=softness*radius,inner=radius-feather;
-  if(d<=inner||feather<=1.0e-9f)return 1.0f;return 1.0f-smoothstep(inner,radius,d);}
-static float look_shortest_angular_delta(float from,float to){float d=fmod(to-from,6.28318530717958647692f);
-  if(d>3.14159265358979323846f)d-=6.28318530717958647692f;if(d< -3.14159265358979323846f)d+=6.28318530717958647692f;return d;}
-static float3 look_oklab_to_rgb(float lightness,float a,float b,constant LookStageUniforms& u){
-  float nl=lightness+0.3963377774f*a+0.2158037573f*b,nm=lightness-0.1055613458f*a-0.0638541728f*b;
-  float ns=lightness-0.0894841775f*a-1.2914855480f*b,ll=nl*nl*nl,lm=nm*nm*nm,ls=ns*ns*ns;
-  return look_multiply(u.xyz_d65_to_rgb,float3(1.2270138511f*ll-0.5577999807f*lm+0.2812561490f*ls,
-      -0.0405801784f*ll+1.1122568696f*lm-0.0716766787f*ls,-0.0763812845f*ll-0.4214819784f*lm+1.5861632204f*ls));}
-static void look_apply_selective(float amount,float target,float weight,thread float& chroma,thread float& hue){
-  if(abs(amount)<=1.0e-9f)return;float2 current=chroma*float2(cos(hue),sin(hue));
-  float direction=target*6.28318530717958647692f+(amount<0.0f?3.14159265358979323846f:0.0f);
-  float2 next=current+abs(amount)*weight*0.07f*float2(cos(direction),sin(direction));
-  chroma=length(next);hue=look_wrap_radians(atan2(next.y,next.x));}
-static float3 look_apply_saturation_vibrance(float3 input,constant LookStageUniforms& u){
-  float spread=max(abs(input.r-input.g),max(abs(input.g-input.b),abs(input.r-input.b)));
-  if(spread<=1.0e-6f&&(u.active_mask&8u)==0u)return input;float3 xyz=look_multiply(u.rgb_to_xyz_d65,input);
-  float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z;
-  float m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z;
-  float s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z;
-  float lr=retained_blend_cbrt(l),mr=retained_blend_cbrt(m),sr=retained_blend_cbrt(s);
-  float lightness=clamp(0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr,0.0f,retained_blend_cbrt(u.output_headroom));
-  float a=1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr;
-  float b=0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr;
-  float original=length(float2(a,b)),chroma=original<=1.0e-4f?0.0f:original;
-  float skin_scale=1.0f;if((u.active_mask&256u)!=0u){float skin_hue=look_wrap_radians(atan2(b,a))/6.28318530717958647692f;
-    float skin_weight=look_circular_weight(skin_hue,u.skin_hue,u.skin_range)*smoothstep(0.02f,0.12f,original)*u.skin_strength;
-    skin_scale=1.0f-0.95f*skin_weight;}
-  chroma*=max(0.0f,1.0f+u.vibrance_strength*(1.0f-smoothstep(0.035f,0.24f,chroma))*skin_scale*0.82f);
-  float scale=original>1.0e-9f?chroma/original:0.0f;a*=scale;b*=scale;
-  if((u.active_mask&32u)!=0u){chroma=length(float2(a,b));float hue=look_wrap_radians(atan2(b,a));
-    float selection=(u.mixer_model==1u||u.mixer_model==2u)?look_rgb_hue(input):hue/6.28318530717958647692f;
-    if(selection>=0.0f){float hs=u.mixer_model==2u?0.16f:0.22f;
-      float ss=u.mixer_model==3u?0.72f:(u.mixer_model==2u?0.92f:1.15f);
-      float ls=u.mixer_model==2u?0.14f:(u.mixer_model==3u?0.20f:0.30f);
-      for(uint c=0u;c<8u;++c){float w=look_channel_weight(selection,c)*skin_scale;if(w<=0.0f)continue;
-        hue=look_wrap_radians(hue+w*u.mixer_hue[c]*hs*6.28318530717958647692f);
-        chroma*=max(0.0f,1.0f+w*u.mixer_saturation[c]*ss);lightness+=w*u.mixer_luminance[c]*ls;
-        look_apply_selective(u.selective_cyan[c],0.50f,w,chroma,hue);
-        look_apply_selective(u.selective_magenta[c],0.88f,w,chroma,hue);
-        look_apply_selective(u.selective_yellow[c],0.15f,w,chroma,hue);
-        lightness-=w*u.selective_black[c]*0.18f;}a=chroma*cos(hue);b=chroma*sin(hue);}}
-  float replacement_luminance=-1.0f,replacement_weight=0.0f;
-  if((u.active_mask&128u)!=0u){float selection=look_rgb_hue(input);if(selection>=0.0f){
-    float weight=look_feathered_weight(selection,u.replacement_source_hue,u.replacement_range,u.replacement_softness)*
-        u.replacement_strength*skin_scale;if(weight>1.0e-6f){chroma=length(float2(a,b));float hue=look_wrap_radians(atan2(b,a));
-      if(u.replacement_preserve_luminance!=0u){replacement_luminance=look_luminance(look_oklab_to_rgb(lightness,a,b,u),u);replacement_weight=weight;}
-      hue=look_wrap_radians(hue+look_shortest_angular_delta(hue,u.replacement_target_oklab_hue)*weight);
-      if(u.replacement_preserve_saturation==0u)chroma=max(chroma,mix(chroma,0.16f,weight));a=chroma*cos(hue);b=chroma*sin(hue);}}}
-  if((u.active_mask&64u)!=0u){chroma=length(float2(a,b));float hue=look_wrap_radians(atan2(b,a));
-    float normalized=hue/6.28318530717958647692f,best=u.harmony_anchors[0],best_distance=1.0f;
-    for(uint h=0u;h<u.harmony_anchor_count;++h){float d=abs(normalized-u.harmony_anchors[h]);d=min(d,1.0f-d);
-      if(d<best_distance){best_distance=d;best=u.harmony_anchors[h];}}
-    float delta=fmod(best*6.28318530717958647692f-hue+3.14159265358979323846f,6.28318530717958647692f);
-    if(delta<0.0f)delta+=6.28318530717958647692f;delta-=3.14159265358979323846f;
-    hue=look_wrap_radians(hue+delta*u.harmony_strength*skin_scale);a=chroma*cos(hue);b=chroma*sin(hue);}
-  if((u.active_mask&8u)!=0u){float shift=u.grading_balance*0.18f,sl=clamp(lightness,0.0f,1.0f);
-    float sw=1.0f-smoothstep(0.15f-shift,0.45f-shift,sl),hw=smoothstep(0.55f-shift,0.85f-shift,sl);
-    float weights[3]={sw,max(0.0f,1.0f-sw-hw),hw};for(uint g=0u;g<3u;++g){
-      float w=weights[g]*u.grading_amount*skin_scale,i=abs(u.grading_saturation[g])*0.18f*w,h=u.grading_hue[g]*6.28318530717958647692f;
-      a+=i*cos(h);b+=i*sin(h);lightness+=u.grading_luminance[g]*0.20f*w;}chroma=length(float2(a,b));}
-  chroma*=u.saturation_strength>=0.0f?max(0.0f,1.0f+u.saturation_strength*0.85f):max(0.0f,1.0f+u.saturation_strength);
-  float graded=length(float2(a,b));scale=graded>1.0e-9f?chroma/graded:0.0f;a*=scale;b*=scale;
-  float3 out=look_oklab_to_rgb(lightness,a,b,u);
-  if(replacement_luminance>=0.0f&&replacement_weight>1.0e-6f){float source_luminance=look_luminance(out,u);
-    float target=mix(source_luminance,clamp(replacement_luminance,0.0f,u.output_headroom),clamp(replacement_weight,0.0f,1.0f));
-    float maximum=max(abs(out.r),max(abs(out.g),abs(out.b)));float3 adjusted=out;
-    if(maximum<=1.0e-9f)adjusted=float3(max(0.0f,target));else if(source_luminance>1.0e-6f)adjusted*=max(0.0f,target)/source_luminance;
-    float adjusted_luminance=max(0.0f,look_luminance(adjusted,u)),nonnegative_source=max(0.0f,source_luminance);
-    float lift_stops=log2((adjusted_luminance+1.0e-6f)/(nonnegative_source+1.0e-6f));if(lift_stops>0.0f){
-      float spread=max(abs(out.r-out.g),max(abs(out.g-out.b),abs(out.r-out.b)));
-      float attenuation=clamp((1.0f-smoothstep(0.012f,0.16f,nonnegative_source))*smoothstep(0.12f,1.20f,lift_stops)*
-          (1.0f-smoothstep(0.025f,0.12f,spread))*0.56f,0.0f,0.56f);
-      adjusted=adjusted_luminance+(adjusted-adjusted_luminance)*(1.0f-attenuation);}out=adjusted;}
-  if(u.saturation_strength<=-0.999999f&&(u.active_mask&(16u|128u))==0u)out=float3(look_luminance(out,u));return out;
-}
-kernel void apply_compiled_look_stage(device float4* pixels [[buffer(0)]],
-    constant LookStageUniforms& u [[buffer(1)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.pixel_count)return;float alpha=pixels[gid].a;float3 adjusted=pixels[gid].rgb;
-  if((u.active_mask&1u)!=0u)adjusted=max(float3(0.0f),look_multiply(u.rgb_mixer,adjusted));
-  if((u.active_mask&2u)!=0u){float gray=look_luminance(adjusted,u),hue=look_rgb_hue(adjusted);
-    if(hue>=0.0f)for(uint c=0u;c<8u;++c)gray*=max(0.0f,1.0f+look_channel_weight(hue,c)*u.black_and_white_mixer[c]*0.85f);
-    adjusted=float3(max(0.0f,gray));}
-  if((u.active_mask&(4u|8u|32u|64u|128u))!=0u)adjusted=look_apply_saturation_vibrance(adjusted,u);
-  pixels[gid]=float4(adjusted,alpha);
-}
-
-static float clamp_unit(float v) { return clamp(v, 0.0f, 1.0f); }
-
-static float4 apply_lut_3d(float3 rgb, device const float4* lut, int lut_size) {
-  float sm1 = float(lut_size - 1);
-  float rf = clamp_unit(rgb.r) * sm1, gf = clamp_unit(rgb.g) * sm1, bf = clamp_unit(rgb.b) * sm1;
-  int ri = min(int(rf), lut_size - 2), gi = min(int(gf), lut_size - 2), bi = min(int(bf), lut_size - 2);
-  float fr = rf - float(ri), fg = gf - float(gi), fb = bf - float(bi);
-  float4 c000 = lut[(ri*lut_size+gi)*lut_size+bi], c001 = lut[(ri*lut_size+gi)*lut_size+bi+1];
-  float4 c010 = lut[(ri*lut_size+(gi+1))*lut_size+bi], c011 = lut[(ri*lut_size+(gi+1))*lut_size+bi+1];
-  float4 c100 = lut[((ri+1)*lut_size+gi)*lut_size+bi], c101 = lut[((ri+1)*lut_size+gi)*lut_size+bi+1];
-  float4 c110 = lut[((ri+1)*lut_size+(gi+1))*lut_size+bi], c111 = lut[((ri+1)*lut_size+(gi+1))*lut_size+bi+1];
-  return mix(mix(mix(c000,c001,fb), mix(c010,c011,fb), fg), mix(mix(c100,c101,fb), mix(c110,c111,fb), fg), fr);
-}
-
-kernel void apply_color_lut(device float4* pixels [[buffer(0)]], device const float4* lut [[buffer(1)]],
-    constant ColorAdjustmentUniforms& u [[buffer(2)]], uint gid [[thread_position_in_grid]]) {
-  if (gid >= uint(u.width) * uint(u.height)) return;
-  float4 p = pixels[gid];
-  float4 r = apply_lut_3d(p.rgb, lut, u.lut_size);
-  pixels[gid] = float4(r.rgb, p.a);
-}
-
-static float3 user_lut_multiply(constant float* m,float3 v){return float3(m[0]*v.r+m[1]*v.g+m[2]*v.b,
-    m[3]*v.r+m[4]*v.g+m[5]*v.b,m[6]*v.r+m[7]*v.g+m[8]*v.b);}
-static float user_lut_signed_power(float v,float e){return copysign(pow(abs(v),e),v);}
-static float user_lut_encode_transfer(float v,uint t){float m=abs(v);if(t==2u)return copysign(m<=0.0031308f?m*12.92f:1.055f*pow(m,1.0f/2.4f)-0.055f,v);
-  if(t==3u)return user_lut_signed_power(v,1.0f/1.8f);if(t==4u)return user_lut_signed_power(v,1.0f/2.2f);
-  if(t==5u)return user_lut_signed_power(v,1.0f/2.4f);if(t==6u)return copysign(m<0.018053968510807f?4.5f*m:
-      1.09929682680944f*pow(m,0.45f)-0.09929682680944f,v);if(t==7u)return v<=0.0078125f?
-      10.5402377416545f*v+0.0729055341958355f:(log2(v)+9.72f)/17.52f;return v;}
-static float user_lut_decode_transfer(float v,uint t){float m=abs(v);if(t==2u)return copysign(m<=0.04045f?m/12.92f:pow((m+0.055f)/1.055f,2.4f),v);
-  if(t==3u)return user_lut_signed_power(v,1.8f);if(t==4u)return user_lut_signed_power(v,2.2f);
-  if(t==5u)return user_lut_signed_power(v,2.4f);if(t==6u)return copysign(m<4.5f*0.018053968510807f?m/4.5f:
-      pow((m+0.09929682680944f)/1.09929682680944f,1.0f/0.45f),v);if(t==7u){if(v<=0.155251141552511f)
-      return(v-0.0729055341958355f)/10.5402377416545f;return v<1.4679963120447153f?exp2(v*17.52f-9.72f):65504.0f;}return v;}
-static float3 user_lut_apply_shaper(float3 v,device const float4* lut,uint size,float input_min,float input_max){
-  float3 position=clamp((v-input_min)*(float(size-1u)/(input_max-input_min)),0.0f,float(size-1u));
-  uint3 lower=min(uint3(position),uint3(size-2u));float3 fraction=position-float3(lower);
-  return float3(mix(lut[lower.r].r,lut[lower.r+1u].r,fraction.r),
-      mix(lut[lower.g].g,lut[lower.g+1u].g,fraction.g),mix(lut[lower.b].b,lut[lower.b+1u].b,fraction.b));}
-kernel void apply_user_lut_stage(device float4* pixels [[buffer(0)]],device const float4* lut [[buffer(1)]],
-    constant UserLutStageUniforms& u [[buffer(2)]],uint gid [[thread_position_in_grid]]){if(gid>=u.pixel_count)return;
-  float4 source=pixels[gid];float3 input=user_lut_multiply(u.working_to_input,source.rgb);input=float3(
-      user_lut_encode_transfer(input.r,u.input_transfer),user_lut_encode_transfer(input.g,u.input_transfer),
-      user_lut_encode_transfer(input.b,u.input_transfer));if(u.shaper_size>1u)input=user_lut_apply_shaper(
-      input,lut+u.shaper_offset,u.shaper_size,u.shaper_input_min,u.shaper_input_max);
-  float3 dmin=float3(u.domain_min[0],u.domain_min[1],u.domain_min[2]);float3 dmax=float3(u.domain_max[0],u.domain_max[1],u.domain_max[2]);
-  float3 output=input;if(u.lut_size>1u){float3 normalized=clamp((input-dmin)/(dmax-dmin),0.0f,1.0f);
-    output=apply_lut_3d(normalized,lut,int(u.lut_size)).rgb;float spread=max(abs(input.r-input.g),max(abs(input.g-input.b),abs(input.r-input.b)));
-    if(spread<1.0e-9f)output=float3((output.r+output.g+output.b)/3.0f);}output=float3(user_lut_decode_transfer(output.r,u.output_transfer),
-      user_lut_decode_transfer(output.g,u.output_transfer),user_lut_decode_transfer(output.b,u.output_transfer));
-  float3 graded=user_lut_multiply(u.output_to_working,output);pixels[gid]=float4(mix(source.rgb,graded,u.strength),source.a);}
-
-static float geometry_mirrored_coordinate(float v,uint extent){if(extent<=1u)return 0.0f;float maximum=float(extent-1u),period=maximum*2.0f;
-  float mirrored=fmod(v,period);if(mirrored<0.0f)mirrored+=period;return mirrored<=maximum?mirrored:period-mirrored;}
-static float4 geometry_sample_bilinear(device const float4* source,float x,float y,constant GeometryStageUniforms& u){
-  if(u.content_aware_crop_fill!=0u){x=geometry_mirrored_coordinate(x,u.width);y=geometry_mirrored_coordinate(y,u.height);}
-  x=clamp(x,0.0f,float(u.width-1u));y=clamp(y,0.0f,float(u.height-1u));uint x0=uint(floor(x)),y0=uint(floor(y));
-  uint x1=min(u.width-1u,x0+1u),y1=min(u.height-1u,y0+1u);float fx=x-float(x0),fy=y-float(y0);
-  return mix(mix(source[y0*u.width+x0],source[y0*u.width+x1],fx),mix(source[y1*u.width+x0],source[y1*u.width+x1],fx),fy);}
-kernel void apply_geometry_stage(device const float4* source [[buffer(0)]],device float4* destination [[buffer(1)]],
-    constant GeometryStageUniforms& u [[buffer(2)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.width*u.height)return;uint x=gid%u.width,y=gid/u.width;float dx=float(x)-u.center_x,dy=float(y)-u.center_y;
-  if(abs(u.transform_rotation)>1.0e-6f||abs(u.transform_scale-1.0f)>1.0e-6f||abs(u.transform_skew_x)>1.0e-6f||abs(u.transform_skew_y)>1.0e-6f){
-    dx/=u.transform_scale;dy/=u.transform_scale;float sdx=dx+dy*u.transform_skew_x,sdy=dy+dx*u.transform_skew_y;
-    float cosine=cos(-u.transform_rotation),sine=sin(-u.transform_rotation);dx=sdx*cosine-sdy*sine;dy=sdx*sine+sdy*cosine;}
-  float radius=length(float2(dx,dy))/u.maximum_radius,radius_squared=radius*radius;
-  float distortion_scale=1.0f/max(0.40f,1.0f+u.distortion_strength*(0.55f*radius_squared+0.20f*radius_squared*radius_squared));
-  float normalized_dx=u.center_x>0.0f?dx/u.center_x:0.0f,normalized_dy=u.center_y>0.0f?dy/u.center_y:0.0f;
-  float sample_x=u.center_x+dx*distortion_scale*max(0.35f,1.0f+u.vertical_perspective*normalized_dy*0.45f);
-  float sample_y=u.center_y+dy*distortion_scale*max(0.35f,1.0f+u.horizontal_perspective*normalized_dx*0.45f);
-  if(abs(u.liquify_strength)>1.0e-6f){float ldx=sample_x-u.liquify_center_x,ldy=sample_y-u.liquify_center_y,distance=length(float2(ldx,ldy));
-    if(distance<u.liquify_radius){float falloff=1.0f-smoothstep(0.0f,1.0f,distance/max(1.0f,u.liquify_radius));
-      float scale=clamp(1.0f-u.liquify_strength*0.55f*falloff,0.30f,2.50f);sample_x=u.liquify_center_x+ldx*scale;sample_y=u.liquify_center_y+ldy*scale;}}
-  float4 corrected=geometry_sample_bilinear(source,sample_x,sample_y,u);
-  if(u.chromatic_aberration_strength>1.0e-6f&&radius>1.0e-6f){float inverse_length=1.0f/max(1.0e-6f,length(float2(dx,dy)));
-    float radial_x=dx*inverse_length,radial_y=dy*inverse_length,shift=u.chromatic_aberration_strength*radius_squared*2.2f;
-    float4 red_sample=geometry_sample_bilinear(source,sample_x-radial_x*shift*1.15f,sample_y-radial_y*shift*1.15f,u);
-    float4 blue_sample=geometry_sample_bilinear(source,sample_x-radial_x*shift*0.85f,sample_y-radial_y*shift*0.85f,u);
-    corrected.r=red_sample.r;corrected.b=blue_sample.b;}
-  destination[gid]=float4(corrected.rgb,clamp(corrected.a,0.0f,1.0f));}
-
-static float retained_spatial_luminance(float3 rgb,constant RetainedSpatialDetailUniforms& u){
-  return rgb.r*u.luminance_red+rgb.g*u.luminance_green+rgb.b*u.luminance_blue;}
-static float retained_spatial_bell_weight(float value,float center,float radius){if(radius<=0.0f)return 0.0f;
-  float distance=abs(value-center)/radius;if(distance>=1.0f)return 0.0f;float amount=1.0f-distance;return amount*amount*(3.0f-2.0f*amount);}
-static float4 retained_spatial_scale_to_luminance(float4 source,float target,constant RetainedSpatialDetailUniforms& u){
-  float source_luminance=retained_spatial_luminance(source.rgb,u),maximum_channel=max(source.r,max(source.g,source.b));
-  float safe_target=max(0.0f,target);if(maximum_channel<=1.0e-9f||source_luminance<=1.0e-9f)safe_target=min(safe_target,u.output_headroom);
-  else safe_target=min(safe_target,max(0.0f,u.output_headroom*source_luminance/maximum_channel));
-  float maximum_magnitude=max(abs(source.r),max(abs(source.g),abs(source.b)));float3 adjusted=source.rgb;
-  if(maximum_magnitude<=1.0e-9f)adjusted=float3(safe_target);else if(source_luminance>1.0e-6f)adjusted*=safe_target/source_luminance;
-  float adjusted_luminance=max(0.0f,retained_spatial_luminance(adjusted,u)),nonnegative_source=max(0.0f,source_luminance);
-  float lift_stops=log2((adjusted_luminance+1.0e-6f)/(nonnegative_source+1.0e-6f));if(lift_stops>0.0f){
-    float spread=max(abs(source.r-source.g),max(abs(source.g-source.b),abs(source.r-source.b)));
-    float attenuation=clamp((1.0f-smoothstep(0.012f,0.16f,nonnegative_source))*smoothstep(0.12f,1.20f,lift_stops)*
-        (1.0f-smoothstep(0.025f,0.12f,spread))*0.56f,0.0f,0.56f);
-    adjusted=adjusted_luminance+(adjusted-adjusted_luminance)*(1.0f-attenuation);}return float4(adjusted,source.a);}
-kernel void extract_retained_spatial_luminance(device const float4* pixels [[buffer(0)]],device float* luminance_buffer [[buffer(1)]],
-    constant RetainedSpatialDetailUniforms& u [[buffer(2)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.width*u.height)return;luminance_buffer[gid]=retained_spatial_luminance(pixels[gid].rgb,u);}
-kernel void apply_retained_spatial_detail(device float4* pixels [[buffer(0)]],device const float* luminance_buffer [[buffer(1)]],
-    device const float* texture_blur [[buffer(2)]],device const float* clarity_blur [[buffer(3)]],device const float* haze_blur [[buffer(4)]],
-    constant RetainedSpatialDetailUniforms& u [[buffer(5)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.width*u.height)return;uint x=gid%u.width,y=gid/u.width;float luminance=luminance_buffer[gid],local_activity=0.0f;
-  if(x>0u)local_activity=max(local_activity,abs(luminance-luminance_buffer[gid-1u]));if(x+1u<u.width)local_activity=max(local_activity,abs(luminance-luminance_buffer[gid+1u]));
-  if(y>0u)local_activity=max(local_activity,abs(luminance-luminance_buffer[gid-u.width]));if(y+1u<u.height)local_activity=max(local_activity,abs(luminance-luminance_buffer[gid+u.width]));
-  float midtone=retained_spatial_bell_weight(luminance,0.5f,0.42f),shadow=smoothstep(0.025f,0.12f,luminance);
-  float highlight=1.0f-smoothstep(0.74f,0.98f,luminance),tone_guard=shadow*highlight,target=luminance;
-  if((u.active_mask&1u)!=0u){float signal=luminance-texture_blur[gid],broad=(u.active_mask&2u)!=0u?luminance-clarity_blur[gid]:local_activity;
-    float guard=1.0f-smoothstep(0.08f,0.36f,abs(broad))*0.72f,gain=u.texture_strength>=0.0f?1.30f:0.48f;
-    target+=u.texture_strength*signal*(0.46f+midtone*0.70f)*guard*tone_guard*gain;}
-  if((u.active_mask&2u)!=0u){float signal=luminance-clarity_blur[gid],edge=1.0f-smoothstep(0.24f,0.58f,abs(signal))*0.28f;
-    float structure=smoothstep(0.003f,0.035f,local_activity),gain=u.clarity_strength>=0.0f?1.08f:0.46f;
-    target+=u.clarity_strength*signal*(0.36f+midtone*0.82f)*tone_guard*edge*structure*gain;}
-  if((u.active_mask&4u)!=0u){float signal=clamp(luminance-haze_blur[gid],-0.18f,0.18f),activity=smoothstep(0.0015f,0.018f,local_activity);
-    float edge=1.0f-smoothstep(0.11f,0.18f,abs(signal))*0.95f,gain=u.dehaze_strength>=0.0f?0.95f:0.36f;
-    target+=u.dehaze_strength*signal*(0.52f+midtone*0.78f)*highlight*activity*edge*gain;
-    float shadow_weight=1.0f-smoothstep(0.08f,0.20f,luminance),structure=smoothstep(0.008f,0.065f,abs(signal))*activity*edge;
-    if(u.dehaze_strength>0.0f){target*=max(0.0f,1.0f-u.dehaze_strength*shadow_weight*structure*0.52f);
-      target*=max(0.0f,1.0f-u.dehaze_strength*shadow_weight*activity*edge*0.035f);}
-    else target+=(-u.dehaze_strength)*shadow_weight*structure*0.075f;}
-  pixels[gid]=retained_spatial_scale_to_luminance(pixels[gid],target,u);}
-
-static float3 retained_detail_multiply(constant float* m,float3 v){return float3(m[0]*v.r+m[1]*v.g+m[2]*v.b,
-    m[3]*v.r+m[4]*v.g+m[5]*v.b,m[6]*v.r+m[7]*v.g+m[8]*v.b);}
-static float retained_detail_cbrt(float v){return copysign(pow(abs(v),1.0f/3.0f),v);}
-static float3 retained_detail_rgb_to_oklab(float3 rgb,constant RetainedFineDetailUniforms& u){float3 xyz=retained_detail_multiply(u.rgb_to_xyz_d65,rgb);
-  float l=0.8189330101f*xyz.x+0.3618667424f*xyz.y-0.1288597137f*xyz.z,m=0.0329845436f*xyz.x+0.9293118715f*xyz.y+0.0361456387f*xyz.z;
-  float s=0.0482003018f*xyz.x+0.2643662691f*xyz.y+0.6338517070f*xyz.z,lr=retained_detail_cbrt(l),mr=retained_detail_cbrt(m),sr=retained_detail_cbrt(s);
-  return float3(0.2104542553f*lr+0.7936177850f*mr-0.0040720468f*sr,1.9779984951f*lr-2.4285922050f*mr+0.4505937099f*sr,
-      0.0259040371f*lr+0.7827717662f*mr-0.8086757660f*sr);}
-static float3 retained_detail_oklab_to_rgb(float lightness,float a,float b,constant RetainedFineDetailUniforms& u){
-  float lr=lightness+0.3963377774f*a+0.2158037573f*b,mr=lightness-0.1055613458f*a-0.0638541728f*b,sr=lightness-0.0894841775f*a-1.2914855480f*b;
-  float l=lr*lr*lr,m=mr*mr*mr,s=sr*sr*sr;float3 xyz=float3(1.2270138511f*l-0.5577999807f*m+0.2812561490f*s,
-      -0.0405801784f*l+1.1122568696f*m-0.0716766787f*s,-0.0763812845f*l-0.4214819784f*m+1.5861632204f*s);
-  return retained_detail_multiply(u.xyz_d65_to_rgb,xyz);}
-kernel void extract_retained_fine_detail(device const float4* pixels [[buffer(0)]],device float* lightness [[buffer(1)]],
-    device float* chroma_a [[buffer(2)]],device float* chroma_b [[buffer(3)]],constant RetainedFineDetailUniforms& u [[buffer(4)]],
-    uint gid [[thread_position_in_grid]]){if(gid>=u.width*u.height)return;float3 lab=retained_detail_rgb_to_oklab(pixels[gid].rgb,u);
-  lightness[gid]=lab.x;chroma_a[gid]=lab.y;chroma_b[gid]=lab.z;}
-kernel void apply_retained_sharpen(device float* lightness [[buffer(0)]],device const float* sharp_blur [[buffer(1)]],
-    device const float* edge_blur [[buffer(2)]],constant RetainedFineDetailUniforms& u [[buffer(3)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.width*u.height)return;float signal=lightness[gid]-sharp_blur[gid],gate=1.0f;if(u.sharpen_mask_strength>1.0e-6f)
-    gate=smoothstep(0.0015f,0.012f+0.06f*u.sharpen_mask_strength,abs(lightness[gid]-edge_blur[gid]));
-  lightness[gid]+=signal*u.sharpen_strength*u.sharpen_gain*gate;}
-kernel void apply_retained_luminance_nr(device float* lightness [[buffer(0)]],device const float* nr_blur [[buffer(1)]],
-    device const float* edge_blur [[buffer(2)]],constant RetainedFineDetailUniforms& u [[buffer(3)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.width*u.height)return;float edge=abs(lightness[gid]-edge_blur[gid]),preserve=1.0f-smoothstep(0.005f,0.04f,edge);
-  lightness[gid]=mix(lightness[gid],nr_blur[gid],u.luminance_nr_strength*0.85f*preserve);}
-kernel void apply_retained_color_nr(device float* chroma_a [[buffer(0)]],device float* chroma_b [[buffer(1)]],
-    device const float* a_blur [[buffer(2)]],device const float* b_blur [[buffer(3)]],constant RetainedFineDetailUniforms& u [[buffer(4)]],
-    uint gid [[thread_position_in_grid]]){if(gid>=u.width*u.height)return;float blend=u.color_nr_strength*0.90f;
-  chroma_a[gid]=mix(chroma_a[gid],a_blur[gid],blend);chroma_b[gid]=mix(chroma_b[gid],b_blur[gid],blend);}
-kernel void compose_retained_fine_detail(device float4* pixels [[buffer(0)]],device const float* lightness [[buffer(1)]],
-    device const float* chroma_a [[buffer(2)]],device const float* chroma_b [[buffer(3)]],constant RetainedFineDetailUniforms& u [[buffer(4)]],
-    uint gid [[thread_position_in_grid]]){if(gid>=u.width*u.height)return;pixels[gid]=float4(retained_detail_oklab_to_rgb(
-      lightness[gid],chroma_a[gid],chroma_b[gid],u),pixels[gid].a);}
-
-struct MaskUniforms {
-  int has_linear_mask; float linear_exposure; float linear_temperature; float linear_feather;
-  float linear_position; float linear_rotation_rad;
-  int has_radial_mask; float radial_exposure; float radial_temperature; float radial_feather;
-  float radial_center_x; float radial_center_y; float radial_radius_x; float radial_radius_y;
-  float radial_rotation_rad;
-  float radial_wb_red; float radial_wb_green; float radial_wb_blue;
-  float linear_wb_red; float linear_wb_green; float linear_wb_blue;
-  int width; int height;
-};
-
-struct BlurUniforms {
-  int width; int height; int radius;
-};
-struct GuidedFilterUniforms { uint pixel_count; float epsilon; };
-
-kernel void apply_masks(device float4* pixels [[buffer(0)]], constant MaskUniforms& u [[buffer(1)]],
-    uint gid [[thread_position_in_grid]]) {
-  if (gid >= uint(u.width) * uint(u.height)) return;
-  int x = int(gid) % u.width, y = int(gid) / u.width;
-  float nx = u.width > 1 ? float(x) / float(u.width - 1) : 0.5f;
-  float ny = u.height > 1 ? float(y) / float(u.height - 1) : 0.5f;
-  float4 p = pixels[gid];
-  if (u.has_linear_mask) {
-    float cr = cos(u.linear_rotation_rad), sr = sin(u.linear_rotation_rad);
-    float axis = (nx - 0.5f) * cr + (ny - 0.5f) * sr + 0.5f;
-    float w = clamp_unit((u.linear_position - axis) / max(0.05f, u.linear_feather) + 0.5f);
-    if (w > 0.0f) { float g = pow(2.0f, u.linear_exposure * w);
-      p.r *= (1.0f + (u.linear_wb_red - 1.0f) * w) * g;
-      p.g *= (1.0f + (u.linear_wb_green - 1.0f) * w) * g;
-      p.b *= (1.0f + (u.linear_wb_blue - 1.0f) * w) * g; }
-  }
-  if (u.has_radial_mask) {
-    float cr = cos(u.radial_rotation_rad), sr = sin(u.radial_rotation_rad);
-    float2 t = float2(nx, ny) - float2(u.radial_center_x, u.radial_center_y);
-    float lx = t.x * cr + t.y * sr, ly = -t.x * sr + t.y * cr;
-    float2 sr2 = max(float2(u.radial_radius_x, u.radial_radius_y), float2(0.05f));
-    float d = sqrt(lx*lx/(sr2.x*sr2.x) + ly*ly/(sr2.y*sr2.y));
-    float inner = max(0.0f, 1.0f - clamp(u.radial_feather, 0.05f, 1.0f));
-    float w = 0.0f;
-    if (d <= inner) w = 1.0f;
-    else if (d < 1.0f) { float s = clamp_unit((d - inner) / (1.0f - inner)); w = 1.0f - s*s*(3.0f-2.0f*s); }
-    if (w > 0.0f) { float g = pow(2.0f, u.radial_exposure * w);
-      p.r *= (1.0f + (u.radial_wb_red - 1.0f) * w) * g;
-      p.g *= (1.0f + (u.radial_wb_green - 1.0f) * w) * g;
-      p.b *= (1.0f + (u.radial_wb_blue - 1.0f) * w) * g; }
-  }
-  pixels[gid] = max(p, float4(0.0f));
-}
-
-kernel void box_blur_horizontal(device const float* input [[buffer(0)]], device float* output [[buffer(1)]],
-    constant BlurUniforms& u [[buffer(2)]], uint gid [[thread_position_in_grid]]) {
-  if (gid >= uint(u.width) * uint(u.height)) return;
-  int x = int(gid) % u.width, y = int(gid) / u.width;
-  int kernel_width = u.radius * 2 + 1;
-  float sum = 0.0f;
-  for (int sample = -u.radius; sample <= u.radius; ++sample) {
-    int clamped_x = clamp(x + sample, 0, u.width - 1);
-    sum += input[y * u.width + clamped_x];
-  }
-  output[gid] = sum / float(kernel_width);
-}
-
-kernel void box_blur_vertical(device const float* input [[buffer(0)]], device float* output [[buffer(1)]],
-    constant BlurUniforms& u [[buffer(2)]], uint gid [[thread_position_in_grid]]) {
-  if (gid >= uint(u.width) * uint(u.height)) return;
-  int x = int(gid) % u.width, y = int(gid) / u.width;
-  int kernel_width = u.radius * 2 + 1;
-  float sum = 0.0f;
-  for (int sample = -u.radius; sample <= u.radius; ++sample) {
-    int clamped_y = clamp(y + sample, 0, u.height - 1);
-    sum += input[clamped_y * u.width + x];
-  }
-  output[gid] = sum / float(kernel_width);
-}
-kernel void retained_guided_square(device const float* input [[buffer(0)]],device float* correlation [[buffer(1)]],
-    constant GuidedFilterUniforms& u [[buffer(2)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.pixel_count)return;correlation[gid]=input[gid]*input[gid];}
-kernel void retained_guided_coefficients(device const float* input [[buffer(0)]],device const float* mean [[buffer(1)]],
-    device const float* mean_correlation [[buffer(2)]],device float* coefficient_a [[buffer(3)]],device float* coefficient_b [[buffer(4)]],
-    constant GuidedFilterUniforms& u [[buffer(5)]],uint gid [[thread_position_in_grid]]){
-  if(gid>=u.pixel_count)return;float variance=max(0.0f,mean_correlation[gid]-mean[gid]*mean[gid]);
-  float a=variance/(variance+max(1.0e-8f,u.epsilon));coefficient_a[gid]=a;coefficient_b[gid]=mean[gid]*(1.0f-a);}
-kernel void retained_guided_compose(device const float* input [[buffer(0)]],device const float* mean_a [[buffer(1)]],
-    device const float* mean_b [[buffer(2)]],device float* output [[buffer(3)]],constant GuidedFilterUniforms& u [[buffer(4)]],
-    uint gid [[thread_position_in_grid]]){if(gid>=u.pixel_count)return;output[gid]=max(0.0f,mean_a[gid]*input[gid]+mean_b[gid]);}
-)"];
-  }
 };
 
 struct MetalWorkingSurface::Impl final {
@@ -4325,6 +3466,7 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
     };
     if (!finite_values(look_program->rgb_to_xyz_d65.values) ||
         !finite_values(look_program->xyz_d65_to_rgb.values) ||
+        !finite_values(look_program->rgb_to_selection_rgb.values) ||
         !finite_values(look_program->luminance_coefficients) ||
         !finite_values(look_program->rgb_mixer) ||
         !finite_values(look_program->black_and_white_mixer) ||
@@ -5492,6 +4634,8 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
         auto detail = RetainedFineDetailUniforms{
             .sharpen_strength = program.sharpen_strength,
             .sharpen_gain = program.sharpen_gain,
+            .sharpen_radius_fraction = program.sharpen_radius_fraction,
+            .sharpen_subpixel_scale = program.sharpen_subpixel_scale,
             .sharpen_mask_strength = program.sharpen_mask_strength,
             .luminance_nr_strength = program.luminance_nr_strength,
             .color_nr_strength = program.color_nr_strength,
@@ -5518,18 +4662,6 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
             source_buffer = output;
           }
         };
-        if ((program.active_mask & CompiledFineDetailProgram::kSharpen) != 0U) {
-          blur_fine(detail_lightness_buffer, detail_blur_a_buffer,
-                    static_cast<int>(program.sharpen_radius));
-          blur_fine(detail_lightness_buffer, detail_blur_b_buffer,
-                    static_cast<int>(program.sharpen_edge_radius));
-          dispatch_buffers(
-              impl_->retained_detail_sharpen_pipeline,
-              std::array<id<MTLBuffer>, 3U>{
-                  detail_lightness_buffer, detail_blur_a_buffer,
-                  detail_blur_b_buffer},
-              3U, &detail, sizeof(detail));
-        }
         if ((program.active_mask &
              CompiledFineDetailProgram::kLuminanceNoiseReduction) != 0U) {
           blur_fine(detail_lightness_buffer, detail_blur_a_buffer, 2);
@@ -5551,6 +4683,18 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
                   detail_chroma_a_buffer, detail_chroma_b_buffer,
                   detail_blur_a_buffer, detail_blur_b_buffer},
               4U, &detail, sizeof(detail));
+        }
+        if ((program.active_mask & CompiledFineDetailProgram::kSharpen) != 0U) {
+          blur_fine(detail_lightness_buffer, detail_blur_a_buffer,
+                    static_cast<int>(program.sharpen_radius));
+          blur_fine(detail_lightness_buffer, detail_blur_b_buffer,
+                    static_cast<int>(program.sharpen_edge_radius));
+          dispatch_buffers(
+              impl_->retained_detail_sharpen_pipeline,
+              std::array<id<MTLBuffer>, 3U>{
+                  detail_lightness_buffer, detail_blur_a_buffer,
+                  detail_blur_b_buffer},
+              3U, &detail, sizeof(detail));
         }
         dispatch_buffers(
             impl_->retained_detail_compose_pipeline,
@@ -5768,6 +4912,8 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
       auto detail_uniforms = RetainedFineDetailUniforms{
           .sharpen_strength = fine_detail_program.sharpen_strength,
           .sharpen_gain = fine_detail_program.sharpen_gain,
+          .sharpen_radius_fraction = fine_detail_program.sharpen_radius_fraction,
+          .sharpen_subpixel_scale = fine_detail_program.sharpen_subpixel_scale,
           .sharpen_mask_strength =
               fine_detail_program.sharpen_mask_strength,
           .luminance_nr_strength =
@@ -5847,26 +4993,6 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
         }
       };
       if ((fine_detail_program.active_mask &
-           CompiledFineDetailProgram::kSharpen) != 0U) {
-        blur_detail(
-            detail_lightness_buffer,
-            detail_blur_a_buffer,
-            static_cast<int>(fine_detail_program.sharpen_radius));
-        blur_detail(
-            detail_lightness_buffer,
-            detail_blur_b_buffer,
-            static_cast<int>(fine_detail_program.sharpen_edge_radius));
-        dispatch_detail(
-            impl_->retained_detail_sharpen_pipeline,
-            std::array<id<MTLBuffer>, 3U>{
-                detail_lightness_buffer,
-                detail_blur_a_buffer,
-                detail_blur_b_buffer},
-            3U,
-            &detail_uniforms,
-            sizeof(detail_uniforms));
-      }
-      if ((fine_detail_program.active_mask &
            CompiledFineDetailProgram::kLuminanceNoiseReduction) != 0U) {
         blur_detail(detail_lightness_buffer, detail_blur_a_buffer, 2);
         blur_detail(detail_lightness_buffer, detail_blur_b_buffer, 5);
@@ -5892,6 +5018,26 @@ MetalPipelineBackend::publish_masks_and_color_lut_surface(
                 detail_blur_a_buffer,
                 detail_blur_b_buffer},
             4U,
+            &detail_uniforms,
+            sizeof(detail_uniforms));
+      }
+      if ((fine_detail_program.active_mask &
+           CompiledFineDetailProgram::kSharpen) != 0U) {
+        blur_detail(
+            detail_lightness_buffer,
+            detail_blur_a_buffer,
+            static_cast<int>(fine_detail_program.sharpen_radius));
+        blur_detail(
+            detail_lightness_buffer,
+            detail_blur_b_buffer,
+            static_cast<int>(fine_detail_program.sharpen_edge_radius));
+        dispatch_detail(
+            impl_->retained_detail_sharpen_pipeline,
+            std::array<id<MTLBuffer>, 3U>{
+                detail_lightness_buffer,
+                detail_blur_a_buffer,
+                detail_blur_b_buffer},
+            3U,
             &detail_uniforms,
             sizeof(detail_uniforms));
       }

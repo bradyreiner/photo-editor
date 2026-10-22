@@ -2,10 +2,13 @@
 
 #include <QColorSpace>
 #include <QCoreApplication>
+#include <QJsonDocument>
 
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <string_view>
 
 namespace {
 
@@ -23,6 +26,76 @@ bool close(double left, double right) {
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
   using namespace photo_editor::desktop;
+
+  struct WorkingProfileCase final {
+    QString name;
+    QString alias;
+    photo_editor::pipeline::ColorPrimaries primaries;
+    photo_editor::pipeline::WorkingTransformKind kind;
+  };
+  const auto working_profiles = std::array<WorkingProfileCase, 10>{{
+      {QStringLiteral("Linear Adobe RGB"), QStringLiteral("Linear Adobe RGB"),
+       photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+       photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      {QStringLiteral("Linear Adobe RGB"), QStringLiteral("linear-adobe-rgb"),
+       photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+       photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      {QStringLiteral("Linear Adobe RGB"), QStringLiteral("AdobeRGBLinear"),
+       photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+       photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      {QStringLiteral("ACEScg"), QStringLiteral("ACEScg/AP1"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp1,
+       photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      {QStringLiteral("ACEScg"), QStringLiteral("ACEScg"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp1,
+       photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      {QStringLiteral("ACEScg"), QStringLiteral("linearacesap1"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp1,
+       photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      {QStringLiteral("ACES2065-1"), QStringLiteral("ACES2065-1/AP0"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp0,
+       photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      {QStringLiteral("ACES2065-1"), QStringLiteral("ACES2065-1"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp0,
+       photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      {QStringLiteral("ACES2065-1"), QStringLiteral("ACES2065_1"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp0,
+       photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      {QStringLiteral("ACES2065-1"), QStringLiteral("linearacesap0"),
+       photo_editor::pipeline::ColorPrimaries::AcesAp0,
+       photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+  }};
+  for (const auto& profile : working_profiles) {
+    auto recipe = EditRecipeState{};
+    recipe.working_color_profile = profile.alias;
+    const auto serialized = serialize_edit_recipe_json(recipe);
+    const auto document =
+        QJsonDocument::fromJson(serialized.toUtf8()).object();
+    const auto saved_profile = document
+                                   .value(QStringLiteral("colorPipeline"))
+                                   .toObject()
+                                   .value(QStringLiteral("workingProfile"))
+                                   .toString();
+    const auto restored = parse_edit_recipe_json(serialized);
+    const auto restored_config = compile_preview_color_pipeline_config_for_display(
+        restored, nullptr, {});
+    if (saved_profile != profile.name ||
+        restored.working_color_profile != profile.name ||
+        restored_config.working_profile.profile_name !=
+            profile.name.toStdString() ||
+        restored_config.working_profile.kind != profile.kind ||
+        restored_config.working_profile.color_space.primaries !=
+            profile.primaries ||
+        restored_config.working_profile.color_space.transfer_function !=
+            photo_editor::pipeline::TransferFunction::Linear) {
+      std::cerr << "working profile recipe roundtrip="
+                << profile.name.toStdString() << '\n';
+      return fail("wide-gamut working profile names must survive recipe save/load and compile to distinct linear spaces");
+    }
+    if (normalized_working_color_profile_name(profile.alias) != profile.name) {
+      return fail("working-profile aliases must normalize to the serialized canonical name");
+    }
+  }
 
   auto match_export = EditRecipeState{};
   match_export.preview_output_mode = QStringLiteral("Match Export");

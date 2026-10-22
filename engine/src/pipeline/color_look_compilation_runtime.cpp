@@ -31,6 +31,9 @@ std::uint64_t look_stage_program_payload_identity(
   for (const auto value : compiled.xyz_d65_to_rgb.values) {
     append_float(static_cast<float>(value));
   }
+  for (const auto value : compiled.rgb_to_selection_rgb.values) {
+    append_float(static_cast<float>(value));
+  }
   for (const auto value : compiled.rgb_mixer) append_float(value);
   for (const auto value : compiled.black_and_white_mixer) append_float(value);
   for (const auto value : compiled.harmony_anchors) append_float(value);

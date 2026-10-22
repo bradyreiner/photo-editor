@@ -25,6 +25,9 @@ enum class WorkingTransformKind {
   LinearDisplayP3,
   LinearProPhotoRgb,
   LinearRec2020,
+  LinearAdobeRgb,
+  LinearAcesCg,
+  LinearAces2065_1,
 };
 
 enum class OutputTransformKind {

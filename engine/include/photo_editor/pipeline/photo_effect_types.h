@@ -97,6 +97,11 @@ struct PhotoEffectInstance final {
     double strength = 0.02;
     double color = -0.8;
     std::uint32_t seed = 1;
+    // Empty selects the original renderer, preserving saved v1 edits exactly.
+    std::string stock = {};
+    double roughness = 0.4;
+    double shadows = 1.0;
+    double highlights = 1.0;
     bool operator==(const FilmGrain&) const = default;
   } grain;
   // A broad, feathered light veil positioned in normalized full-frame space.

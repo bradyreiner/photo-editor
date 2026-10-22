@@ -367,6 +367,18 @@ void apply_fine_detail_effects(
     const ColorAdjustmentState& state,
     CancellationToken cancellation,
     ColorAdjustmentTelemetry* telemetry) {
+  apply_fine_detail_effects_in_context(pixels, width, height, state,
+      make_pipeline_color_context(state), cancellation, telemetry);
+}
+
+void apply_fine_detail_effects_in_context(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const ColorAdjustmentState& state,
+    const PipelineColorContext& color_context,
+    CancellationToken cancellation,
+    ColorAdjustmentTelemetry* telemetry) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() !=
           static_cast<std::size_t>(width) *
@@ -376,10 +388,8 @@ void apply_fine_detail_effects(
   }
   const auto safe_width =
       static_cast<std::size_t>(width);
-  const auto color_context =
-      make_pipeline_color_context(state);
   const auto sharpen_strength =
-      clamp_signed_percent(state.sharpening) / 100.0;
+      std::clamp(state.sharpening, -100.0, 100.0) / 100.0;
   const auto sharpen_radius =
       std::clamp(state.sharpen_radius, 0.5, 3.0);
   const auto sharpen_detail =
@@ -430,73 +440,9 @@ void apply_fine_detail_effects(
       telemetry->detail_oklab_ms += elapsed_stage_ms(detail_oklab_timer);
     }
 
-    // Sharpening: unsharp mask on lightness with edge-aware masking. Radius
-    // controls the blur scale; Detail increases fine-edge gain without
-    // changing the user's amount.
-    if (std::abs(sharpen_strength) > 1e-6) {
-      const auto detail_sharpen_timer = StageClock::now();
-      const auto sharp_radius = std::max(1, static_cast<int>(std::lround(sharpen_radius)));
-      const auto edge_radius = std::max(sharp_radius + 2, static_cast<int>(std::lround(sharpen_radius * 3.0)));
-      const auto sharpen_gain = 1.9 + sharpen_detail * 1.15;
-      std::vector<float> sharp_blur;
-      gaussian_approximate_blur_into(
-          lightness_buf,
-          width,
-          height,
-          sharp_radius,
-          &sharp_blur,
-          &detail_blur_workspace,
-          cancellation);
-      if (cancellation.cancelled()) {
-        return;
-      }
-      std::vector<float> edge_blur;
-      if (sharpen_mask_strength > 1e-6) {
-        gaussian_approximate_blur_into(
-            lightness_buf,
-            width,
-            height,
-            edge_radius,
-            &edge_blur,
-            &detail_blur_workspace,
-            cancellation);
-        if (cancellation.cancelled()) {
-          return;
-        }
-      }
-
-      parallel_for(height, [&](int y) {
-        if (cancellation.cancelled()) {
-          return;
-        }
-        const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-        for (int x = 0; x < width; ++x) {
-          const auto index = row_offset + static_cast<std::size_t>(x);
-          const auto detail_signal = lightness_buf[index] - sharp_blur[index];
-          auto mask_gate = 1.0;
-          if (sharpen_mask_strength > 1e-6) {
-            const auto edge_strength = std::abs(lightness_buf[index] - edge_blur[index]);
-            mask_gate = smoothstep(
-                0.0015,
-                0.012 + 0.06 * sharpen_mask_strength,
-                static_cast<double>(edge_strength));
-          }
-          lightness_buf[index] += static_cast<float>(
-              static_cast<double>(detail_signal) * sharpen_strength * sharpen_gain * mask_gate);
-        }
-      });
-      if (cancellation.cancelled()) {
-        return;
-      }
-      if (telemetry != nullptr) {
-        telemetry->detail_sharpen_ms += elapsed_stage_ms(detail_sharpen_timer);
-      }
-    }
-
     // Luminance noise reduction: edge-preserving blur on lightness.
-    // Uses a box blur at radius 2 and blends toward it proportional to
-    // strength, but preserves edges by reducing blend where local contrast
-    // is high.
+    // Compare two smoothed scales so individual noisy pixels are not
+    // mistaken for image edges. Sharpen only after both denoising passes.
     if (std::abs(luma_nr_strength) > 1e-6) {
       const auto detail_luminance_nr_timer = StageClock::now();
       std::vector<float> nr_blur;
@@ -531,7 +477,7 @@ void apply_fine_detail_effects(
         const auto row_offset = static_cast<std::size_t>(y) * safe_width;
         for (int x = 0; x < width; ++x) {
           const auto index = row_offset + static_cast<std::size_t>(x);
-          const auto edge = std::abs(lightness_buf[index] - nr_edge_blur[index]);
+          const auto edge = std::abs(nr_blur[index] - nr_edge_blur[index]);
           const auto edge_preserve = 1.0 - smoothstep(0.005, 0.04, static_cast<double>(edge));
           const auto blend = luma_nr_strength * 0.85 * edge_preserve;
           lightness_buf[index] = static_cast<float>(
@@ -582,9 +528,10 @@ void apply_fine_detail_effects(
           return;
         }
         const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-        const auto blend = color_nr_strength * 0.90;
         for (int x = 0; x < width; ++x) {
           const auto index = row_offset + static_cast<std::size_t>(x);
+          const auto edge = std::hypot(chroma_a_buf[index] - a_blur[index], chroma_b_buf[index] - b_blur[index]);
+          const auto blend = color_nr_strength * 0.90 * (1.0 - smoothstep(0.01, 0.04, static_cast<double>(edge)));
           chroma_a_buf[index] = static_cast<float>(
               static_cast<double>(chroma_a_buf[index]) * (1.0 - blend) +
               static_cast<double>(a_blur[index]) * blend);
@@ -598,6 +545,75 @@ void apply_fine_detail_effects(
       }
       if (telemetry != nullptr) {
         telemetry->detail_color_nr_ms += elapsed_stage_ms(detail_color_nr_timer);
+      }
+    }
+
+    // Sharpening: unsharp mask on lightness with edge-aware masking. Radius
+    // controls the blur scale; Detail increases fine-edge gain without
+    // changing the user's amount.
+    if (std::abs(sharpen_strength) > 1e-6) {
+      const auto detail_sharpen_timer = StageClock::now();
+      const auto sharp_radius = std::max(1, static_cast<int>(std::floor(sharpen_radius)));
+      const auto edge_radius = sharp_radius + 1;
+      const auto radius_fraction = std::max(0.0, sharpen_radius - sharp_radius);
+      const auto subpixel_scale = std::min(1.0, sharpen_radius);
+      const auto sharpen_gain = 1.9 + sharpen_detail * 1.15;
+      std::vector<float> sharp_blur;
+      gaussian_approximate_blur_into(
+          lightness_buf,
+          width,
+          height,
+          sharp_radius,
+          &sharp_blur,
+          &detail_blur_workspace,
+          cancellation);
+      if (cancellation.cancelled()) {
+        return;
+      }
+      std::vector<float> edge_blur;
+      if (sharpen_mask_strength > 1e-6 || radius_fraction > 1e-6) {
+        gaussian_approximate_blur_into(
+            lightness_buf,
+            width,
+            height,
+            edge_radius,
+            &edge_blur,
+            &detail_blur_workspace,
+            cancellation);
+        if (cancellation.cancelled()) {
+          return;
+        }
+      }
+
+      parallel_for(height, [&](int y) {
+        if (cancellation.cancelled()) {
+          return;
+        }
+        const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+        for (int x = 0; x < width; ++x) {
+          const auto index = row_offset + static_cast<std::size_t>(x);
+          const auto blur = radius_fraction > 1e-6
+              ? std::lerp(static_cast<double>(sharp_blur[index]), static_cast<double>(edge_blur[index]), radius_fraction)
+              : static_cast<double>(sharp_blur[index]);
+          const auto detail_signal = (lightness_buf[index] - blur) * subpixel_scale;
+          const auto limited_signal = detail_signal / (1.0 + std::abs(detail_signal) / 0.025);
+          auto mask_gate = 1.0;
+          if (sharpen_mask_strength > 1e-6) {
+            const auto edge_strength = std::abs(detail_signal);
+            mask_gate = smoothstep(
+                0.0015,
+                0.012 + 0.06 * sharpen_mask_strength,
+                static_cast<double>(edge_strength));
+          }
+          lightness_buf[index] += static_cast<float>(
+              limited_signal * sharpen_strength * sharpen_gain * mask_gate);
+        }
+      });
+      if (cancellation.cancelled()) {
+        return;
+      }
+      if (telemetry != nullptr) {
+        telemetry->detail_sharpen_ms += elapsed_stage_ms(detail_sharpen_timer);
       }
     }
 

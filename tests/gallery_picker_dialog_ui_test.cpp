@@ -1,3 +1,4 @@
+#include "qml_popup_wait.h"
 #include <QAccessible>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -12,11 +13,12 @@
 #include <memory>
 
 namespace {
-void settle() {
+void settle(QObject* popup = nullptr) {
   for (auto index = 0; index < 16; ++index) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     QThread::msleep(5);
   }
+  wait_for_popup_transition(popup);
 }
 
 int fail(const char* message) {
@@ -140,10 +142,10 @@ ApplicationWindow {
 
   window->show();
   opener->forceActiveFocus(Qt::TabFocusReason);
-  settle();
+  settle(dialog);
   if (window->activeFocusItem() != opener || !QMetaObject::invokeMethod(dialog, "openDialog"))
     return fail("Gallery Picker should open from its focused invoking control");
-  settle();
+  settle(dialog);
   auto* first_card = find_visual_child(window->contentItem(), QStringLiteral("Portrait One"));
   auto* second_card = find_visual_child(window->contentItem(), QStringLiteral("Kitchen Test Clip"));
   auto* grid = find_named_visual_child(window->contentItem(), QStringLiteral("timelineVirtualizedGalleryGrid"));
@@ -188,17 +190,17 @@ ApplicationWindow {
     return fail("Gallery Picker capture should save when requested");
   if (!send_key(window, Qt::Key_Escape))
     return fail("Gallery Picker should accept Escape");
-  settle();
+  settle(dialog);
   if (dialog->property("visible").toBool() || window->activeFocusItem() != opener)
     return fail("Escape should close Gallery Picker and return focus to its opener");
 
   const auto original_assets = window->property("sourceAssets");
   window->setProperty("sourceAssets", QVariantList{});
   window->resize(560, 420);
-  settle();
+  settle(dialog);
   if (!QMetaObject::invokeMethod(dialog, "openDialog"))
     return fail("Gallery Picker should reopen with an empty library");
-  settle();
+  settle(dialog);
   auto* empty_card = window->findChild<QObject*>("galleryPickerEmptyStateCard");
   auto* close_button = window->findChild<QObject*>("galleryPickerCloseButton");
   project_scope_button = window->findChild<QObject*>("galleryPickerProjectScopeButton");
@@ -240,7 +242,7 @@ ApplicationWindow {
   if (!compact_output.isEmpty() && !window->grabWindow().save(compact_output))
     return fail("Compact Gallery Picker capture should save when requested");
   window->setProperty("sourceAssets", original_assets);
-  settle();
+  settle(dialog);
   footer_action = find_named_visual_child(window->contentItem(), QStringLiteral("fixtureGalleryLoadAction"));
   if (!selection_panel->isVisible() || !dialog->property("hasSelection").toBool() ||
       !footer_action || !footer_action->isVisible() || !footer_action->isEnabled() ||
@@ -250,7 +252,7 @@ ApplicationWindow {
   opener->setVisible(false);
   if (!send_key(window, Qt::Key_Escape))
     return fail("Empty Gallery Picker should accept Escape");
-  settle();
+  settle(dialog);
   auto* focus_fallback = qvariant_cast<QQuickItem*>(dialog->property("focusFallbackItem"));
   if (dialog->property("visible").toBool() || window->activeFocusItem() != focus_fallback)
     return fail("Empty Gallery Picker should return focus to the window after its opener is hidden");

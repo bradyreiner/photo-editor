@@ -373,7 +373,7 @@ Item {
                     }
                 }
 
-                Popup {
+                AppPopup {
                     id: railMenuPopup
                     property int currentFocusIndex: -1
                     parent: Overlay.overlay
@@ -424,10 +424,10 @@ Item {
 
                     x: toolDelegate.menuPopupX()
                     y: toolDelegate.menuPopupY()
-                    width: Math.min(root.menuMaximumWidth,
+                    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(root.menuMaximumWidth,
                                     Math.max(root.menuMinimumWidth,
                                              root.menuWidthForTool(toolDelegate.tool),
-                                             menuColumn.implicitWidth + root.menuPopoverPadding * 2))
+                                             menuColumn.implicitWidth + root.menuPopoverPadding * 2))))
                     modal: false
                     focus: true
                     padding: root.menuPopoverPadding
@@ -491,9 +491,7 @@ Item {
                         }
                     }
 
-                    background: PopupSurface {
-                        accent: root.accent
-                    }
+                    background: PopupSurface {}
                 }
             }
         }

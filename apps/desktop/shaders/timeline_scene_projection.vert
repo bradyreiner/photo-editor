@@ -18,6 +18,8 @@ layout(std140, binding = 0) uniform buf {
     vec4 occlusionRect;
     float occlusionEnabled;
     float occlusionReady;
+    vec4 fadeColor;
+    float fadeAmount;
 } ubuf;
 
 void main()

@@ -1,5 +1,7 @@
 #include "edit_recipe_state.h"
 
+#include "photo_editor/pipeline/color_pipeline.h"
+
 #include <QFileInfo>
 
 namespace photo_editor::desktop {
@@ -158,29 +160,9 @@ QString normalized_input_color_profile_name(const QString& value) {
 }
 
 QString normalized_working_color_profile_name(const QString& value) {
-  const auto trimmed = value.trimmed();
-  if (trimmed.compare(QStringLiteral("Linear sRGB"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("linear-srgb"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("srgb-linear"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("Linear sRGB");
-  }
-  if (trimmed.compare(QStringLiteral("Linear Display P3"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("linear-display-p3"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("display-p3-linear"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("Linear Display P3");
-  }
-  if (trimmed.compare(QStringLiteral("Linear ProPhoto RGB"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("linear-prophoto-rgb"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("prophoto-linear"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("Linear ProPhoto RGB");
-  }
-  if (trimmed.compare(QStringLiteral("Linear Rec.2020"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("linear-rec.2020"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("linear-rec2020"), Qt::CaseInsensitive) == 0 ||
-      trimmed.compare(QStringLiteral("rec2020-linear"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("Linear Rec.2020");
-  }
-  return QStringLiteral("Linear ProPhoto RGB");
+  return QString::fromStdString(
+      photo_editor::pipeline::normalize_working_color_profile_name(
+          value.toStdString()));
 }
 
 QString normalized_monitor_color_profile_name(const QString& value) {

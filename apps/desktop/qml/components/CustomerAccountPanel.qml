@@ -181,7 +181,7 @@ ColumnLayout {
         font.pixelSize: 12
         wrapMode: Text.WordWrap
     }
-    Dialog {
+    AppDialog {
         id: revokeDialog
         objectName: "revokeCustomerDeviceDialog"
         modal: true
@@ -194,11 +194,7 @@ ColumnLayout {
             padding: theme.space16
             background: Rectangle { color: theme.surfaceTop }
         }
-        background: Rectangle {
-            color: theme.surfaceBottom
-            border.width: 1
-            border.color: theme.lineSoft
-        }
+        background: PopupSurface {}
         Label {
             width: 340
             text: "That device will no longer be able to refresh its license."
@@ -212,7 +208,7 @@ ColumnLayout {
             ActionButton { text: "Revoke device"; tone: "danger"; onClicked: revokeDialog.accept() }
         }
     }
-    Dialog {
+    AppDialog {
         id: deactivateDialog
         objectName: "deactivateCurrentDeviceDialog"
         modal: true
@@ -225,11 +221,7 @@ ColumnLayout {
             padding: theme.space16
             background: Rectangle { color: theme.surfaceTop }
         }
-        background: Rectangle {
-            color: theme.surfaceBottom
-            border.width: 1
-            border.color: theme.lineSoft
-        }
+        background: PopupSurface {}
         Label {
             width: 340
             text: "This installation will be signed out and its saved access removed. You can recover it later with your verified purchase key."

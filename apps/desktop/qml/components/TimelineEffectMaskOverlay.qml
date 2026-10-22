@@ -179,8 +179,8 @@ Item {
                 delegate: Rectangle {
                     required property var modelData
                     readonly property real handleSize: Math.max(10, root.theme.scaled(12))
-                    x: modelData.horizontal < 0 ? -handleSize / 2 : parent.width - handleSize / 2
-                    y: modelData.vertical < 0 ? -handleSize / 2 : parent.height - handleSize / 2
+                    x: modelData.horizontal < 0 ? -handleSize / 2 : (parent ? parent.width : 0) - handleSize / 2
+                    y: modelData.vertical < 0 ? -handleSize / 2 : (parent ? parent.height : 0) - handleSize / 2
                     width: handleSize
                     height: handleSize
                     radius: 2

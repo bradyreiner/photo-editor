@@ -712,6 +712,35 @@ int main(int argc, char** argv) {
               << " residentBytes="
               << reused_metrics.value(QStringLiteral("frameCacheBytes")).toULongLong()
               << " pixelSha256=" << reused_hash.toHex().toStdString() << '\n';
+
+    // A composited range already contains the clip grade and effects. Reduced
+    // preview modes must resize these pixels without applying that work twice.
+    cache_playback.setTimelineEffectsBypassed(false);
+    const auto ranges = cache_document.renderCacheRanges();
+    if (ranges.isEmpty()) return fail("the reduced composite fixture needs a cache range");
+    const auto cache_directory = temporary.filePath(QStringLiteral("cache/timeline-render-cache"));
+    if (!QDir().mkpath(cache_directory)) return fail("the composite cache directory should be created");
+    const auto timeline_id = cache_document.timelineAssetId().mid(QStringLiteral("timeline:").size());
+    const auto signature = ranges.first().toMap().value(QStringLiteral("signature")).toString();
+    QFile composite_file(QDir(cache_directory).filePath(
+        QStringLiteral("%1-%2.mp4").arg(timeline_id, signature)));
+    if (!composite_file.open(QIODevice::WriteOnly) || composite_file.write("composite fixture") <= 0) {
+      return fail("the reduced composite fixture should be written");
+    }
+    composite_file.close();
+    for (const auto& quality : {QStringLiteral("half"), QStringLiteral("quarter")}) {
+      cache_playback.setPreviewQualityMode(quality);
+      QVariantMap metrics;
+      if (!cache_playback.usingRenderCache() || !submit_same_content(metrics)) {
+        return fail("reduced-resolution composite frames should reach Program processing");
+      }
+      const auto image = TimelinePlaybackFrameTestAccess::image(cache_playback);
+      const auto expected_size = quality == QStringLiteral("half")
+                                     ? QSize(320, 180) : QSize(160, 90);
+      if (image.size() != expected_size || image.pixelColor(0, 0) != QColor(24, 96, 220)) {
+        return fail("reduced composite frames should preserve cached colors without applying the monochrome effect or grade again");
+      }
+    }
   }
   {
     const auto source_path =

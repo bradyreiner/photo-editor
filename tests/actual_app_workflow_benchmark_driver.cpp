@@ -27,6 +27,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJSValue>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -38,6 +39,7 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSet>
+#include <QSignalSpy>
 #include <QSettings>
 #include <QSGRendererInterface>
 #include <QScopeGuard>
@@ -1181,6 +1183,8 @@ QJsonObject measure_timeline_continuous_scrub_preview(
   return scrub_preview_probe;
 }
 
+#include "timeline_animation_ui_proof.inc"
+
 int run_timeline_ui_proof(
     QQuickWindow* root_window,
     QObject* root,
@@ -1212,6 +1216,8 @@ int run_timeline_ui_proof(
                    active->objectName() == QStringLiteral("timelineWorkspace") &&
                    !root->property("workspaceTransitionActive").toBool() &&
                    item_visible(find_visible_named_item(
+                       active, QStringLiteral("timelineHeaderBar"))) &&
+                   item_visible(find_visible_named_item(
                        active, QStringLiteral("timelineProgramMonitor")));
           },
           30000)) {
@@ -1223,6 +1229,15 @@ int run_timeline_ui_proof(
   }
   empty_workspace->setProperty("sourcePanelCollapsed", false);
   empty_workspace->setProperty("effectsPanelCollapsed", true);
+  // Media is the default entry point. Select Source explicitly for the
+  // source-empty assertions below, and let its deferred panel finish loading.
+  empty_workspace->setProperty("sourceRailTab", QStringLiteral("source"));
+  if (!wait_for_condition([empty_workspace]() {
+        return named_item_visible(empty_workspace, QStringLiteral("timelineSourceMonitor")) &&
+               named_item_visible(empty_workspace, QStringLiteral("timelineSourceEmptyBrowseButton"));
+      }, 10000)) {
+    return fail(QStringLiteral("Timeline Source empty-state controls should finish loading."));
+  }
   process_layout_events(12);
   const QList<QPair<int, int>> empty_sizes = {{1180, 768}, {1440, 900}, {1920, 1080}};
   const QStringList header_control_objects = {
@@ -1281,6 +1296,12 @@ int run_timeline_ui_proof(
             QStringLiteral("timelineHeaderBar"),
             header_control_objects,
             &header_reason)) {
+      root_window->grabWindow().save(QDir(output_dir).filePath(QStringLiteral("timeline-header-failure.png")));
+      const auto* header = find_named_item(empty_workspace, QStringLiteral("timelineHeaderBar"));
+      std::cerr << "Header geometry: present=" << (header != nullptr)
+                << " visible=" << (header != nullptr && header->isVisible())
+                << " width=" << (header == nullptr ? -1.0 : header->width())
+                << " height=" << (header == nullptr ? -1.0 : header->height()) << '\n';
       return fail(QStringLiteral("Timeline header failed at %1x%2: %3")
                       .arg(size.first)
                       .arg(size.second)
@@ -4738,8 +4759,10 @@ int main(int argc, char** argv) {
     qputenv("PHOTO_EDITOR_CACHE_DIR", cache_root.path().toUtf8());
     qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   } else {
+    const auto timeline_proof_database = !timeline_ui_proof_dir.isEmpty()
+        ? qEnvironmentVariable("PHOTO_EDITOR_TIMELINE_PROOF_DATABASE_URL") : QString{};
     const auto membership_database = arguments.contains("--library-membership-proof")
-        ? option_value(arguments, "--membership-database-url") : QString{};
+        ? option_value(arguments, "--membership-database-url") : timeline_proof_database;
     qputenv("PHOTO_EDITOR_DATABASE_URL", membership_database.isEmpty()
         ? QByteArray("postgresql://127.0.0.1:1/photo_editor_offline_test") : membership_database.toUtf8());
   }
@@ -6992,6 +7015,8 @@ int main(int argc, char** argv) {
     timeline_media_asset.duration_text = QStringLiteral("0:10");
     timeline_media_asset.duration_seconds = 10.0;
     catalog_assets.replaceAssetsForTesting({timeline_media_asset});
+    if (arguments.contains(QStringLiteral("--timeline-animation-proof-only")))
+      return run_timeline_animation_ui_proof(root_window, root, &timeline_document, source_path, timeline_ui_proof_dir);
     return run_timeline_ui_proof(
         root_window,
         root,

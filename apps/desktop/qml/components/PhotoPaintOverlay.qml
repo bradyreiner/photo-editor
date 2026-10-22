@@ -375,13 +375,13 @@ Item {
             }
         }
 
-        Popup {
+        AppPopup {
             id: brushMaterialPopup
             objectName: "photoPaintMaterialPopup"
             parent: Overlay.overlay
             focus: true
-            width: Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))
-            height: Math.min(implicitHeight, parent ? Math.max(theme.scaled(120), parent.height - theme.space8) : implicitHeight)
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(implicitHeight, parent ? Math.max(theme.scaled(120), parent.height - theme.space8) : implicitHeight)))
             x: Math.max(theme.space4, Math.min(parent ? parent.width - width - theme.space4 : 0,
                                                 materialChooser.mapToItem(parent, 0, 0).x))
             y: {
@@ -396,12 +396,7 @@ Item {
                 const currentOption = materialOptionRepeater.itemAt(currentIndex)
                 if (currentOption) currentOption.forceActiveFocus()
             }
-            background: Rectangle {
-                radius: theme.radiusPanel
-                color: theme.surfaceTop
-                border.width: theme.hairlineWidth
-                border.color: theme.glassEdge
-            }
+            background: PopupSurface {}
             contentItem: ColumnLayout {
                 spacing: theme.space6
                 Label {

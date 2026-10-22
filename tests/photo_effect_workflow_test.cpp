@@ -145,7 +145,7 @@ Rectangle {
 )QML",QUrl::fromLocalFile(QStringLiteral(PHOTO_EFFECT_TEST_ROOT "/tests/effect-workflow.qml")));
   std::unique_ptr<QObject> root(component.create());
   CHECK(root,component.errorString().toStdString());
-  QQuickWindow window; window.resize(980,650);
+  QQuickWindow window; window.setFlags(Qt::Window | Qt::FramelessWindowHint); window.resize(980,650);
   qobject_cast<QQuickItem*>(root.get())->setParentItem(window.contentItem());
   window.show();window.requestActivate();
   CHECK(wait_until([&]{return window.isExposed() && !controller->processing() && !controller->fullRenderRunning();}),"Offscreen Qt Quick window and source render ready");
@@ -256,6 +256,7 @@ Rectangle {
   };
   const auto evidence=qEnvironmentVariable("PHOTO_EFFECT_EVIDENCE_DIR");
   if(!evidence.isEmpty()) { CHECK(QDir().mkpath(evidence),"Evidence directory");CHECK(source.save(evidence+"/source.png"),"Source evidence"); }
+#include "film_grain_workflow_proof.inc"
   if(qEnvironmentVariableIsSet("PHOTO_EFFECT_EXTENDED_REVIEW_ONLY")) {
     CHECK(controller->availablePhotoEffects().size() == 35, "All 35 operators are exposed");
     CHECK(controller->exportFlattenedPhoto(temp.filePath("extended-baseline.png")), "Export reference");

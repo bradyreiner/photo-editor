@@ -854,6 +854,8 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedFrameOffsetX(double frame_offset_x);
   Q_INVOKABLE void setSelectedFrameOffsetY(double frame_offset_y);
   Q_INVOKABLE void setSelectedFrameRotationDegrees(double frame_rotation_degrees);
+  Q_INVOKABLE bool setSelectedClipTransform(
+      double offset_x, double offset_y, double scale, double rotation_degrees);
   Q_INVOKABLE void setSelectedFramePerspectiveX(double perspective_x);
   Q_INVOKABLE void setSelectedFramePerspectiveY(double perspective_y);
   Q_INVOKABLE void setSelectedTitleFontSize(double font_size);
@@ -1958,7 +1960,7 @@ signals:
       const DialogueCleanupState& fallback) const;
   [[nodiscard]] DialogueCleanupState effectiveDialogueCleanupState(
       const Track& track) const;
-  bool setSelectedClipAnimatedValue(const QString& parameter, double value);
+  bool setSelectedClipAnimatedValue(const QString& parameter, double value, bool publish = true);
   bool replaceSelectedClipFromSourceImpl(bool fit_to_fill);
   [[nodiscard]] QString formatDurationText(double seconds) const;
   [[nodiscard]] QVariantMap markerMap(const Marker& marker) const;

@@ -5391,6 +5391,9 @@ QVariantMap verified_native_composition_completion(
   auto reports = model_tool_plan.value(QStringLiteral("toolReports")).toList();
   auto host_readback_accepted = false;
   const auto rounds = model_tool_plan.value(QStringLiteral("rounds")).toList();
+  const auto reviewed_composition = std::any_of(rounds.cbegin(), rounds.cend(), [](const auto& value) {
+    return !value.toMap().value(QStringLiteral("compositionAssessment")).toMap().isEmpty();
+  });
   if (!rounds.isEmpty()) {
     // The planner sees this genuine host inspection after a reviewed batch.
     // Verify the same observation here rather than requiring an extra model
@@ -5409,8 +5412,9 @@ QVariantMap verified_native_composition_completion(
     const auto round_number = round.value(QStringLiteral("round")).toInt();
     const auto no_later_mutation = std::none_of(reports.cbegin(), reports.cend(), [round_number](const auto& value) {
       const auto report = value.toMap();
+      const auto name = report.value(QStringLiteral("toolName")).toString();
       return report.value(QStringLiteral("ok")).toBool() &&
-          report.value(QStringLiteral("toolName")).toString() == QStringLiteral("photo.edit_composition") &&
+          (name == QStringLiteral("photo.edit_composition") || name == QStringLiteral("app.invoke_command")) &&
           report.value(QStringLiteral("round")).toInt() > round_number;
     });
     QFile proof_file(visual.value(QStringLiteral("currentProofPath")).toString());
@@ -5442,6 +5446,9 @@ QVariantMap verified_native_composition_completion(
         visual.value(QStringLiteral("proofSha256")).toString() == proof_sha && proof_matches;
     if (host_readback_accepted) reports.append(inspection);
   }
+  // Reviewed composition tasks require their bound passing observation. A
+  // weaker model-requested inspect must not rescue rejected review evidence.
+  if (reviewed_composition && !host_readback_accepted) return {};
   QSet<QString> mutated_layer_ids;
   QSet<QString> mutated_mask_ids;
   QStringList operation_names;

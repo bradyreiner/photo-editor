@@ -325,6 +325,17 @@ Rectangle {
     property var trackAutomationSpeedEditTrackData: null
     property var trackAutomationSpeedEditFocusReturnItem: null
     property string curveEditorParameter: "frameScale"
+    property bool programTransformControlsVisible: true
+    property string programTransformGestureClipId: ""
+    readonly property bool selectedVisualClipActive: currentClip && currentClip.clipId
+        && currentClip.trackKind === "video" && currentClip.mediaType !== "adjustment"
+        && sequencePlayheadWithinClip(currentClip)
+    readonly property bool selectedVisualTrackLocked: {
+        if (!currentClip || !currentClip.clipId) return false
+        for (const track of sequenceTrackModel)
+            if (String(track.trackId) === String(currentClip.trackId)) return track.locked === true
+        return false
+    }
     property string curveEditorTarget: "clip"
     property string curveEditorTrackId: ""
     property real curveEditorSelectedSeconds: -1
@@ -688,6 +699,14 @@ Rectangle {
         {
             "name": "Cross Dissolve",
             "description": "Blend two adjacent clips using the incoming clip's source handle."
+        },
+        {
+            "name": "Fade to Black",
+            "description": "Fade the clip in from black or out to black."
+        },
+        {
+            "name": "Fade to White",
+            "description": "Fade the clip in from white or out to white."
         }
     ]
     readonly property real laneHeaderWidthMinimum: 136
@@ -2350,7 +2369,7 @@ Rectangle {
     function captureProgramScopeFrame(force) {
         if (!programMonitor || !programScopesVisible || programScopesCaptureInProgress ||
                 (!force && programScopesFrozen) || !hasPlayableSequence() ||
-                fullScreenProgramActive || programComparisonActive)
+                fullScreenProgramActive || programComparisonActive || programTransformGestureClipId.length > 0)
             return false
         programScopesCaptureInProgress = true
         programScopesCaptureRevision += 1
@@ -5107,8 +5126,8 @@ Rectangle {
     }
 
     function groupTransformOffset(layer, frameOffsetX, frameOffsetY) {
-        const width = Math.max(1, Number(programMonitor.width || 1))
-        const height = Math.max(1, Number(programMonitor.height || 1))
+        const width = Math.max(1, Number(programMonitor ? programMonitor.width : 1))
+        const height = Math.max(1, Number(programMonitor ? programMonitor.height : 1))
         const scale = root.groupTransformScale(layer)
         const angle = root.groupTransformRotation(layer) * Math.PI / 180
         const cosine = Math.cos(angle)
@@ -5123,12 +5142,12 @@ Rectangle {
     }
 
     function groupCombinedFrameOffsetX(layer, frameOffsetX, frameOffsetY) {
-        const width = Math.max(1, Number(programMonitor.width || 1))
+        const width = Math.max(1, Number(programMonitor ? programMonitor.width : 1))
         return root.groupTransformOffset(layer, frameOffsetX, frameOffsetY).x / (width * 0.25)
     }
 
     function groupCombinedFrameOffsetY(layer, frameOffsetX, frameOffsetY) {
-        const height = Math.max(1, Number(programMonitor.height || 1))
+        const height = Math.max(1, Number(programMonitor ? programMonitor.height : 1))
         return root.groupTransformOffset(layer, frameOffsetX, frameOffsetY).y / (height * 0.25)
     }
 
@@ -5941,6 +5960,25 @@ Rectangle {
                 && Number(sequencePlayheadSeconds || 0) < Number(transition.endSeconds || 0))
             return baseOpacity * Number(transition.incomingAlpha || 0)
         return baseOpacity
+    }
+
+    function programColorFadeState(layer) {
+        if (!layer) return {amount: 0, color: "black"}
+        const local = Number(sequencePlayheadSeconds || 0) - Number(layer.startSeconds || 0)
+        const duration = Number(layer.trimmedDurationSeconds || 0)
+        const amount = function(name, seconds, incoming) {
+            if (["Fade to Black", "Fade to White"].indexOf(String(name)) < 0 || Number(seconds) <= 0)
+                return 0
+            return Math.max(0, Math.min(1, incoming ? 1 - local / Number(seconds)
+                                                   : 1 - (duration - local) / Number(seconds)))
+        }
+        const incoming = amount(layer.transitionInName, layer.transitionInSeconds, true)
+        const outgoing = amount(layer.transitionOutName, layer.transitionOutSeconds, false)
+        const combined = incoming * (1 - outgoing) + outgoing
+        const white = (layer.transitionInName === "Fade to White" ? incoming * (1 - outgoing) : 0)
+                    + (layer.transitionOutName === "Fade to White" ? outgoing : 0)
+        const value = combined > 0 ? white / combined : 0
+        return {amount: combined, color: Qt.rgba(value, value, value, 1)}
     }
 
     function escapedCaptionText(value) {
@@ -9771,7 +9809,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: trackAutomationSpeedEditorPopup
         property bool contentCreated: false
         readonly property var incomingSpeedField:
@@ -9782,10 +9820,10 @@ Rectangle {
         objectName: "timelineTrackAutomationSpeedEditorPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(420), Math.max(theme.scaled(280), root.width - theme.space24 * 2))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(420), Math.max(theme.scaled(280), root.width - theme.space24 * 2))))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - implicitHeight) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onOpened: Qt.callLater(function() {
             const field = root.trackAutomationKeyframeHasSide(
@@ -9799,10 +9837,7 @@ Rectangle {
         })
         onClosed: root.restorePopupInvoker(root.trackAutomationSpeedEditFocusReturnItem)
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: trackAutomationSpeedEditorPopup.contentCreated || trackAutomationSpeedEditorPopup.visible
@@ -9992,23 +10027,20 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: externalAudioSyncPopup
         property bool contentCreated: false
         objectName: "timelineExternalAudioSyncPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(560), root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(560), root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - implicitHeight) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onClosed: root.restorePopupInvoker(root.externalAudioSyncFocusReturnItem)
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: externalAudioSyncPopup.contentCreated || externalAudioSyncPopup.visible
@@ -10271,24 +10303,21 @@ Rectangle {
         onAccepted: root.scanBatchRelinkFolder(selectedFolder)
     }
 
-    Popup {
+    AppPopup {
         id: batchRelinkPopup
         property bool contentCreated: false
 
         objectName: "timelineBatchRelinkPopup"
         modal: true
         focus: true
-        width: Math.min(720, root.width - theme.space24 * 2)
-        height: Math.min(620, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(720, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(620, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: batchRelinkPopup.contentCreated || batchRelinkPopup.visible
@@ -10480,26 +10509,23 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: playbackDiagnosticsPopup
         property bool contentCreated: false
         objectName: "timelinePlaybackDiagnosticsPopup"
         modal: true
         focus: true
-        width: Math.min(520, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         readonly property var diagnostic: timelinePlayback.playbackDiagnostics || ({})
         readonly property var frameMetrics: timelinePlayback.frameProcessingMetrics || ({})
         readonly property var cacheMetrics: timelinePlayback.colorCacheDiagnostics || ({})
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: playbackDiagnosticsPopup.contentCreated || playbackDiagnosticsPopup.visible
@@ -10752,7 +10778,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: platformOverlayPopup
         property bool contentCreated: false
         property bool contentRequested: false
@@ -10760,20 +10786,17 @@ Rectangle {
         objectName: "timelinePlatformOverlayPopup"
         modal: true
         focus: true
-        width: Math.min(560, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(560, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onContentRequestedChanged: {
             if (contentRequested)
                 platformOverlayContentLoader.active = true
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.24)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             id: platformOverlayContentLoader
@@ -11133,23 +11156,20 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: reviewRangesPopup
         property bool contentCreated: false
         objectName: "timelineReviewRangesPopup"
         modal: true
         focus: true
-        width: Math.min(900, root.width - theme.space24 * 2)
-        height: Math.min(680, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(900, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(680, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: reviewRangesPopup.contentCreated || reviewRangesPopup.visible
@@ -11424,26 +11444,23 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: similarSelectionPopup
         property bool contentCreated: false
         objectName: "timelineSelectSimilarPopup"
         modal: true
         focus: true
-        width: Math.min(520, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.similarSelectionFocusReturnItem)
             root.similarSelectionFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: similarSelectionPopup.contentCreated || similarSelectionPopup.visible
@@ -11535,27 +11552,24 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: pasteAttributesPopup
         property bool contentCreated: false
         objectName: "timelinePasteAttributesPopup"
         modal: true
         focus: true
-        width: Math.min(760, root.width - theme.space24 * 2)
-        height: Math.min(700, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(700, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.pasteAttributesFocusReturnItem)
             root.pasteAttributesFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: pasteAttributesPopup.contentCreated || pasteAttributesPopup.visible
@@ -11734,27 +11748,24 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: gapIndexPopup
         property bool contentCreated: false
         objectName: "timelineGapIndexPopup"
         modal: true
         focus: true
-        width: Math.min(760, root.width - theme.space24 * 2)
-        height: Math.min(680, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(680, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.gapIndexFocusReturnItem)
             root.gapIndexFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: gapIndexPopup.contentCreated || gapIndexPopup.visible
@@ -12023,13 +12034,13 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: editPointPopup
         property bool contentCreated: false
         objectName: "timelineEditPointPopup"
         modal: false
         focus: true
-        width: Math.min(560, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(560, root.width - theme.space24 * 2)))
         x: Math.max(theme.space12, (root.width - width) / 2)
         y: Math.max(theme.space24, root.height - height - theme.space24)
         padding: theme.panelPaddingStandard
@@ -12039,10 +12050,7 @@ Rectangle {
             root.editPointFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: editPointPopup.contentCreated || editPointPopup.visible
@@ -12230,7 +12238,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: timecodeEntryPopup
         property bool contentCreated: false
         readonly property var entryField:
@@ -12239,20 +12247,17 @@ Rectangle {
         objectName: "timelineTimecodeEntryPopup"
         modal: true
         focus: true
-        width: Math.min(420, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(420, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.timecodeEntryFocusReturnItem)
             root.timecodeEntryFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: timecodeEntryPopup.contentCreated || timecodeEntryPopup.visible
@@ -12342,27 +12347,24 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: reviewNotesPopup
         property bool contentCreated: false
         objectName: "timelineReviewNotesPopup"
         modal: true
         focus: true
-        width: Math.min(720, root.width - theme.space24 * 2)
-        height: Math.min(600, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(720, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(600, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.reviewNotesFocusReturnItem)
             root.reviewNotesFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: reviewNotesPopup.contentCreated || reviewNotesPopup.visible
@@ -12610,7 +12612,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: colorFinishingPopup
         property bool contentCreated: false
         readonly property var scopesCanvas:
@@ -12621,11 +12623,11 @@ Rectangle {
         objectName: "timelineColorFinishingPopup"
         modal: true
         focus: true
-        width: Math.min(680, root.width - theme.space24 * 2)
-        height: Math.min(580, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(580, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onOpened: {
             const clips = timelineDocument.sequenceClipSummaries || []
@@ -12643,10 +12645,7 @@ Rectangle {
             root.colorFinishingFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.24)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: colorFinishingPopup.contentCreated || colorFinishingPopup.visible
@@ -12882,27 +12881,24 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: markerEditorPopup
         property bool contentCreated: false
 
         objectName: "timelineMarkerEditorPopup"
         modal: true
         focus: true
-        width: 360
+        width: Math.min(popupAvailableWidth, Math.max(1, 360))
         x: (root.width - width) / 2
         y: Math.max(24, (root.height - height) / 2)
-        padding: theme.panelPadding
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.markerEditorFocusReturnItem)
             root.markerEditorFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.94)
-            borderColor: theme.alpha(theme.glassEdge, 0.46)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: markerEditorPopup.contentCreated || markerEditorPopup.visible
@@ -13027,7 +13023,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: captionGeneratorPopup
         property bool contentCreated: false
         readonly property var transcriptionReplaceButton:
@@ -13036,10 +13032,10 @@ Rectangle {
         objectName: "timelineCaptionGeneratorPopup"
         modal: true
         focus: true
-        width: Math.min(520, root.width - 40)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - 40)))
         x: (root.width - width) / 2
         y: Math.max(24, (root.height - height) / 2)
-        padding: theme.panelPadding
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.disarmPopupControl(captionGeneratorPopup.transcriptionReplaceButton)
@@ -13047,10 +13043,7 @@ Rectangle {
             root.captionGeneratorFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.94)
-            borderColor: theme.alpha(theme.glassEdge, 0.5)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: captionGeneratorPopup.contentCreated || captionGeneratorPopup.visible
@@ -13265,7 +13258,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: transcriptEditorPopup
         readonly property var styleDeleteControl:
             contentItem.item ? contentItem.item.styleDeleteControl : null
@@ -13279,10 +13272,10 @@ Rectangle {
         objectName: "timelineTranscriptEditorPopup"
         modal: true
         focus: true
-        width: Math.min(720, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(720, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.disarmPopupControl(transcriptEditorPopup.extractControl)
@@ -13293,10 +13286,7 @@ Rectangle {
             root.transcriptEditorFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: transcriptEditorPopup.visible
@@ -14834,26 +14824,23 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: titleTemplatePopup
         property bool contentCreated: false
         objectName: "timelineTitleTemplatePopup"
         modal: true
         focus: true
-        width: Math.min(640, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(640, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.titleTemplateFocusReturnItem)
             root.titleTemplateFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: titleTemplatePopup.contentCreated || titleTemplatePopup.visible
@@ -15034,22 +15021,19 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: audioTrackRolePopup
         property bool contentCreated: false
         objectName: "timelineAudioTrackRolePopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(520), Math.max(theme.scaled(320), root.width - theme.space24 * 2))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(520), Math.max(theme.scaled(320), root.width - theme.space24 * 2))))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - implicitHeight) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: audioTrackRolePopup.contentCreated || audioTrackRolePopup.visible
@@ -15128,16 +15112,16 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: autoReframePopup
         property bool contentRequested: false
         objectName: "timelineAutoReframePopup"
         modal: true
         focus: true
-        width: Math.min(560, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(560, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onVisibleChanged: if (visible) contentRequested = true
         onClosed: {
@@ -15145,10 +15129,7 @@ Rectangle {
             root.autoReframeFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: autoReframePopup.contentRequested
@@ -15354,14 +15335,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: motionTrackingPopup
         objectName: "timelineMotionTrackingPopup"
         modal: false
         focus: true
-        width: Math.min(620, root.width - theme.space24 * 2)
-        height: Math.min(Math.max(1, root.height - theme.space24 * 2),
-                         motionTrackingPanel.implicitHeight)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(620, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(Math.max(1, root.height - theme.space24 * 2),
+                         motionTrackingPanel.implicitHeight)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
         padding: 0
@@ -15412,16 +15393,16 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: deliverySettingsPopup
         property bool contentCreated: false
         objectName: "timelineDeliverySettingsPopup"
         modal: true
         focus: true
-        width: Math.min(600, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(600, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.deliverySettingsFocusReturnItem)
@@ -15429,10 +15410,7 @@ Rectangle {
             root.deliveryAdvancedVisible = false
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: theme.alpha(theme.glassEdge, 0.28)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: deliverySettingsPopup.contentCreated || deliverySettingsPopup.visible
@@ -15663,16 +15641,16 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: projectHealthPopup
         property bool contentCreated: false
         objectName: "timelineProjectHealthPopup"
         modal: true
         focus: true
-        width: Math.min(620, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(620, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.projectHealthFocusReturnItem)
@@ -15680,10 +15658,7 @@ Rectangle {
             root.projectHealthData = ({})
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: projectHealthPopup.contentCreated || projectHealthPopup.visible
@@ -15858,17 +15833,17 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: backgroundJobsPopup
         property bool contentCreated: false
         objectName: "timelineBackgroundJobsPopup"
         modal: true
         focus: true
-        width: Math.min(760, root.width - theme.space24 * 2)
-        height: Math.min(720, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(720, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.backgroundJobsFocusReturnItem)
@@ -15877,10 +15852,7 @@ Rectangle {
             root.backgroundJobsShowFinished = false
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         Timer {
             interval: 750
@@ -16210,28 +16182,25 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: pancakeTimelinePopup
         readonly property var editor: contentItem.item
 
         objectName: "timelinePancakePopup"
         modal: true
         focus: true
-        width: Math.min(1040, root.width - theme.space24 * 2)
-        height: Math.min(780, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(1040, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(780, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onClosed: {
             root.restorePopupInvoker(root.pancakeFocusReturnItem)
             root.pancakeFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: pancakeTimelinePopup.visible
@@ -16246,17 +16215,17 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: projectCachePopup
         property bool contentCreated: false
         objectName: "timelineProjectCachePopup"
         modal: true
         focus: true
-        width: Math.min(680, root.width - theme.space24 * 2)
-        height: Math.min(720, root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(720, root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             timelineDocument.setProjectCacheManagerVisible(false)
@@ -16272,10 +16241,7 @@ Rectangle {
             root.projectCacheCleanupArmed = false
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: projectCachePopup.contentCreated || projectCachePopup.visible
@@ -16693,16 +16659,16 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: publishPopup
         property bool contentCreated: false
         objectName: "timelinePublishPopup"
         modal: true
         focus: true
-        width: Math.min(610, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(610, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.publishFocusReturnItem)
@@ -16711,10 +16677,7 @@ Rectangle {
             root.publishData = ({})
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.97)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: publishPopup.contentCreated || publishPopup.visible
@@ -16915,7 +16878,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: deliveryPreflightPopup
         property bool contentCreated: false
         readonly property var normalizeControl:
@@ -16924,10 +16887,10 @@ Rectangle {
         objectName: "timelineDeliveryPreflightPopup"
         modal: true
         focus: true
-        width: Math.min(580, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(580, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.disarmPopupControl(deliveryPreflightPopup.normalizeControl)
@@ -16936,10 +16899,7 @@ Rectangle {
             root.deliveryPreflightData = ({})
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: deliveryPreflightPopup.contentCreated || deliveryPreflightPopup.visible
@@ -17185,7 +17145,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: beatAnalysisPopup
         property bool contentCreated: false
         readonly property var markerCreateControl:
@@ -17194,10 +17154,10 @@ Rectangle {
         objectName: "timelineBeatAnalysisPopup"
         modal: true
         focus: true
-        width: Math.min(520, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.disarmPopupControl(beatAnalysisPopup.markerCreateControl)
@@ -17205,10 +17165,7 @@ Rectangle {
             root.beatAnalysisFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: beatAnalysisPopup.contentCreated || beatAnalysisPopup.visible
@@ -17383,7 +17340,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: multicamPopup
         property bool contentCreated: false
         readonly property var contentFocus:
@@ -17392,10 +17349,10 @@ Rectangle {
         objectName: "timelineMulticamPopup"
         modal: true
         focus: true
-        width: Math.min(900, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(900, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         readonly property var group: timelineDocument.activeMulticamGroup || ({})
         readonly property bool editingGroup: String(group.groupId || "").length > 0
@@ -17405,10 +17362,7 @@ Rectangle {
             root.multicamFocusReturnItem = null
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.32)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: multicamPopup.contentCreated || multicamPopup.visible
@@ -17835,17 +17789,17 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: timelineRecoveryPopup
         property bool contentCreated: false
         property string pendingRecoveryCandidateId: ""
         objectName: "timelineRecoveryPopup"
         modal: true
         focus: true
-        width: Math.min(700, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(700, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onAboutToShow: contentCreated = true
         onClosed: {
@@ -17856,10 +17810,7 @@ Rectangle {
             pendingRecoveryCandidateId = ""
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: timelineRecoveryPopup.contentCreated
@@ -18121,7 +18072,7 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: sequenceVersionsPopup
         property bool contentCreated: false
         readonly property var versionNameField:
@@ -18130,10 +18081,10 @@ Rectangle {
         objectName: "timelineSequenceVersionsPopup"
         modal: true
         focus: true
-        width: Math.min(620, root.width - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(620, root.width - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: {
             root.restorePopupInvoker(root.sequenceVersionsFocusReturnItem)
@@ -18142,10 +18093,7 @@ Rectangle {
             root.sequenceVersionCompareData = ({})
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.96)
-            borderColor: theme.alpha(theme.glassEdge, 0.36)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             active: sequenceVersionsPopup.contentCreated || sequenceVersionsPopup.visible
@@ -18974,10 +18922,10 @@ Rectangle {
         title: "Curve Editor — " + root.keyframeParameterLabel(root.curveEditorParameter)
         transientParent: root.Window.window
         flags: Qt.Tool
-        width: 860
-        height: 520
-        minimumWidth: 640
-        minimumHeight: 400
+        width: 1020
+        height: 700
+        minimumWidth: 760
+        minimumHeight: 600
         color: theme.ink950
         visible: false
 
@@ -19002,6 +18950,30 @@ Rectangle {
         readonly property real curveSpeedMagnitudeValue: computeCurveSpeedMagnitude()
         property string graphMode: "value"
         property var selectedSeconds: []
+        property bool fitGraphValues: true
+        property var frozenDisplayBounds: null
+        readonly property var displayBounds: {
+            if (frozenDisplayBounds) return frozenDisplayBounds
+            if (!fitGraphValues || curveKeyframes.length < 2) return parameterBounds
+            let low = Infinity
+            let high = -Infinity
+            for (const key of curveKeyframes) {
+                const value = Number(key.value)
+                low = Math.min(low, value, value + Number(key.bezierInValue || 0), value + Number(key.bezierOutValue || 0))
+                high = Math.max(high, value, value + Number(key.bezierInValue || 0), value + Number(key.bezierOutValue || 0))
+            }
+            const span = Math.max(high - low, (Number(parameterBounds.maximum) - Number(parameterBounds.minimum)) * 0.05)
+            return {minimum: low - span * 0.15, maximum: high + span * 0.15}
+        }
+        function beginCurveGesture() {
+            frozenDisplayBounds = displayBounds
+            timelineDocument.beginContinuousEdit()
+        }
+        function endCurveGesture() {
+            timelineDocument.endContinuousEdit()
+            frozenDisplayBounds = null
+        }
+        onDisplayBoundsChanged: if (curveCanvasItem) curveCanvasItem.requestPaint()
 
         function sequenceSecondsForCurve(seconds) {
             return Number(seconds || 0)
@@ -19043,12 +19015,12 @@ Rectangle {
             const boundedValue = Math.max(parameterBounds.minimum, Math.min(parameterBounds.maximum, value))
             if (Math.abs(boundedSeconds - Number(selected.seconds)) < 0.000001
                     && Math.abs(boundedValue - Number(selected.value)) < 0.000001) return
-            timelineDocument.beginContinuousEdit()
+            keyframeCurveWindow.beginCurveGesture()
             try {
                 updateCurveKeyframe(Number(selected.seconds), boundedSeconds, boundedValue)
                 selectCurveSecond(boundedSeconds, false)
             } finally {
-                timelineDocument.endContinuousEdit()
+                keyframeCurveWindow.endCurveGesture()
             }
         }
 
@@ -19073,11 +19045,11 @@ Rectangle {
                 Math.abs(Number(key.seconds) - Number(second)) < 0.001
                 && String(key.interpolation) !== interpolation))
             if (!changed.length) return
-            timelineDocument.beginContinuousEdit()
+            keyframeCurveWindow.beginCurveGesture()
             try {
                 for (const second of changed) setCurveKeyframeInterpolation(second, interpolation)
             } finally {
-                timelineDocument.endContinuousEdit()
+                keyframeCurveWindow.endCurveGesture()
             }
         }
 
@@ -19234,8 +19206,8 @@ Rectangle {
                     curveSpeedAt(curveDuration * sample / 120)))
             }
             const range = Math.max(0.001,
-                                   Number(parameterBounds.maximum)
-                                   - Number(parameterBounds.minimum))
+                                   Number(displayBounds.maximum)
+                                   - Number(displayBounds.minimum))
             return Math.max(magnitude, range / Math.max(0.001, curveDuration) * 2)
         }
 
@@ -19310,8 +19282,8 @@ Rectangle {
         }
 
         function graphYForValue(value) {
-            const minimum = Number(parameterBounds.minimum)
-            const maximum = Number(parameterBounds.maximum)
+            const minimum = Number(displayBounds.minimum)
+            const maximum = Number(displayBounds.maximum)
             return theme.space16
                     + (1 - (Number(value || 0) - minimum)
                        / Math.max(0.0001, maximum - minimum))
@@ -19327,8 +19299,8 @@ Rectangle {
         }
 
         function graphValueForY(y) {
-            const minimum = Number(parameterBounds.minimum)
-            const maximum = Number(parameterBounds.maximum)
+            const minimum = Number(displayBounds.minimum)
+            const maximum = Number(displayBounds.maximum)
             return maximum
                     - Math.max(0, Math.min(1,
                         (Number(y || 0) - theme.space16)
@@ -19426,7 +19398,8 @@ Rectangle {
                                                    ? keyframeCurveWindow.trackData.trackName || "Track"
                                                    : "Track")
                                             + " · " + root.keyframeParameterLabel(root.curveEditorParameter)
-                                          : root.keyframeParameterLabel(root.curveEditorParameter)
+                                          : String(root.currentClip.displayLabel || "Clip") + " · "
+                                            + root.keyframeParameterLabel(root.curveEditorParameter)
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
                                     color: theme.textStrong
@@ -19497,6 +19470,17 @@ Rectangle {
                                 active: keyframeCurveWindow.graphMode === "speed"
                                 tooltipText: "Show and edit each keyframe's signed rate of change."
                                 onClicked: keyframeCurveWindow.graphMode = "speed"
+                            }
+
+                            ActionButton {
+                                objectName: "timelineCurveFitValuesButton"
+                                text: "Fit Values"
+                                iconName: "focus-frame"
+                                compact: true
+                                active: keyframeCurveWindow.fitGraphValues
+                                visible: keyframeCurveWindow.graphMode === "value"
+                                tooltipText: "Fit the graph to keyframe values and Bézier handles. Toggle to see the full parameter range."
+                                onClicked: keyframeCurveWindow.fitGraphValues = !keyframeCurveWindow.fitGraphValues
                             }
 
                             TimelineKeyframeParameterPicker {
@@ -19951,10 +19935,10 @@ Rectangle {
                                     const nextSpeed = Number(text)
                                     if (selected === null || !isFinite(nextSpeed))
                                         return
-                                    timelineDocument.beginContinuousEdit()
+                                    keyframeCurveWindow.beginCurveGesture()
                                             keyframeCurveWindow.setCurveKeyframeSpeed(
                                                 Number(selected.seconds || 0), "in", nextSpeed)
-                                    timelineDocument.endContinuousEdit()
+                                    keyframeCurveWindow.endCurveGesture()
                                 }
                             }
 
@@ -19996,10 +19980,10 @@ Rectangle {
                                     const nextSpeed = Number(text)
                                     if (selected === null || !isFinite(nextSpeed))
                                         return
-                                    timelineDocument.beginContinuousEdit()
+                                    keyframeCurveWindow.beginCurveGesture()
                                             keyframeCurveWindow.setCurveKeyframeSpeed(
                                                 Number(selected.seconds || 0), "out", nextSpeed)
-                                    timelineDocument.endContinuousEdit()
+                                    keyframeCurveWindow.endCurveGesture()
                                 }
                             }
 
@@ -20028,11 +20012,35 @@ Rectangle {
                             objectName: "timelineKeyframeCurveGraph"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            Layout.minimumHeight: 120
+                            Layout.minimumHeight: 220
                             radius: theme.radius4
                             color: theme.alpha(theme.mediaCanvas, 0.96)
                             border.width: 0
                             clip: true
+
+                            MouseArea {
+                                objectName: "timelineCurveAddPointArea"
+                                anchors.fill: parent
+                                onDoubleClicked: function(mouse) {
+                                    const fps = Math.max(1, Number(timelineDocument.framesPerSecond || 30))
+                                    const fraction = Math.max(0, Math.min(1,
+                                        (mouse.x - theme.space16) / Math.max(1, width - theme.space16 * 2)))
+                                    const seconds = Math.min(keyframeCurveWindow.curveDuration,
+                                        Math.round(fraction * keyframeCurveWindow.curveDuration * fps) / fps)
+                                    keyframeCurveWindow.beginCurveGesture()
+                                    if (keyframeCurveWindow.addCurveKeyframe(seconds)) {
+                                        if (keyframeCurveWindow.graphMode === "value") {
+                                            const bounds = keyframeCurveWindow.displayBounds
+                                            const y = Math.max(0, Math.min(1,
+                                                (mouse.y - theme.space16) / Math.max(1, height - theme.space16 * 2)))
+                                            keyframeCurveWindow.updateCurveKeyframe(seconds, seconds,
+                                                Number(bounds.maximum) - y * (Number(bounds.maximum) - Number(bounds.minimum)))
+                                        }
+                                        keyframeCurveWindow.selectCurveSecond(seconds, false)
+                                    }
+                                    keyframeCurveWindow.endCurveGesture()
+                                }
+                            }
 
                             Canvas {
                                 id: curveCanvas
@@ -20052,10 +20060,9 @@ Rectangle {
                                         ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(width, gy); ctx.stroke()
                                     }
                                     const values = keyframeCurveWindow.curveKeyframes
-                                    if (values.length === 0)
-                                        return
-                                    const minimum = Number(keyframeCurveWindow.parameterBounds.minimum)
-                                    const maximum = Number(keyframeCurveWindow.parameterBounds.maximum)
+                                    if (values.length === 0) return
+                                    const minimum = Number(keyframeCurveWindow.displayBounds.minimum)
+                                    const maximum = Number(keyframeCurveWindow.displayBounds.maximum)
                                     const range = Math.max(0.0001, maximum - minimum)
                                     const speedMode = keyframeCurveWindow.graphMode === "speed"
                                     const speedMagnitude = speedMode
@@ -20070,12 +20077,13 @@ Rectangle {
                                     ctx.strokeStyle = theme.accentCool400
                                     ctx.lineWidth = 2
                                     ctx.beginPath()
-                                    for (let sample = 0; sample <= 120; ++sample) {
-                                        const local = keyframeCurveWindow.curveDuration * sample / 120
+                                    const samples = Math.max(120, Math.min(1000, Math.round(width / 2)))
+                                    for (let sample = 0; sample <= samples; ++sample) {
+                                        const local = keyframeCurveWindow.curveDuration * sample / samples
                                         const value = speedMode
                                                       ? keyframeCurveWindow.curveSpeedAt(local)
                                                       : keyframeCurveWindow.curveValueAt(local)
-                                        const px = width * sample / 120
+                                        const px = width * sample / samples
                                         const py = speedMode
                                                    ? height - (value + speedMagnitude)
                                                      / (speedMagnitude * 2) * height
@@ -20115,8 +20123,8 @@ Rectangle {
                                         Number(modelData.value || 0).toFixed(4))
                                     Accessible.description: qsTr("Drag to change time and value. Shift, Control, or Command click to add or remove this keyframe from the selection.")
                                     property real originalSeconds: Number(modelData.seconds || 0)
-                                    readonly property real minimumValue: Number(keyframeCurveWindow.parameterBounds.minimum)
-                                    readonly property real maximumValue: Number(keyframeCurveWindow.parameterBounds.maximum)
+                                    readonly property real minimumValue: Number(keyframeCurveWindow.displayBounds.minimum)
+                                    readonly property real maximumValue: Number(keyframeCurveWindow.displayBounds.maximum)
                                     width: 12
                                     height: 12
                                     radius: modelData.roving === true ? width / 2 : 2
@@ -20155,7 +20163,7 @@ Rectangle {
                                             keyframeCurveWindow.selectCurveSecond(
                                                 curvePoint.originalSeconds, additive)
                                             keyframeCurveWindow.seekCurveSeconds(curvePoint.originalSeconds)
-                                            timelineDocument.beginContinuousEdit()
+                                            keyframeCurveWindow.beginCurveGesture()
                                         }
                                         onReleased: {
                                             const graphWidth = Math.max(1, curveGraph.width - theme.space16 * 2)
@@ -20180,11 +20188,11 @@ Rectangle {
                                                 keyframeCurveWindow.setCurveKeyframeSpeed(
                                                     nextSeconds, "both", nextSpeed)
                                             }
-                                            timelineDocument.endContinuousEdit()
+                                            keyframeCurveWindow.endCurveGesture()
                                             keyframeCurveWindow.selectCurveSecond(nextSeconds, false)
                                             keyframeCurveWindow.seekCurveSeconds(nextSeconds)
                                         }
-                                        onCanceled: timelineDocument.endContinuousEdit()
+                                        onCanceled: keyframeCurveWindow.endCurveGesture()
                                     }
                                 }
                             }
@@ -20285,7 +20293,7 @@ Rectangle {
                                             return
                                         bezierInHandle.keySeconds = Number(selected.seconds || 0)
                                         bezierInHandle.keyValue = Number(selected.value || 0)
-                                        timelineDocument.beginContinuousEdit()
+                                        keyframeCurveWindow.beginCurveGesture()
                                     }
                                     onReleased: {
                                         keyframeCurveWindow.setCurveBezierHandle(
@@ -20296,9 +20304,9 @@ Rectangle {
                                             keyframeCurveWindow.graphValueForY(
                                                 bezierInHandle.y + bezierInHandle.height / 2)
                                                 - bezierInHandle.keyValue)
-                                        timelineDocument.endContinuousEdit()
+                                        keyframeCurveWindow.endCurveGesture()
                                     }
-                                    onCanceled: timelineDocument.endContinuousEdit()
+                                    onCanceled: keyframeCurveWindow.endCurveGesture()
                                 }
                             }
 
@@ -20350,7 +20358,7 @@ Rectangle {
                                             return
                                         bezierOutHandle.keySeconds = Number(selected.seconds || 0)
                                         bezierOutHandle.keyValue = Number(selected.value || 0)
-                                        timelineDocument.beginContinuousEdit()
+                                        keyframeCurveWindow.beginCurveGesture()
                                     }
                                     onReleased: {
                                         keyframeCurveWindow.setCurveBezierHandle(
@@ -20361,9 +20369,9 @@ Rectangle {
                                             keyframeCurveWindow.graphValueForY(
                                                 bezierOutHandle.y + bezierOutHandle.height / 2)
                                                 - bezierOutHandle.keyValue)
-                                        timelineDocument.endContinuousEdit()
+                                        keyframeCurveWindow.endCurveGesture()
                                     }
-                                    onCanceled: timelineDocument.endContinuousEdit()
+                                    onCanceled: keyframeCurveWindow.endCurveGesture()
                                 }
                             }
 
@@ -20371,11 +20379,30 @@ Rectangle {
                                 visible: keyframeCurveWindow.curveKeyframes.length === 0
                                 anchors.centerIn: parent
                                 text: root.curveEditorParameter === "sourceTime"
-                                      ? "Choose a retime preset, then shape source time here."
-                                      : "Add two keyframes to shape an animation curve."
+                                      ? "Choose a speed preset or double-click to add a keyframe."
+                                      : "Double-click to add a keyframe."
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: theme.typeBody
+                            }
+                        }
+
+                        RowLayout {
+                            objectName: "timelineCurveTimeAxis"
+                            Layout.fillWidth: true
+                            Layout.leftMargin: theme.space16
+                            Layout.rightMargin: theme.space16
+                            Repeater {
+                                model: 5
+                                delegate: Label {
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    text: Number(keyframeCurveWindow.curveDuration * index / 4).toFixed(2) + " s"
+                                    horizontalAlignment: index === 0 ? Text.AlignLeft : index === 4 ? Text.AlignRight : Text.AlignHCenter
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: theme.typeCaption
+                                }
                             }
                         }
 
@@ -21602,9 +21629,12 @@ Rectangle {
                                                     rotation: modelData.sceneAttachmentEnabled === true
                                                               ? 0 : root.groupTransformRotation(modelData)
                                                     visible: root.visible && true
-                                                    layer.enabled: visible && (root.clipHasPerspective(modelData)
+                                                    layer.enabled: visible && (root.programColorFadeState(modelData).amount > 0 || root.clipHasPerspective(modelData)
                                                                                || modelData.sceneAttachmentEnabled === true)
                                                     layer.effect: Components.TimelineSceneProjectionEffect {
+                                                        readonly property var colorFade: root.programColorFadeState(programBackgroundLayer.modelData)
+                                                        fadeAmount: colorFade.amount
+                                                        fadeColor: colorFade.color
                                                         itemWidth: programBackgroundLayer.width
                                                         itemHeight: programBackgroundLayer.height
                                                         sceneQuad: root.sceneProjectionQuadFor(
@@ -22328,8 +22358,12 @@ Rectangle {
                                         asynchronous: false
                                         fillMode: root.programVideoFillMode()
                                         layer.enabled: !root.renderCacheActive
-                                                       && root.clipHasPerspective(programClip)
+                                                       && (root.clipHasPerspective(programClip)
+                                                           || root.programColorFadeState(programClip).amount > 0)
                                         layer.effect: TimelinePerspectiveEffect {
+                                            readonly property var colorFade: root.programColorFadeState(programClip)
+                                            fadeAmount: colorFade.amount
+                                            fadeColor: colorFade.color
                                             itemWidth: videoMonitor.width
                                             itemHeight: videoMonitor.height
                                             perspectiveX: root.animatedClipValue(
@@ -22806,8 +22840,12 @@ Rectangle {
                                                         drag.maximumX: Math.max(0, rotoCorrectionLayer.width - rotoCorrectionHud.width)
                                                         drag.minimumY: 0
                                                         drag.maximumY: Math.max(0, rotoCorrectionLayer.height - rotoCorrectionHud.height)
-                                                        ToolTip.visible: containsMouse && !pressed
-                                                        ToolTip.text: "Drag to move the controls away from the subject."
+                                                        AppToolTip {
+                                                            id: sharedTooltip1
+                                                            targetItem: rotoCorrectionHudDragArea
+                                                            visible: rotoCorrectionHudDragArea.visible && (rotoCorrectionHudDragArea.containsMouse && !rotoCorrectionHudDragArea.pressed)
+                                                            text: "Drag to move the controls away from the subject."
+                                                        }
                                                     }
                                                 }
 
@@ -22929,9 +22967,12 @@ Rectangle {
                                         height: parent.height - (programClip.sceneAttachmentEnabled === true ? 0 : 18)
                                         visible: !root.renderCacheActive && root.shouldShowTimelinePoster()
                                                  && !root.clipRequiresMultiEffect(programClip)
-                                        layer.enabled: visible && (root.clipHasPerspective(programClip)
+                                        layer.enabled: visible && (root.programColorFadeState(programClip).amount > 0 || root.clipHasPerspective(programClip)
                                                                    || programClip.sceneAttachmentEnabled === true)
                                         layer.effect: Components.TimelineSceneProjectionEffect {
+                                            readonly property var colorFade: root.programColorFadeState(programClip)
+                                            fadeAmount: colorFade.amount
+                                            fadeColor: colorFade.color
                                             itemWidth: currentPosterImage.width
                                             itemHeight: currentPosterImage.height
                                             sceneQuad: root.sceneProjectionQuadFor(programClip)
@@ -22975,9 +23016,12 @@ Rectangle {
                                                  && root.clipRequiresMultiEffect(programClip)
                                         layer.enabled: visible
                                                        && (programClip.sceneAttachmentEnabled === true
-                                                           || (root.clipHasPerspective(programClip)
+                                                           || ((root.clipHasPerspective(programClip) || root.programColorFadeState(programClip).amount > 0)
                                                                && root.clipMaskedPointEffects(programClip).length === 0))
                                         layer.effect: Components.TimelineSceneProjectionEffect {
+                                            readonly property var colorFade: root.programColorFadeState(programClip)
+                                            fadeAmount: colorFade.amount
+                                            fadeColor: colorFade.color
                                             itemWidth: currentPosterEffect.width
                                             itemHeight: currentPosterEffect.height
                                             sceneQuad: root.sceneProjectionQuadFor(programClip)
@@ -23044,9 +23088,12 @@ Rectangle {
                                                            ? Number(programClip.sourceWidth)
                                                                / Number(programClip.sourceHeight)
                                                            : programMonitor.sequenceAspectRatio
-                                        layer.enabled: visible && (root.clipHasPerspective(programClip)
+                                        layer.enabled: visible && (root.programColorFadeState(programClip).amount > 0 || root.clipHasPerspective(programClip)
                                                                    || programClip.sceneAttachmentEnabled === true)
                                         layer.effect: Components.TimelineSceneProjectionEffect {
+                                            readonly property var colorFade: root.programColorFadeState(programClip)
+                                            fadeAmount: colorFade.amount
+                                            fadeColor: colorFade.color
                                             itemWidth: parent.width
                                             itemHeight: parent.height
                                             sceneQuad: root.sceneProjectionQuadFor(programClip)
@@ -23552,6 +23599,58 @@ Rectangle {
                                         }
                                     }
 
+                                    TimelineTransformOverlay {
+                                        objectName: "timelineProgramTransformOverlay"
+                                        anchors.fill: parent
+                                        z: 100000
+                                        theme: root.timelineTheme
+                                        active: root.selectedVisualClipActive && !root.sequencePlaying
+                                                && root.programTransformControlsVisible
+                                                && ["video", "photo", "image"].indexOf(String(root.currentClip.mediaType)) >= 0
+                                                && !root.programComparisonActive && !root.programComparisonCaptureInProgress
+                                                && !root.programScopesCaptureInProgress && !root.fullScreenProgramActive
+                                                && root.trimFeedbackState.visible !== true
+                                                && !root.surfaceCorrectionOverlayVisible && !root.rotoCorrectionOverlayVisible
+                                                && !root.motionSeedSelectionActive
+                                                && !(root.inspectorTab === "effects"
+                                                     && root.clipEffectMask(root.currentClip, root.activeEffectMaskName).enabled === true)
+                                                && root.currentClip.sceneAttachmentEnabled !== true
+                                                && !root.clipHasPerspective(root.currentClip)
+                                        locked: root.selectedVisualTrackLocked
+                                        sourceAspect: Number(root.currentClip.sourceWidth || 1)
+                                                      / Math.max(1, Number(root.currentClip.sourceHeight || 1))
+                                        frameMode: String(root.currentClip.frameMode || "fit")
+                                        frameScale: root.animatedClipValue(root.currentClip, "frameScale", root.currentClip.baseFrameScale === undefined ? 1 : root.currentClip.baseFrameScale)
+                                        offsetX: root.animatedClipValue(root.currentClip, "frameOffsetX", root.currentClip.baseFrameOffsetX || 0)
+                                        offsetY: root.animatedClipValue(root.currentClip, "frameOffsetY", root.currentClip.baseFrameOffsetY || 0)
+                                        frameRotation: root.animatedClipValue(root.currentClip, "frameRotationDegrees", root.currentClip.baseFrameRotationDegrees || 0)
+                                        groupScale: root.groupTransformScale(root.currentClip)
+                                        groupRotation: root.groupTransformRotation(root.currentClip)
+                                        groupOffsetX: Number(root.currentClip.groupTransformOffsetX || 0)
+                                        groupOffsetY: Number(root.currentClip.groupTransformOffsetY || 0)
+                                        onInteractionStarted: {
+                                            root.programTransformGestureClipId = String(root.currentClip.clipId)
+                                            timelinePlayback.interactionActive = true
+                                            timelineDocument.beginContinuousEdit()
+                                        }
+                                        onTransformEdited: function(x, y, scale, rotation) {
+                                            if (String(root.currentClip.clipId) === root.programTransformGestureClipId)
+                                                timelineDocument.setSelectedClipTransform(x, y, scale, rotation)
+                                        }
+                                        onInteractionFinished: {
+                                            timelineDocument.endContinuousEdit()
+                                            timelinePlayback.interactionActive = root.previewInteractionActive
+                                            root.programTransformGestureClipId = ""
+                                        }
+                                        onInteractionCancelled: {
+                                            timelineDocument.endContinuousEdit()
+                                            if (String(root.currentClip.clipId) === root.programTransformGestureClipId)
+                                                timelineDocument.undo()
+                                            timelinePlayback.interactionActive = root.previewInteractionActive
+                                            root.programTransformGestureClipId = ""
+                                        }
+                                    }
+
                                     TimelinePlatformOverlay {
                                         id: platformPreviewOverlay
                                         objectName: "timelineProgramPlatformPreviewOverlay"
@@ -23665,6 +23764,88 @@ Rectangle {
                                     onRefreshRequested: root.captureProgramScopeFrame(true)
                                     onDetachToggleRequested: root.toggleProgramScopesDetached()
                                     onCloseRequested: root.closeProgramScopes()
+                                }
+
+                                Flow {
+                                    objectName: "timelineProgramAnimationToolbar"
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+                                    visible: root.selectedVisualClipActive && !root.sequencePlaying
+                                    enabled: !root.selectedVisualTrackLocked
+
+                                    ActionButton {
+                                        text: "Transform"
+                                        compact: true
+                                        iconName: "focus-frame"
+                                        active: root.programTransformControlsVisible
+                                        visible: ["video", "photo", "image"].indexOf(String(root.currentClip.mediaType)) >= 0
+                                        tooltipText: "Drag the picture to move it; drag a corner to resize. Shift constrains movement or rotation. Escape cancels."
+                                        onClicked: root.programTransformControlsVisible = !root.programTransformControlsVisible
+                                    }
+                                    TimelineKeyframeParameterPicker {
+                                        width: theme.scaled(170)
+                                        options: root.clipKeyframeParameterOptions()
+                                        currentParameter: root.curveEditorParameter
+                                        onParameterSelected: function(parameter) { root.curveEditorParameter = parameter }
+                                    }
+                                    ActionButton {
+                                        objectName: "timelineProgramAddKeyframeButton"
+                                        showText: false
+                                        iconName: "keyframe"
+                                        compact: true
+                                        active: root.clipHasKeyframeAtPlayhead(root.currentClip, root.curveEditorParameter)
+                                        tooltipText: "Add or remove a " + root.keyframeParameterLabel(root.curveEditorParameter) + " keyframe at the playhead. Once animated, changing this property adds or updates a keyframe."
+                                        Accessible.name: "Toggle " + root.keyframeParameterLabel(root.curveEditorParameter) + " keyframe"
+                                        onClicked: timelineDocument.toggleSelectedClipKeyframe(root.curveEditorParameter)
+                                    }
+                                    ActionButton {
+                                        objectName: "timelineProgramCurveButton"
+                                        text: "Graph"
+                                        iconName: "curve"
+                                        compact: true
+                                        tooltipText: "Edit timing, values, easing, and Bézier handles for video or text."
+                                        onClicked: root.openCurveEditor(root.curveEditorParameter)
+                                    }
+                                    Row {
+                                        spacing: theme.space6
+                                        Label {
+                                            height: programOpacityField.height
+                                            verticalAlignment: Text.AlignVCenter
+                                            text: "Opacity"
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: theme.typeCaption
+                                        }
+                                        ToneTextField {
+                                            id: programOpacityField
+                                            objectName: "timelineProgramOpacityField"
+                                            width: theme.scaled(72)
+                                            accessibleLabel: "Clip opacity percent"
+                                            text: Math.round(Number(root.currentClip.opacity === undefined ? 1 : root.currentClip.opacity) * 100) + "%"
+                                            onEditingFinished: {
+                                                const value = Number(text.replace("%", ""))
+                                                if (Number.isFinite(value)) timelineDocument.setSelectedClipOpacity(Math.max(0, Math.min(1, value / 100)))
+                                            }
+                                        }
+                                    }
+                                    MenuButton {
+                                        objectName: "timelineProgramSpeedMenu"
+                                        text: root.currentClip.retimeActive === true ? "Speed Curve"
+                                              : "Speed " + Number(root.currentClip.playbackRate || 1) + "×"
+                                        compact: true
+                                        primaryOpensMenu: true
+                                        visible: root.currentClip.mediaType === "video"
+                                        menuItems: [
+                                            {key: "0.25", label: "0.25× · Slow"}, {key: "0.5", label: "0.5× · Slow"},
+                                            {key: "1", label: "1× · Normal"}, {key: "2", label: "2× · Fast"}, {key: "4", label: "4× · Fast"},
+                                            {key: "ramp-up", label: "Ramp 0.5× → 2×", separatorBefore: true},
+                                            {key: "ramp-down", label: "Ramp 2× → 0.5×"}, {key: "graph", label: "Edit Speed Curve…"}]
+                                        onMenuItemTriggered: function(key) {
+                                            if (key === "graph") root.openCurveEditor("sourceTime")
+                                            else if (key.indexOf("ramp-") === 0) timelineDocument.applySelectedClipRetimePreset(key)
+                                            else timelineDocument.setSelectedClipPlaybackRate(Number(key))
+                                        }
+                                    }
                                 }
 
                                 GlassSurface {
@@ -26522,6 +26703,7 @@ Rectangle {
                                                             }
 
                                                             Rectangle {
+                                                                id: popupTooltipAnchor2
                                                                 anchors.left: parent.left
                                                                 anchors.bottom: parent.bottom
                                                                 anchors.margins: theme.space4
@@ -26535,11 +26717,14 @@ Rectangle {
                                                                          && String(modelData.multicamGroupId || "").length > 0
                                                                          && parent.width >= 58
                                                                 z: 3
-                                                                ToolTip.visible: multicamBadgeHover.hovered
-                                                                ToolTip.text: "Multicam angle "
+                                                                AppToolTip {
+                                                                    id: sharedTooltip3
+                                                                    targetItem: popupTooltipAnchor2
+                                                                    visible: popupTooltipAnchor2.visible && (multicamBadgeHover.hovered)
+                                                                    text: "Multicam angle "
                                                                               + String(Number(modelData.multicamAngleIndex || 0) + 1)
                                                                               + " of " + String(modelData.multicamAngleCount || 0)
-
+                                                                }
                                                                 HoverHandler { id: multicamBadgeHover }
 
                                                                 Label {
@@ -26555,6 +26740,7 @@ Rectangle {
                                                             }
 
                                                             Rectangle {
+                                                                id: popupTooltipAnchor4
                                                                 anchors.left: parent.left
                                                                 anchors.top: parent.top
                                                                 anchors.margins: theme.space4
@@ -26571,13 +26757,16 @@ Rectangle {
                                                                          && modelData.isCompound
                                                                          && parent.width >= 64
                                                                 z: 3
-                                                                ToolTip.visible: compoundHover.hovered
-                                                                ToolTip.text: modelData.compoundStatus === "failed"
+                                                                AppToolTip {
+                                                                    id: sharedTooltip5
+                                                                    targetItem: popupTooltipAnchor4
+                                                                    visible: popupTooltipAnchor4.visible && (compoundHover.hovered)
+                                                                    text: modelData.compoundStatus === "failed"
                                                                               ? String(modelData.compoundError || "Compound preview failed.")
                                                                               : modelData.compoundStatus === "ready"
                                                                                 ? "Editable compound timeline. Double-click to open."
                                                                                 : "Updating the compound preview in the background."
-
+                                                                }
                                                                 HoverHandler { id: compoundHover }
 
                                                                 Label {
@@ -26733,10 +26922,14 @@ Rectangle {
                                                                     cursorShape: Qt.SizeHorCursor
                                                                     preventStealing: true
                                                                     hoverEnabled: true
-                                                                    ToolTip.visible: containsMouse
-                                                                    ToolTip.text: timelineDocument.activeTool === "roll"
+                                                                    AppToolTip {
+                                                                        id: sharedTooltip6
+                                                                        targetItem: leftTrimHandle
+                                                                        visible: leftTrimHandle.visible && (leftTrimHandle.containsMouse)
+                                                                        text: timelineDocument.activeTool === "roll"
                                                                                   ? "Drag to roll the edit point"
                                                                                   : "Drag to trim the clip start"
+                                                                    }
                                                                     onPressed: function(mouse) {
                                                                         if (timelineDocument.activeTool === "razor" || trackLane.modelData.locked) {
                                                                             mouse.accepted = false
@@ -26816,10 +27009,14 @@ Rectangle {
                                                                     cursorShape: Qt.SizeHorCursor
                                                                     preventStealing: true
                                                                     hoverEnabled: true
-                                                                    ToolTip.visible: containsMouse
-                                                                    ToolTip.text: timelineDocument.activeTool === "roll"
+                                                                    AppToolTip {
+                                                                        id: sharedTooltip7
+                                                                        targetItem: rightTrimHandle
+                                                                        visible: rightTrimHandle.visible && (rightTrimHandle.containsMouse)
+                                                                        text: timelineDocument.activeTool === "roll"
                                                                                   ? "Drag to roll the edit point"
                                                                                   : "Drag to trim the clip end"
+                                                                    }
                                                                     onPressed: function(mouse) {
                                                                         if (timelineDocument.activeTool === "razor" || trackLane.modelData.locked) {
                                                                             mouse.accepted = false
@@ -27423,6 +27620,7 @@ Rectangle {
                                                         }
 
                                                         Rectangle {
+                                                            id: popupTooltipAnchor8
                                                             objectName: "timelineTrackAutomationOpenCurveEditorButton"
                                                             x: timelineViewport.contentX + timelineViewport.width
                                                                - 54 - width - theme.space12
@@ -27439,9 +27637,12 @@ Rectangle {
                                                             Accessible.name: "Open full curve editor for "
                                                                              + root.keyframeParameterLabel(
                                                                                  trackAutomationLane.parameter)
-                                                            ToolTip.visible: openTrackCurveEditorMouse.containsMouse
-                                                            ToolTip.text: "Open the full curve editor"
-
+                                                            AppToolTip {
+                                                                id: sharedTooltip9
+                                                                targetItem: popupTooltipAnchor8
+                                                                visible: popupTooltipAnchor8.visible && (openTrackCurveEditorMouse.containsMouse)
+                                                                text: "Open the full curve editor"
+                                                            }
                                                             AppIcon {
                                                                 anchors.centerIn: parent
                                                                 name: "external-link"
@@ -27462,6 +27663,7 @@ Rectangle {
                                                         }
 
                                                         Rectangle {
+                                                            id: popupTooltipAnchor10
                                                             x: timelineViewport.contentX + timelineViewport.width
                                                                - width - theme.space6
                                                             anchors.top: parent.top
@@ -27477,10 +27679,13 @@ Rectangle {
                                                             z: 5
                                                             Accessible.name: root.trackAutomationGraphSpeedMode(trackLane.modelData.trackId)
                                                                            ? "Show value graph" : "Show speed graph"
-                                                            ToolTip.visible: automationGraphToggleMouse.containsMouse
-                                                            ToolTip.text: root.trackAutomationGraphSpeedMode(trackLane.modelData.trackId)
+                                                            AppToolTip {
+                                                                id: sharedTooltip11
+                                                                targetItem: popupTooltipAnchor10
+                                                                visible: popupTooltipAnchor10.visible && (automationGraphToggleMouse.containsMouse)
+                                                                text: root.trackAutomationGraphSpeedMode(trackLane.modelData.trackId)
                                                                           ? "Switch to value graph" : "Edit keyframe speed"
-
+                                                            }
                                                             Label {
                                                                 anchors.centerIn: parent
                                                                 text: root.trackAutomationGraphSpeedMode(trackLane.modelData.trackId)

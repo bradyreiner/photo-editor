@@ -65,8 +65,12 @@ Item {
         onClicked: root.selectedRequested(root.presetName)
     }
 
-    ToolTip.visible: presetMouse.containsMouse && root.presetName.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: 2600
-    ToolTip.text: root.presetName + " curve preset"
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (presetMouse.containsMouse && root.presetName.length > 0)
+        delay: 350
+        timeout: 2600
+        text: root.presetName + " curve preset"
+    }
 }

@@ -1,4 +1,6 @@
 #include "color_look_protected_program.h"
+#include "color_mixer_runtime.h"
+#include "color_look_runtime.h"
 
 #include <algorithm>
 #include <array>
@@ -60,52 +62,6 @@ constexpr auto kTwoPi = 2.0F * kPi;
       -0.0763812845F * l - 0.4214819784F * m + 1.5861632204F * s});
 }
 
-[[nodiscard]] float rgb_hue(const ColorPixel& pixel) {
-  const auto red = std::max(0.0F, pixel.red);
-  const auto green = std::max(0.0F, pixel.green);
-  const auto blue = std::max(0.0F, pixel.blue);
-  const auto maximum = std::max({red, green, blue});
-  const auto minimum = std::min({red, green, blue});
-  const auto delta = maximum - minimum;
-  if (delta <= 1.0e-9F) return -1.0F;
-  auto hue = 0.0F;
-  if (maximum == red) {
-    hue = (green - blue) / delta;
-    if (hue < 0.0F) hue += 6.0F;
-  } else if (maximum == green) {
-    hue = (blue - red) / delta + 2.0F;
-  } else {
-    hue = (red - green) / delta + 4.0F;
-  }
-  return hue / 6.0F;
-}
-
-[[nodiscard]] std::array<float, 3> pure_hue_rgb(float hue) {
-  hue = wrap_unit(hue) * 6.0F;
-  const auto sector = static_cast<int>(std::floor(hue));
-  const auto fraction = hue - std::floor(hue);
-  switch (sector % 6) {
-    case 0: return {1.0F, fraction, 0.0F};
-    case 1: return {1.0F - fraction, 1.0F, 0.0F};
-    case 2: return {0.0F, 1.0F, fraction};
-    case 3: return {0.0F, 1.0F - fraction, 1.0F};
-    case 4: return {fraction, 0.0F, 1.0F};
-    default: return {1.0F, 0.0F, 1.0F - fraction};
-  }
-}
-
-[[nodiscard]] float target_oklab_hue(
-    const CompiledLookStageProgram& compiled,
-    float target_hue) {
-  const auto xyz = multiply(compiled.rgb_to_xyz_d65, pure_hue_rgb(target_hue));
-  const auto l = std::cbrt(0.8189330101F * xyz[0] + 0.3618667424F * xyz[1] - 0.1288597137F * xyz[2]);
-  const auto m = std::cbrt(0.0329845436F * xyz[0] + 0.9293118715F * xyz[1] + 0.0361456387F * xyz[2]);
-  const auto s = std::cbrt(0.0482003018F * xyz[0] + 0.2643662691F * xyz[1] + 0.6338517070F * xyz[2]);
-  const auto a = 1.9779984951F * l - 2.4285922050F * m + 0.4505937099F * s;
-  const auto b = 0.0259040371F * l + 0.7827717662F * m - 0.8086757660F * s;
-  return wrap_radians(std::atan2(b, a));
-}
-
 [[nodiscard]] float circular_weight(float value, float center, float radius) {
   auto distance = std::abs(value - center);
   distance = std::min(distance, 1.0F - distance);
@@ -138,8 +94,8 @@ void compile_look_protected_program(
       std::clamp(state.color_replacement_strength / 100.0, 0.0, 1.0));
   if (state.color_replacement_enabled && compiled->replacement_strength > 1.0e-9F) {
     compiled->replacement_source_hue = wrap_unit(static_cast<float>(state.color_replacement_source_hue));
-    compiled->replacement_target_oklab_hue = target_oklab_hue(
-        *compiled, static_cast<float>(state.color_replacement_target_hue));
+    compiled->replacement_target_oklab_hue = static_cast<float>(oklab_hue_for_rgb_hue(
+        state.color_replacement_target_hue));
     compiled->replacement_range = static_cast<float>(
         std::clamp(state.color_replacement_range / 100.0, 0.01, 1.0) * 0.50);
     compiled->replacement_softness = static_cast<float>(
@@ -152,7 +108,11 @@ void compile_look_protected_program(
       std::clamp(state.skin_tone_protection_strength / 100.0, 0.0, 1.0));
   if (state.skin_tone_protection_enabled && compiled->skin_strength > 1.0e-9F &&
       compiled->active_mask != 0U) {
-    compiled->skin_hue = wrap_unit(static_cast<float>(state.skin_tone_line_hue));
+    const auto legacy = state.color_pipeline.photographic_rendering_model !=
+                        PhotographicRenderingModel::Aces2OcioV1;
+    compiled->skin_hue = legacy
+        ? wrap_unit(static_cast<float>(state.skin_tone_line_hue))
+        : wrap_unit(static_cast<float>(oklab_hue_for_rgb_hue(state.skin_tone_line_hue)) / kTwoPi);
     compiled->skin_range = static_cast<float>(
         std::clamp(state.skin_tone_protection_range / 100.0, 0.01, 1.0) * 0.50);
     compiled->active_mask |= CompiledLookStageProgram::kSkinProtection;
@@ -181,12 +141,16 @@ void apply_compiled_look_replacement(
     float* luminance_reference,
     float* luminance_weight) {
   if ((compiled.active_mask & CompiledLookStageProgram::kColorReplacement) == 0U) return;
-  const auto selection_hue = rgb_hue(input);
+  const auto selection_rgb = color_selection_rgb(compiled, input);
+  const auto confidence = static_cast<float>(color_selection_confidence(selection_rgb));
+  if (confidence <= 0.0F) return;
+  const auto selection_hue = rgb_hue_for_mixer_selection(selection_rgb);
   if (selection_hue < 0.0F) return;
   const auto weight = feathered_weight(
-      selection_hue, compiled.replacement_source_hue,
+      static_cast<float>(selection_hue), compiled.replacement_source_hue,
       compiled.replacement_range, compiled.replacement_softness) *
-      compiled.replacement_strength * skin_scale;
+      compiled.replacement_strength * skin_scale *
+      confidence;
   if (weight <= 1.0e-6F) return;
   auto chroma = std::hypot(*a, *b);
   auto hue = wrap_radians(std::atan2(*b, *a));

@@ -135,10 +135,14 @@ Rectangle {
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
             elide: Text.ElideNone
-            ToolTip.visible: cardHover.hovered && titleLabel.contentHeight > titleLabel.height + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.displayLabel
+            AppToolTip {
+                id: sharedTooltip1
+                targetItem: titleLabel
+                visible: titleLabel.visible && (cardHover.hovered && titleLabel.contentHeight > titleLabel.height + 1)
+                delay: 350
+                timeout: 3600
+                text: root.displayLabel
+            }
         }
 
         RowLayout {

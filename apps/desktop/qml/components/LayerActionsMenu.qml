@@ -3,7 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 
-Menu {
+AppMenu {
     id: root
     Theme { id: theme }
     property var menuItems: []
@@ -36,6 +36,7 @@ Menu {
     Component {
         id: actionDelegate
         MenuItem {
+            id: popupTooltipAnchor1
             required property var modelData
             objectName: "layerAction_" + String(modelData.key || "")
             text: modelData.key === "duplicate-with-masks" ? qsTr("Duplicate Layer") : String(modelData.label || "")
@@ -44,11 +45,15 @@ Menu {
             checked: modelData.checked === true
             font.family: theme.fontUi
             font.pixelSize: theme.typeControl
-            ToolTip.visible: hovered
-            ToolTip.delay: 650
-            ToolTip.text: enabled ? String(modelData.tooltip || text)
-                                 : String(modelData.disabledReason || qsTr("Unavailable in the current state."))
-            Accessible.description: ToolTip.text
+            AppToolTip {
+                id: sharedTooltip2
+                targetItem: popupTooltipAnchor1
+                visible: popupTooltipAnchor1.visible && (popupTooltipAnchor1.hovered)
+                delay: 650
+                text: popupTooltipAnchor1.enabled ? String(popupTooltipAnchor1.modelData.tooltip || popupTooltipAnchor1.text)
+                                 : String(popupTooltipAnchor1.modelData.disabledReason || qsTr("Unavailable in the current state."))
+            }
+            Accessible.description: sharedTooltip2.text
             onTriggered: root.dispatch(String(modelData.key || ""))
         }
     }
@@ -60,7 +65,7 @@ Menu {
     }
     Instantiator {
         model: root.groupedItems
-        delegate: Menu {
+        delegate: AppMenu {
             id: groupMenu
             required property var modelData
             objectName: "layerActions_" + modelData.key
@@ -78,13 +83,18 @@ Menu {
     }
     MenuSeparator { }
     MenuItem {
+        id: popupTooltipAnchor3
         objectName: "layerAction_delete"
         text: qsTr("Delete Layer")
         enabled: root.deleteItem.enabled !== false
         font.family: theme.fontUi
         font.pixelSize: theme.typeControl
-        ToolTip.visible: hovered && !enabled
-        ToolTip.text: String(root.deleteItem.disabledReason || "")
+        AppToolTip {
+            id: sharedTooltip4
+            targetItem: popupTooltipAnchor3
+            visible: popupTooltipAnchor3.visible && (popupTooltipAnchor3.hovered && !popupTooltipAnchor3.enabled)
+            text: String(root.deleteItem.disabledReason || "")
+        }
         onTriggered: root.dispatch("delete")
     }
 }

@@ -994,6 +994,7 @@ bool apply_color_look_stage(
       if (state.black_and_white_enabled) {
         pixel = apply_black_and_white_mixer(
             pixel,
+            pixel_to_linear_srgb_reference(pixel, color_context),
             state,
             luminance_for_pixel(pixel, color_context));
       }

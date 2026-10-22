@@ -216,14 +216,14 @@ Item {
             }
         }
 
-        Popup {
+        AppPopup {
             id: shapeTypePopup
             objectName: "photoShapeTypePopup"
             parent: Overlay.overlay
             modal: false
             focus: true
-            width: Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))
-            height: Math.min(implicitHeight, parent ? Math.max(1, parent.height - theme.space8) : implicitHeight)
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(300), Math.max(1, parent ? parent.width - theme.space8 : theme.scaled(300)))))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(implicitHeight, parent ? Math.max(1, parent.height - theme.space8) : implicitHeight)))
             x: Math.max(theme.space4, Math.min(parent ? parent.width - width - theme.space4 : 0,
                                                 shapeTypeChooser.mapToItem(parent, 0, 0).x))
             y: {
@@ -237,12 +237,7 @@ Item {
             }
             padding: theme.space8
             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-            background: Rectangle {
-                radius: theme.radiusPanel
-                color: theme.surfaceTop
-                border.width: theme.hairlineWidth
-                border.color: theme.glassEdge
-            }
+            background: PopupSurface {}
             onOpened: {
                 const currentOption = shapeTypeOptions.itemAt(root.shapeTypeIndex())
                 if (currentOption) currentOption.forceActiveFocus()
@@ -369,9 +364,13 @@ Item {
                     onClicked: shapeTypePopup.open()
                     Accessible.name: qsTr("Shape: %1").arg(photoShapeControls.shapeTypeLabel(root.shapeType))
                     Accessible.description: qsTr("Choose a shape to draw.")
-                    ToolTip.text: qsTr("Choose a shape to draw.")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: theme.durationSlow
+                    AppToolTip {
+                        id: sharedTooltip1
+                        targetItem: shapeTypeChooser
+                        text: qsTr("Choose a shape to draw.")
+                        visible: shapeTypeChooser.visible && (shapeTypeChooser.hovered)
+                        delay: theme.durationSlow
+                    }
                     background: Rectangle {
                         radius: theme.radiusControl
                         color: shapeTypeChooser.activeFocus ? theme.interactionFill

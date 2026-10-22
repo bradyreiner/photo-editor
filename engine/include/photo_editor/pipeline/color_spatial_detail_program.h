@@ -36,6 +36,8 @@ struct CompiledFineDetailProgram final {
   ColorMatrix3 xyz_d65_to_rgb;
   float sharpen_strength = 0.0F;
   float sharpen_gain = 1.9F;
+  float sharpen_radius_fraction = 0.0F;
+  float sharpen_subpixel_scale = 1.0F;
   float sharpen_mask_strength = 0.0F;
   float luminance_nr_strength = 0.0F;
   float color_nr_strength = 0.0F;

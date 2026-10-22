@@ -1,5 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "../color_look_harmony_math.h"
+#include "../color_look_grading_math.h"
 
 struct ColorAdjustmentUniforms {
   float exposure_gain;
@@ -57,6 +59,7 @@ struct CurveStageUniforms {
 struct LookStageUniforms {
   float rgb_to_xyz_d65[9];
   float xyz_d65_to_rgb[9];
+  float rgb_to_selection_rgb[9];
   float luminance_coefficients[3];
   float rgb_mixer[9];
   float black_and_white_mixer[8];
@@ -226,6 +229,8 @@ struct RetainedFineDetailUniforms {
   float xyz_d65_to_rgb[9];
   float sharpen_strength;
   float sharpen_gain;
+  float sharpen_radius_fraction;
+  float sharpen_subpixel_scale;
   float sharpen_mask_strength;
   float luminance_nr_strength;
   float color_nr_strength;
@@ -700,6 +705,7 @@ static float3 look_multiply(constant float* matrix, float3 value);
 static float look_luminance(
     float3 rgb, constant LookStageUniforms& uniforms);
 static float look_rgb_hue(float3 rgb);
+static float look_selection_confidence(float3 rgb);
 static float look_channel_weight(float hue, uint channel);
 static float3 look_apply_saturation_vibrance(
     float3 input, constant LookStageUniforms& uniforms);
@@ -711,10 +717,12 @@ static float3 retained_layer_downstream_look(
   }
   if ((uniforms.active_mask & 2u) != 0u) {
     float gray = look_luminance(adjusted, uniforms);
-    const float hue = look_rgb_hue(adjusted);
+    const float3 selection_rgb = look_multiply(uniforms.rgb_to_selection_rgb, adjusted);
+    const float hue = look_rgb_hue(selection_rgb);
+    const float confidence = look_selection_confidence(selection_rgb);
     if (hue >= 0.0f) {
       for (uint channel = 0u; channel < 8u; ++channel) {
-        gray *= max(0.0f, 1.0f + look_channel_weight(hue, channel) *
+        gray *= max(0.0f, 1.0f + look_channel_weight(hue, channel) * confidence *
                                   uniforms.black_and_white_mixer[channel] * 0.85f);
       }
     }
@@ -1201,8 +1209,15 @@ static float look_luminance(float3 rgb, constant LookStageUniforms& uniforms) {
          rgb.b * uniforms.luminance_coefficients[2];
 }
 
+static float look_encode_selection_channel(float value) {
+  value = max(0.0f, value);
+  return value <= 0.0031308f ? 12.92f * value :
+      1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
 static float look_rgb_hue(float3 rgb) {
-  const float3 nonnegative = max(rgb, float3(0.0f));
+  const float3 nonnegative = float3(look_encode_selection_channel(rgb.r),
+      look_encode_selection_channel(rgb.g), look_encode_selection_channel(rgb.b));
   const float maximum = max(nonnegative.r, max(nonnegative.g, nonnegative.b));
   const float minimum = min(nonnegative.r, min(nonnegative.g, nonnegative.b));
   const float delta = maximum - minimum;
@@ -1217,6 +1232,16 @@ static float look_rgb_hue(float3 rgb) {
     hue = (nonnegative.r - nonnegative.g) / delta + 4.0f;
   }
   return hue / 6.0f;
+}
+
+// Keep in step with color_selection_confidence in color_mixer_runtime.cpp.
+static float look_selection_confidence(float3 rgb) {
+  const float3 nonnegative = max(rgb, float3(0.0f));
+  const float maximum = max(nonnegative.r, max(nonnegative.g, nonnegative.b));
+  const float minimum = min(nonnegative.r, min(nonnegative.g, nonnegative.b));
+  if (!(maximum > 0.0f) || !isfinite(maximum) || !isfinite(minimum)) return 0.0f;
+  const float relative_spread = (maximum - minimum) / maximum;
+  return smoothstep(0.02f, 0.12f, relative_spread);
 }
 
 static float look_channel_weight(float hue, uint channel) {
@@ -1314,7 +1339,11 @@ static float3 look_apply_saturation_vibrance(
     constant LookStageUniforms& uniforms) {
   const float spread = max(
       abs(input.r - input.g), max(abs(input.g - input.b), abs(input.r - input.b)));
-  if (spread <= 1.0e-6f && (uniforms.active_mask & 8u) == 0u) return input;
+  const float neutral_threshold = (uniforms.active_mask & 512u) != 0u ? 1.0e-6f : 0.0f;
+  if (spread <= neutral_threshold && (uniforms.active_mask & 8u) == 0u) return input;
+  const float3 selection_rgb = look_multiply(uniforms.rgb_to_selection_rgb, input);
+  const float selection_confidence = look_selection_confidence(selection_rgb);
+  if ((uniforms.active_mask & (4u | 8u)) == 0u && selection_confidence <= 0.0f) return input;
   const float3 xyz = look_multiply(uniforms.rgb_to_xyz_d65, input);
   const float l = 0.8189330101f * xyz.x + 0.3618667424f * xyz.y - 0.1288597137f * xyz.z;
   const float m = 0.0329845436f * xyz.x + 0.9293118715f * xyz.y + 0.0361456387f * xyz.z;
@@ -1326,9 +1355,9 @@ static float3 look_apply_saturation_vibrance(
   float a = 1.9779984951f * l_root - 2.4285922050f * m_root + 0.4505937099f * s_root;
   float b = 0.0259040371f * l_root + 0.7827717662f * m_root - 0.8086757660f * s_root;
   const float original_chroma = length(float2(a, b));
-  float chroma = original_chroma <= 1.0e-4f ? 0.0f : original_chroma;
+  float chroma = original_chroma;
   float skin_scale = 1.0f;
-  if ((uniforms.active_mask & 256u) != 0u) {
+  if ((uniforms.active_mask & 256u) != 0u && original_chroma > 0.0f) {
     const float skin_hue = look_wrap_radians(atan2(b, a)) /
                            6.28318530717958647692f;
     const float skin_weight = look_circular_weight(
@@ -1339,15 +1368,26 @@ static float3 look_apply_saturation_vibrance(
   const float low_chroma_weight = 1.0f - smoothstep(0.035f, 0.24f, chroma);
   chroma *= max(0.0f, 1.0f + uniforms.vibrance_strength *
       low_chroma_weight * skin_scale * 0.82f);
+  const float peak = max(input.r, max(input.g, input.b));
+  const bool over_headroom = (uniforms.active_mask & 1024u) != 0u &&
+      peak > clamp(uniforms.output_headroom, 1.0f, 16.0f) + 1.0e-5f;
+  const bool from_tone = (uniforms.active_mask & 2048u) != 0u &&
+      !over_headroom && peak >= 0.98f;
+  if (over_headroom || from_tone) {
+    chroma *= clamp(1.0f - 0.20f * smoothstep(0.78f, 0.98f, lightness) *
+        smoothstep(0.035f, 0.22f, original_chroma), 0.78f, 1.0f);
+  }
   float chroma_scale = original_chroma > 1.0e-9f ? chroma / original_chroma : 0.0f;
   a *= chroma_scale;
   b *= chroma_scale;
   if ((uniforms.active_mask & 32u) != 0u) {
     chroma = length(float2(a, b));
+    // Match the CPU's pre-channel chromatic-signal bound; never blur pixels
+    // or suppress genuine faint color with an absolute brightness cutoff.
+    const float luminance_chroma_scale = (uniforms.active_mask & 512u) != 0u
+        ? 1.0f : min(1.0f, chroma / 0.12f);
     float hue = look_wrap_radians(atan2(b, a));
-    const float selection_hue = uniforms.mixer_model == 1u || uniforms.mixer_model == 2u
-                                    ? look_rgb_hue(input)
-                                    : hue / 6.28318530717958647692f;
+    const float selection_hue = look_rgb_hue(selection_rgb);
     if (selection_hue >= 0.0f) {
       const float hue_scale = uniforms.mixer_model == 2u ? 0.16f : 0.22f;
       const float saturation_scale = uniforms.mixer_model == 3u ? 0.72f :
@@ -1355,14 +1395,19 @@ static float3 look_apply_saturation_vibrance(
       const float luminance_scale = uniforms.mixer_model == 2u ? 0.14f :
                                     uniforms.mixer_model == 3u ? 0.20f : 0.30f;
       for (uint channel = 0u; channel < 8u; ++channel) {
-        const float weight = look_channel_weight(selection_hue, channel) * skin_scale;
+        if (uniforms.mixer_hue[channel] == 0.0f && uniforms.mixer_saturation[channel] == 0.0f &&
+            uniforms.mixer_luminance[channel] == 0.0f && uniforms.selective_cyan[channel] == 0.0f &&
+            uniforms.selective_magenta[channel] == 0.0f && uniforms.selective_yellow[channel] == 0.0f &&
+            uniforms.selective_black[channel] == 0.0f) continue;
+        const float weight = look_channel_weight(selection_hue, channel) * skin_scale * selection_confidence;
         if (weight <= 0.0f) continue;
         hue = look_wrap_radians(
             hue + weight * uniforms.mixer_hue[channel] * hue_scale *
                       6.28318530717958647692f);
         chroma *= max(0.0f, 1.0f + weight *
             uniforms.mixer_saturation[channel] * saturation_scale);
-        lightness += weight * uniforms.mixer_luminance[channel] * luminance_scale;
+        lightness += weight * uniforms.mixer_luminance[channel] * luminance_scale *
+            luminance_chroma_scale;
         look_apply_selective(uniforms.selective_cyan[channel], 0.50f, weight, chroma, hue);
         look_apply_selective(uniforms.selective_magenta[channel], 0.88f, weight, chroma, hue);
         look_apply_selective(uniforms.selective_yellow[channel], 0.15f, weight, chroma, hue);
@@ -1375,12 +1420,12 @@ static float3 look_apply_saturation_vibrance(
   float replacement_luminance = -1.0f;
   float replacement_weight = 0.0f;
   if ((uniforms.active_mask & 128u) != 0u) {
-    const float selection_hue = look_rgb_hue(input);
+    const float selection_hue = look_rgb_hue(selection_rgb);
     if (selection_hue >= 0.0f) {
       const float weight = look_feathered_weight(
           selection_hue, uniforms.replacement_source_hue,
           uniforms.replacement_range, uniforms.replacement_softness) *
-          uniforms.replacement_strength * skin_scale;
+          uniforms.replacement_strength * skin_scale * selection_confidence;
       if (weight > 1.0e-6f) {
         chroma = length(float2(a, b));
         float hue = look_wrap_radians(atan2(b, a));
@@ -1402,23 +1447,30 @@ static float3 look_apply_saturation_vibrance(
   if ((uniforms.active_mask & 64u) != 0u) {
     chroma = length(float2(a, b));
     float hue = look_wrap_radians(atan2(b, a));
-    const float normalized_hue = hue / 6.28318530717958647692f;
-    float best = uniforms.harmony_anchors[0];
-    float best_distance = 1.0f;
-    for (uint anchor = 0u; anchor < uniforms.harmony_anchor_count; ++anchor) {
-      float distance = abs(normalized_hue - uniforms.harmony_anchors[anchor]);
-      distance = min(distance, 1.0f - distance);
-      if (distance < best_distance) {
-        best_distance = distance;
-        best = uniforms.harmony_anchors[anchor];
+    float force = 0.0f;
+    if ((uniforms.active_mask & 512u) != 0u) {
+      const float normalized_hue = hue / 6.28318530717958647692f;
+      float best = uniforms.harmony_anchors[0];
+      float best_distance = 1.0f;
+      for (uint anchor = 0u; anchor < uniforms.harmony_anchor_count; ++anchor) {
+        float distance = abs(normalized_hue - uniforms.harmony_anchors[anchor]);
+        distance = min(distance, 1.0f - distance);
+        if (distance < best_distance) {
+          best_distance = distance;
+          best = uniforms.harmony_anchors[anchor];
+        }
       }
+      float delta = fmod(best * 6.28318530717958647692f - hue +
+                         3.14159265358979323846f,
+                         6.28318530717958647692f);
+      if (delta < 0.0f) delta += 6.28318530717958647692f;
+      delta -= 3.14159265358979323846f;
+      force = delta;
+    } else {
+      force = photo_editor_color_harmony_circular_force(
+          hue, uniforms.harmony_anchors, uniforms.harmony_anchor_count);
     }
-    float delta = fmod(best * 6.28318530717958647692f - hue +
-                       3.14159265358979323846f,
-                       6.28318530717958647692f);
-    if (delta < 0.0f) delta += 6.28318530717958647692f;
-    delta -= 3.14159265358979323846f;
-    hue = look_wrap_radians(hue + delta * uniforms.harmony_strength * skin_scale);
+    hue = look_wrap_radians(hue + force * uniforms.harmony_strength * skin_scale * selection_confidence);
     a = chroma * cos(hue);
     b = chroma * sin(hue);
   }
@@ -1433,15 +1485,32 @@ static float3 look_apply_saturation_vibrance(
         shadow_weight,
         max(0.0f, 1.0f - shadow_weight - highlight_weight),
         highlight_weight};
-    for (uint grade = 0u; grade < 3u; ++grade) {
-      const float scaled_weight = weights[grade] * uniforms.grading_amount * skin_scale;
-      const float intensity = abs(uniforms.grading_saturation[grade]) *
-                              0.18f * scaled_weight;
-      const float hue_radians = uniforms.grading_hue[grade] *
-                                6.28318530717958647692f;
-      a += intensity * cos(hue_radians);
-      b += intensity * sin(hue_radians);
-      lightness += uniforms.grading_luminance[grade] * 0.20f * scaled_weight;
+    if ((uniforms.active_mask & 512u) != 0u) {
+      for (uint grade = 0u; grade < 3u; ++grade) {
+        const float scaled_weight = weights[grade] * uniforms.grading_amount * skin_scale;
+        const float intensity = abs(uniforms.grading_saturation[grade]) *
+                                0.18f * scaled_weight;
+        const float hue_radians = uniforms.grading_hue[grade] *
+                                  6.28318530717958647692f;
+        a += intensity * cos(hue_radians);
+        b += intensity * sin(hue_radians);
+        lightness += uniforms.grading_luminance[grade] * 0.20f * scaled_weight;
+      }
+    } else {
+      float desaturation = 0.0f;
+      float2 tint = float2(0.0f);
+      for (uint grade = 0u; grade < 3u; ++grade) {
+        const auto contribution = photo_editor::pipeline::color_look_grading_band_contribution(
+            uniforms.grading_hue[grade], uniforms.grading_saturation[grade],
+            uniforms.grading_luminance[grade],
+            weights[grade] * uniforms.grading_amount * skin_scale);
+        tint += float2(contribution.tint_a, contribution.tint_b);
+        desaturation += contribution.desaturation;
+        lightness += contribution.lightness_delta;
+      }
+      const float retention = clamp(1.0f - desaturation, 0.0f, 1.0f);
+      a = a * retention + tint.x;
+      b = b * retention + tint.y;
     }
     chroma = length(float2(a, b));
   }
@@ -1503,10 +1572,12 @@ kernel void apply_compiled_look_stage(
   }
   if ((uniforms.active_mask & 2u) != 0u) {
     float gray = look_luminance(adjusted, uniforms);
-    const float hue = look_rgb_hue(adjusted);
+    const float3 selection_rgb = look_multiply(uniforms.rgb_to_selection_rgb, adjusted);
+    const float hue = look_rgb_hue(selection_rgb);
+    const float confidence = look_selection_confidence(selection_rgb);
     if (hue >= 0.0f) {
       for (uint channel = 0u; channel < 8u; ++channel) {
-        gray *= max(0.0f, 1.0f + look_channel_weight(hue, channel) *
+        gray *= max(0.0f, 1.0f + look_channel_weight(hue, channel) * confidence *
                                   uniforms.black_and_white_mixer[channel] * 0.85f);
       }
     }
@@ -2053,16 +2124,18 @@ kernel void apply_retained_sharpen(
     constant RetainedFineDetailUniforms& uniforms [[buffer(3)]],
     uint gid [[thread_position_in_grid]]) {
   if (gid >= uniforms.width * uniforms.height) return;
-  const float detail_signal = lightness[gid] - sharp_blur[gid];
+  const float blur = mix(sharp_blur[gid], edge_blur[gid], uniforms.sharpen_radius_fraction);
+  const float detail_signal = (lightness[gid] - blur) * uniforms.sharpen_subpixel_scale;
+  const float limited_signal = detail_signal / (1.0f + abs(detail_signal) / 0.025f);
   float mask_gate = 1.0f;
   if (uniforms.sharpen_mask_strength > 1.0e-6f) {
-    const float edge_strength = abs(lightness[gid] - edge_blur[gid]);
+    const float edge_strength = abs(detail_signal);
     mask_gate = smoothstep(
         0.0015f,
         0.012f + 0.06f * uniforms.sharpen_mask_strength,
         edge_strength);
   }
-  lightness[gid] += detail_signal * uniforms.sharpen_strength *
+  lightness[gid] += limited_signal * uniforms.sharpen_strength *
                     uniforms.sharpen_gain * mask_gate;
 }
 
@@ -2073,7 +2146,7 @@ kernel void apply_retained_luminance_nr(
     constant RetainedFineDetailUniforms& uniforms [[buffer(3)]],
     uint gid [[thread_position_in_grid]]) {
   if (gid >= uniforms.width * uniforms.height) return;
-  const float edge = abs(lightness[gid] - edge_blur[gid]);
+  const float edge = abs(nr_blur[gid] - edge_blur[gid]);
   const float preserve = 1.0f - smoothstep(0.005f, 0.04f, edge);
   const float blend = uniforms.luminance_nr_strength * 0.85f * preserve;
   lightness[gid] = mix(lightness[gid], nr_blur[gid], blend);
@@ -2087,7 +2160,8 @@ kernel void apply_retained_color_nr(
     constant RetainedFineDetailUniforms& uniforms [[buffer(4)]],
     uint gid [[thread_position_in_grid]]) {
   if (gid >= uniforms.width * uniforms.height) return;
-  const float blend = uniforms.color_nr_strength * 0.90f;
+  const float edge = length(float2(chroma_a[gid] - a_blur[gid], chroma_b[gid] - b_blur[gid]));
+  const float blend = uniforms.color_nr_strength * 0.90f * (1.0f - smoothstep(0.01f, 0.04f, edge));
   chroma_a[gid] = mix(chroma_a[gid], a_blur[gid], blend);
   chroma_b[gid] = mix(chroma_b[gid], b_blur[gid], blend);
 }

@@ -3,8 +3,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
+    margins: docked ? 0 : theme.space12
 
     required property var theme
     required property var timelineDocument
@@ -223,18 +224,18 @@ Popup {
     parent: docked && workspaceHost ? workspaceHost : Overlay.overlay
     modal: !docked
     focus: !docked
-    width: docked && workspaceHost ? workspaceHost.width
-           : Math.min(theme.scaled(1180), parent ? parent.width - theme.space24 * 2 : theme.scaled(1180))
-    height: docked && workspaceHost ? workspaceHost.height
-            : Math.min(theme.scaled(680), parent ? parent.height - theme.space24 * 2 : theme.scaled(680))
+    width: Math.min(popupAvailableWidth, Math.max(1, docked && workspaceHost ? workspaceHost.width
+           : Math.min(theme.scaled(1180), parent ? parent.width - theme.space24 * 2 : theme.scaled(1180))))
+    height: Math.min(popupAvailableHeight, Math.max(1, docked && workspaceHost ? workspaceHost.height
+            : Math.min(theme.scaled(680), parent ? parent.height - theme.space24 * 2 : theme.scaled(680))))
     x: docked ? 0 : parent ? (parent.width - width) / 2 : 0
     y: docked ? 0 : parent ? Math.max(theme.space24, (parent.height - height) / 2) : 0
     padding: docked ? theme.panelPaddingCompact : theme.panelPaddingStandard
     closePolicy: docked ? Popup.NoAutoClose : Popup.CloseOnEscape
 
     background: PopupSurface {
-        fillColor: theme.alpha(theme.glassBase, 0.98)
-        borderColor: "transparent"
+        radius: root.docked ? 0 : theme.popupRadius
+        shadowColor: root.docked ? "transparent" : "#48000000"
     }
 
     contentItem: ColumnLayout {
@@ -842,22 +843,19 @@ Popup {
         }
     }
 
-    Popup {
+    AppPopup {
         id: timelineAudioChannelMappingPopup
         objectName: "timelineAudioChannelMappingWindow"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(520), root.width - theme.space24 * 2)
-        height: Math.min(theme.scaled(470), root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(520), root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(470), root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: (root.height - height) / 2
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.99)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -1053,24 +1051,21 @@ Popup {
         }
     }
 
-    Popup {
+    AppPopup {
         id: timelineDialogueCleanupPopup
         objectName: "timelineDialogueCleanupWindow"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(560), root.width - theme.space24 * 2)
-        height: Math.min(theme.scaled(650), root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(560), root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(650), root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: (root.height - height) / 2
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onClosed: root.timelineDocument.clearTrackDialogueCleanupPreview(
                       root.processorTrackIndex)
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.99)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -1377,22 +1372,19 @@ Popup {
         }
     }
 
-    Popup {
+    AppPopup {
         id: timelineAudioProcessorPopup
         objectName: "timelineAudioProcessorWindow"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(620), root.width - theme.space24 * 2)
-        height: Math.min(theme.scaled(640), root.height - theme.space24 * 2)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(620), root.width - theme.space24 * 2)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(640), root.height - theme.space24 * 2)))
         x: (root.width - width) / 2
         y: (root.height - height) / 2
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.99)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10

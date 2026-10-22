@@ -20,9 +20,10 @@ namespace photo_editor::pipeline {
     double lightness,
     double chroma);
 
-[[nodiscard]] double oklab_hue_for_rgb_hue(
-    double hue_unit,
-    const PipelineColorContext& context);
+// Converts a canonical sRGB/Qt.hsla display hue turn [0, 1) into the angle,
+// in radians, of that color in the engine's D65 OKLab axes. This mapping is
+// independent of the active working profile and is shared by color controls.
+[[nodiscard]] double oklab_hue_for_rgb_hue(double hue_unit);
 
 [[nodiscard]] ColorPixel apply_post_tone_color_adjustments(
     const ColorPixel& input,

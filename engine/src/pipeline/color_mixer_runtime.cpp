@@ -47,9 +47,28 @@ std::string_view normalized_color_mixer_model(const ColorAdjustmentState& state)
 }
 
 double rgb_hue_for_mixer_selection(const ColorPixel& pixel) {
-  const auto red = std::max(0.0, static_cast<double>(pixel.red));
-  const auto green = std::max(0.0, static_cast<double>(pixel.green));
-  const auto blue = std::max(0.0, static_cast<double>(pixel.blue));
+  // A continuous float transfer table avoids three pow calls per selected pixel.
+  // The linear toe is exact; HDR values retain the unbounded analytic transfer.
+  static const auto encoding = [] {
+    std::array<float, 65537> values{};
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      const auto v = static_cast<float>(index) / 65536.0F;
+      values[index] = v <= 0.0031308F ? 12.92F * v :
+          1.055F * std::pow(v, 1.0F / 2.4F) - 0.055F;
+    }
+    return values;
+  }();
+  const auto encode = [](float value) {
+    const auto v = std::max(0.0F, value);
+    if (v <= 0.0031308F) return 12.92F * v;
+    if (v >= 1.0F) return 1.055F * std::pow(v, 1.0F / 2.4F) - 0.055F;
+    const auto position = v * 65536.0F;
+    const auto index = static_cast<std::size_t>(position);
+    return std::lerp(encoding[index], encoding[index + 1], position - static_cast<float>(index));
+  };
+  const auto red = encode(pixel.red);
+  const auto green = encode(pixel.green);
+  const auto blue = encode(pixel.blue);
   const auto maximum = std::max({red, green, blue});
   const auto minimum = std::min({red, green, blue});
   const auto delta = maximum - minimum;
@@ -71,18 +90,28 @@ double rgb_hue_for_mixer_selection(const ColorPixel& pixel) {
   return wrap_unit(hue / 6.0);
 }
 
-double mixer_selection_hue(
-    const ColorPixel& pixel,
-    double oklch_hue,
-    double chroma,
-    std::string_view model) {
-  if (model == "HSL" || model == "HSV") {
-    return rgb_hue_for_mixer_selection(pixel);
+double color_selection_confidence(const ColorPixel& pixel) {
+  const auto maximum = std::max({0.0, static_cast<double>(pixel.red), static_cast<double>(pixel.green), static_cast<double>(pixel.blue)});
+  const auto minimum = std::max(0.0, std::min({static_cast<double>(pixel.red), static_cast<double>(pixel.green), static_cast<double>(pixel.blue)}));
+  // Hue is encoded by channel ratios, so a brightness floor would also erase
+  // real dark color. Keep neutral rejection exposure-independent. The input
+  // path does not carry a sensor noise estimate, so this is not noise-adaptive
+  // protection for low-light capture.
+  if (!(maximum > 0.0) || !std::isfinite(maximum) || !std::isfinite(minimum)) {
+    return 0.0;
   }
-  if (chroma <= 1.0e-6) {
-    return -1.0;
-  }
-  return wrap_unit(oklch_hue / (2.0 * kPi));
+  const auto relative_spread = (maximum - minimum) / maximum;
+  return smoothstep(0.02, 0.12, relative_spread);
+}
+
+ColorPixel color_selection_rgb(
+    const CompiledLookStageProgram& program, const ColorPixel& pixel) {
+  const auto& m = program.rgb_to_selection_rgb.values;
+  return {
+      static_cast<float>(m[0] * pixel.red + m[1] * pixel.green + m[2] * pixel.blue),
+      static_cast<float>(m[3] * pixel.red + m[4] * pixel.green + m[5] * pixel.blue),
+      static_cast<float>(m[6] * pixel.red + m[7] * pixel.green + m[8] * pixel.blue),
+      pixel.alpha};
 }
 
 void apply_selective_color_adjustment(
@@ -143,13 +172,15 @@ ColorPixel apply_rgb_channel_mixer(
 
 ColorPixel apply_black_and_white_mixer(
     const ColorPixel& pixel,
+    const ColorPixel& selection_rgb,
     const ColorAdjustmentState& state,
     double native_luminance) {
   auto gray = native_luminance;
-  const auto mixer_hue = rgb_hue_for_mixer_selection(pixel);
+  const auto confidence = color_selection_confidence(selection_rgb);
+  const auto mixer_hue = confidence > 0.0 ? rgb_hue_for_mixer_selection(selection_rgb) : -1.0;
   if (mixer_hue >= 0.0) {
     for (int channel = 0; channel < kColorMixerChannelCount; ++channel) {
-      const auto weight = channel_weight_for_selection(
+      const auto weight = confidence * channel_weight_for_selection(
           mixer_hue,
           kColorMixerChannelNames[static_cast<std::size_t>(channel)]);
       if (weight > 0.0) {
@@ -182,45 +213,20 @@ bool has_per_channel_color_mixer_adjustments(const ColorAdjustmentState& state) 
       });
 }
 
+double color_mixer_channel_weight(double hue, std::size_t channel) {
+  static constexpr std::array<double, 8> centers{0.0, 0.09, 0.15, 0.32, 0.50, 0.64, 0.78, 0.88};
+  static constexpr std::array<double, 8> inner{0.05, 0.04, 0.04, 0.10, 0.06, 0.08, 0.06, 0.05};
+  static constexpr std::array<double, 8> outer{0.10, 0.09, 0.08, 0.18, 0.10, 0.13, 0.10, 0.10};
+  if (hue < 0.0 || channel >= centers.size()) return 0.0;
+  auto distance = std::abs(hue - centers[channel]);
+  distance = std::min(distance, 1.0 - distance);
+  return 1.0 - smoothstep(inner[channel], outer[channel], distance);
+}
+
 double channel_weight_for_selection(double hue, std::string_view channel) {
-  if (hue < 0.0) {
-    return 0.0;
+  for (std::size_t index = 0; index < kColorMixerChannelNames.size(); ++index) {
+    if (channel == kColorMixerChannelNames[index]) return color_mixer_channel_weight(hue, index);
   }
-
-  struct Region final {
-    std::string_view name;
-    double center;
-    double inner_width;
-    double outer_width;
-  };
-
-  static constexpr std::array<Region, 8> kRegions{{
-      {"Reds", 0.0, 0.05, 0.10},
-      {"Oranges", 0.09, 0.04, 0.09},
-      {"Yellows", 0.15, 0.04, 0.08},
-      {"Greens", 0.32, 0.10, 0.18},
-      {"Aquas", 0.50, 0.06, 0.10},
-      {"Blues", 0.64, 0.08, 0.13},
-      {"Purples", 0.78, 0.06, 0.10},
-      {"Magentas", 0.88, 0.05, 0.10},
-  }};
-
-  for (const auto& region : kRegions) {
-    if (channel != region.name) {
-      continue;
-    }
-
-    auto distance = std::abs(hue - region.center);
-    distance = std::min(distance, 1.0 - distance);
-    if (distance <= region.inner_width) {
-      return 1.0;
-    }
-    if (distance >= region.outer_width) {
-      return 0.0;
-    }
-    return 1.0 - smoothstep(region.inner_width, region.outer_width, distance);
-  }
-
   return 0.0;
 }
 

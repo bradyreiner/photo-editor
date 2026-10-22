@@ -595,10 +595,17 @@ qt_add_qml_module(photo_editor_app
     qml/components/MaskRowActions.qml
     qml/components/MiniButton.qml
     qml/components/MetricCard.qml
+    qml/components/RecoveryStatusPanel.qml
     qml/components/ProgressStrip.qml
+    qml/components/OpticalLightField.qml
     qml/components/AdditiveLightWaves.qml
     qml/components/LooksyLoadingScene.qml
     qml/components/PopupSurface.qml
+    qml/components/AppPopup.qml
+    qml/components/AppDialog.qml
+    qml/components/AppDrawer.qml
+    qml/components/PopupEnterTransition.qml
+    qml/components/PopupExitTransition.qml
     qml/components/PopupMenuRow.qml
     qml/components/PreferenceNavRow.qml
     qml/components/ProjectMembershipRow.qml
@@ -664,6 +671,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/TimelineRotoscopeCorrectionOverlay.qml
     qml/components/TimelineSceneProjectionEffect.qml
     qml/components/TimelineKeyframeParameterPicker.qml
+    qml/components/TimelineTransformOverlay.qml
     qml/components/TimelineEffectMaskOverlay.qml
     qml/components/TimelineColorMaskEffect.qml
     qml/components/TimelinePerspectiveEffect.qml
@@ -770,7 +778,9 @@ qt_add_shaders(photo_editor_app "character_crt_shaders"
   BATCHABLE
   PREFIX "/photo-editor/shaders"
   BASE "shaders"
-  FILES shaders/agent_crt.vert shaders/agent_crt.frag)
+  FILES shaders/agent_crt.vert shaders/agent_crt.frag
+    shaders/agent_robot.vert shaders/agent_robot.frag
+    shaders/optical_light.vert shaders/optical_light.frag)
 
 qt_add_shaders(photo_editor_app "carousel_color_vision_shaders"
   BATCHABLE

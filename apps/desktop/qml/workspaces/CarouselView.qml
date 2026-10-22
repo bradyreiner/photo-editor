@@ -612,10 +612,10 @@ Rectangle {
                 }
             }
 
-            ProgressBar {
+            ProgressStrip {
                 Layout.fillWidth: true
                 visible: root.selection.cutoutState === "processing"
-                indeterminate: true
+                progress: -1
             }
 
             Label {
@@ -3498,6 +3498,7 @@ Rectangle {
                 }
 
                 Rectangle {
+                    id: popupTooltipAnchor5
                     Layout.fillWidth: true
                     Layout.preferredHeight: 28
                     radius: 6
@@ -3523,7 +3524,8 @@ Rectangle {
                         onClicked: carouselDocument.setLayoutSetting("snappingEnabled", !root.snappingEnabled)
                     }
 
-                    ToolTip {
+                    AppToolTip {
+                        targetItem: popupTooltipAnchor5
                         visible: snapHover.containsMouse
                         text: root.snappingEnabled ? "Snapping On" : "Snapping Off"
                         delay: 400
@@ -3531,6 +3533,7 @@ Rectangle {
                 }
 
                 Rectangle {
+                    id: popupTooltipAnchor6
                     Layout.fillWidth: true
                     Layout.preferredHeight: 28
                     radius: 6
@@ -3556,7 +3559,8 @@ Rectangle {
                         onClicked: carouselDocument.setLayoutSetting("guidesEnabled", !root.guidesEnabled)
                     }
 
-                    ToolTip {
+                    AppToolTip {
+                        targetItem: popupTooltipAnchor6
                         visible: guidesHover.containsMouse
                         text: root.guidesEnabled ? "Guides On" : "Guides Off"
                         delay: 400
@@ -4198,11 +4202,14 @@ Rectangle {
                                                 Accessible.description: compactPrompt
                                                                         ? "Compact add media button. Full label is available in the tooltip."
                                                                         : "Add media button with full visible label."
-                                                ToolTip.visible: visible && emptyPromptHover.hovered
-                                                ToolTip.text: promptAccessibleName
-                                                ToolTip.delay: 350
-                                                ToolTip.timeout: 3600
-
+                                                AppToolTip {
+                                                    id: sharedTooltip1
+                                                    targetItem: emptySlotPromptChrome
+                                                    visible: emptySlotPromptChrome.visible && (emptySlotPromptChrome.visible && emptyPromptHover.hovered)
+                                                    text: emptySlotPromptChrome.promptAccessibleName
+                                                    delay: 350
+                                                    timeout: 3600
+                                                }
                                                 HoverHandler {
                                                     id: emptyPromptHover
                                                     cursorShape: Qt.PointingHandCursor
@@ -6779,15 +6786,19 @@ Rectangle {
                                 model: root.formatButtons
 
                                 delegate: FilterChip {
+                                    id: popupTooltipAnchor2
                                     required property var modelData
                                     Layout.fillWidth: true
                                     text: modelData.label
                                     active: carouselDocument.documentFormat === modelData.value
                                     onClicked: carouselDocument.documentFormat = modelData.value
-                                    ToolTip.visible: formatHover.containsMouse
-                                    ToolTip.text: modelData.size
-                                    ToolTip.delay: 400
-
+                                    AppToolTip {
+                                        id: sharedTooltip3
+                                        targetItem: popupTooltipAnchor2
+                                        visible: popupTooltipAnchor2.visible && (formatHover.containsMouse)
+                                        text: popupTooltipAnchor2.modelData.size
+                                        delay: 400
+                                    }
                                     MouseArea {
                                         id: formatHover
                                         anchors.fill: parent
@@ -7762,8 +7773,12 @@ Rectangle {
                                                         font.family: theme.fontMono
                                                         font.pixelSize: 8
                                                     }
-                                                    ToolTip.visible: roleHover.hovered
-                                                    ToolTip.text: String(sequenceRolePreview.modelData)
+                                                    AppToolTip {
+                                                        id: sharedTooltip4
+                                                        targetItem: sequenceRolePreview
+                                                        visible: sequenceRolePreview.visible && (roleHover.hovered)
+                                                        text: String(sequenceRolePreview.modelData)
+                                                    }
                                                     HoverHandler { id: roleHover }
                                                 }
                                             }
@@ -12660,7 +12675,7 @@ Rectangle {
         }
     }
 
-    Drawer {
+    AppDrawer {
         id: carouselCompactInspectorDrawer
         objectName: "carouselCompactInspectorDrawer"
         readonly property string presentationContract: "carousel-compact-inspector:v1|edge:right|modal:true|width:280-360|same-inspector-instance:true|editing-context-preserved:true|focus-restored:true|no-overlap-with-layout:true"
@@ -12683,10 +12698,9 @@ Rectangle {
                 carouselLayoutButton.forceActiveFocus()
         }
 
-        background: Rectangle {
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.55)
+        background: PopupSurface {
+            radius: 0
+            shadowColor: "transparent"
         }
 
         contentItem: Item {
@@ -12695,7 +12709,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselVariantComparisonDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -12714,8 +12728,8 @@ Rectangle {
         focus: true
         padding: 0
         parent: Overlay.overlay
-        width: Math.min(theme.scaled(940), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(940), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48)))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -12728,11 +12742,7 @@ Rectangle {
                 else carouselDesignVariantsSection.forceActiveFocus()
             })
         }
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Compare design variants"
         }
@@ -12749,7 +12759,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselLayoutRecipeDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -12765,8 +12775,8 @@ Rectangle {
         focus: true
         padding: 0
         parent: Overlay.overlay
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(620), parent ? parent.height - 32 : root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(620), parent ? parent.height - 32 : root.height - 48)))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -12780,11 +12790,7 @@ Rectangle {
                 else root.forceActiveFocus(Qt.TabFocusReason)
             })
         }
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Layout recipe"
         }
@@ -12801,7 +12807,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselClipboardPasteDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -12815,9 +12821,9 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -12834,14 +12840,10 @@ Rectangle {
             })
         }
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Paste Carousel content"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
         contentItem: Loader {
@@ -12856,7 +12858,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselRepeatedElementLinkDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -12864,18 +12866,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(560, root.width - 48)
-        height: Math.min(390, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(560, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(390, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -12889,7 +12886,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselCommandPalette
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -12898,8 +12895,8 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(680, root.width - 48)
-        height: Math.min(650, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(650, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.max(24, Math.round((root.height - height) * 0.22))
         closePolicy: Popup.CloseOnEscape
@@ -12915,12 +12912,7 @@ Rectangle {
                 Qt.callLater(function() { restoreItem.forceActiveFocus() })
         }
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.accentWarm400, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -12934,7 +12926,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselPreflightIgnoreDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -12942,18 +12934,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(520, root.width - 48)
-        height: Math.min(320, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(320, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.warning, 0.48)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -12967,7 +12954,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselBrandApplicationDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -12976,8 +12963,8 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(860, root.width - 48)
-        height: Math.min(740, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(860, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(740, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
@@ -12996,12 +12983,7 @@ Rectangle {
             return values.length > 0 ? values.join(" · ") : "Unchanged"
         }
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13015,7 +12997,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselBrandLintDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13024,18 +13006,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(700, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(700, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13049,7 +13026,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselBrandKitEditorDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -13065,9 +13042,9 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(theme.scaled(980), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(760), parent ? parent.height - 32 : root.height - 48,
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(760))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(980), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(760), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(760))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13084,14 +13061,10 @@ Rectangle {
             })
         }
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Brand kit editor"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
         contentItem: Loader {
@@ -13106,7 +13079,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselReadingOrderDialog
         property bool contentCreated: false
         property bool focusCanvasOnClose: false
@@ -13121,9 +13094,9 @@ Rectangle {
         focus: true
         padding: 0
         parent: Overlay.overlay
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(carouselDocument.readingOrderState.entryCount > 0 ? 600 : 320),
-                         parent ? parent.height - 32 : root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(carouselDocument.readingOrderState.entryCount > 0 ? 600 : 320),
+                         parent ? parent.height - 32 : root.height - 48)))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13137,13 +13110,9 @@ Rectangle {
                 Qt.callLater(function() { restoreItem.forceActiveFocus() })
         }
 
-        background: Rectangle {
-            radius: theme.radiusPanel
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Reading order"
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
         contentItem: Loader {
@@ -13158,7 +13127,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselDocumentStructureDialog
         property bool contentCreated: false
         property bool focusCanvasOnClose: false
@@ -13198,9 +13167,9 @@ Rectangle {
         focus: true
         padding: 0
         parent: Overlay.overlay
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48,
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(400))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(720), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(400))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13227,13 +13196,9 @@ Rectangle {
             }
         }
 
-        background: Rectangle {
-            radius: theme.radiusPanel
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Document structure"
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
         contentItem: Loader {
@@ -13248,7 +13213,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselBoardRangeCommandDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -13261,9 +13226,9 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(640), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(parent ? parent.height - 32 : root.height - 48, theme.scaled(620),
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(420))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13290,14 +13255,10 @@ Rectangle {
             }
         }
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Apply to board range"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
         contentItem: Loader {
@@ -13312,7 +13273,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselNeighborComparisonDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13326,18 +13287,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(940, root.width - 48)
-        height: Math.min(720, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(940, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(720, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13351,7 +13307,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselContinuityPreviewDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13359,18 +13315,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(960, root.width - 48)
-        height: Math.min(760, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(960, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(760, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13384,7 +13335,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselStatusNoticesDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13392,18 +13343,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(620, root.width - 48)
-        height: Math.min(520, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(620, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(520, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13417,7 +13363,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselRecoveryDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13426,18 +13372,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(520, root.width - 48)
-        height: 300
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, 300))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.NoAutoClose
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.warning, 0.58)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13451,7 +13392,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselRelinkDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13469,19 +13410,14 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(680, root.width - 48)
-        height: Math.min(640, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(640, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onClosed: carouselDocument.clearRelinkPlan()
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13495,7 +13431,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselCopyProofDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13503,18 +13439,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(700, root.width - 48)
-        height: Math.min(650, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(700, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(650, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13528,7 +13459,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselFontBrowserDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -13558,21 +13489,17 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Installed fonts"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
         }
 
         contentItem: Loader {
@@ -13587,7 +13514,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselFontRecoveryDialog
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -13606,9 +13533,9 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13624,14 +13551,10 @@ Rectangle {
             })
         }
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Resolve fonts"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
         contentItem: Loader {
@@ -13646,7 +13569,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselExportSheet
         property bool contentCreated: false
         property Item focusReturnItem: null
@@ -13698,9 +13621,9 @@ Rectangle {
         focus: true
         parent: Overlay.overlay
         padding: 0
-        width: Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)
-        height: Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
-                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(820), parent ? parent.width - 32 : root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(740), parent ? parent.height - 32 : root.height - 48,
+                         contentItem.item ? contentItem.item.implicitHeight + theme.space18 * 2 : theme.scaled(740))))
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         closePolicy: Popup.CloseOnEscape
@@ -13722,14 +13645,10 @@ Rectangle {
             })
         }
 
-        background: Rectangle {
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: "Export carousel"
             Accessible.ignored: false
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
         }
 
         contentItem: Loader {
@@ -13744,7 +13663,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselCutoutRefineDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13752,18 +13671,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(440, root.width - 48)
-        height: Math.min(390, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(440, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(390, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13777,7 +13691,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselTemplatePackUpdateDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13785,19 +13699,14 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(660, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(660, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onClosed: carouselDocument.clearTemplatePackUpdatePreview()
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13811,7 +13720,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselSequenceTemplateDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13819,18 +13728,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(900, root.width - 48)
-        height: Math.min(650, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(900, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(650, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13844,7 +13748,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselStoryboardDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13852,18 +13756,13 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(980, root.width - 48)
-        height: Math.min(760, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(980, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(760, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13877,7 +13776,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselRepeatGridDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13894,19 +13793,14 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(720, root.width - 48)
-        height: Math.min(700, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(720, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(700, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onClosed: carouselDocument.clearRepeatGridPreview()
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13920,7 +13814,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselSelectionBatchDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13929,19 +13823,14 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(680, root.width - 48)
-        height: Math.min(620, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(620, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onClosed: carouselDocument.clearSelectionBatchOperationPreview()
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13955,7 +13844,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselMediaUsageDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -13963,20 +13852,15 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(720, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(720, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onOpened: root.mediaUsageReportState = carouselDocument.mediaUsageReport(
                       carouselDocument.mediaAutofillPlan || [])
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -13990,7 +13874,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselVideoPreviewDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -14045,20 +13929,15 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(760, root.width - 48)
-        height: Math.min(720, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(760, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(720, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onOpened: Qt.callLater(seekPoster)
         onClosed: { if (carouselVideoPreviewDialog.player) carouselVideoPreviewDialog.player.stop() }
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -14072,7 +13951,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselMediaAutofillDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
@@ -14080,19 +13959,14 @@ Rectangle {
         modal: true
         focus: true
         padding: 0
-        width: Math.min(680, root.width - 48)
-        height: Math.min(620, root.height - 48)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, root.width - 48)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(620, root.height - 48)))
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         closePolicy: Popup.CloseOnEscape
         onClosed: carouselDocument.clearMediaAutofillPlan()
 
-        background: Rectangle {
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.6)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {
@@ -14106,25 +13980,20 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: carouselDesignPackageImportDialog
         property bool contentCreated: false
         onAboutToShow: contentItem.loadContent()
         objectName: "carouselDesignPackageImportDialog"
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(600, parent ? parent.width - 48 : 600)
-        height: Math.min(560, parent ? parent.height - 48 : 560)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(600, parent ? parent.width - 48 : 600)))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(560, parent ? parent.height - 48 : 560)))
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
         padding: 0
-        background: Rectangle {
-            radius: 12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.62)
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             function loadContent() {

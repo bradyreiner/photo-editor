@@ -87,7 +87,7 @@ Item {
         }
     }
 
-    Popup {
+    AppPopup {
         id: fontPopup
         objectName: root.objectName + "Popup"
         parent: Overlay.overlay
@@ -96,9 +96,9 @@ Item {
         dim: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        padding: theme.space12
-        width: Math.min(theme.scaled(480), Math.max(0, parent ? parent.width - theme.space24 : theme.scaled(480)))
-        height: Math.min(theme.scaled(520), Math.max(0, parent ? parent.height - theme.scaled(32) : theme.scaled(520)))
+        padding: standardPopupPadding
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(480), Math.max(0, parent ? parent.width - theme.space24 : theme.scaled(480)))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(520), Math.max(0, parent ? parent.height - theme.scaled(32) : theme.scaled(520)))))
         onOpened: {
             root.loadFamilies()
             fontList.currentIndex = root.filteredFamilies.length > 0
@@ -214,11 +214,7 @@ Item {
                 onClicked: fontPopup.close()
             }
         }
-        background: Components.PopupSurface {
-            radius: theme.radiusControl
-            fillColor: theme.popupFill
-            borderColor: theme.alpha(theme.controlEdge, 0.82)
-        }
+        background: PopupSurface {}
     }
 
     onSearchTextChanged: {

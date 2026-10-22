@@ -53,6 +53,7 @@
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_CULL_WORKFLOW") ||
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_PROFESSIONAL_LIBRARY") ||
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_PRESET_LIBRARY") ||
+      qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ALIGNMENT") ||
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_UI_PRIMITIVES") ||
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_STUDIO_POLISH") ||
       qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_TIMELINE_WORKFLOW") ||
@@ -171,6 +172,9 @@
   const auto main_qml_path = main_qml_override.isEmpty()
       ? QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(QStringLiteral("apps/desktop/qml/Main.qml"))
       : main_qml_override;
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ALIGNMENT")) {
+#include "color_alignment_controls_proof.inc"
+  }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_LIBRARY_COLLECTIONS")) {
 #include "library_collection_proof.inc"
   }
@@ -719,7 +723,7 @@
       !studio_workspace_source.contains(QStringLiteral("editorPreview.currentPhotographicRenderingModel")) ||
       !studio_workspace_source.contains(QStringLiteral("Open Info > Rendering for the recipe model and upgrade availability.")) ||
       !inspector_section_source.contains(QStringLiteral("property string helpText: \"\"")) ||
-      !inspector_section_source.contains(QStringLiteral("ToolTip.text: root.resolvedTooltipText")) ||
+      !inspector_section_source.contains(QStringLiteral("text: root.resolvedTooltipText")) ||
       !inspector_section_source.contains(QStringLiteral("root.helpText.length > 0)")) ||
       !inspector_section_source.contains(QStringLiteral("? root.helpText : root.subtitle")) ||
       !studio_workspace_source.contains(
@@ -1653,7 +1657,7 @@
       !agent_tool_call_row_source.contains(QStringLiteral("Accessible.description: root.detail")) ||
       !agent_tool_call_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
       !agent_tool_call_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !agent_tool_call_row_source.contains(QStringLiteral("ToolTip.text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title"))) {
+      !agent_tool_call_row_source.contains(QStringLiteral("text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title"))) {
     return fail("Edit agent tool-call audit rows should use AgentToolCallRow with readable no-elide title/detail text and preserved status logic");
   }
   if (!agent_recipe_diff_row_source.contains(QStringLiteral("agentRecipeDiffRowContract: \"agent-recipe-diff-row:v1|label-wrap:true|summary-wrap:true|count-badge:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
@@ -1662,7 +1666,7 @@
       !agent_recipe_diff_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
       !agent_recipe_diff_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !agent_recipe_diff_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !agent_recipe_diff_row_source.contains(QStringLiteral("ToolTip.text: root.summary.length > 0 ? root.label + \"\\n\" + root.summary : root.label"))) {
+      !agent_recipe_diff_row_source.contains(QStringLiteral("text: root.summary.length > 0 ? root.label + \"\\n\" + root.summary : root.label"))) {
     return fail("Edit agent recipe diff rows should use AgentRecipeDiffRow with readable label/summary text and preserved count binding");
   }
   if (!agent_run_history_row_source.contains(QStringLiteral("agentRunHistoryRowContract: \"agent-run-history-row:v1|title-wrap:true|detail-wrap:true|status-badge:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
@@ -1671,7 +1675,7 @@
       !agent_run_history_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
       !agent_run_history_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !agent_run_history_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !agent_run_history_row_source.contains(QStringLiteral("ToolTip.text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title"))) {
+      !agent_run_history_row_source.contains(QStringLiteral("text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title"))) {
     return fail("Edit agent run history rows should use AgentRunHistoryRow with readable no-elide title/detail text and preserved status binding");
   }
   if (!studio_workspace_source.contains(QStringLiteral("SharedMaskOverlay {")) ||
@@ -3132,8 +3136,8 @@
       !tool_hud_source.contains(QStringLiteral("property int cancelMinimumReadableWidth: 88")) ||
       !tool_hud_source.contains(QStringLiteral("Layout.preferredWidth: 188")) ||
       !tool_hud_source.contains(QStringLiteral("Layout.maximumWidth: 280")) ||
-      !tool_hud_source.contains(QStringLiteral("ToolTip.text: root.title")) ||
-      !tool_hud_source.contains(QStringLiteral("ToolTip.text: root.subtitle")) ||
+      !tool_hud_source.contains(QStringLiteral("text: root.title")) ||
+      !tool_hud_source.contains(QStringLiteral("text: root.subtitle")) ||
       !tool_hud_source.contains(QStringLiteral("minimumReadableWidth: root.doneMinimumReadableWidth")) ||
       !tool_hud_source.contains(QStringLiteral("minimumReadableWidth: root.cancelMinimumReadableWidth")) ||
       !tool_hud_source.contains(QStringLiteral("activeFocusOnTab: true")) ||
@@ -3283,13 +3287,15 @@
       !main_qml_source.contains(QStringLiteral("readonly property bool recoveryBannerVisible")) ||
       !main_qml_source.contains(QStringLiteral("objectName: window.recoveryBannerVisible ? \"recoveryStatusIndicator\"")) ||
       !main_qml_source.contains(QStringLiteral("ActivityStatusBar {")) ||
-      !main_qml_source.contains(QStringLiteral("StartupLoadingPopup {")) ||
+      main_qml_source.contains(QStringLiteral("StartupLoadingPopup {")) ||
+      !main_qml_source.contains(QStringLiteral("RecoveryStatusPanel {")) ||
+      !main_qml_source.contains(QStringLiteral("!window.libraryLoadingSceneVisible")) ||
       !startup_loading_popup_source.contains(QStringLiteral("objectName: \"startupLoadingPopup\"")) ||
       !startup_loading_popup_source.contains(QStringLiteral("function synchronize()")) ||
       !startup_loading_popup_source.contains(QStringLiteral("observedLoading = true")) ||
       !startup_loading_popup_source.contains(QStringLiteral("finished = true")) ||
       !popup_surface_source.contains(QStringLiteral("objectName: \"popupSurface\"")) ||
-      !popup_surface_source.contains(QStringLiteral("popupSurfaceContract: \"popup-surface:v2|shared|fill:soft-gradient|border:single|accent:optional-rail|radius:consistent|nested-card:false|no-overlap:true\"")) ||
+      !popup_surface_source.contains(QStringLiteral("popupSurfaceContract: \"popup-surface:v3|shared|fill:neutral-flat|border:single|accent:optional-rail|radius:consistent|nested-card:false|no-overlap:true\"")) ||
       !popup_surface_source.contains(QStringLiteral("surfaceHierarchyContract: \"surface-hierarchy:v2|popover-dialog|structure-border:true|decorative-border:false|accent-restraint:true|content-owned-by-caller:true\""))) {
     return fail("Shared startup popup and popup surface should expose visibility, function-preservation, and hierarchy contracts");
   }
@@ -3550,7 +3556,7 @@
       !agent_run_stage_row_source.contains(QStringLiteral("Accessible.description: root.statusText")) ||
       !agent_run_stage_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !agent_run_stage_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !agent_run_stage_row_source.contains(QStringLiteral("ToolTip.text: root.label + \" - \" + root.statusText"))) {
+      !agent_run_stage_row_source.contains(QStringLiteral("text: root.label + \" - \" + root.statusText"))) {
     return fail("Edit agent run stages should use AgentRunStageRow with readable status text while preserving stage status logic");
   }
   if (!edit_rail_button_source.contains(QStringLiteral("editRailButtonContract: \"edit-rail-button:v2|active-state:true|rounded:true|centered-icons:true|hover:true|keyboard:true|tooltip-full:true|accessibility-full:true|icon-only:true\"")) ||
@@ -3677,7 +3683,7 @@
       !agent_tool_permission_toggle_source.contains(QStringLiteral("Accessible.checked: checked")) ||
       !agent_tool_permission_toggle_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !agent_tool_permission_toggle_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !agent_tool_permission_toggle_source.contains(QStringLiteral("ToolTip.text: helperText.length > 0 ? helperText : label")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("text: root.helperText.length > 0 ? root.helperText : root.label")) ||
       !agent_batch_status_row_source.contains(QStringLiteral("agentBatchStatusRowContract: \"agent-batch-status-row:v1|thumbnail:true|status-badge:true|actions:true|details-toggle:true|label-wrap:true|detail-wrap:true|readable-text:true|no-elide:true\"")) ||
       !agent_batch_status_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|asset-wrap:true|detail-wrap:true|suggested-wrap:true|details-wrap:true|badge-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
       !agent_batch_status_row_source.contains(QStringLiteral("signal fixRequested()")) ||
@@ -4728,7 +4734,7 @@
       !carousel_view_source.contains(QStringLiteral("text: \"Add media\"")) ||
       !carousel_view_source.contains(QStringLiteral("visible: !emptySlotPromptChrome.compactPrompt")) ||
       !carousel_view_source.contains(QStringLiteral("readonly property string promptAccessibleName: \"Add media to \" + String(modelData.label || \"slot\")")) ||
-      !carousel_view_source.contains(QStringLiteral("ToolTip.text: promptAccessibleName")) ||
+      !carousel_view_source.contains(QStringLiteral("text: emptySlotPromptChrome.promptAccessibleName")) ||
       !carousel_view_source.contains(QStringLiteral("id: slotHitArea")) ||
       !carousel_view_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !carousel_view_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
@@ -4813,7 +4819,7 @@
       !tool_option_toggle_source.contains(QStringLiteral("Accessible.checked: checked")) ||
       !tool_option_toggle_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
       !tool_option_toggle_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
-      !tool_option_toggle_source.contains(QStringLiteral("ToolTip.text: disabledTooltipText")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("text: root.disabledTooltipText")) ||
       !mask_view_source.contains(QStringLiteral("ToolOptionToggle {\n                objectName: \"alphaMaskImportInvertCheck\"")) ||
       !mask_view_source.contains(QStringLiteral("onToggled: checked => editorPreview.alphaMaskImportInvert = checked")) ||
       !studio_workspace_source.contains(QStringLiteral("ToolOptionToggle {")) ||
@@ -6029,7 +6035,7 @@
       !timeline_track_toggle_button_source.contains(QStringLiteral("Accessible.name: root.label")) ||
       !timeline_track_toggle_button_source.contains(QStringLiteral("Accessible.checked: root.checked")) ||
       !timeline_track_toggle_button_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
-      !timeline_track_toggle_button_source.contains(QStringLiteral("ToolTip.text: root.label")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("text: root.label")) ||
       !app_menu_source.contains(QStringLiteral("appMenuContract: \"app-menu:v1|shared-surface:true|keyboard:true|escape:true|premium-border:true|consistent-padding:true|readable-items:true\"")) ||
       !app_menu_source.contains(QStringLiteral("closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent")) ||
       !app_menu_item_source.contains(QStringLiteral("appMenuItemContract: \"app-menu-item:v1|hover:true|keyboard:true|disabled-state:true|shortcut-fit:true|readable-text:true|no-elide:true\"")) ||

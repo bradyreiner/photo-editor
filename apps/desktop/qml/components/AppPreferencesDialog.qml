@@ -3,14 +3,14 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Dialog {
+AppDialog {
     id: root
     objectName: "appPreferencesDialog"
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(theme.scaled(920), parent ? parent.width - 32 : theme.scaled(920))
-    height: Math.min(theme.scaled(640), parent ? parent.height - 32 : theme.scaled(640))
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(920), parent ? parent.width - 32 : theme.scaled(920))))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(640), parent ? parent.height - 32 : theme.scaled(640))))
     padding: 0
     standardButtons: Dialog.NoButton
 
@@ -388,15 +388,8 @@ Dialog {
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
 
-    Overlay.modal: Rectangle {
-        color: theme.alpha(theme.ink950, 0.78)
-    }
 
-    background: PopupSurface {
-        radius: theme.radiusPanel
-        accent: theme.accentWarm400
-        accentRail: false
-    }
+    background: PopupSurface {}
 
     contentItem: RowLayout {
         anchors.fill: parent

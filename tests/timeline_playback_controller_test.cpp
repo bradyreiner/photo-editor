@@ -577,6 +577,48 @@ int main(int argc, char** argv) {
     if (touch_file(cache_path).isEmpty()) {
       return fail("adaptive playback cache placeholder should be created");
     }
+    for (const auto& quality : {QStringLiteral("half"), QStringLiteral("quarter")}) {
+      playback.setPreviewQualityMode(quality);
+      const auto expected_scale = quality == QStringLiteral("half") ? 0.5 : 0.25;
+      const auto expected_cache_source = QUrl::fromLocalFile(cache_path).toString();
+      if (!playback.usingRenderCache() || playback.usingProxy() ||
+          playback.activeSourceUrl() != expected_cache_source ||
+          !nearly_equal(playback.effectivePreviewScale(), expected_scale)) {
+        return fail("reduced-resolution preview should reuse the ready composite at the requested scale");
+      }
+      playback.play();
+      playback.pause();
+      if (!playback.usingRenderCache() ||
+          playback.activeSourceUrl() != expected_cache_source) {
+        return fail("pausing reduced-resolution preview should retain the cached composite source");
+      }
+    }
+    document.addSelectedClipEffect(QStringLiteral("Exposure"));
+    if (playback.usingRenderCache() || playback.activeSourceUrl() != original_source ||
+        !nearly_equal(playback.effectivePreviewScale(), 0.25)) {
+      return fail("editing reduced-resolution preview should fall back from a stale composite without changing scale");
+    }
+    document.undo();
+    if (!playback.usingRenderCache() ||
+        playback.activeSourceUrl() != QUrl::fromLocalFile(cache_path).toString()) {
+      return fail("undoing the edit should restore the matching reduced-resolution composite");
+    }
+    if (!QFile::remove(cache_path)) {
+      return fail("the reduced-resolution cache fixture should be removable");
+    }
+    playback.setPreviewQualityMode(QStringLiteral("half"));
+    if (playback.usingRenderCache() || playback.activeSourceUrl() != original_source ||
+        !nearly_equal(playback.effectivePreviewScale(), 0.5)) {
+      return fail("a missing reduced-resolution cache should fall back to the original at the requested scale");
+    }
+    if (touch_file(cache_path).isEmpty()) {
+      return fail("the reduced-resolution cache fixture should be restored");
+    }
+    playback.setPreviewQualityMode(QStringLiteral("full"));
+    if (playback.usingRenderCache() || playback.activeSourceUrl() != original_source) {
+      return fail("full preview should retain original media even when a reduced-resolution cache exists");
+    }
+    playback.setPreviewQualityMode(QStringLiteral("auto"));
     playback.setInteractionActive(true);
     if (!playback.usingRenderCache() || playback.usingProxy() ||
         playback.activeSourceUrl() != QUrl::fromLocalFile(cache_path).toString() ||

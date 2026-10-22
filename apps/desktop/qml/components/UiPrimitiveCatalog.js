@@ -592,6 +592,12 @@ var components = [
         "plan": "Separate information from actions; make status readable without color alone."
     },
     {
+        "name": "OpticalLightField",
+        "family": "Feedback",
+        "status": "Workspace review",
+        "plan": "Shared caustic, interference ring and spectral progress rendering."
+    },
+    {
         "name": "PhotoEffectStack",
         "family": "Workspace compositions",
         "status": "Workspace review",

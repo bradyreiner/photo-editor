@@ -8,20 +8,17 @@ Rectangle {
 
     property color accent: theme.accentWarm400
     property color fillColor: theme.popupFill
-    property color borderColor: theme.alpha(theme.glassEdge, 0.52)
-    property color shadowColor: theme.alpha("#000000", 0.38)
+    property color borderColor: theme.popupBorder
+    property color shadowColor: theme.alpha("#000000", 0.28)
     property bool accentRail: false
-    readonly property string popupSurfaceContract: "popup-surface:v2|shared|fill:soft-gradient|border:single|accent:optional-rail|radius:consistent|nested-card:false|no-overlap:true"
+    readonly property string popupSurfaceContract: "popup-surface:v3|shared|fill:neutral-flat|border:single|accent:optional-rail|radius:consistent|nested-card:false|no-overlap:true"
     readonly property string surfaceHierarchyContract: "surface-hierarchy:v2|popover-dialog|structure-border:true|decorative-border:false|accent-restraint:true|content-owned-by-caller:true"
 
     Theme { id: theme }
 
     implicitWidth: theme.menuMinWidth
-    radius: theme.radiusSurface
-    gradient: Gradient {
-        GradientStop { position: 0.0; color: root.fillColor }
-        GradientStop { position: 1.0; color: Qt.darker(root.fillColor, 1.075) }
-    }
+    radius: theme.popupRadius
+    color: root.fillColor
     border.width: 1
     border.color: borderColor
     clip: true
@@ -29,8 +26,8 @@ Rectangle {
     layer.effect: MultiEffect {
         shadowEnabled: root.shadowColor.a > 0
         shadowColor: root.shadowColor
-        shadowBlur: 0.42
-        shadowVerticalOffset: 7
+        shadowBlur: 0.28
+        shadowVerticalOffset: 4
     }
 
     Rectangle {

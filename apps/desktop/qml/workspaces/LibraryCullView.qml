@@ -320,13 +320,13 @@ Item {
                             visible: heroImage.status !== Image.Ready || root.normalizedImagePath(root.selectedAsset).length === 0
                         }
 
-                        BusyIndicator {
+                        OpticalActivityIndicator {
                             objectName: "libraryCullOriginalLoadingIndicator"
                             anchors.centerIn: parent
                             width: 28
                             height: 28
-                            running: heroImage.status === Image.Loading
-                            visible: running
+                            active: heroImage.status === Image.Loading
+                            visible: active
                         }
 
                         Label {

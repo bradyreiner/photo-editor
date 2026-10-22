@@ -5,6 +5,11 @@ foreach(effect_test photo_optical_effects_test photo_artistic_effects_test photo
   add_test(NAME ${effect_test} COMMAND ${effect_test})
 endforeach()
 
+add_executable(film_grain_detail_test film_grain_detail_test.cpp)
+target_link_libraries(film_grain_detail_test PRIVATE photo_engine)
+photo_editor_apply_warnings(film_grain_detail_test)
+add_test(NAME film_grain_detail_test COMMAND film_grain_detail_test)
+
 add_executable(photo_effect_spatial_test photo_effect_spatial_test.cpp)
 add_executable(photo_effect_kernel_benchmark photo_effect_kernel_benchmark.cpp)
 add_executable(photo_layer_detail_benchmark photo_layer_detail_benchmark.cpp)
@@ -758,6 +763,50 @@ target_link_libraries(color_tool_invariant_test PRIVATE photo_engine)
 photo_editor_apply_warnings(color_tool_invariant_test)
 
 add_test(NAME color_tool_invariant_test COMMAND color_tool_invariant_test)
+
+add_executable(color_selection_stability_test color_selection_stability_test.cpp)
+target_link_libraries(color_selection_stability_test PRIVATE photo_engine)
+photo_editor_apply_warnings(color_selection_stability_test)
+add_test(NAME color_selection_stability_test COMMAND color_selection_stability_test)
+if(APPLE AND PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
+  add_test(NAME metal_color_selection_stability_test COMMAND color_selection_stability_test --metal)
+  set_tests_properties(metal_color_selection_stability_test PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 120 ENVIRONMENT "MTL_DEBUG_LAYER=1")
+endif()
+
+# Creative-control and profile contracts include independent fixed references.
+foreach(color_contract color_grading_contract color_harmony_continuity color_profile_edit_matrix color_creative_contract color_mixer_noise_gain)
+  add_executable(${color_contract}_test ${color_contract}_test.cpp)
+  target_link_libraries(${color_contract}_test PRIVATE photo_engine)
+  target_include_directories(${color_contract}_test PRIVATE "${PROJECT_SOURCE_DIR}/engine/src/pipeline")
+  photo_editor_apply_warnings(${color_contract}_test)
+  add_test(NAME ${color_contract}_test COMMAND ${color_contract}_test)
+endforeach()
+if(PHOTO_EDITOR_ENABLE_LCMS_COLOR_MANAGEMENT AND TARGET PkgConfig::LCMS2)
+  target_link_libraries(color_profile_edit_matrix_test PRIVATE PkgConfig::LCMS2)
+  target_compile_definitions(color_profile_edit_matrix_test PRIVATE PHOTO_EDITOR_COLOR_MATRIX_TEST_HAS_LCMS2=1)
+endif()
+if(APPLE AND PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
+  add_test(NAME metal_color_mixer_noise_gain_test COMMAND color_mixer_noise_gain_test --metal)
+  set_tests_properties(metal_color_mixer_noise_gain_test PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 240 ENVIRONMENT "MTL_DEBUG_LAYER=1")
+  add_test(NAME metal_color_creative_contract_test COMMAND color_creative_contract_test --metal)
+  set_tests_properties(metal_color_creative_contract_test PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 240 ENVIRONMENT "MTL_DEBUG_LAYER=1")
+  enable_language(OBJCXX)
+  add_executable(metal_shader_source_test metal_shader_source_test.mm)
+  target_link_libraries(metal_shader_source_test PRIVATE photo_engine "-framework Foundation" "-framework Metal")
+  target_include_directories(metal_shader_source_test PRIVATE "${PROJECT_BINARY_DIR}/engine/generated")
+  target_compile_definitions(metal_shader_source_test PRIVATE
+    PHOTO_EDITOR_METAL_CANONICAL_SOURCE_PATH="${PROJECT_SOURCE_DIR}/engine/src/pipeline/metal/color_adjustments.metal"
+    PHOTO_EDITOR_METAL_GRADING_HELPER_PATH="${PROJECT_SOURCE_DIR}/engine/src/pipeline/color_look_grading_math.h"
+    PHOTO_EDITOR_METAL_HARMONY_HELPER_PATH="${PROJECT_SOURCE_DIR}/engine/src/pipeline/color_look_harmony_math.h")
+  set_source_files_properties(metal_shader_source_test.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  photo_editor_apply_warnings(metal_shader_source_test)
+  add_test(NAME metal_shader_source_test COMMAND metal_shader_source_test)
+  add_test(NAME metal_shader_compile_test COMMAND metal_shader_source_test --compile)
+  set_tests_properties(metal_shader_compile_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+endif()
 
 add_executable(color_curve_headroom_test color_curve_headroom_test.cpp)
 target_link_libraries(color_curve_headroom_test PRIVATE photo_engine)
@@ -2188,7 +2237,17 @@ endif()
     preview_color_pipeline_config_test
     preview_color_pipeline_config_test.cpp
     ../apps/desktop/src/preview_color_pipeline_config.cpp
-    ../apps/desktop/src/edit_recipe_model_normalization.cpp)
+    ../apps/desktop/src/edit_recipe_content_validation.cpp
+    ../apps/desktop/src/edit_recipe_curve_codec.cpp
+    ../apps/desktop/src/edit_recipe_document_codec.cpp
+    ../apps/desktop/src/edit_recipe_group_normalization.cpp
+    ../apps/desktop/src/edit_recipe_json_readers.cpp
+    ../apps/desktop/src/edit_recipe_layer_codec.cpp
+    ../apps/desktop/src/edit_recipe_model_normalization.cpp
+    ../apps/desktop/src/edit_recipe_profile_codec.cpp
+    ../apps/desktop/src/edit_recipe_profile_validation.cpp
+    ../apps/desktop/src/edit_recipe_validation.cpp
+    ../apps/desktop/src/edit_recipe_v13_adapter.cpp)
   target_include_directories(
     preview_color_pipeline_config_test
     PRIVATE
@@ -3336,6 +3395,10 @@ endif()
       FILES
         ../apps/desktop/shaders/agent_crt.vert
         ../apps/desktop/shaders/agent_crt.frag
+        ../apps/desktop/shaders/agent_robot.vert
+        ../apps/desktop/shaders/agent_robot.frag
+        ../apps/desktop/shaders/optical_light.vert
+        ../apps/desktop/shaders/optical_light.frag
         ../apps/desktop/shaders/carousel_color_vision.vert
         ../apps/desktop/shaders/carousel_color_vision.frag
         ../apps/desktop/shaders/timeline_perspective.vert
@@ -3688,6 +3751,11 @@ endif()
     PHOTO_EDITOR_SMOKE_STOP_AFTER_ADJUST_INSPECTOR_BASELINE
     180
     "desktop;ui-shard")
+  add_desktop_shell_shard(
+    desktop_shell_color_controls_test
+    PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ALIGNMENT
+    240
+    "desktop;ui-shard;color;visual-proof")
   add_desktop_shell_shard(
     desktop_shell_crop_test
     PHOTO_EDITOR_SMOKE_STOP_AFTER_CROP_WORKFLOW
@@ -5287,6 +5355,13 @@ endif()
       LABELS "desktop;timeline;visual-proof"
       RESOURCE_LOCK photo_editor_desktop_runtime)
 
+  add_test(NAME timeline_animation_ui_workflow_test
+    COMMAND actual_app_workflow_benchmark_driver --timeline-ui-proof-dir
+      ${CMAKE_CURRENT_BINARY_DIR}/timeline-animation-ui-proof --timeline-animation-proof-only)
+  set_tests_properties(timeline_animation_ui_workflow_test PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PHOTO_EDITOR_DISABLE_RECIPE_PERSISTENCE=1"
+    LABELS "desktop;timeline;animation;visual-proof" RESOURCE_LOCK photo_editor_desktop_runtime)
+
   add_test(
     NAME timeline_multicam_runtime_proof_test
     COMMAND
@@ -5536,6 +5611,10 @@ endif()
   set_tests_properties(photo_extended_effects_workflow_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PHOTO_EFFECT_EXTENDED_REVIEW_ONLY=1;PHOTO_EFFECT_TEST_NO_MASK=1"
     TIMEOUT 600 RUN_SERIAL TRUE)
+  add_test(NAME film_grain_workflow_test COMMAND photo_effect_workflow_test)
+  set_tests_properties(film_grain_workflow_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PHOTO_FILM_STOCK_WORKFLOW_ONLY=1;PHOTO_EFFECT_TEST_NO_MASK=1"
+    TIMEOUT 240 RUN_SERIAL TRUE)
   add_test(NAME photo_creative_looks_workflow_test COMMAND photo_effect_workflow_test)
   set_tests_properties(photo_creative_looks_workflow_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PHOTO_EFFECT_CREATIVE_REVIEW_ONLY=1;PHOTO_EFFECT_TEST_NO_MASK=1"
@@ -5616,6 +5695,15 @@ endif()
   photo_editor_apply_warnings(linked_image_source_monitor_test)
   add_test(NAME linked_image_source_monitor_test COMMAND linked_image_source_monitor_test)
   set_tests_properties(linked_image_source_monitor_test PROPERTIES TIMEOUT 30 LABELS "desktop;layers")
+
+  add_executable(popup_system_ui_test popup_system_ui_test.cpp)
+  target_compile_definitions(popup_system_ui_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  target_link_libraries(popup_system_ui_test PRIVATE Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+  photo_editor_apply_warnings(popup_system_ui_test)
+  add_test(NAME popup_system_ui_test COMMAND popup_system_ui_test)
+  set_tests_properties(popup_system_ui_test PROPERTIES TIMEOUT 45 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "desktop;qml;popup;ui")
+  add_test(NAME popup_system_inventory_test COMMAND "${PHOTO_EDITOR_TEST_PYTHON3_EXECUTABLE}" ${PROJECT_SOURCE_DIR}/scripts/audit-popup-system.py)
+  set_tests_properties(popup_system_inventory_test PROPERTIES TIMEOUT 15 LABELS "desktop;qml;popup;source-contract")
 
   add_executable(menu_popover_bounds_test menu_popover_bounds_test.cpp)
   target_compile_definitions(menu_popover_bounds_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -6414,6 +6502,13 @@ endif()
   set_tests_properties(photo_cache_budget_test PROPERTIES TIMEOUT 30 LABELS "desktop;photo;performance")
 
   add_executable(timeline_frame_scheduling_test timeline_frame_scheduling_test.cpp)
+  add_executable(timeline_transform_workflow_test timeline_transform_workflow_test.cpp)
+  target_compile_definitions(timeline_transform_workflow_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  target_include_directories(timeline_transform_workflow_test PRIVATE ../apps/desktop/src)
+  target_link_libraries(timeline_transform_workflow_test PRIVATE desktop_shell_test_runtime Qt6::Widgets Qt6::Quick Qt6::Qml Qt6::Test Qt6::Concurrent photo_engine)
+  photo_editor_apply_warnings(timeline_transform_workflow_test)
+  add_test(NAME timeline_transform_workflow_test COMMAND timeline_transform_workflow_test)
+  set_tests_properties(timeline_transform_workflow_test PROPERTIES TIMEOUT 60 LABELS "desktop;timeline;animation;workflow")
   target_include_directories(timeline_frame_scheduling_test PRIVATE ../apps/desktop/src)
   target_link_libraries(timeline_frame_scheduling_test PRIVATE desktop_shell_test_runtime Qt6::Widgets Qt6::Quick Qt6::Multimedia Qt6::Concurrent)
   photo_editor_apply_warnings(timeline_frame_scheduling_test)
@@ -6821,6 +6916,25 @@ if(TARGET Qt6::Core AND TARGET Qt6::Gui)
   photo_editor_apply_warnings(timeline_surface_runtime_test)
   add_test(NAME timeline_surface_runtime_test COMMAND timeline_surface_runtime_test)
   set_tests_properties(timeline_surface_runtime_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 150 LABELS "desktop;timeline;surface")
+endif()
+
+if(TARGET Qt6::QuickControls2 AND TARGET Qt6::Test)
+  add_executable(crt_signal_surface_test crt_signal_surface_test.cpp)
+  target_compile_definitions(crt_signal_surface_test PRIVATE PHOTO_EDITOR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  target_link_libraries(crt_signal_surface_test PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+  qt_add_shaders(crt_signal_surface_test "crt_signal_test_shaders"
+    BATCHABLE PREFIX "/photo-editor/shaders" BASE "../apps/desktop/shaders"
+    FILES ../apps/desktop/shaders/agent_crt.vert ../apps/desktop/shaders/agent_crt.frag
+      ../apps/desktop/shaders/agent_robot.vert ../apps/desktop/shaders/agent_robot.frag)
+  if(APPLE)
+    set_target_properties(crt_signal_surface_test PROPERTIES MACOSX_BUNDLE TRUE
+      MACOSX_BUNDLE_BUNDLE_NAME "Looksy CRT Preview"
+      MACOSX_BUNDLE_GUI_IDENTIFIER "dev.looksy.crt-preview")
+  endif()
+  photo_editor_apply_warnings(crt_signal_surface_test)
+  add_test(NAME crt_signal_surface_test COMMAND crt_signal_surface_test --verify)
+  set_tests_properties(crt_signal_surface_test PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "desktop;agent;crt;gpu")
 endif()
 
 # Timeline controller tests compile the controller directly and therefore need

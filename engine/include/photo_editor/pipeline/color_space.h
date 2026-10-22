@@ -53,6 +53,7 @@ struct RgbColorSpace final {
 [[nodiscard]] RgbColorSpace make_linear_display_p3_color_space();
 [[nodiscard]] RgbColorSpace make_linear_prophoto_rgb_color_space();
 [[nodiscard]] RgbColorSpace make_linear_rec2020_color_space();
+[[nodiscard]] RgbColorSpace make_linear_adobe_rgb_color_space();
 [[nodiscard]] RgbColorSpace make_aces2065_1_color_space();
 [[nodiscard]] RgbColorSpace make_acescg_color_space();
 [[nodiscard]] RgbColorSpace make_acescct_color_space();

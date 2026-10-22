@@ -925,23 +925,22 @@ int main() {
 
   if (!contains(agent_light, "looksy-light:v3|form:rgb-optical-orb|render:photographic-light-asset") ||
       !contains(looksy_mark, "looksy-mark:v4|asset:period-crop|source:provided-looksy-logo") ||
-      !contains(looksy_character, "looksy-agent-character:v6|form:single-body-line-character") ||
+      !contains(looksy_character, "looksy-agent-character:v8|form:crt-robot") ||
       !contains(looksy_character, "CrtSignalSurface {") ||
       !contains(looksy_character, "property bool celebrating") ||
       !contains(looksy_character, "celebration:small-nod") ||
       !contains(looksy_character, "Accessible.name: \"Looksy visual assistant, \" + mode") ||
       !contains(dialog, "objectName: \"agentRobotScreenArtwork\"") ||
-      !contains(assistant_dock, "LooksyAgentCharacter {") ||
+      contains(assistant_dock, "LooksyAgentCharacter {") ||
       !contains(assistant_dock, "looksy-agent-entry:v5|placement:left-rail") ||
-      !contains(assistant_dock, "glyphOnly: true") ||
+      !contains(assistant_dock, "name: \"agent-terminal\"") ||
       !contains(assistant_dock, "HoverHandler {")) {
-    return fail("Looksy's character should retain accessible entry and restrained CRT reactions");
+    return fail("Looksy's CRT robot must remain within agent views with an accessible icon entry");
   }
 
-  if (!contains(progress_strip, "progress-strip:v4|channels:soft-color|composite:additive|scope:leading-glint|motion:eased-sweep|reduced-motion:static") ||
-      !contains(progress_strip, "globalCompositeOperation = \"lighter\"") ||
-      !contains(progress_strip, "const colors = [") ||
-      !contains(progress_strip, "Easing.InOutSine") ||
+  if (!contains(progress_strip, "progress-strip:v5|channels:rgb-wavefront|composite:additive|progress:measured|reduced-motion:static") ||
+      !contains(progress_strip, "OpticalLightField {") ||
+      !contains(progress_strip, "reducedMotion: root.reducedMotion") ||
       !contains(main_qml, "activity-progress-placement:v2|header-overlay:true|layout-shift:false|text:false") ||
       !contains(main_qml, "objectName: \"additiveActivityProgressLine\"") ||
       !contains(main_qml, "visible: (window.appActivityErrorVisible || window.recoveryBannerVisible)")) {
@@ -956,9 +955,8 @@ int main() {
       !contains(workspace_overlay, "if (mode === \"adjust\" || mode === \"processing\")") ||
       !contains(workspace_overlay, "function assistantLightMode()") ||
       !contains(workspace_overlay, "function assistantLightTool()") ||
-      !contains(workspace_overlay, "LooksyAgentCharacter {") ||
-      !contains(workspace_overlay, "tool: root.deployedTool") ||
-      !contains(workspace_overlay, "talking: root.speaking && !root.traveling") ||
+      contains(workspace_overlay, "LooksyAgentCharacter {") ||
+      !contains(workspace_overlay, "OpticalActivityIndicator {") ||
       !contains(controller_source, "character_mode = QStringLiteral(\"observe\")") ||
       !contains(controller_source, "character_mode = QStringLiteral(\"review\")")) {
     return fail("character motion should walk between anchors, speak briefly on arrival, and animate semantically for each agent stage");

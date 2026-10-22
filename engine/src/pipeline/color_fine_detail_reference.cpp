@@ -96,28 +96,6 @@ bool apply_compiled_fine_detail_program(
   }
   const auto width = static_cast<int>(program.width);
   const auto height = static_cast<int>(program.height);
-  if ((program.active_mask & CompiledFineDetailProgram::kSharpen) != 0U) {
-    const auto sharp_blur = gaussian_approximate_blur(
-        lightness, width, height, static_cast<int>(program.sharpen_radius));
-    auto edge_blur = std::vector<float>{};
-    if (program.sharpen_mask_strength > 1.0e-6F) {
-      edge_blur = gaussian_approximate_blur(
-          lightness, width, height,
-          static_cast<int>(program.sharpen_edge_radius));
-    }
-    for (auto index = std::size_t{0U}; index < count; ++index) {
-      const auto signal = lightness[index] - sharp_blur[index];
-      auto gate = 1.0;
-      if (!edge_blur.empty()) {
-        gate = smoothstep(
-            0.0015,
-            0.012 + 0.06 * program.sharpen_mask_strength,
-            std::abs(static_cast<double>(lightness[index] - edge_blur[index])));
-      }
-      lightness[index] += static_cast<float>(
-          signal * program.sharpen_strength * program.sharpen_gain * gate);
-    }
-  }
   if ((program.active_mask &
        CompiledFineDetailProgram::kLuminanceNoiseReduction) != 0U) {
     const auto nr_blur = gaussian_approximate_blur(
@@ -126,7 +104,7 @@ bool apply_compiled_fine_detail_program(
         lightness, width, height, 5);
     for (auto index = std::size_t{0U}; index < count; ++index) {
       const auto edge = std::abs(
-          static_cast<double>(lightness[index] - edge_blur[index]));
+          static_cast<double>(nr_blur[index] - edge_blur[index]));
       const auto preserve = 1.0 - smoothstep(0.005, 0.04, edge);
       const auto blend = program.luminance_nr_strength * 0.85 * preserve;
       lightness[index] = static_cast<float>(
@@ -137,12 +115,38 @@ bool apply_compiled_fine_detail_program(
        CompiledFineDetailProgram::kColorNoiseReduction) != 0U) {
     const auto a_blur = gaussian_approximate_blur(chroma_a, width, height, 3);
     const auto b_blur = gaussian_approximate_blur(chroma_b, width, height, 3);
-    const auto blend = program.color_nr_strength * 0.90;
     for (auto index = std::size_t{0U}; index < count; ++index) {
+      const auto edge = std::hypot(chroma_a[index] - a_blur[index], chroma_b[index] - b_blur[index]);
+      const auto blend = program.color_nr_strength * 0.90 * (1.0 - smoothstep(0.01, 0.04, static_cast<double>(edge)));
       chroma_a[index] = static_cast<float>(
           chroma_a[index] * (1.0 - blend) + a_blur[index] * blend);
       chroma_b[index] = static_cast<float>(
           chroma_b[index] * (1.0 - blend) + b_blur[index] * blend);
+    }
+  }
+  if ((program.active_mask & CompiledFineDetailProgram::kSharpen) != 0U) {
+    const auto sharp_blur = gaussian_approximate_blur(
+        lightness, width, height, static_cast<int>(program.sharpen_radius));
+    auto edge_blur = std::vector<float>{};
+    if (program.sharpen_mask_strength > 1.0e-6F || program.sharpen_radius_fraction > 1.0e-6F) {
+      edge_blur = gaussian_approximate_blur(
+          lightness, width, height,
+          static_cast<int>(program.sharpen_edge_radius));
+    }
+    for (auto index = std::size_t{0U}; index < count; ++index) {
+      const auto blur = program.sharpen_radius_fraction > 1.0e-6F
+          ? std::lerp(sharp_blur[index], edge_blur[index], program.sharpen_radius_fraction) : sharp_blur[index];
+      const auto signal = (lightness[index] - blur) * program.sharpen_subpixel_scale;
+      const auto limited_signal = signal / (1.0 + std::abs(signal) / 0.025);
+      auto gate = 1.0;
+      if (program.sharpen_mask_strength > 1.0e-6F) {
+        gate = smoothstep(
+            0.0015,
+            0.012 + 0.06 * program.sharpen_mask_strength,
+            std::abs(static_cast<double>(signal)));
+      }
+      lightness[index] += static_cast<float>(
+          limited_signal * program.sharpen_strength * program.sharpen_gain * gate);
     }
   }
   for (auto index = std::size_t{0U}; index < count; ++index) {

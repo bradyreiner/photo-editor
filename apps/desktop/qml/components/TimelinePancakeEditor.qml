@@ -304,10 +304,14 @@ Item {
                                             }
                                         }
 
-                                        ToolTip.visible: clipHover.hovered
-                                        ToolTip.text: String(sourceClip.modelData.displayLabel || "Clip") +
+                                        AppToolTip {
+                                            id: sharedTooltip1
+                                            targetItem: sourceClip
+                                            visible: sourceClip.visible && (clipHover.hovered)
+                                            text: String(sourceClip.modelData.displayLabel || "Clip") +
                                                       "  ·  " + root.timeText(Number(sourceClip.modelData.startSeconds || 0)) +
                                                       "  ·  " + root.timeText(Number(sourceClip.modelData.trimmedDurationSeconds || 0))
+                                        }
                                         HoverHandler { id: clipHover }
                                     }
                                 }

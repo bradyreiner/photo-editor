@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Dialog {
+AppDialog {
     id: root
     objectName: "galleryPickerDialog"
 
@@ -135,17 +135,14 @@ Dialog {
     parent: Overlay.overlay
     modal: true
     focus: true
-    width: Math.min((parent ? parent.width : 1112) - 32, 1080)
-    height: Math.min((parent ? parent.height : 792) - 32, 760)
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min((parent ? parent.width : 1112) - 32, 1080)))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min((parent ? parent.height : 792) - 32, 760)))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
     padding: 0
     closePolicy: Popup.CloseOnEscape
 
     background: PopupSurface {
-        radius: root.theme.radiusPanel
-        accent: root.theme.accentWarm400
-        accentRail: false
         Accessible.name: root.dialogTitle
         Accessible.description: root.subtitle.length > 0 ? root.subtitle : "Choose media from the gallery."
         Accessible.role: Accessible.Dialog

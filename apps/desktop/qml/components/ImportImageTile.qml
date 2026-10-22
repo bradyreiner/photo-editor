@@ -73,10 +73,14 @@ Rectangle {
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8
             elide: Text.ElideNone
-            ToolTip.visible: tileHover.hovered && fileLabel.contentWidth > fileLabel.width + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.fileName
+            AppToolTip {
+                id: sharedTooltip1
+                targetItem: fileLabel
+                visible: fileLabel.visible && (tileHover.hovered && fileLabel.contentWidth > fileLabel.width + 1)
+                delay: 350
+                timeout: 3600
+                text: root.fileName
+            }
         }
     }
 

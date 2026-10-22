@@ -238,6 +238,7 @@ Item {
                             }
 
                             ToneComboBox {
+                                id: popupTooltipAnchor1
                                 objectName: "libraryProjectStage_" + projectRow.projectName
                                 Layout.fillWidth: true
                                 visible: !root.collapsed
@@ -251,8 +252,12 @@ Item {
                                     if (root.controller)
                                         root.controller.setProjectStage(projectRow.projectName, root.stageValues[index])
                                 }
-                                ToolTip.visible: currentIndex === 3 && hovered
-                                ToolTip.text: "Manual delivery tracking only; this does not verify an export."
+                                AppToolTip {
+                                    id: sharedTooltip2
+                                    targetItem: popupTooltipAnchor1
+                                    visible: popupTooltipAnchor1.visible && (currentIndex === 3 && popupTooltipAnchor1.hovered)
+                                    text: "Manual delivery tracking only; this does not verify an export."
+                                }
                             }
                         }
                     }

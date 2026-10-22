@@ -56,11 +56,14 @@ Rectangle {
     Drag.supportedActions: Qt.CopyAction
     Drag.keys: ["effect"]
 
-    ToolTip.visible: effectHover.hovered && titleLabel.contentHeight > titleLabel.height + 1
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: effectName + (effectCategory.length > 0 ? " - " + effectCategory : "")
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (effectHover.hovered && titleLabel.contentHeight > titleLabel.height + 1)
+        delay: 350
+        timeout: 3600
+        text: root.effectName + (root.effectCategory.length > 0 ? " - " + root.effectCategory : "")
+    }
     HoverHandler { id: effectHover }
 
     RowLayout {

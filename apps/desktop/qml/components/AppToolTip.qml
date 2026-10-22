@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Effects
 
 ToolTip {
     id: root
@@ -14,6 +13,7 @@ ToolTip {
 
     readonly property real preferredTextWidth: Math.min(
                                                    maximumTextWidth,
+                                                   parent ? Math.max(1, parent.width - theme.space8 * 2 - leftPadding - rightPadding) : maximumTextWidth,
                                                    Math.max(40, tooltipLabel.implicitWidth, shortcutLabel.implicitWidth))
     property point anchorOrigin: Qt.point(0, 0)
 
@@ -81,27 +81,7 @@ ToolTip {
         }
     }
 
-    background: Rectangle {
-        radius: theme.radiusSurface
-        color: theme.popupFill
-        border.width: theme.hairlineWidth
-        border.color: theme.alpha(theme.lineStrong, 0.65)
-        layer.enabled: GraphicsInfo.api !== GraphicsInfo.Software
-        layer.effect: MultiEffect {
-            shadowEnabled: true
-            shadowColor: "#60000000"
-            shadowBlur: 0.18
-            shadowVerticalOffset: theme.space2
-        }
-        Rectangle {
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.margins: theme.space3
-            height: 1
-            color: theme.alpha(theme.opticalLight, 0.18)
-        }
-    }
+    background: PopupSurface { shadowColor: "#40000000" }
 
     Theme { id: theme }
 }

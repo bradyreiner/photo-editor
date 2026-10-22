@@ -17,7 +17,7 @@ Rectangle {
     property var pendingValues: ({})
     property var pendingKeys: []
     readonly property real normalizedRadius: clamp((radiusValue - 0.5) / 2.5, 0, 1)
-    readonly property real normalizedSharpen: clamp(sharpening / 150, 0, 1)
+    readonly property real normalizedSharpen: clamp(sharpening / 100, 0, 1)
 
     signal valueEdited(string key, real value)
     signal interactionStarted()
@@ -67,7 +67,7 @@ Rectangle {
 
     function editFocus(mouseX, mouseY) {
         const nextRadius = 0.5 + clamp(mouseX / Math.max(1, focusPad.width), 0, 1) * 2.5
-        const nextAmount = clamp(150 - mouseY / Math.max(1, focusPad.height) * 150, 0, 150)
+        const nextAmount = clamp(100 - mouseY / Math.max(1, focusPad.height) * 100, 0, 100)
         queueValueEdited("sharpenRadius", nextRadius)
         queueValueEdited("sharpening", nextAmount)
     }

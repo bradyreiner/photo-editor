@@ -348,6 +348,36 @@ struct WorkingImageOutputTransform final {
 #endif
 }
 
+[[nodiscard]] inline QColorSpace linear_adobe_rgb_color_space() {
+  return QColorSpace(
+      QColorSpace::Primaries::AdobeRgb,
+      QColorSpace::TransferFunction::Linear);
+}
+
+[[nodiscard]] inline QColorSpace linear_builtin_color_space(
+    const photo_editor::pipeline::RgbColorSpace& color_space) {
+  const auto profile = photo_editor::pipeline::builtin_rgb_icc_profile_payload(
+      color_space);
+  if (profile.empty()) {
+    return {};
+  }
+  return QColorSpace::fromIccProfile(QByteArray(
+      reinterpret_cast<const char*>(profile.data()),
+      static_cast<qsizetype>(profile.size())));
+}
+
+[[nodiscard]] inline QColorSpace linear_acescg_color_space() {
+  static const auto color_space = linear_builtin_color_space(
+      photo_editor::pipeline::make_acescg_color_space());
+  return color_space;
+}
+
+[[nodiscard]] inline QColorSpace linear_aces2065_1_color_space() {
+  static const auto color_space = linear_builtin_color_space(
+      photo_editor::pipeline::make_aces2065_1_color_space());
+  return color_space;
+}
+
 [[nodiscard]] inline QImage converted_to_color_space(
     QImage image,
     const QColorSpace& target_color_space,
@@ -429,21 +459,26 @@ struct WorkingImageOutputTransform final {
           Qt::CaseInsensitive) == 0) {
     return preview_color_space_for_name(normalized);
   }
-  if (normalized.compare(QStringLiteral("Linear sRGB"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("linear-srgb"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("srgb-linear"), Qt::CaseInsensitive) == 0) {
+  const auto canonical_name = QString::fromStdString(
+      photo_editor::pipeline::normalize_working_color_profile_name(
+          normalized.toStdString()));
+  if (canonical_name == QStringLiteral("Linear sRGB")) {
     return linear_srgb_color_space();
   }
-  if (normalized.compare(QStringLiteral("Linear Display P3"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("linear-display-p3"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("display-p3-linear"), Qt::CaseInsensitive) == 0) {
+  if (canonical_name == QStringLiteral("Linear Display P3")) {
     return linear_display_p3_color_space();
   }
-  if (normalized.compare(QStringLiteral("Linear Rec.2020"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("linear-rec.2020"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("linear-rec2020"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("rec2020-linear"), Qt::CaseInsensitive) == 0) {
+  if (canonical_name == QStringLiteral("Linear Rec.2020")) {
     return linear_rec2020_color_space();
+  }
+  if (canonical_name == QStringLiteral("Linear Adobe RGB")) {
+    return linear_adobe_rgb_color_space();
+  }
+  if (canonical_name == QStringLiteral("ACEScg")) {
+    return linear_acescg_color_space();
+  }
+  if (canonical_name == QStringLiteral("ACES2065-1")) {
+    return linear_aces2065_1_color_space();
   }
   return linear_prophoto_color_space();
 }

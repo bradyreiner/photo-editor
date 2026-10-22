@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "searchEditDialog"
     property var workflow: null
@@ -23,25 +23,16 @@ Popup {
                 instructionInput.forceActiveFocus(Qt.PopupFocusReason)
         }
     }
-    width: Math.min(780, parent ? parent.width - 48 : 780)
-    height: Math.min(confirming ? Math.min(720, 400 + workflow.search.results.length * 100) : 420,
-                     parent ? parent.height - 48 : 720)
-    padding: theme.panelPaddingStandard
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(780, parent ? parent.width - 48 : 780)))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(confirming ? Math.min(720, 400 + workflow.search.results.length * 100) : 420,
+                     parent ? parent.height - 48 : 720)))
+    padding: standardPopupPadding
     Theme { id: theme }
-    background: Rectangle {
-        color: theme.ink900
-        radius: theme.radiusPanel
-        border.color: theme.lineSoft
+    background: PopupSurface {
         Accessible.role: Accessible.Dialog
         Accessible.name: qsTr("Search & Edit")
         Accessible.description: qsTr("Find photos, review matching targets, and create an edit draft.")
         Accessible.ignored: false
-    }
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 220 }
-            NumberAnimation { property: "scale"; from: 0.97; to: 1; duration: 280; easing.type: Easing.OutCubic }
-        }
     }
     Connections {
         target: root.workflow
@@ -129,8 +120,12 @@ Popup {
                     font.weight: Font.DemiBold
                     elide: Text.ElideMiddle
                     HoverHandler { id: nameHover }
-                    ToolTip.visible: nameHover.hovered
-                    ToolTip.text: matchName.text
+                    AppToolTip {
+                        id: sharedTooltip1
+                        targetItem: matchName
+                        visible: matchName.visible && (nameHover.hovered)
+                        text: matchName.text
+                    }
                 }
                 Label {
                     Layout.fillWidth: true

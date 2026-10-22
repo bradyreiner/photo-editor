@@ -9,6 +9,7 @@
 #include "photo_effect_looks.h"
 #include "photo_extended_effect_bridge.h"
 #include "photo_editor/pipeline/photo_effect_registry.h"
+#include "photo_editor/pipeline/film_grain_profiles.h"
 #include "preset_thumbnail_result_cache.h"
 #include "mask_edit_normalization.h"
 #include "editor_preview_controller.h"
@@ -33894,6 +33895,20 @@ QVariantList EditorPreviewController::availablePhotoTextAxes(const QString& fami
   return result;
 }
 
+QVariantList EditorPreviewController::availableFilmGrainStocks() const {
+  QVariantList result;
+  for (const auto& stock : photo_editor::pipeline::film_grain_profiles) {
+    const auto string = [](std::string_view value) {
+      return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+    };
+    result.push_back(QVariantMap{{"grainStock", string(stock.id)}, {"name", string(stock.name)},
+        {"description", string(stock.description)}, {"grainSize", stock.size},
+        {"grainStrength", stock.strength}, {"grainColor", stock.color},
+        {"grainRoughness", stock.roughness}, {"grainShadows", 1.0}, {"grainHighlights", 1.0}});
+  }
+  return result;
+}
+
 QVariantList EditorPreviewController::availablePhotoEffects() const {
   QVariantList result;
   for (const auto& entry : photo_editor::pipeline::photo_effect_registry) {
@@ -34013,6 +34028,10 @@ QVariantList EditorPreviewController::photoLayerEffects(int index) const {
         {QStringLiteral("grainSize"), effect.grain.size},
         {QStringLiteral("grainStrength"), effect.grain.strength},
         {QStringLiteral("grainColor"), effect.grain.color},
+        {QStringLiteral("grainStock"), QString::fromStdString(effect.grain.stock)},
+        {QStringLiteral("grainRoughness"), effect.grain.roughness},
+        {QStringLiteral("grainShadows"), effect.grain.shadows},
+        {QStringLiteral("grainHighlights"), effect.grain.highlights},
         {QStringLiteral("leakCenterX"), effect.leak.center_x},
         {QStringLiteral("leakCenterY"), effect.leak.center_y},
         {QStringLiteral("leakAngle"), effect.leak.angle},
@@ -34546,9 +34565,24 @@ bool EditorPreviewController::setPhotoLayerEffectParameters(int index, const QSt
   if (photo_editor::desktop::extended_photo_effect(type.toStdString())) {
     values_valid = photo_editor::desktop::set_extended_photo_effect_values(&*found, parameters, currentState().working_color_profile);
   } else if (type == QStringLiteral("film_grain")) {
-    found->grain = {read_number(u"grainSize", found->grain.size),
-        read_number(u"grainStrength", found->grain.strength),
-        read_number(u"grainColor", found->grain.color), read_seed(found->grain.seed)};
+    auto& grain = found->grain;
+    if (effect_id.isEmpty()) {
+      const auto& stock = photo_editor::pipeline::film_grain_profiles[1];
+      grain.stock = stock.id;
+      grain.size = stock.size;
+      grain.strength = stock.strength;
+      grain.color = stock.color;
+      grain.roughness = stock.roughness;
+    }
+    grain.size = read_number(u"grainSize", grain.size);
+    grain.strength = read_number(u"grainStrength", grain.strength);
+    grain.color = read_number(u"grainColor", grain.color);
+    grain.seed = read_seed(grain.seed);
+    if (parameters.contains(QStringLiteral("grainStock")))
+      grain.stock = parameters.value(QStringLiteral("grainStock")).toString().toStdString();
+    grain.roughness = read_number(u"grainRoughness", grain.roughness);
+    grain.shadows = read_number(u"grainShadows", grain.shadows);
+    grain.highlights = read_number(u"grainHighlights", grain.highlights);
   } else if (type == QStringLiteral("light_leak")) {
     found->leak = {read_number(u"leakCenterX", found->leak.center_x),
         read_number(u"leakCenterY", found->leak.center_y),
@@ -40909,6 +40943,18 @@ bool EditorPreviewController::autoDetectSkinProtection() {
   const auto state = currentState();
   const auto exposure_gain = std::pow(2.0, state.exposure);
   const auto white_balance = preview_white_balance_multipliers(state.temperature, state.tint);
+  const auto modern_display_hue = photo_editor::pipeline::photographic_rendering_model_from_name(
+      state.photographic_rendering_model.toStdString()) ==
+      photo_editor::pipeline::PhotographicRenderingModel::Aces2OcioV1;
+  const auto selection_pixel = [modern_display_hue](photo_editor::pipeline::ColorPixel pixel) {
+    if (modern_display_hue) {
+      // Protected hue uses the same display sRGB wheel as the picker.
+      pixel.red = static_cast<float>(photo_editor::pipeline::linear_to_srgb(pixel.red));
+      pixel.green = static_cast<float>(photo_editor::pipeline::linear_to_srgb(pixel.green));
+      pixel.blue = static_cast<float>(photo_editor::pipeline::linear_to_srgb(pixel.blue));
+    }
+    return pixel;
+  };
   auto sin_sum = 0.0;
   auto cos_sum = 0.0;
   auto weight_sum = 0.0;
@@ -40936,7 +40982,7 @@ bool EditorPreviewController::autoDetectSkinProtection() {
       auto hue = 0.0;
       auto saturation = 0.0;
       auto value = 0.0;
-      hue_saturation_value_for_preview_pixel(pixel, &hue, &saturation, &value);
+      hue_saturation_value_for_preview_pixel(selection_pixel(pixel), &hue, &saturation, &value);
       const auto weight = skin_candidate_weight(hue, saturation, value);
       if (weight <= 0.08) {
         continue;
@@ -40982,7 +41028,7 @@ bool EditorPreviewController::autoDetectSkinProtection() {
       auto hue = 0.0;
       auto saturation = 0.0;
       auto value = 0.0;
-      hue_saturation_value_for_preview_pixel(pixel, &hue, &saturation, &value);
+      hue_saturation_value_for_preview_pixel(selection_pixel(pixel), &hue, &saturation, &value);
       const auto weight = skin_candidate_weight(hue, saturation, value);
       if (weight <= 0.08) {
         continue;
@@ -41007,7 +41053,7 @@ bool EditorPreviewController::autoDetectSkinProtection() {
   endEditTransaction();
 
   setStatus(
-      QStringLiteral("Skin protection estimated from %1 pixels.").arg(candidate_count));
+      QStringLiteral("Protected hue suggested from %1 pixels.").arg(candidate_count));
   return true;
 }
 

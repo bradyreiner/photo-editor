@@ -111,6 +111,8 @@ bool CompiledFineDetailProgram::ready() const noexcept {
              std::numeric_limits<std::size_t>::max() &&
          finite_matrix(rgb_to_xyz_d65) && finite_matrix(xyz_d65_to_rgb) &&
          std::isfinite(sharpen_strength) && std::isfinite(sharpen_gain) &&
+         std::isfinite(sharpen_radius_fraction) && sharpen_radius_fraction >= 0.0F && sharpen_radius_fraction < 1.0F &&
+         std::isfinite(sharpen_subpixel_scale) && sharpen_subpixel_scale >= 0.5F && sharpen_subpixel_scale <= 1.0F &&
          std::isfinite(sharpen_mask_strength) &&
          std::isfinite(luminance_nr_strength) &&
          std::isfinite(color_nr_strength) && sharpen_radius >= 1U &&
@@ -190,10 +192,10 @@ CompiledFineDetailProgram compile_fine_detail_program(
   program.color_nr_strength = static_cast<float>(
       std::clamp(state.color_nr, -100.0, 100.0) / 100.0);
   program.sharpen_radius = static_cast<std::uint32_t>(
-      std::max(1, static_cast<int>(std::lround(radius))));
-  program.sharpen_edge_radius = static_cast<std::uint32_t>(std::max(
-      static_cast<int>(program.sharpen_radius) + 2,
-      static_cast<int>(std::lround(radius * 3.0))));
+      std::max(1, static_cast<int>(std::floor(radius))));
+  program.sharpen_radius_fraction = static_cast<float>(std::max(0.0, radius - program.sharpen_radius));
+  program.sharpen_subpixel_scale = static_cast<float>(std::min(1.0, radius));
+  program.sharpen_edge_radius = program.sharpen_radius + 1U;
   program.width = static_cast<std::uint32_t>(width);
   program.height = static_cast<std::uint32_t>(height);
   if (std::abs(program.sharpen_strength) > 1.0e-6F) {

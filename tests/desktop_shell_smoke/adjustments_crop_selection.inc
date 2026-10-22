@@ -401,8 +401,9 @@
       black_white_group->property("expanded").toBool() ||
       color_replace_group->property("expanded").toBool() ||
       color_replace_mask_preview_button->property("active").toBool() ||
-      color_replace_auto_skin_button->property("text").toString() != QStringLiteral("Auto Skin (Heuristic)") ||
-      !color_replace_auto_skin_button->property("tooltip").toString().contains(QStringLiteral("color heuristic")) ||
+      color_replace_auto_skin_button->property("text").toString() != QStringLiteral("Suggest protected hue") ||
+      !color_replace_auto_skin_button->property("tooltip").toString().contains(QStringLiteral("warm hue range from image colors")) ||
+      !color_replace_auto_skin_button->property("tooltip").toString().contains(QStringLiteral("does not identify people or faces")) ||
       color_replace_reset_skin_button->property("text").toString() != QStringLiteral("Reset Skin") ||
       !color_replace_preserve_luminance_check->property("checked").toBool() ||
       !color_replace_preserve_saturation_check->property("checked").toBool() ||
@@ -448,10 +449,144 @@
           "colorMixActiveChannelSignature",
           Q_RETURN_ARG(QVariant, color_mix_signature)) ||
       color_mix_signature.toString() != QStringLiteral("HSL|Blues|h:22|s:-14|l:9") ||
-      color_mix_active_label->property("text").toString() != QStringLiteral("Blues / HSL") ||
+      color_mix_active_label->property("text").toString() != QStringLiteral("Blues / Standard") ||
       !color_mix_reset_channel_button->property("enabled").toBool() ||
-      !QMetaObject::invokeMethod(color_mix_reset_channel_button, "click")) {
+      editor_preview.colorMixerModel() != QStringLiteral("HSL") ||
+      std::abs(editor_preview.hueAdjustment() - 22.0) > 1e-6 ||
+      std::abs(editor_preview.saturationAdjustment() + 14.0) > 1e-6 ||
+      std::abs(editor_preview.luminanceAdjustment() - 9.0) > 1e-6) {
     return fail("color mix should show the active channel and expose a reset action for selected HSL adjustments");
+  }
+
+  const struct {
+    const char* response_name;
+    const char* model_name;
+  } color_mixer_responses[] = {
+      {"Standard", "OKLab"},
+      {"Gentle", "HSV"},
+      {"Soft", "LCH"},
+  };
+  for (const auto& response : color_mixer_responses) {
+    QVariant mapped_model;
+    QVariant mapped_response;
+    if (!QMetaObject::invokeMethod(
+            edit_workspace,
+            "colorMixerResponseModel",
+            Q_RETURN_ARG(QVariant, mapped_model),
+            Q_ARG(QVariant, QString::fromLatin1(response.response_name))) ||
+        mapped_model.toString() != QString::fromLatin1(response.model_name) ||
+        !QMetaObject::invokeMethod(
+            edit_workspace,
+            "colorMixerResponseName",
+            Q_RETURN_ARG(QVariant, mapped_response),
+            Q_ARG(QVariant, QString::fromLatin1(response.model_name))) ||
+        mapped_response.toString() != QString::fromLatin1(response.response_name)) {
+      return fail("color mixer response names should round-trip Standard/OKLab, Gentle/HSV, and Soft/LCH");
+    }
+  }
+  QVariant hsl_response_name;
+  QVariant oklab_response_name;
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "colorMixerResponseName",
+          Q_RETURN_ARG(QVariant, hsl_response_name),
+          Q_ARG(QVariant, QStringLiteral("HSL"))) ||
+      hsl_response_name.toString() != QStringLiteral("Standard") ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "colorMixerResponseName",
+          Q_RETURN_ARG(QVariant, oklab_response_name),
+          Q_ARG(QVariant, QStringLiteral("OKLab"))) ||
+      oklab_response_name.toString() != QStringLiteral("Standard") ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "colorMixActiveChannelSignature",
+          Q_RETURN_ARG(QVariant, color_mix_signature)) ||
+      color_mix_signature.toString() != QStringLiteral("HSL|Blues|h:22|s:-14|l:9") ||
+      color_mix_active_label->property("text").toString() != QStringLiteral("Blues / Standard") ||
+      editor_preview.colorMixerModel() != QStringLiteral("HSL") ||
+      std::abs(editor_preview.hueAdjustment() - 22.0) > 1e-6 ||
+      std::abs(editor_preview.saturationAdjustment() + 14.0) > 1e-6 ||
+      std::abs(editor_preview.luminanceAdjustment() - 9.0) > 1e-6) {
+    return fail("response names should display Standard without rewriting legacy HSL state or its three channel values");
+  }
+
+  const auto color_alignment_proof_dir =
+      qEnvironmentVariable("PHOTO_EDITOR_COLOR_ALIGNMENT_PROOF_DIR");
+  const auto capture_color_controls = [&](QObject* target,
+                                          const QString& file_name,
+                                          const QStringList& objects_that_must_fit) {
+    if (color_alignment_proof_dir.isEmpty()) {
+      return true;
+    }
+    auto* scroll_view = find_named_item(edit_workspace, QStringLiteral("editInspectorScroll"));
+    auto* flickable_object = scroll_view == nullptr
+                                 ? nullptr
+                                 : scroll_view->property("contentItem").value<QObject*>();
+    auto* content_object = flickable_object == nullptr
+                               ? nullptr
+                               : flickable_object->property("contentItem").value<QObject*>();
+    auto* flickable = qobject_cast<QQuickItem*>(flickable_object);
+    auto* content_item = qobject_cast<QQuickItem*>(content_object);
+    auto* target_item = qobject_cast<QQuickItem*>(target);
+    if (root_window == nullptr || scroll_view == nullptr || flickable == nullptr ||
+        content_item == nullptr || target_item == nullptr) {
+      return false;
+    }
+
+    const auto original_content_y = flickable->property("contentY").toDouble();
+    const auto target_content_y = target_item->mapToItem(content_item, QPointF(0.0, 0.0)).y();
+    flickable->setProperty("contentY", std::max(0.0, target_content_y - 24.0));
+    process_layout_events(8);
+    const auto restore_scroll = [&]() {
+      flickable->setProperty("contentY", original_content_y);
+      process_layout_events(4);
+    };
+    const auto proof_objects_fit = [&]() {
+      const auto viewport = scene_rect(scroll_view);
+      return item_visible(target_item) &&
+             std::all_of(
+                 objects_that_must_fit.cbegin(),
+                 objects_that_must_fit.cend(),
+                 [&](const QString& object_name) {
+                   const auto* item = find_named_item(edit_workspace, object_name);
+                   return item_visible(item) &&
+                          contains_with_tolerance(viewport, scene_rect(item), 2.0);
+                 });
+    };
+    if (!wait_for_condition(proof_objects_fit, 1500)) {
+      restore_scroll();
+      return false;
+    }
+
+    QImage frame;
+    const auto frame_ready = [&]() {
+      root_window->requestUpdate();
+      frame = root_window->grabWindow();
+      return !frame.isNull();
+    };
+    if (!wait_for_condition(frame_ready, 2000)) {
+      restore_scroll();
+      return false;
+    }
+    const auto output_path = QDir(color_alignment_proof_dir).filePath(file_name);
+    const auto saved = QDir().mkpath(color_alignment_proof_dir) && frame.save(output_path);
+    restore_scroll();
+    return saved;
+  };
+  if (!color_alignment_proof_dir.isEmpty() &&
+      (!QDir().mkpath(color_alignment_proof_dir) ||
+       !capture_color_controls(
+           color_mix_active_label,
+           QStringLiteral("color-mix-standard-label.png"),
+           {QStringLiteral("colorMixActiveChannelLabel"),
+            QStringLiteral("colorMixActiveChannelValues"),
+            QStringLiteral("colorMixActiveChannelSwatch")}))) {
+    return fail("color alignment proof should capture the Standard label with its HSL legacy state visible");
+  }
+  QCoreApplication::processEvents();
+  if (!QMetaObject::invokeMethod(color_mix_reset_channel_button, "click")) {
+    return fail("color mix reset should remain available after response-name checks");
   }
   QCoreApplication::processEvents();
   if (
@@ -809,6 +944,58 @@
       split_toning_focused_wheel->property("showValueReadouts").toBool()) {
     return fail("color grading should use named tonal-range tabs above one large, uncluttered hue/saturation wheel");
   }
+  if (!color_alignment_proof_dir.isEmpty() &&
+      !capture_color_controls(
+          find_named_item(edit_workspace, QStringLiteral("colorGradingInspectorGroup")),
+          QStringLiteral("color-grading-wheel-and-controls.png"),
+          {QStringLiteral("splitToningRangeTabs"),
+           QStringLiteral("splitToningFocusedWheel"),
+           QStringLiteral("colorGradingAmountSlider"),
+           QStringLiteral("colorGradingBalanceSlider"),
+           QStringLiteral("selectedToneWheelHueSlider"),
+           QStringLiteral("selectedToneWheelSaturationSlider"),
+           QStringLiteral("selectedToneWheelLuminanceSlider")})) {
+    return fail("color alignment proof should capture the grading wheel, tonal tabs, and controls fitted in the inspector");
+  }
+
+  const auto original_midtones_saturation = editor_preview.gradingMidtonesSaturation();
+  editor_preview.setGradingMidtonesSaturation(-100.0);
+  process_layout_events(6);
+  QVariant negative_saturation_preview_result;
+  const auto preview_helper_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "gradingPreviewColor",
+      Q_RETURN_ARG(QVariant, negative_saturation_preview_result),
+      Q_ARG(QVariant, 0.27),
+      Q_ARG(QVariant, -100.0),
+      Q_ARG(QVariant, 0.0));
+  const auto negative_saturation_preview = negative_saturation_preview_result.value<QColor>();
+  const auto negative_saturation_ui_color = grading_amount_slider->property("centerColor").value<QColor>();
+  const auto is_neutral_color = [](const QColor& color) {
+    return color.isValid() &&
+           std::abs(color.redF() - color.greenF()) <= 1e-6 &&
+           std::abs(color.greenF() - color.blueF()) <= 1e-6;
+  };
+  const auto negative_saturation_preview_is_neutral =
+      preview_helper_invoked && is_neutral_color(negative_saturation_preview);
+  const auto negative_saturation_ui_is_neutral =
+      is_neutral_color(negative_saturation_ui_color) &&
+      std::abs(negative_saturation_ui_color.alphaF() - 0.45) <= 1e-3;
+  editor_preview.setGradingMidtonesSaturation(original_midtones_saturation);
+  process_layout_events(4);
+  if (!negative_saturation_preview_is_neutral || !negative_saturation_ui_is_neutral) {
+    return fail("negative grading saturation should produce neutral colors in both the QML helper and actual UI QColor");
+  }
+
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_COLOR_ALIGNMENT")) {
+    qunsetenv("PHOTO_EDITOR_DATABASE_URL");
+    qunsetenv("PHOTO_EDITOR_CACHE_DIR");
+    qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+    editor_preview.setImageProvider(nullptr);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    return EXIT_SUCCESS;
+  }
+
   if (!QMetaObject::invokeMethod(
           selected_tone_hue_slider,
           "testCommitInputText",

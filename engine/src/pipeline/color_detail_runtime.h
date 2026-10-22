@@ -15,6 +15,13 @@ namespace photo_editor::pipeline {
     CancellationToken cancellation,
     ColorAdjustmentTelemetry* telemetry);
 
+struct PipelineColorContext;
+
+void apply_fine_detail_effects_in_context(
+    std::vector<ColorPixel>* pixels, int width, int height,
+    const ColorAdjustmentState& state, const PipelineColorContext& context,
+    CancellationToken cancellation, ColorAdjustmentTelemetry* telemetry);
+
 void apply_fine_detail_effects(
     std::vector<ColorPixel>* pixels,
     int width,

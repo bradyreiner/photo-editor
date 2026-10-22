@@ -117,8 +117,12 @@ Item {
         }
     }
 
-    ToolTip.visible: markerMouse.containsMouse
-    ToolTip.delay: 350
-    ToolTip.timeout: 3000
-    ToolTip.text: root.label
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (markerMouse.containsMouse)
+        delay: 350
+        timeout: 3000
+        text: root.label
+    }
 }

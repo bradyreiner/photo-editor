@@ -42,11 +42,14 @@ Button {
     Accessible.name: root.tooltipText.length > 0 ? root.tooltipText : (root.title.length > 0 ? root.title : root.kind)
     Accessible.description: root.subtitle
 
-    ToolTip.visible: root.hovered && (root.tooltipText.length > 0 || (root.showFullTextTooltip && titleLabel.visible && (titleLabel.truncated || titleLabel.contentWidth > titleLabel.width + 1)))
-    ToolTip.delay: 250
-    ToolTip.timeout: 3000
-    ToolTip.text: root.tooltipText.length > 0 ? root.tooltipText : root.title
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (root.hovered && (root.tooltipText.length > 0 || (root.showFullTextTooltip && titleLabel.visible && (titleLabel.truncated || titleLabel.contentWidth > titleLabel.width + 1))))
+        delay: 250
+        timeout: 3000
+        text: root.tooltipText.length > 0 ? root.tooltipText : root.title
+    }
     background: Item {
         Rectangle {
             anchors.fill: parent

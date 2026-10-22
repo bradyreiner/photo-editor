@@ -44,7 +44,7 @@ Item {
         onClicked: pickerPopup.open()
     }
 
-    Popup {
+    AppPopup {
         id: pickerPopup
         objectName: root.objectName + "Popup"
         parent: Overlay.overlay
@@ -52,9 +52,9 @@ Item {
         modal: true
         dim: true
         focus: true
-        padding: theme.space12
-        width: Math.min(theme.scaled(440), Math.max(1, parent ? parent.width - theme.space24 : 440))
-        height: Math.min(theme.scaled(440), Math.max(1, parent ? parent.height - theme.space24 : 440))
+        padding: standardPopupPadding
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(440), Math.max(1, parent ? parent.width - theme.space24 : 440))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(440), Math.max(1, parent ? parent.height - theme.space24 : 440))))
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onOpened: {
             root.searchText = ""
@@ -62,7 +62,7 @@ Item {
                 option => option.parameter === root.currentParameter))
             Qt.callLater(() => searchField.forceActiveFocus())
         }
-        background: PopupSurface { radius: theme.radiusControl }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             spacing: theme.space8
             Label {

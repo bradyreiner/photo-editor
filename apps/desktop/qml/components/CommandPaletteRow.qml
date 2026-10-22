@@ -39,6 +39,7 @@ Rectangle {
         spacing: theme.space8
 
         Label {
+            id: popupTooltipAnchor1
             visible: root.category.length > 0
             Layout.maximumWidth: 108
             text: root.category
@@ -48,10 +49,14 @@ Rectangle {
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8
             elide: Text.ElideNone
-            ToolTip.visible: rowHover.hovered && contentWidth > width + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.category
+            AppToolTip {
+                id: sharedTooltip2
+                targetItem: popupTooltipAnchor1
+                visible: popupTooltipAnchor1.visible && (rowHover.hovered && popupTooltipAnchor1.contentWidth > popupTooltipAnchor1.width + 1)
+                delay: 350
+                timeout: 3600
+                text: root.category
+            }
         }
 
         Label {
@@ -64,10 +69,14 @@ Rectangle {
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 10
             elide: Text.ElideNone
-            ToolTip.visible: rowHover.hovered && contentWidth > width + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.label
+            AppToolTip {
+                id: sharedTooltip3
+                targetItem: commandLabel
+                visible: commandLabel.visible && (rowHover.hovered && commandLabel.contentWidth > commandLabel.width + 1)
+                delay: 350
+                timeout: 3600
+                text: root.label
+            }
         }
 
         Label {

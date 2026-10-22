@@ -5398,3 +5398,263 @@ completion decision unless they are explicitly mapped to Gates 1–5 above:
 At that point the application can claim a unified, wide-gamut, scene-referred, RAW-trustworthy,
 preview/export-consistent, performance-bounded color engine and a maintainable desktop foundation.
 Until then, the status is “strong implementation in migration,” not “fully complete.”
+
+## Color selection stability correction — 2026-10-22
+
+A user report of hue/saturation edits producing noise in apparently unrelated areas exposed a
+shared selection defect. The named mixer ranges could apply full control strength to tiny
+near-neutral channel differences. OKLab/LCH also used RGB hue-range centers on their different
+hue scale. The same weak-neutral selection affected black-and-white mixing and replacement.
+
+The correction applies one fixed sRGB selection reference, adapted from the actual working gamut,
+to all mixer models, black-and-white mixing, and color replacement. Selection hue uses the sRGB
+encoding expected by the existing picker; negative values are bounded only in the selection copy,
+and HDR selection encoding remains unbounded. Working pixels retain their original domain.
+Replacement target hues now use that same reference rather than the current working primaries.
+The mixer model retains its existing adjustment-strength response.
+
+Selection confidence fades smoothly across relative linear-RGB spread 0.02–0.12 and the linear
+black floor 0.00001–0.001. It is measured from the source, before the edit, and also attenuates
+harmony near neutral. Hue-selective compiled edits return the original pixel exactly when
+confidence is zero. Global saturation, vibrance, and intentional color grading retain their
+existing behavior. This is selection stability, not spatial denoising.
+
+The reference CPU, compiled CPU, local/layer paths, standalone Metal source, and embedded Metal
+fallback share this contract. CPU mixer selection tables were consolidated; inactive compiled
+channels are skipped. The GPU payload includes the working-to-selection matrix, validates it,
+and includes it in cache identity. Thumbnail color-pipeline identity is now v7 so cached edited
+thumbnails refresh. Existing mixer recipes may render differently with the corrected selection;
+there is no new recipe field or user setting.
+
+### Evidence and limits
+
+- `color_selection_stability_test` covers all four models, eight named channels, seven channel
+  controls, four working gamuts (sRGB, P3, ProPhoto, Rec.2020), six near-neutral noise directions,
+  shadows through extended highlights, unrelated colors, continuous falloff, reference/compiled
+  agreement, and related selectors. Unreliably colored compiled samples must remain exact.
+- Fourteen focused headless native tests pass, covering the new regression, color invariants,
+  transforms, properties, charts, curves, profiles, output, scheduling, LUTs, video transforms,
+  and direct layer color.
+- Six Release checks pass on the Apple M4 Pro: the regression, 64 dedicated real Metal selection
+  dispatches, full retained Metal parity, direct layer color, preview/export render parity, and
+  layer-LUT render parity. The embedded fallback shader also compiles on that physical device.
+- Diagnostic renders compare actual operators from the baseline revision with the corrected
+  compiled Look stage, followed by the same sRGB encoding. Maximum change on the synthetic
+  near-gray patch falls from 0.000496805 (hue +50), 0.000367746 (saturation +50), and 0.100714
+  (luminance +30) to exactly zero. Colored patches still respond. The repository landscape
+  fixture was also rendered and visually reviewed. The original reported photograph was absent.
+- Bounded single-thread CPU timings use identical 131,072-pixel inputs, one warmup and eight
+  measured runs. The mixed neutral/color fixture improved from median 10.1964 ms to 7.275525 ms;
+  the fully colored fixture increased from 10.8021 ms to 13.6363 ms. These measure only compiled
+  Look execution, exclude first transfer-table initialization, and do not qualify app interaction
+  latency or GPU performance. Color-heavy CPU fallback cost remains a follow-up.
+- Two wider checks remain red on assertions outside this correction: the Metal source-contract
+  test expects `Aces2OutputLutQuality::Interactive` in the preview controller, which is also absent
+  in HEAD; the layer-adjustment controller test expects LUT table clamping while its unchanged
+  normalization preserves signed/extended values. Their failures are not counted as passes.
+
+Local evidence is in `build/color-selection-stability-2026-10-22/`: diagnostic PNGs, timing JSON,
+CPU/Metal logs, build log, existing controller failure, proof-tool sources, and SHA-256 provenance
+for the color sources and delivered binaries. The Release app is
+`build/release-macos/apps/desktop/Looksy.app`. This is dirty-workspace engineering evidence; the
+active board's corpus, editorial, migration, and release requirements retain their separate gates.
+
+## Active color-control alignment plan — 2026-10-22
+
+The product owner explicitly requested implementation of the eight shortcomings identified in the
+follow-up review, using Luna agents at xhigh, rigorous proof, broad profile support, and no
+quality reduction to obtain passing tests. This adds a targeted engineering workstream to the
+acceptance board above; external corpus rights, independent human decisions, and physical
+monitor/printer evidence remain required evidence rather than results software can invent.
+
+### Execution and ownership
+
+1. **Freeze the baseline and write failing behavior tests.** Save the current dirty engine/UI
+   sources and SHA-256 manifest under `build/color-engine-alignment-2026-10-22/baseline/`.
+   Reproduce the sign-discarding grading control and harmony discontinuity before changes.
+   Preserve unrelated work. Root owns integration, CMake registration, reference CPU/Metal
+   integration, final shared builds, performance acceptance, and artifact review.
+2. **Luna xhigh: grading and truthful controls.** Correct signed grading behavior and establish
+   one explicit display-hue-to-engine contract for grading, harmony swatches, and skin targeting.
+   Test the actual control-to-pixel relationship. Simplify the ordinary mixer presentation while
+   retaining compatibility for saved advanced model choices; no feature removal or profile loss.
+3. **Luna xhigh: continuous harmony.** Replace hard nearest-anchor switching with a continuous,
+   circular, deterministic operator. Preserve identity, neutral protection, wraparound, alpha,
+   signed/extended working values, and meaningful palette guidance. Provide the exact formula
+   and analytic boundary tests for CPU/Metal integration.
+4. **Luna xhigh: independent profile and performance proof.** Add profile-matrix/ICC oracle
+   coverage and an adversarial color fixture set; measure CPU cost on identical neutral, color,
+   dark, HDR, masked, and layered inputs. Audit fixed protection thresholds and semantic limits.
+   Optimize only measured paths; preserve precision and behavior. Expose concrete remaining gaps.
+5. **Integrate protection and eliminate touched duplication.** Root aligns skin-hue sampling,
+   protection behavior, reference/compiled execution, standalone/embedded Metal, payload/cache
+   identities, and layer/mask paths. Reuse existing masks for subject-specific control and keep
+   hue-only protection truthfully labeled. Do not silently activate an unavailable model or claim
+   camera-noise adaptation from fixed thresholds.
+6. **Run the complete acceptance matrix and review artifacts.** Complete focused native checks,
+   independent transform references, real-device Metal checks, preview/export and layer parity,
+   profile-tagged output/readback, deterministic repeats, visual inspection, and the Release app
+   build. Preserve historical rendering compatibility through existing renderer/version contracts.
+   Record source/binary/artifact hashes and leave unavailable evidence explicitly open.
+
+### Required acceptance matrix
+
+- Working spaces: linear sRGB, Display P3, Adobe RGB, ProPhoto RGB (D50), Rec.2020, ACEScg/AP1,
+  and ACES2065-1/AP0 wherever admitted by the existing engine contract. Exercise Bradford and
+  CAT02 adaptation where supported. Include payload-backed custom ICC profiles and invalid,
+  missing, or changed payloads failing closed.
+- Output: sRGB, Display P3, Adobe RGB, ProPhoto RGB, supported HDR targets and tagged 16-bit
+  artifacts; compare profile-aware readback. Do not use raw RGB equality across unlike profiles.
+- Samples: smooth hue/lightness/chroma ramps; every selector boundary and hue seam; near-neutral
+  perturbations; deep shadows; saturated skin-like colors, foliage, sky, neon; signed/HDR values;
+  alpha 0/partial/1; masks, layers, repeated adjustments, and canceled/stale work where applicable.
+- Independent assertions: signed controls differ with the declared direction; wheel hue predicts
+  the applied tint; infinitesimal input changes cannot cause finite harmony jumps; identity and
+  neutral behavior hold; genuine faint color remains editable; real colors survive gamut changes.
+  Cross-backend agreement is necessary and is not the sole correctness oracle.
+- Keep existing tolerances, finite/alpha requirements, profile coverage, and performance gates.
+  Do not remove cases, disable features, clamp away signed/HDR data, update goldens blindly,
+  relabel failures as skips, or weaken checks to obtain a pass. An inaccurate old assertion may
+  be corrected only with independent specification/reference evidence and an explicit record.
+- Measure warm and cold costs separately. Use identical sources/settings for comparisons and
+  inspect both mixed and fully colored cases. Report median and tail timing, memory, transfers,
+  actual GPU dispatch, and fallback provenance. No blanket responsiveness claim from a microbench.
+- Render and inspect real repository photographs plus synthetic stress charts. Inventory missing
+  camera/reference/physical-output evidence; no generated or self-compared image is promoted to
+  independent photographic truth. Final acceptance reports distinguish proved, failed, and open.
+
+### Alignment implementation and proof — 2026-10-22
+
+Three explicitly requested Luna xhigh agents implemented the grading/control, harmony, and
+wide-profile/proof lanes. Root integrated the reference, compiled CPU, Metal, caches, builds,
+and evidence. This is an engineering correction with bounded proof, not a claim of perfect
+color science or completed external promotion approval.
+
+Implemented behavior:
+
+- Current ACES2/OCIO controls map display-wheel hues through canonical linear sRGB into OKLab.
+  Positive grading adds the selected tint; negative grading removes chroma. Negative bands sum
+  before attenuating the original chroma, so results do not depend on iteration order. Hue-only
+  and zero-amount modern grading are exact full-Look identities, including signed/HDR samples.
+- Modern harmony uses a shared circular sine field between adjacent palette anchors. It retains
+  every anchor, repels bisector ties, wraps continuously, and has full-strength hue-map slope
+  bounded by `[0.09, 1.91]`. Quarter-gap attraction retains approximately 89% of the old pull.
+  The two historical renderer enums retain frozen raw-angle, abs-saturation, nearest-anchor
+  creative behavior. Their UI swatches also retain the historical tint for either saturation
+  sign; the modern UI shows negative saturation as neutral. Compatibility tests assert the
+  original outputs independently, and native tests load actual recipes for both old models.
+- Seven distinct named linear working profiles are admitted: sRGB, Display P3, Adobe RGB,
+  ProPhoto RGB, Rec.2020, ACEScg/AP1, and ACES2065-1/AP0. The engine, saved recipes, and QImage
+  boundary share canonical working-name normalization. Enum values were appended. AP0/AP1
+  raster tags use generated ICC payloads; profile/recipe tests reject accidental ProPhoto fallback.
+- Near-neutral selector protection uses relative channel spread. Removing an absolute brightness
+  multiplier restores genuine faint color. Exact black/invalid maxima are guarded. This remains
+  a color heuristic without a camera-noise estimate. Protection targets the displayed hue and
+  is labeled as protecting skin-like colors, including similarly colored objects; subject masks
+  remain the way to limit its area. Automatic hue suggestions use display-encoded hue in the
+  current renderer. The ordinary mixer offers Standard/Gentle/Soft response names while keeping
+  stored HSL/OKLab/HSV/LCH strings and their response scales.
+- Grading and harmony scalar operators are shared with Metal. Build-generated shader embedding
+  replaces the manually maintained shader copy and live source-tree fallback. Byte identity is
+  checked after helper expansion, followed by actual system-device compilation. The expanded
+  matrix also exposed and fixed omitted legacy HDR highlight compression in compiled execution,
+  and non-finite GPU black pixels caused by evaluating a protected hue at zero chroma.
+- Thumbnail pipeline identity is v8. Look payload identities include mapped hue values, reference
+  selection transforms, and behavior flags; scalar/uniform member layout remains unchanged by
+  this alignment phase.
+
+Evidence lives under `build/color-engine-alignment-2026-10-22/`:
+
+| Check | Final evidence |
+| --- | --- |
+| Focused native regression suite | `headless-acceptance.log`: 25/25 pass |
+| Release Metal, custom ICC/OCIO, retained layer, preview/export parity | `release-gpu-acceptance.log`: 9/9 pass on the physical Apple M4 Pro |
+| Creative matrix | 588 actual GPU dispatches: 7 profiles × 3 renderers × 2 headrooms × 14 cases, 384 samples each; CPU/reference tolerance `4e-5`, GPU/reference `8e-5` unchanged |
+| Recipe, QImage, migration, layer controller and emitted exports | `desktop-acceptance.log`: 5/5 pass |
+| No-ICC-backend behavior | `no-lcms-acceptance.log`: fixed matrix/edit checks and BackendUnavailable fail-closed assertions |
+| Independent CMM references | `evidence/cmm-comparison.json`: direct Little CMS, Qt 6.10.2, macOS ColorSync; official ACES2/OCIO references also pass |
+| Native control behavior and captures | `native-ui-acceptance.log`: 1/1 pass, Cocoa window and Metal validation, typed controls and both saved legacy renderers |
+| Real repository photo and stress ramps | `evidence/visual/`: rendered and inspected; neutral mixer delta 0, seven-profile common linear-sRGB error at most `2.03e-6` |
+
+The CMM relative-colorimetric p95 Delta E 2000 is `0.000270` against Little CMS,
+`0.0000117` against Qt, and `0.002904` against ColorSync on the pinned 20-patch fixture.
+The separate perceptual comparison remains informational (maximum `30.292`); these relative
+conversion gates do not assert a perceptual match between different output-rendering operators.
+The independent OKLab checks use the published [OKLab equations](https://bottosson.github.io/posts/oklab/)
+and [W3C color conversion references](https://www.w3.org/TR/css-color-4/#color-conversion-code).
+
+The final native check requires an exposed window and a painted, nonblank mountain photograph
+before each capture. Wheel and numeric controls are verified across normal scrolling at 1280×850;
+all controls remain covered. Native QML/controller behavior is exercised using the real Main.qml;
+the separately completed Release app build contains the identical final StudioWorkspace.qml.
+`final-provenance.json` pins source, executable, packaged QML and evidence hashes. This focused
+proof does not qualify the entire desktop workflow or the unrelated failing broad UI shards.
+
+Emitted export tests inspect PNG iCCP chunks and reassemble JPEG ICC APP2 segments for sRGB,
+Display P3, Adobe RGB, ProPhoto RGB, and Rec.2020. Payload bytes must exactly match the selected
+profile. PNG IHDR must declare 16-bit RGBA and decoded RGBA64 samples/alpha must exactly match
+the converted source. Queued and atomic writer paths are exercised; ten retained image artifacts
+and `evidence/export-profiles/manifest.txt` preserve the results.
+
+The final CPU microbenchmark uses 9 fresh processes per case, 131,072 identical input pixels,
+and 24 warm passes. `mixer-cpu-benchmark-final.json` reports cold, warm median and tail values
+plus a defined FNV-1a hash over every output RGBA float bit. Warm medians are `12.5489 ->
+11.2742 ms` for color, `12.7543 -> 12.0119 ms` for HDR, and `0.945750 -> 0.780917 ms` for
+near-neutral inputs; their complete output bit hashes match. Dark input now edits 49,152 pixels
+instead of zero, costing `11.0272 ms` instead of `0.853125 ms`; this is restored work, not a
+like-for-like speedup. These are CPU Look timings, not desktop interaction or GPU latency claims.
+
+Four stored preset hashes in `render_golden_test` remain red. A separately linked renderer built
+from the frozen task-start CPU sources and the final current renderer produce identical RGBA
+pixels for all four: zero changed pixels, maximum error and RMSE. Both disagree with the same
+stored hashes. `evidence/golden-regression/` retains both binaries, link maps, source hashes,
+images and exact comparisons. No golden was refreshed and no failure was counted as a pass.
+
+Two inaccurate old assertions were corrected with additional proof: signed/HDR LUT table values
+must survive persistence and native layer rendering, rather than be clamped to `[0,1]`; preset
+application status must be checked before a later save operation replaces it. Kernel/source
+contracts retain their assertions against the canonical shader and the actual output-quality
+owner. Numeric tolerances, profile coverage, finite/alpha checks and existing goldens were not
+relaxed, and no feature was disabled to obtain passing checks.
+
+External licensed camera/RAW references, camera-noise characterization, independently approved
+preset migration, calibrated monitor/printer measurements, broad native UI workflow qualification,
+and complete end-to-end interaction performance remain separate open gates. The original reported
+photo was not supplied. The diagnostic sheets clamp only their displayed sRGB copies; numeric
+profile comparisons retain unclipped values. This work does not assert physical output fidelity
+or a completely green repository beyond the specifically recorded checks.
+
+### Real-photo Color Mix noise follow-up — 2026-10-22
+
+The user's IMG_4447.CR2 screenshot exposed a failure missing from the earlier synthetic tests.
+The actual managed RAW and saved tone settings reproduce the speckling on the full desktop CPU
+path at 2048×1366. Isolating Reds / Standard / Hue +63 / Saturation 0 / Luminance +30 identifies
+the absolute Color Mix lightness lift as the dominant trigger. Matching CPU/Metal implementations
+did not prove acceptable noise behavior. A one-code near-neutral input pair amplifies independent
+OKLab distance by 13.259× in the frozen previous engine.
+
+The modern mixer now scales only its luminance offset by `min(1, C0 / 0.12)`, using pre-channel
+chroma captured once. This bounds weak-chroma lightness changes, preserves the original response
+at C≥0.12 and retains a nonzero proportional response for genuine faint color. It applies no
+spatial blur and is not a noise estimator. Low-chroma colors deliberately receive less luminance
+lift. This follow-up retains the task-start legacy mixer behavior; thumbnail identity is v9.
+
+`build/color-mix-real-photo-2026-10-22/` retains the actual before/after renders, recipes,
+reproducible probe, exact-pixel contact sheet, independent metric source/CSVs, frozen engine,
+red/green tests and source/build hashes. Edit-lightness Laplacian RMS falls 77.1% on the face,
+82.5% on the hillside and 57.4% on the shirt. The shirt still changes hue/lightness. No-mix and
+hue-only PNGs are byte-identical before/after, and final rendered PNGs match the reviewed candidate.
+
+The permanent regression adds two-code and seeded-noise gain gates across seven profiles, four
+mixer responses and eight channel centers; saturated and faint-color response, overlap, signed
+luminance, HDR and alpha are checked independently. Existing CPU/reference `4e-5` and GPU/reference
+`8e-5` tolerances are retained. Metal uses 28 real dispatches over the noise fixtures in addition
+to the existing creative matrix. The focused Release checks pass; the wider headless run retains
+an independent Detail signed-range failure during concurrent detail/effect work in this dirty
+tree. Direct Detail execution reproduces it with Look active mask zero. Stored goldens remain
+unmodified; all five failing cases also fail with the mixer correction restored to its previous
+CPU code. The portrait's low-chroma mixer luminance output intentionally changes with this fix.
+
+The full-RAW artifact is CPU evidence. Strict GPU-only RAW admission rejects the camera-linear
+LUT fidelity; separate Look-stage dispatches do not establish full-RAW GPU parity. See the new
+evidence README for exact results, open failures and the final app-build record.

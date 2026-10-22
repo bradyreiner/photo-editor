@@ -137,6 +137,23 @@ int main(int argc, char** argv) {
   if (outsideQuadBounds != QColor(QStringLiteral("#102030")))
     return fail("The projective homography should clip texture outside the tilted scene plane quad.");
 
+  auto* fade_effect = window->findChild<QObject*>(QStringLiteral("timelineSceneProjectionTestEffect"));
+  if (!fade_effect || !fade_effect->setProperty("fadeColor", QColor(Qt::white)) ||
+      !fade_effect->setProperty("fadeAmount", 0.5))
+    return fail("The Program geometry shader must accept color-fade state");
+  settle();
+  const auto fade_frame = window->grabWindow();
+  const auto faded = fade_frame.pixelColor(static_cast<int>(160 * pixel_scale_x),
+                                          static_cast<int>(120 * pixel_scale_y));
+  if (std::abs(faded.red() - (insideQuad.red() + 255) / 2) > 6 ||
+      std::abs(faded.green() - (insideQuad.green() + 255) / 2) > 6 ||
+      std::abs(faded.blue() - (insideQuad.blue() + 255) / 2) > 6 ||
+      fade_frame.pixelColor(static_cast<int>(12 * pixel_scale_x),
+                            static_cast<int>(12 * pixel_scale_y)) != background)
+    return fail("A white fade must mix the picture while preserving transparent geometry outside it");
+  fade_effect->setProperty("fadeAmount", 0.0);
+  settle();
+
   QTemporaryDir mask_directory;
   QImage mask(320, 240, QImage::Format_ARGB32);
   mask.fill(Qt::transparent);

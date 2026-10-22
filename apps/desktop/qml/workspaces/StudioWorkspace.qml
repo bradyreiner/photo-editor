@@ -16,6 +16,9 @@ Rectangle {
     color: "transparent"
     focus: true
     readonly property bool pageContentReady: studioPageLoader.status === Loader.Ready
+    readonly property bool libraryLoadingSceneVisible: page === "library" &&
+        (!pageContentReady || (catalogAssets.loading && root.assetCount() === 0 &&
+         !root.importModeOpen && !root.libraryDocumentsOpen && root.catalogViewMode !== "cull"))
 
     Theme { id: theme }
     Settings {
@@ -959,7 +962,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: activeMaskRenameDialog
         objectName: "activeMaskRenameDialog"
         title: "Rename Selection"
@@ -996,7 +999,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: workspaceLayoutSaveDialog
         objectName: "workspaceLayoutSaveDialog"
         title: "Save Workspace Layout"
@@ -1004,16 +1007,11 @@ Rectangle {
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         anchors.centerIn: parent
-        padding: theme.space16
+        padding: standardPopupPadding
         implicitWidth: 388
         header: null
         footer: null
-        background: Rectangle {
-            radius: theme.radius8
-            color: theme.surfaceTop
-            border.width: 1
-            border.color: theme.lineSoft
-        }
+        background: PopupSurface {}
         onOpened: {
             workspaceLayoutNameField.forceActiveFocus()
             workspaceLayoutNameField.selectAll()
@@ -1076,7 +1074,7 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: studioPresetCreateDialog
         objectName: "studioPresetCreateDialog"
         title: studioPresetCreateMode === "duplicate" ? "Copy selected preset" : "Create custom preset"
@@ -1084,16 +1082,11 @@ Rectangle {
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         anchors.centerIn: parent
-        padding: theme.space16
+        padding: standardPopupPadding
         implicitWidth: Math.min(460, parent ? parent.width - theme.space16 * 2 : 460)
         header: null
         footer: null
-        background: Rectangle {
-            radius: theme.radius8
-            color: theme.surfaceTop
-            border.width: 1
-            border.color: theme.lineSoft
-        }
+        background: PopupSurface {}
         onOpened: {
             studioPresetCreateFeedback = ""
             if (studioPresetDraftName.trim().length === 0 || studioPresetDraftName === root.studioCurrentPresetName())
@@ -2908,7 +2901,32 @@ Rectangle {
     }
 
     function hueSwatchColor(hue) {
+        // Keep swatches on the same display sRGB wheel reported by ColorWheelControl.
         return Qt.hsla(wrapUnit(hue), 0.72, 0.58, 1)
+    }
+
+    function colorMixerResponseName(model) {
+        if (model === "HSV")
+            return "Gentle"
+        if (model === "LCH")
+            return "Soft"
+        return "Standard"
+    }
+
+    function colorMixerResponseModel(responseName) {
+        if (responseName === "Gentle")
+            return "HSV"
+        if (responseName === "Soft")
+            return "LCH"
+        return "OKLab"
+    }
+
+    function colorMixerResponseDescription(responseName) {
+        if (responseName === "Gentle")
+            return "Lower hue, color, and lightness response."
+        if (responseName === "Soft")
+            return "Lower color response with a softer lightness change."
+        return "Balanced channel response."
     }
 
     function applyHarmonyPreset(name) {
@@ -4854,6 +4872,10 @@ Rectangle {
 
     function visibleSystemHealthItems() {
         return systemHealthItems().filter(function(item) {
+            // Library activity and recovery already have an owning surface.
+            // Retain the raw catalog badge in explicitly enabled diagnostics.
+            if (root.page === "library" && item.label === "Catalog" && !root.developerDiagnosticsEnabled)
+                return false
             return root.developerDiagnosticsEnabled || item.state !== "OK"
         })
     }
@@ -5153,7 +5175,10 @@ Rectangle {
         case "color":
             return "Look-space. Color controls shape creative channel and perceptual color after tone curves." + rendererContext
         case "color-grading":
-            return "Look-space. Three-way Color Grading follows selective color styling." + rendererContext
+            return "Look-space. Three-way Color Grading follows selective color styling." +
+                    (root.usesSignedColorGrading()
+                     ? " Positive saturation adds tint; negative saturation removes chroma."
+                     : " This recipe keeps the historical tint response for both saturation signs. Upgrade its rendering to use signed saturation.") + rendererContext
         default:
             return ""
         }
@@ -6698,9 +6723,19 @@ Rectangle {
         return ["#d45a62", "#dd8a39", "#d7bd42", "#61b56f", "#49b8c4", "#4e86d9", "#8b6be3", "#c85ac1", "#d45a62"]
     }
 
+    function usesSignedColorGrading() {
+        const model = editorPreview.renderingUpgradePreviewActive
+                    ? editorPreview.renderingUpgradeTargetModel
+                    : editorPreview.currentPhotographicRenderingModel
+        return String(model) === "aces2-ocio-v1"
+    }
+
     function gradingPreviewColor(hueValue, saturationValue, luminanceValue) {
         const hue = ((hueValue % 1.0) + 1.0) % 1.0
-        const saturation = Math.max(0.18, Math.min(1.0, Math.abs(saturationValue) / 100.0))
+        // Match the current or previewed renderer, including saved legacy tint
+        // semantics. Current negative grading removes chroma instead of tinting.
+        const tint = root.usesSignedColorGrading() ? Math.max(0.0, saturationValue) : Math.abs(saturationValue)
+        const saturation = Math.max(0.0, Math.min(1.0, tint / 100.0))
         const lightness = Math.max(0.38, Math.min(0.76, 0.56 + luminanceValue / 280.0))
         return Qt.hsla(hue, saturation, lightness, 1.0)
     }
@@ -14130,7 +14165,7 @@ Rectangle {
                          : root.page === "edit" ? editPage
                          : exportPage
     }
-    Drawer {
+    AppDrawer {
         id: libraryNavigationDrawer
         objectName: "libraryNavigationDrawer"
         edge: Qt.LeftEdge
@@ -15152,6 +15187,7 @@ Rectangle {
                              root.catalogViewMode !== "cull" && root.assetCount() === 0
 
                     ColumnLayout {
+                        visible: catalogAssets.loading || catalogAssets.errorMessage.length === 0
                         anchors.centerIn: parent
                         width: Math.min(380, Math.max(1, parent.width - 48))
                         spacing: 14
@@ -15543,6 +15579,7 @@ Rectangle {
                         spacing: 7
 
                         Label {
+                            id: popupTooltipAnchor1
                             objectName: "maskCreationVocabularyLabel"
                             property string vocabularyTooltip: root.maskVocabularyTooltip()
                             text: "Selection"
@@ -15553,9 +15590,13 @@ Rectangle {
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
                             font.letterSpacing: 0
-                            ToolTip.visible: maskCreationGlossaryHover.hovered
-                            ToolTip.delay: 200
-                            ToolTip.text: vocabularyTooltip
+                            AppToolTip {
+                                id: sharedTooltip2
+                                targetItem: popupTooltipAnchor1
+                                visible: popupTooltipAnchor1.visible && (maskCreationGlossaryHover.hovered)
+                                delay: 200
+                                text: popupTooltipAnchor1.vocabularyTooltip
+                            }
                             HoverHandler { id: maskCreationGlossaryHover }
                         }
                         MiniButton { objectName: "legacyMaskSourceObjectButton"; visible: false; text: "Object"; iconName: "smart-select"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("object") }
@@ -15647,21 +15688,16 @@ Rectangle {
                     border.color: root.hairline
                     radius: 4
 
-                    Popup {
+                    AppPopup {
                         id: maskRefineOptions
                         objectName: "maskRefineOptionsPopup"
                         parent: Overlay.overlay
                         x: Math.max(8, Math.min(parent.width - width - 8, maskRefineFlow.mapToItem(parent, 0, 0).x + 200))
                         y: maskRefineFlow.mapToItem(parent, 0, maskRefineFlow.height).y + 8
-                        width: Math.min(340, parent.width - 16)
+                        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, parent.width - 16)))
                         padding: 12
                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                        background: Rectangle {
-                            color: theme.surfaceTop
-                            radius: theme.radius8
-                            border.width: 1
-                            border.color: theme.controlEdge
-                        }
+                        background: PopupSurface {}
                         contentItem: Flow {
                             spacing: 6
                     MiniButton {
@@ -15832,6 +15868,7 @@ Rectangle {
                         }
 
                         Label {
+                            id: popupTooltipAnchor3
                             objectName: "maskRefineToolbarStatusLabel"
                             visible: false
                             readonly property string debugSignature: root.maskCreateRefineSplitSignature()
@@ -15846,11 +15883,14 @@ Rectangle {
                             minimumPixelSize: 8
                             elide: Text.ElideNone
                             wrapMode: Text.WordWrap
-                            ToolTip.visible: refineStatusHover.hovered && root.developerDiagnosticsEnabled
-                            ToolTip.text: debugSignature
-                            ToolTip.delay: 350
-                            ToolTip.timeout: 3600
-
+                            AppToolTip {
+                                id: sharedTooltip4
+                                targetItem: popupTooltipAnchor3
+                                visible: popupTooltipAnchor3.visible && (refineStatusHover.hovered && root.developerDiagnosticsEnabled)
+                                text: popupTooltipAnchor3.debugSignature
+                                delay: 350
+                                timeout: 3600
+                            }
                             HoverHandler {
                                 id: refineStatusHover
                             }
@@ -18447,6 +18487,7 @@ Rectangle {
                                 spacing: 0
 
                                 Label {
+                                    id: popupTooltipAnchor5
                                     objectName: "activeEditDocumentBreadcrumbLabel"
                                     Layout.fillWidth: true
                                     visible: root.editBoardMode
@@ -18456,8 +18497,12 @@ Rectangle {
                                     font.pixelSize: theme.typeCaption
                                     elide: Text.ElideMiddle
                                     Accessible.name: text
-                                    ToolTip.visible: documentBreadcrumbHover.hovered && truncated
-                                    ToolTip.text: text
+                                    AppToolTip {
+                                        id: sharedTooltip6
+                                        targetItem: popupTooltipAnchor5
+                                        visible: popupTooltipAnchor5.visible && (documentBreadcrumbHover.hovered && truncated)
+                                        text: popupTooltipAnchor5.text
+                                    }
                                     HoverHandler { id: documentBreadcrumbHover }
                                 }
 
@@ -20404,13 +20449,13 @@ Rectangle {
                                                         onClicked: root.editBoardPhotoTextDetachRequested(photoTextBoardLinks.layerId)
                                                     }
                                                 }
-                                                Popup {
+                                                AppPopup {
                                                     id: photoTextBoardLinkPicker
                                                     objectName: "photoTextBoardLinkPicker"
                                                     modal: true
                                                     focus: true
-                                                    padding: theme.space12
-                                                    width: Math.max(theme.scaled(260), photoTextBoardLinks.width)
+                                                    padding: standardPopupPadding
+                                                    width: Math.min(popupAvailableWidth, Math.max(1, Math.max(theme.scaled(260), photoTextBoardLinks.width)))
                                                     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                                                     property string sourceLayerId: ""
                                                     readonly property string currentBoardId: String(root.activeEditBoard.boardId || "")
@@ -21704,6 +21749,7 @@ Rectangle {
                                             }
 
                                             Rectangle {
+                                                id: popupTooltipAnchor7
                                                 objectName: "photoLayerDropTargetBefore"
                                                 readonly property string dropTargetSignature: photoLayerRowRoot.dropTargetSignature
                                                 anchors.left: parent.left
@@ -21715,10 +21761,13 @@ Rectangle {
                                                 color: root.mint
                                                 opacity: beforeDropHover.hovered ? 0.95 : 0.42
                                                 z: 4
-                                                ToolTip.visible: beforeDropHover.hovered
-                                                ToolTip.delay: 250
-                                                ToolTip.text: "Move this layer before the previous layer."
-
+                                                AppToolTip {
+                                                    id: sharedTooltip8
+                                                    targetItem: popupTooltipAnchor7
+                                                    visible: popupTooltipAnchor7.visible && (beforeDropHover.hovered)
+                                                    delay: 250
+                                                    text: "Move this layer before the previous layer."
+                                                }
                                                 HoverHandler { id: beforeDropHover }
 
                                                 MouseArea {
@@ -21729,6 +21778,7 @@ Rectangle {
                                             }
 
                                             Rectangle {
+                                                id: popupTooltipAnchor9
                                                 objectName: "photoLayerDropTargetAfter"
                                                 readonly property string dropTargetSignature: photoLayerRowRoot.dropTargetSignature
                                                 anchors.left: parent.left
@@ -21740,10 +21790,13 @@ Rectangle {
                                                 color: root.mint
                                                 opacity: afterDropHover.hovered ? 0.95 : 0.42
                                                 z: 4
-                                                ToolTip.visible: afterDropHover.hovered
-                                                ToolTip.delay: 250
-                                                ToolTip.text: "Move this layer after the next layer."
-
+                                                AppToolTip {
+                                                    id: sharedTooltip10
+                                                    targetItem: popupTooltipAnchor9
+                                                    visible: popupTooltipAnchor9.visible && (afterDropHover.hovered)
+                                                    delay: 250
+                                                    text: "Move this layer after the next layer."
+                                                }
                                                 HoverHandler { id: afterDropHover }
 
                                                 MouseArea {
@@ -21854,6 +21907,7 @@ Rectangle {
                                                 }
 
                                                 Rectangle {
+                                                    id: popupTooltipAnchor11
                                                     objectName: "photoLayerReorderHandle"
                                                     readonly property string reorderContract: "layer-reorder:v2|drag-release:any-distance:true|keyboard:true|menu:true|selection-preserved:true|locked:blocked"
                                                     readonly property bool dragActive: photoLayerReorderDragArea.drag.active
@@ -21863,10 +21917,13 @@ Rectangle {
                                                     radius: 3
                                                     color: "transparent"
                                                     opacity: photoLayerRowRoot.contextualActionsVisible ? 0.62 : 0.18
-                                                    ToolTip.visible: photoLayerReorderHandleHover.hovered
-                                                    ToolTip.delay: 350
-                                                    ToolTip.text: layerLocked ? "Unlock this layer before reordering." : "Drag to reorder the layer."
-
+                                                    AppToolTip {
+                                                        id: sharedTooltip12
+                                                        targetItem: popupTooltipAnchor11
+                                                        visible: popupTooltipAnchor11.visible && (photoLayerReorderHandleHover.hovered)
+                                                        delay: 350
+                                                        text: layerLocked ? "Unlock this layer before reordering." : "Drag to reorder the layer."
+                                                    }
                                                     HoverHandler { id: photoLayerReorderHandleHover }
 
                                                     Column {
@@ -22182,6 +22239,7 @@ Rectangle {
                                                             model: []
 
                                                             delegate: Rectangle {
+                                                                id: popupTooltipAnchor13
                                                                 objectName: "photoLayerStateBadge"
                                                                 required property var modelData
                                                                 readonly property string badgeKey: String(modelData.key || "")
@@ -22197,10 +22255,13 @@ Rectangle {
                                                                 color: theme.alpha(badgeAccent, badgeTone === "neutral" ? 0.10 : 0.16)
                                                                 border.width: theme.chromeBorderWidth
                                                                 border.color: theme.alpha(badgeAccent, badgeTone === "neutral" ? 0.28 : 0.54)
-                                                                ToolTip.visible: badgeHover.hovered
-                                                                ToolTip.delay: 350
-                                                                ToolTip.text: badgeLabel
-
+                                                                AppToolTip {
+                                                                    id: sharedTooltip14
+                                                                    targetItem: popupTooltipAnchor13
+                                                                    visible: popupTooltipAnchor13.visible && (badgeHover.hovered)
+                                                                    delay: 350
+                                                                    text: popupTooltipAnchor13.badgeLabel
+                                                                }
                                                                 HoverHandler { id: badgeHover }
 
                                                                 Label {
@@ -23533,7 +23594,7 @@ Rectangle {
                                                 onClicked: studioPresetManagementMenu.open()
                                             }
                                         }
-                                        Popup {
+                                        AppPopup {
                                             id: studioPresetQuickSelectMenu
                                             objectName: "studioPresetQuickSelectMenu"
                                             parent: root
@@ -23546,7 +23607,7 @@ Rectangle {
                                             modal: true
                                             focus: true
                                             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                                            background: Rectangle { color: root.panelColor; border.color: root.hairline; border.width: 1; radius: theme.radius4 }
+                                            background: PopupSurface {}
                                             contentItem: ListView {
                                                 clip: true
                                                 model: editorPreview.presetNames
@@ -23558,7 +23619,7 @@ Rectangle {
                                                 }
                                             }
                                         }
-                                        Popup {
+                                        AppPopup {
                                             id: studioPresetManagementMenu
                                             objectName: "studioPresetManagementMenu"
                                             parent: root
@@ -23573,12 +23634,7 @@ Rectangle {
                                             modal: true
                                             focus: true
                                             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                                            background: Rectangle {
-                                                color: root.panelColor
-                                                border.width: theme.chromeBorderWidth
-                                                border.color: root.hairline
-                                                radius: 4
-                                            }
+                                            background: PopupSurface {}
                                             contentItem: ColumnLayout {
                                                 spacing: 8
                                                 MiniButton {
@@ -23765,13 +23821,18 @@ Rectangle {
                                             model: root.batchSyncGroupOptions
 
                                             FilterChip {
+                                                id: popupTooltipAnchor15
                                                 required property var modelData
                                                 text: modelData.label
                                                 active: root.batchSyncGroupEnabled(modelData.key)
-                                                ToolTip.visible: hovered
-                                                ToolTip.text: active
+                                                AppToolTip {
+                                                    id: sharedTooltip16
+                                                    targetItem: popupTooltipAnchor15
+                                                    visible: popupTooltipAnchor15.visible && (popupTooltipAnchor15.hovered)
+                                                    text: active
                                                               ? "Included in this synchronization."
                                                               : "Excluded; every target keeps its current value."
+                                                }
                                                 onClicked: root.toggleBatchSyncGroup(modelData.key)
                                             }
                                         }
@@ -24196,10 +24257,10 @@ Rectangle {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         MiniButton {
-                                            text: "Color models"
+                                            text: "Response"
                                             role: "ghost"
                                             active: root.labColorToolsVisible
-                                            tooltip: "Show HSV, LCH, OKLab and selective color controls"
+                                            tooltip: "Show response strength and selective color controls. Saved model settings keep their existing response."
                                             onClicked: root.labColorToolsVisible = !root.labColorToolsVisible
                                         }
                                     }
@@ -24207,14 +24268,15 @@ Rectangle {
                                         Layout.fillWidth: true
                                         visible: root.labColorToolsVisible
                                         Repeater {
-                                            model: ["HSL", "HSV", "LCH", "OKLab"]
+                                            model: ["Standard", "Gentle", "Soft"]
                                             MiniButton {
                                                 required property string modelData
                                                 Layout.fillWidth: true
                                                 text: modelData
                                                 role: "segmented"
-                                                active: root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel) === modelData
-                                                onClicked: root.setPrimaryStringAdjustmentValue("colorMixerModel", modelData)
+                                                active: root.colorMixerResponseName(root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel)) === modelData
+                                                tooltip: root.colorMixerResponseDescription(modelData)
+                                                onClicked: root.setPrimaryStringAdjustmentValue("colorMixerModel", root.colorMixerResponseModel(modelData))
                                             }
                                         }
                                     }
@@ -24265,7 +24327,7 @@ Rectangle {
                                                 Label {
                                                     objectName: "colorMixActiveChannelLabel"
                                                     Layout.fillWidth: true
-                                                    text: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) + " / " + root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel)
+                                                    text: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) + " / " + root.colorMixerResponseName(root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel))
                                                     color: theme.textMain
                                                     font.family: theme.fontUi
                                                     font.pixelSize: 12
@@ -24860,9 +24922,9 @@ Rectangle {
 
                                     ToolOptionToggle {
                                         objectName: "colorReplaceProtectSkinCheckBox"
-                                        label: "Protect Skin"
+                                        label: "Protect skin-like colors"
                                         checked: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled)
-                                        helperText: "Protect skin tones from replacement spill on the active target."
+                                        helperText: "Reduce edits in this hue range. Similar-colored objects are protected too; use a subject mask to limit the area."
                                         onToggled: function(checked) { root.setPrimaryBoolAdjustmentValue("skinToneProtectionEnabled", checked) }
                                     }
                                     RowLayout {
@@ -24871,10 +24933,10 @@ Rectangle {
                                         MiniButton {
                                             objectName: "colorReplaceAutoSkinButton"
                                             Layout.fillWidth: true
-                                            text: "Auto Skin (Heuristic)"
+                                            text: "Suggest protected hue"
                                             iconName: "scope"
                                             role: "secondary"
-                                            tooltip: "Estimate protected skin hue and range with a color heuristic."
+                                            tooltip: "Suggest a warm hue range from image colors. This does not identify people or faces."
                                             enabled: root.adjustmentControlCanWriteActiveTarget("base-image")
                                             disabledReason: root.adjustmentControlDisabledReason("base-image")
                                             onClicked: editorPreview.autoDetectSkinProtection()
@@ -24908,7 +24970,7 @@ Rectangle {
                                     ToolOptionToggle {
                                         label: "Protect"
                                         checked: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled)
-                                        helperText: "Enable skin-tone protection for the active target."
+                                        helperText: "Protect a hue range, including similar-colored objects. Use a subject mask for people."
                                         onToggled: function(checked) { root.setPrimaryBoolAdjustmentValue("skinToneProtectionEnabled", checked) }
                                     }
                                     Rectangle {
@@ -25087,22 +25149,22 @@ Rectangle {
                                         MiniButton { objectName: "detailMaskPreviewButton"; Layout.fillWidth: true; text: "Peaking"; iconName: "snap"; role: "segmented"; active: root.focusPeakingOverlayEnabled; tooltip: "Show focus peaking for detail inspection."; onClicked: root.setAnalysisOverlay("focus-peaking") }
                                     }
                                     StudioCollapsibleGroup {
-                                        objectName: "detailSharpeningGroup"
-                                        title: "Sharpening"
-                                        expanded: true
-                                        onToggled: expanded = !expanded
-                                        AdjustSlider { objectName: "detailSharpenAmountSlider"; label: "Amount"; from: 0; to: 150; defaultValue: 0; value: root.primaryAdjustmentValue("sharpening", editorPreview.sharpening); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpening", editorPreview.sharpening)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpening", value) } }
-                                        AdjustSlider { objectName: "detailSharpenRadiusSlider"; label: "Radius"; from: 0.5; to: 3.0; stepSize: 0.1; defaultValue: 1.0; value: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius); valueText: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius).toFixed(1) + " px"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenRadius", value) } }
-                                        AdjustSlider { objectName: "detailSharpenDetailSlider"; label: "Detail"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail); valueText: Math.round(root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenDetail", value) } }
-                                        AdjustSlider { objectName: "detailSharpenMaskingSlider"; label: "Edge Limit"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenMasking", value) } }
-                                    }
-                                    StudioCollapsibleGroup {
                                         objectName: "detailNoiseReductionGroup"
                                         title: "Noise Reduction"
                                         expanded: true
                                         onToggled: expanded = !expanded
                                         AdjustSlider { objectName: "detailLuminanceNrSlider"; label: "Luminance"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("luminanceNr", editorPreview.luminanceNr); valueText: root.signedPercent(root.primaryAdjustmentValue("luminanceNr", editorPreview.luminanceNr)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("luminanceNr", value) } }
                                         AdjustSlider { objectName: "detailColorNrSlider"; label: "Color"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("colorNr", editorPreview.colorNr); valueText: root.signedPercent(root.primaryAdjustmentValue("colorNr", editorPreview.colorNr)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorNr", value) } }
+                                    }
+                                    StudioCollapsibleGroup {
+                                        objectName: "detailSharpeningGroup"
+                                        title: "Sharpening"
+                                        expanded: true
+                                        onToggled: expanded = !expanded
+                                        AdjustSlider { objectName: "detailSharpenAmountSlider"; label: "Amount"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpening", editorPreview.sharpening); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpening", editorPreview.sharpening)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpening", value) } }
+                                        AdjustSlider { objectName: "detailSharpenRadiusSlider"; label: "Radius"; from: 0.5; to: 3.0; stepSize: 0.1; defaultValue: 1.0; value: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius); valueText: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius).toFixed(1) + " px"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenRadius", value) } }
+                                        AdjustSlider { objectName: "detailSharpenDetailSlider"; label: "Detail"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail); valueText: Math.round(root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenDetail", value) } }
+                                        AdjustSlider { objectName: "detailSharpenMaskingSlider"; label: "Edge Limit"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenMasking", value) } }
                                     }
                                 }
                                 InspectorGroup {
@@ -25529,7 +25591,7 @@ Rectangle {
                     }
                     Item { Layout.fillHeight: true }
                     StudioSectionTitle { label: "Export Drive" }
-                    ProgressBar { Layout.fillWidth: true; value: 0.30 }
+                    ProgressStrip { Layout.fillWidth: true; progress: 0.30; active: false }
                     Label { text: "2.4 TB / 8 TB                                      30%"; color: root.dimText; font.pixelSize: 10 }
                 }
             }

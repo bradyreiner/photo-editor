@@ -3573,7 +3573,7 @@ GlassSurface {
                                 InspectorSlider {
                                     Layout.fillWidth: true
                                     label: "Opacity"
-                                    valueText: Math.round(Number(root.hasClip ? (clipState.opacity || 1) : 1) * 100) + "%"
+                                    valueText: Math.round(Number(root.hasClip && clipState.opacity !== undefined ? clipState.opacity : 1) * 100) + "%"
                                     from: 0
                                     to: 1
                                     value: root.hasClip && clipState.opacity !== undefined ? clipState.opacity : 1
@@ -4353,28 +4353,25 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: quickEffectPicker
         objectName: "timelineQuickEffectPicker"
         parent: Overlay.overlay
         modal: true
         dim: true
         focus: true
-        width: Math.min(theme.scaled(620), parent ? parent.width - theme.space24 * 2 : theme.scaled(620))
-        height: Math.min(theme.scaled(560), parent ? parent.height - theme.space24 * 2 : theme.scaled(560))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(620), parent ? parent.width - theme.space24 * 2 : theme.scaled(620))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(560), parent ? parent.height - theme.space24 * 2 : theme.scaled(560))))
         x: parent ? (parent.width - width) / 2 : 0
         y: parent ? (parent.height - height) / 2 : 0
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onOpened: Qt.callLater(() => {
             quickEffectSearch.forceActiveFocus()
             quickEffectSearch.selectAll()
         })
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space8
@@ -4536,16 +4533,16 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: effectPresetPopup
         objectName: "timelineEffectStackPresetPopup"
         parent: Overlay.overlay
         modal: true
         focus: true
-        width: Math.min(theme.scaled(600), parent ? parent.width - theme.space24 * 2 : theme.scaled(600))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(600), parent ? parent.width - theme.space24 * 2 : theme.scaled(600))))
         x: parent ? (parent.width - width) / 2 : 0
         y: parent ? Math.max(theme.space24, (parent.height - implicitHeight) / 2) : 0
-        padding: theme.panelPaddingStandard
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onOpened: {
             const presets = root.effectPresetItems()
@@ -4554,10 +4551,7 @@ GlassSurface {
             Qt.callLater(effectPresetNameField.forceActiveFocus)
         }
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10

@@ -418,6 +418,7 @@ ColorPixel apply_global_color_pipeline(
   if (state.black_and_white_enabled) {
     pixel = apply_black_and_white_mixer(
         pixel,
+        pixel_to_linear_srgb_reference(pixel, context),
         state,
         luminance_for_pixel(pixel, context));
   }

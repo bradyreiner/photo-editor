@@ -65,12 +65,15 @@ Rectangle {
     Keys.onEnterPressed: root.selectedRequested(root.index, 0)
     Keys.onSpacePressed: root.selectedRequested(root.index, 0)
 
-    ToolTip.visible: thumbHover.hovered
-    ToolTip.delay: 500
-    ToolTip.timeout: 3600
-    ToolTip.text: "Board " + slideNumber + " · " + boardRoleLabel
-                  + (boardName.length > 0 ? " · " + boardName : "")
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (thumbHover.hovered)
+        delay: 500
+        timeout: 3600
+        text: "Board " + root.slideNumber + " · " + root.boardRoleLabel
+                  + (root.boardName.length > 0 ? " · " + root.boardName : "")
+    }
     HoverHandler {
         id: thumbHover
         cursorShape: Qt.PointingHandCursor
@@ -230,6 +233,7 @@ Rectangle {
     }
 
     Rectangle {
+        id: popupTooltipAnchor2
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 7
@@ -263,9 +267,13 @@ Rectangle {
             onTapped: root.duplicateRequested(root.index)
         }
 
-        ToolTip.visible: duplicateHover.hovered
-        ToolTip.text: "Duplicate board"
-        ToolTip.delay: 300
+        AppToolTip {
+            id: sharedTooltip3
+            targetItem: popupTooltipAnchor2
+            visible: popupTooltipAnchor2.visible && (duplicateHover.hovered)
+            text: "Duplicate board"
+            delay: 300
+        }
     }
 
     MouseArea {

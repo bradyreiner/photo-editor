@@ -14,18 +14,33 @@ layout(std140, binding = 0) uniform buf {
     vec4 activityBounds;
     vec4 eyeBounds;
     vec4 activityColor;
+    vec4 displayStyle;
+    float displayPhase;
+    float reactionAmount;
 } ubuf;
+vec4 sampleArt(vec2 uv) {
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return vec4(0.0);
+    return texture(source, uv);
+}
+vec3 emission(vec2 uv) {
+    vec4 pixel = sampleArt(uv);
+    return max(pixel.rgb - vec3(pixel.a * 0.3), vec3(0.0));
+}
 void main() {
     vec2 pixels = max(ubuf.screenMetrics.xy, vec2(1.0));
     vec2 uv = textureCoordinate;
     // A short signal displacement follows actual character state changes.
     // No random grain: the display pattern stays at physical pixel scale.
-    float band = step(0.0, sin((uv.y + ubuf.screenMetrics.z) * 113.0) - 0.985);
-    uv.x += band * ubuf.signalBreak * 3.0 / pixels.x;
-    vec2 fringe = vec2(1.05 / pixels.x, 0.0) * ubuf.effectStrength;
-    vec4 center = texture(source, uv);
-    vec4 red = texture(source, uv + fringe);
-    vec4 blue = texture(source, uv - fringe);
+    float reaction = max(ubuf.signalBreak, ubuf.reactionAmount) * ubuf.effectStrength;
+    float time = ubuf.displayPhase + ubuf.screenMetrics.z;
+    float band = step(0.965, sin((uv.y + floor(time * 48.0) / 48.0) * 113.0));
+    uv.x += band * reaction * 8.0 / pixels.x;
+    vec2 fringe = vec2(max(0.0, ubuf.displayStyle.w) + reaction * 2.0, 0.0)
+                  / pixels * ubuf.effectStrength;
+    vec4 center = sampleArt(uv);
+    vec4 red = sampleArt(uv + fringe);
+    vec4 blue = sampleArt(uv - fringe);
     // Blink only the two narrow eye marks, keeping the cached body texture.
     float eyeX = min(abs(uv.x - ubuf.eyeBounds.x), abs(uv.x - ubuf.eyeBounds.y));
     bool inEye = ubuf.eyeBounds.w > 0.0 && eyeX < 2.0 / pixels.x
@@ -35,14 +50,30 @@ void main() {
     center *= blink; red *= blink; blue *= blink;
     float alpha = max(center.a, max(red.a, blue.a));
     vec3 rgb = vec3(red.r, center.g, blue.b);
-    float scan = 0.985 + 0.015 * cos(uv.y * pixels.y * 2.0943951);
+    float scan = 1.0 - clamp(ubuf.displayStyle.x, 0.0, 0.7)
+        * (0.5 + 0.5 * cos(uv.y * pixels.y * 2.0943951));
     // Stagger phosphor rows and keep the modulation low: aligned vertical
     // and horizontal stripes read as woven cloth on broad ivory surfaces.
     float rowOffset = mod(floor(uv.y * pixels.y / 3.0), 2.0);
     float subpixel = mod(floor(uv.x * pixels.x) + rowOffset, 3.0);
-    vec3 triad = subpixel < 1.0 ? vec3(1.006, 0.997, 0.997)
-              : subpixel < 2.0 ? vec3(0.997, 1.006, 0.997) : vec3(0.997, 0.997, 1.006);
+    float phosphor = clamp(ubuf.displayStyle.y, 0.0, 0.4);
+    vec3 triad = subpixel < 1.0 ? vec3(1.0, 1.0 - phosphor, 1.0 - phosphor)
+              : subpixel < 2.0 ? vec3(1.0 - phosphor, 1.0, 1.0 - phosphor)
+                              : vec3(1.0 - phosphor, 1.0 - phosphor, 1.0);
     rgb *= mix(vec3(1.0), triad * scan, ubuf.effectStrength);
+    // A low-amplitude rolling beam and bounded local phosphor bloom use the
+    // scene graph clock. They never repaint the cached artwork on the GUI thread.
+    float beam = exp(-pow((uv.y - ubuf.displayPhase) / 0.14, 2.0));
+    rgb *= 1.0 + beam * 0.035 * ubuf.effectStrength;
+    vec2 dx = vec2(2.0 / pixels.x, 0.0);
+    vec2 dy = vec2(0.0, 2.0 / pixels.y);
+    vec3 glow = (emission(uv + dx) + emission(uv - dx)
+               + emission(uv + dy) + emission(uv - dy)
+               + emission(uv + dx * 2.0) + emission(uv - dx * 2.0)
+               + emission(uv + dy * 2.0) + emission(uv - dy * 2.0))
+               * (clamp(ubuf.displayStyle.z, 0.0, 1.0) * ubuf.effectStrength / 8.0);
+    rgb += glow;
+    alpha = max(alpha, max(glow.r, max(glow.g, glow.b)));
     // A continuous, eased ping-pong signal is built into the character body.
     // Only this scalar changes on the render thread; the source art stays cached.
     if (ubuf.activityData.z > 0.5) {

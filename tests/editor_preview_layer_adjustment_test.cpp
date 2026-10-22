@@ -26,6 +26,7 @@
 #include "canonical_composite_mask_alpha.h"
 #include "photo_render_utils.h"
 #include "thumbnail_refresh_queue_service.h"
+#include "photo_editor/pipeline/color_adjustments.h"
 
 namespace photo_editor::desktop {
 
@@ -835,7 +836,7 @@ bool has_thumbnail_invalidation_fields(
          value.value(QStringLiteral("thumbnailInvalidationVisible")).toBool() ==
              expected_visible &&
          value.value(QStringLiteral("thumbnailInvalidationColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v6") &&
+             QStringLiteral("thumbnail-color-pipeline-v9") &&
          key.startsWith(QStringLiteral("sha1:")) &&
          value.value(QStringLiteral("thumbnailInvalidationComparator")).toString() ==
              QStringLiteral("thumbnailInvalidationKey") &&
@@ -851,7 +852,7 @@ bool has_thumbnail_invalidation_fields(
          signature.contains(QStringLiteral("visible:%1")
                                 .arg(expected_visible ? QStringLiteral("true")
                                                       : QStringLiteral("false"))) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v6")) &&
+         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v9")) &&
          signature.contains(QStringLiteral("key:%1").arg(key)) &&
          value.value(QStringLiteral("thumbnailSignature")).toString().contains(key);
 }
@@ -888,14 +889,14 @@ bool has_thumbnail_entry_cache_fields(
              expected_backing_height &&
          value.value(QStringLiteral("thumbnailCacheOutputScale")).toString().startsWith(scale) &&
          value.value(QStringLiteral("thumbnailCacheColorPipelineVersion")).toString() ==
-             QStringLiteral("thumbnail-color-pipeline-v6") &&
+             QStringLiteral("thumbnail-color-pipeline-v9") &&
          value.value(QStringLiteral("thumbnailCacheHit")).toBool() == expected_hit &&
          value.value(QStringLiteral("thumbnailCacheSource")).toString() == expected_source &&
          signature.contains(QStringLiteral("asset:%1").arg(expected_asset_id)) &&
          signature.contains(QStringLiteral("recipe:%1").arg(recipe_hash)) &&
          signature.contains(QStringLiteral("layer:%1").arg(expected_layer_id)) &&
          signature.contains(QStringLiteral("mask:%1").arg(expected_mask_id)) &&
-         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v6")) &&
+         signature.contains(QStringLiteral("color:thumbnail-color-pipeline-v9")) &&
          signature.contains(QStringLiteral("hit:%1").arg(expected_hit ? QStringLiteral("true")
                                                                        : QStringLiteral("false"))) &&
          signature.contains(QStringLiteral("source:%1").arg(expected_source)) &&
@@ -3377,7 +3378,7 @@ int main(int argc, char** argv) {
   QVariantMap first_lut_stack_entry;
   first_lut_stack_entry.insert(QStringLiteral("enabled"), true);
   first_lut_stack_entry.insert(QStringLiteral("strength"), 150.0);
-  first_lut_stack_entry.insert(QStringLiteral("name"), QStringLiteral("Layer Clamp LUT"));
+  first_lut_stack_entry.insert(QStringLiteral("name"), QStringLiteral("Signed HDR Layer LUT"));
   first_lut_stack_entry.insert(QStringLiteral("size"), 999);
   first_lut_stack_entry.insert(QStringLiteral("table"), lut_stack_table);
   first_lut_stack_entry.insert(QStringLiteral("domainMin"), QVariantList{0.0, 0.0, 0.0});
@@ -3411,7 +3412,7 @@ int main(int argc, char** argv) {
   if (!almost_equal(persisted_first_lut.value(QStringLiteral("strength")).toDouble(), 100.0)) {
     return fail("layer-local LUT stack should clamp over-range strength");
   }
-  if (persisted_first_lut.value(QStringLiteral("name")).toString() != QStringLiteral("Layer Clamp LUT")) {
+  if (persisted_first_lut.value(QStringLiteral("name")).toString() != QStringLiteral("Signed HDR Layer LUT")) {
     return fail("layer-local LUT stack should persist LUT names");
   }
   if (persisted_first_lut.value(QStringLiteral("size")).toInt() != 256) {
@@ -3420,11 +3421,60 @@ int main(int argc, char** argv) {
   if (persisted_first_lut_table.size() != 8) {
     return fail("layer-local LUT stack should persist normalized table rows");
   }
-  if (!almost_equal(persisted_first_lut_sample.value(QStringLiteral("red")).toDouble(), 1.0) ||
-      !almost_equal(persisted_first_lut_sample.value(QStringLiteral("green")).toDouble(), 0.0) ||
+  // LUT strength and dimensions are bounded above; table channels carry
+  // scene-linear values and must retain negative/HDR range in the recipe.
+  if (!almost_equal(persisted_first_lut_sample.value(QStringLiteral("red")).toDouble(), 1.25) ||
+      !almost_equal(persisted_first_lut_sample.value(QStringLiteral("green")).toDouble(), -0.25) ||
       !almost_equal(persisted_first_lut_sample.value(QStringLiteral("blue")).toDouble(), 0.50) ||
-      !almost_equal(persisted_first_lut_sample.value(QStringLiteral("alpha")).toDouble(), 1.0)) {
-    return fail("layer-local LUT stack should clamp table channel values");
+      !almost_equal(persisted_first_lut_sample.value(QStringLiteral("alpha")).toDouble(), 1.25)) {
+    return fail("layer-local LUT stack should preserve signed/HDR RGB and table alpha values");
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState extended_layer_lut_state;
+  extended_layer_lut_state.color_pipeline.working_profile.profile_name = "Linear sRGB";
+  extended_layer_lut_state.color_pipeline.working_profile.color_space =
+      photo_editor::pipeline::make_linear_srgb_color_space();
+  extended_layer_lut_state.color_pipeline.output_headroom = 4.0;
+  photo_editor::pipeline::LutAdjustment extended_layer_lut;
+  extended_layer_lut.enabled = true;
+  extended_layer_lut.strength = 100.0;
+  extended_layer_lut.name = "Signed HDR layer LUT";
+  extended_layer_lut.size = 2;
+  extended_layer_lut.input_color_space = "Linear sRGB";
+  extended_layer_lut.output_color_space = "Linear sRGB";
+  extended_layer_lut.table.assign(
+      8U,
+      photo_editor::pipeline::ColorPixel{
+          .red = 1.25F,
+          .green = -0.25F,
+          .blue = 0.50F,
+          .alpha = 1.25F,
+      });
+  extended_layer_lut_state.photo_layers = {
+      photo_editor::pipeline::PhotoLayer{
+          .id = "signed-hdr-layer-lut",
+          .name = "Signed HDR layer LUT",
+          .kind = "adjustment",
+          .enabled = true,
+          .opacity = 1.0,
+          .lut_stack = {extended_layer_lut},
+      },
+  };
+  std::vector<photo_editor::pipeline::ColorPixel> extended_layer_pixels{
+      {0.23F, 0.34F, 0.45F, 0.37F},
+  };
+  if (!photo_editor::pipeline::apply_color_layers_stage(
+          &extended_layer_pixels,
+          1,
+          1,
+          extended_layer_lut_state,
+          photo_editor::pipeline::RemovalQuality::Final) ||
+      extended_layer_pixels.size() != 1U ||
+      !almost_equal(extended_layer_pixels.front().red, 1.25, 1.0e-5) ||
+      !almost_equal(extended_layer_pixels.front().green, -0.25, 1.0e-5) ||
+      !almost_equal(extended_layer_pixels.front().blue, 0.50, 1.0e-5) ||
+      !almost_equal(extended_layer_pixels.front().alpha, 0.37, 1.0e-6)) {
+    return fail("native adjustment-layer LUT rendering should preserve signed/HDR RGB and source alpha");
   }
   if (persisted_second_lut.value(QStringLiteral("enabled")).toBool()) {
     return fail("layer-local LUT stack should persist disabled entries");
@@ -4044,6 +4094,10 @@ int main(int argc, char** argv) {
       !almost_equal(layer_preset_controller.vibrance(), 66.0)) {
     return fail("applying a preset to a layer should not mutate Base Image adjustments");
   }
+  if (!layer_preset_controller.status().contains(
+          QStringLiteral("Applied preset 'Landscape Pop' to layer"))) {
+    return fail("layer preset application should report the applied preset before a later action changes status");
+  }
   const auto layer_authoring_result = layer_preset_controller.saveCustomPreset(
       QStringLiteral("Layer Only Look"),
       QStringLiteral("Layer Looks"),
@@ -4071,8 +4125,7 @@ int main(int argc, char** argv) {
       !almost_equal(layer_after_preset.value(QStringLiteral("clarity")).toDouble(), 10.0) ||
       !almost_equal(layer_after_preset.value(QStringLiteral("dehaze")).toDouble(), 7.0) ||
       !almost_equal(layer_after_preset.value(QStringLiteral("vibrance")).toDouble(), 11.0) ||
-      !almost_equal(preset_blue_channel.value(QStringLiteral("saturation")).toDouble(), 8.0) ||
-      !layer_preset_controller.status().contains(QStringLiteral("Applied preset 'Landscape Pop' to layer"))) {
+      !almost_equal(preset_blue_channel.value(QStringLiteral("saturation")).toDouble(), 8.0)) {
     return fail("layer preset application should write the preset recipe onto the adjustment layer");
   }
   if (!layer_preset_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("temperature"), 18.0) ||

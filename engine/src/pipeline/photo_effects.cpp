@@ -1,6 +1,7 @@
 #include "photo_editor/pipeline/photo_effects.h"
 #include "photo_editor/pipeline/render_tile_planner.h"
 #include "photo_editor/pipeline/photo_effect_registry.h"
+#include "photo_editor/pipeline/film_grain_profiles.h"
 #include "color_adjustment_scheduler.h"
 
 #include <algorithm>
@@ -80,6 +81,46 @@ double grain_noise(double x, double y, double size, std::uint32_t seed) {
   const auto broad = print_noise(x - size * 0.23, y + size * 0.41, size * 2.1,
       seed ^ 0xa511e9b3U);
   return 0.72 * fine + 0.28 * broad;
+}
+
+// Jittered compact particles avoid the rectangular cells of interpolated noise.
+// Signed density fluctuations have zero ensemble mean; independent fine and
+// clustered layers model silver clumps / overlapping dye clouds.
+double grain_particles(double x, double y, double size, std::uint32_t seed) {
+  x /= size;
+  y /= size;
+  if (!std::isfinite(x) || !std::isfinite(y) || std::abs(x) > 9.0e18 || std::abs(y) > 9.0e18)
+    return 0.0;
+  const auto cell_x = static_cast<std::int64_t>(std::floor(x));
+  const auto cell_y = static_cast<std::int64_t>(std::floor(y));
+  double sum = 0.0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const auto hash = print_hash(seed, cell_x + dx, cell_y + dy);
+      const auto unit = [hash](unsigned int shift) {
+        return static_cast<double>((hash >> shift) & 0xffffU) / 65535.0;
+      };
+      const auto px = static_cast<double>(cell_x + dx) + unit(0);
+      const auto py = static_cast<double>(cell_y + dy) + unit(16);
+      const auto radius = 0.38 + 0.43 * unit(32);
+      const auto distance = ((x - px) * (x - px) + (y - py) * (y - py)) / (radius * radius);
+      const auto coverage = std::max(0.0, 1.0 - distance);
+      sum += coverage * coverage * (unit(48) * 2.0 - 1.0);
+    }
+  }
+  return sum * 2.4;
+}
+
+double stock_grain_noise(double x, double y, double size, std::uint32_t seed,
+    double roughness, const FilmGrainProfile& profile) {
+  const auto fine_weight = std::clamp(profile.fine_weight - (roughness - profile.roughness) * 0.4, 0.15, 0.98);
+  const auto primary = grain_particles(x, y, size * (0.55 + 0.4 * (1.0 - fine_weight)), seed);
+  const auto micro = grain_particles(x + 5.37, y + 19.13, size * 0.35, seed ^ 0x68bc21ebU);
+  const auto cluster = grain_particles(x + 13.17, y - 7.83,
+      size * profile.cluster_scale, seed ^ 0xa511e9b3U);
+  // Broad clumps modulate fine particles; they must not become smooth blobs.
+  const auto signal = 0.78 * primary + 0.22 * micro + (1.0 - fine_weight) * 0.15 * cluster;
+  return signal * (1.0 + roughness * 0.45 * std::abs(cluster));
 }
 
 double smoothstep(double edge0, double edge1, double value) {
@@ -358,6 +399,10 @@ PhotoEffectResult photo_effect_support(const PhotoEffectInstance& effect,
     if (!effect.opaque_parameters.empty() || !std::isfinite(grain.size) || grain.size < 0.25 || grain.size > 64.0 ||
         !std::isfinite(grain.strength) || grain.strength < 0.0 || grain.strength > 0.5 ||
         !std::isfinite(grain.color) || grain.color < -1.0 || grain.color > 1.0 ||
+        (!grain.stock.empty() && find_film_grain_profile(grain.stock) == nullptr) ||
+        !std::isfinite(grain.roughness) || grain.roughness < 0.0 || grain.roughness > 1.0 ||
+        !std::isfinite(grain.shadows) || grain.shadows < 0.0 || grain.shadows > 2.0 ||
+        !std::isfinite(grain.highlights) || grain.highlights < 0.0 || grain.highlights > 2.0 ||
         !std::isfinite(options.scale_x) || options.scale_x < kMinDocumentScale || options.scale_x > 4096.0 ||
         !std::isfinite(options.scale_y) || options.scale_y < kMinDocumentScale || options.scale_y > 4096.0 ||
         grain.size * std::max(options.scale_x, options.scale_y) > kMaxSigma ||
@@ -597,11 +642,30 @@ static PhotoEffectResult apply_photo_effect_impl(std::vector<ColorPixel>* pixels
         const auto document_x = (static_cast<double>(options.origin_x) + x) / options.scale_x;
         const auto document_y = (static_cast<double>(options.origin_y) + y) / options.scale_y;
         const auto& grain = effect.grain;
+        const auto* profile = find_film_grain_profile(grain.stock);
         const auto chroma = (grain.color + 1.0) * 0.5;
         const auto level = std::sqrt(std::clamp(std::abs(luminance) /
             (1.0 + std::abs(luminance)), 0.0, 1.0));
         const auto amplitude = grain.strength * (0.25 + 0.75 * level);
-        if (chroma <= 0.0) {
+        if (profile != nullptr) {
+          // Approximate the raster footprint: reduce subpixel variance rather
+          // than turning unresolved grains into full-strength digital noise.
+          const auto footprint = 1.0 / std::sqrt(options.scale_x * options.scale_y);
+          const auto size = std::sqrt(grain.size * grain.size + footprint * footprint * 0.12);
+          const auto resolved = std::min(1.0, grain.size / footprint);
+          const auto tone = std::lerp(profile->shadow_response * grain.shadows, 1.0,
+              smoothstep(0.04, 0.38, level)) *
+              std::lerp(1.0, profile->highlight_response * grain.highlights,
+                  smoothstep(0.60, 0.94, level));
+          const auto stock_amplitude = grain.strength * std::sqrt(std::max(0.0, luminance)) * tone * resolved;
+          const auto mono = stock_grain_noise(document_x, document_y, size, grain.seed, grain.roughness, *profile);
+          for (std::size_t channel = 0; channel < filtered.size(); ++channel) {
+            const auto dye = chroma > 0.0 ? stock_grain_noise(document_x, document_y,
+                size * profile->dye_scale[channel],
+                grain.seed ^ static_cast<std::uint32_t>(0x9e3779b9U * (channel + 1U)), grain.roughness, *profile) : mono;
+            filtered[channel] += stock_amplitude * std::lerp(mono, dye, chroma);
+          }
+        } else if (chroma <= 0.0) {
           const auto noise = grain_noise(document_x, document_y, grain.size, grain.seed);
           for (auto& channel : filtered) channel += amplitude * noise;
         } else {

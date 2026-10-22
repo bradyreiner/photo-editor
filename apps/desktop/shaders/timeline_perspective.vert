@@ -12,6 +12,8 @@ layout(std140, binding = 0) uniform buf {
     float itemHeight;
     float perspectiveX;
     float perspectiveY;
+    vec4 fadeColor;
+    float fadeAmount;
 } ubuf;
 
 void main()

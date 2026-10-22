@@ -1146,7 +1146,9 @@ int main(int argc, char* argv[]) {
       !canonical_working_surface->copy_pixels(&canonical_working_pixels) ||
       canonical_working_pixels.size() != exact_working_reference.size() ||
       canonical_working_telemetry.gpu_command_buffer_count != 1 ||
-      canonical_working_telemetry.gpu_kernel_dispatch_count != 136 ||
+      // Fractional sharpening now uses adjacent blur scales (2 and 3),
+      // removing four dispatches from the former radius-7 edge guide.
+      canonical_working_telemetry.gpu_kernel_dispatch_count != 132 ||
       canonical_working_telemetry.gpu_cpu_to_gpu_bytes !=
           pixel_bytes + static_cast<std::int64_t>(
                             canonical_tone_lut.samples.size() * sizeof(float) +
@@ -1165,7 +1167,7 @@ int main(int argc, char* argv[]) {
                             6U * static_cast<std::size_t>(
                                 photo_editor::pipeline::CompiledCurveStageLuts::
                                     kSampleCount) * sizeof(float) +
-                            6U * 127U * sizeof(float)) ||
+                            6U * 136U * sizeof(float)) ||
       canonical_working_telemetry.gpu_gpu_to_cpu_bytes != 0) {
     std::cerr << "canonical retained working-stage Metal fusion failed: surface="
               << (canonical_working_surface != nullptr)
@@ -1230,7 +1232,7 @@ int main(int argc, char* argv[]) {
                    left.blue == right.blue && left.alpha == right.alpha;
           }) ||
       canonical_working_telemetry.gpu_command_buffer_count != 2 ||
-      canonical_working_telemetry.gpu_kernel_dispatch_count != 272 ||
+      canonical_working_telemetry.gpu_kernel_dispatch_count != 264 ||
       canonical_working_telemetry.gpu_cpu_to_gpu_bytes -
               retained_upload_bytes != pixel_bytes ||
       canonical_working_telemetry.gpu_gpu_to_cpu_bytes != 0) {

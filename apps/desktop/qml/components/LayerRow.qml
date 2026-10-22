@@ -186,16 +186,20 @@ Rectangle {
         z: 2
 
         Rectangle {
+            id: popupTooltipAnchor1
             objectName: "layerRowReorderHandle"
             Layout.preferredWidth: 10
             Layout.fillHeight: true
             radius: 3
             color: "transparent"
             opacity: root.contextualActionsVisible ? 0.82 : 0.28
-            ToolTip.visible: reorderHandleHover.hovered
-            ToolTip.delay: 350
-            ToolTip.text: root.reorderTooltip
-
+            AppToolTip {
+                id: sharedTooltip2
+                targetItem: popupTooltipAnchor1
+                visible: popupTooltipAnchor1.visible && (reorderHandleHover.hovered)
+                delay: 350
+                text: root.reorderTooltip
+            }
             HoverHandler { id: reorderHandleHover }
 
             Column {
@@ -298,10 +302,13 @@ Rectangle {
                         border.width: 0
                         border.color: "transparent"
 
-                        ToolTip.visible: badgeHover.containsMouse && badgeLabel.length > 0
-                        ToolTip.delay: 300
-                        ToolTip.text: badgeLabel
-
+                        AppToolTip {
+                            id: sharedTooltip3
+                            targetItem: badgeDelegate
+                            visible: badgeDelegate.visible && (badgeHover.containsMouse && badgeDelegate.badgeLabel.length > 0)
+                            delay: 300
+                            text: badgeDelegate.badgeLabel
+                        }
                         MouseArea {
                             id: badgeHover
                             anchors.fill: parent
@@ -374,6 +381,7 @@ Rectangle {
             }
 
             Rectangle {
+                id: popupTooltipAnchor4
                 objectName: root.maskStateObjectName
                 visible: root.showMaskState
                 Layout.preferredWidth: 42
@@ -390,10 +398,13 @@ Rectangle {
                               : root.maskLabel !== "No Mask"
                               ? theme.alpha(root.accent, 0.48)
                               : theme.alpha(theme.textMuted, 0.22)
-                ToolTip.visible: maskStateHover.hovered
-                ToolTip.delay: 300
-                ToolTip.text: root.maskLabel
-
+                AppToolTip {
+                    id: sharedTooltip5
+                    targetItem: popupTooltipAnchor4
+                    visible: popupTooltipAnchor4.visible && (maskStateHover.hovered)
+                    delay: 300
+                    text: root.maskLabel
+                }
                 HoverHandler { id: maskStateHover }
 
                 Label {

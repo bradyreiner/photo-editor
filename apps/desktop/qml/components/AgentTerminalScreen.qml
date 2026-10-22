@@ -447,32 +447,15 @@ Item {
                         }
                     }
                 }
-                Rectangle {
+                ProgressStrip {
                     id: activityTrack
                     objectName: "agentRunActivityBar"
                     Layout.fillWidth: true
-                    implicitHeight: 8
-                    color: "#202124"
-                    border.color: "#61584A"
-                    clip: true
-                    Accessible.role: Accessible.ProgressBar
+                    implicitHeight: 4
+                    active: root.activityVisible && root.running && !root.awaitingInput
+                    reducedMotion: root.themeObject.reducedMotion
+                    opacity: root.awaitingInput ? 0.45 : 1
                     Accessible.name: root.awaitingInput ? "Waiting for your answer" : root.running ? "Agent is working" : "Agent run stopped"
-                    Rectangle {
-                        id: activityBeam
-                        x: 1
-                        y: 1
-                        width: root.running ? Math.max(28, activityTrack.width * 0.24) : 0
-                        height: activityTrack.height - 2
-                        color: root.phosphor
-                        opacity: root.awaitingInput ? 0.45 : 0.95
-                    }
-                    SequentialAnimation {
-                        objectName: "agentRunActivityAnimation"
-                        running: root.activityVisible && root.running && !root.awaitingInput && !root.themeObject.reducedMotion
-                        loops: Animation.Infinite
-                        XAnimator { target: activityBeam; from: 1; to: Math.max(1, activityTrack.width - activityBeam.width - 1); duration: 1050; easing.type: Easing.InOutSine }
-                        XAnimator { target: activityBeam; from: Math.max(1, activityTrack.width - activityBeam.width - 1); to: 1; duration: 1050; easing.type: Easing.InOutSine }
-                    }
                 }
                 Button {
                     id: terminalStatusDetail

@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "copyPhotoEditsDialog"
     property string sourceLabel: ""
@@ -61,16 +61,13 @@ Popup {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(480, parent ? parent.width - 32 : 480)
-    height: Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 32 : 660)
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(480, parent ? parent.width - 32 : 480)))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 32 : 660)))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? Math.max(16, (parent.height - height) / 2) : 0
-    padding: 24
+    padding: standardPopupPadding
     Theme { id: theme }
-    background: Rectangle {
-        color: theme.ink900
-        radius: theme.radiusPanel
-        border.color: theme.lineSoft
+    background: PopupSurface {
         Accessible.name: qsTr("Copy Edits")
         Accessible.description: qsTr("Choose the edit groups to copy to selected photos.")
         Accessible.role: Accessible.Dialog
