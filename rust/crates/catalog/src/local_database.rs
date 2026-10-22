@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use getrandom::getrandom;
@@ -560,22 +560,42 @@ impl LocalCatalogDatabaseManager {
     }
 
     fn start_cluster(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
-        self.run_postgres_command(
-            "pg_ctl",
-            &[
-                "-D".to_string(),
-                self.cluster_data_dir().display().to_string(),
-                "-l".to_string(),
-                self.cluster_log_file().display().to_string(),
-                "-w".to_string(),
-                "start".to_string(),
-                "-o".to_string(),
-                format!(
-                    "-c listen_addresses={} -c port={} -c max_connections=32",
-                    state.host, state.port
-                ),
-            ],
-        )
+        let mut command = Command::new(self.postgres_executable("pg_ctl"));
+        command.args([
+            "-D".to_string(),
+            self.cluster_data_dir().display().to_string(),
+            "-l".to_string(),
+            self.cluster_log_file().display().to_string(),
+            "-w".to_string(),
+            "start".to_string(),
+            "-o".to_string(),
+            format!(
+                "-c listen_addresses={} -c port={} -c max_connections=32",
+                state.host, state.port
+            ),
+        ]);
+        apply_runtime_environment(&mut command);
+
+        // On Windows, the postmaster created by `pg_ctl start` can retain the
+        // anonymous stdout/stderr pipes installed by `Command::output`. Waiting
+        // for those pipes to reach EOF then blocks until PostgreSQL itself exits,
+        // even though pg_ctl has already reported a successful start. Give the
+        // server independent handles and wait only for pg_ctl to finish.
+        let status = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            return Ok(());
+        }
+
+        Err(io::Error::other(format!(
+            "pg_ctl failed to start PostgreSQL with code {:?}; inspect {}",
+            status.code(),
+            self.cluster_log_file().display()
+        ))
+        .into())
     }
 
     fn load_or_create_state(&self) -> LocalDatabaseResult<LocalPostgresState> {
