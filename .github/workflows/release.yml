@@ -524,7 +524,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: looksy-release-macos-*
           path: incoming
@@ -603,7 +603,7 @@ jobs:
       PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: looksy-release-*
           path: incoming
