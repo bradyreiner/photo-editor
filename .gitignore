@@ -49,6 +49,7 @@ scripts/ai/
 .env.*.local
 .photo-editor/
 .photo-editor-runtime-check/
+/:memory:.ses
 data/
 logs/
 backups/

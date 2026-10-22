@@ -2,6 +2,7 @@
 #include "brush_input_schema.h"
 #include "local_mask_compiler.h"
 #include "edit_recipe_state.h"
+#include "qimage_color_conversion.h"
 #include "../engine/src/pipeline/color_mask_runtime.h"
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -106,7 +107,9 @@ int main(int argc,char** argv) {
   request.retouch_mode="patch";request.patch_source_set=true;request.quality_mode="final";
   auto patch=run_ai_inpaint(request);
   CHECK(patch.success && patch.patch_image.depth()==64,"Source-region patch retains 16-bit full-resolution output");
-  const auto reference=request.source_image.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_RGBA64);
+  const auto reference=convert_tagged_qimage_color_space(request.source_image,
+      QColorSpace(QColorSpace::SRgb), QImage::Format_RGBA64,
+      QImageColorConversionPurpose::EvidenceMeasurement);
   CHECK(std::abs(patch.patch_image.pixelColor(0,0).redF()-reference.pixelColor(0,0).redF())<0.0001,
       "Linear/wide-gamut source must be converted before tagging a patch sRGB");
   request.control=std::make_shared<AiInpaintControl>();request.control->cancel();

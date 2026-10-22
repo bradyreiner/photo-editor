@@ -1,6 +1,7 @@
 #pragma once
 
 #include "photo_paint_format.h"
+#include "qimage_color_conversion.h"
 #include <QColorSpace>
 #include <QImage>
 #include <QPainter>
@@ -100,7 +101,9 @@ class PhotoPaintSurface final {
       image = QImage(reinterpret_cast<const uchar*>(raw.constData()), rect.width(), rect.height(),
           rect.width() * 16, QImage::Format_RGBA32FPx4_Premultiplied).copy();
     } else if (!legacy.isNull()) {
-      image = legacy.copy(rect).convertedToColorSpace(color_space, QImage::Format_RGBA32FPx4_Premultiplied);
+      image = convert_tagged_qimage_color_space(legacy.copy(rect), color_space,
+          QImage::Format_RGBA32FPx4_Premultiplied,
+          QImageColorConversionPurpose::DecodeNormalization);
     } else {
       image = QImage(rect.size(), QImage::Format_RGBA32FPx4_Premultiplied);
       image.fill(Qt::transparent);
@@ -141,7 +144,9 @@ class PhotoPaintSurface final {
     painter.translate(-region.topLeft());
     painter.scale(static_cast<double>(output.width()) / size.width(), static_cast<double>(output.height()) / size.height());
     if (!legacy.isNull()) {
-      const auto base = legacy.convertedToColorSpace(color_space, QImage::Format_RGBA32FPx4_Premultiplied);
+      const auto base = convert_tagged_qimage_color_space(legacy, color_space,
+          QImage::Format_RGBA32FPx4_Premultiplied,
+          QImageColorConversionPurpose::DecodeNormalization);
       painter.drawImage(QRect(QPoint(),size), base);
     }
     auto keys = tiles.keys();

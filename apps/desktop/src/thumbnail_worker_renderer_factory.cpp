@@ -74,7 +74,8 @@ QString render_source_layer_thumbnail(
       RenderBackendPreference::CpuOnly, &source_metadata, nullptr, {},
       photo_editor::pipeline::RemovalQuality::Final,
       RenderOutputPolicy::DisplayReferred, nullptr, cancellation)
-      : decoded.convertedToColorSpace(QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32);
+      : convert_tagged_qimage_color_space(decoded, QColorSpace(QColorSpace::SRgb),
+            QImage::Format_ARGB32, QImageColorConversionPurpose::OutputPublication);
   if (rendered.isNull() || cancellation.cancelled()) return {};
   auto thumbnail = scaled_layer_thumbnail_image(rendered);
   thumbnail.setColorSpace(QColorSpace(QColorSpace::SRgb));

@@ -55,8 +55,9 @@ class PhotoPixelStroke final {
       if (tip_mips_.empty()) {
         auto source = tip_image;
         if (!source.colorSpace().isValid()) source.setColorSpace(QColorSpace(QColorSpace::SRgb));
-        source = source.convertedToColorSpace(
-            surface.color_space, QImage::Format_RGBA32FPx4_Premultiplied);
+        source = convert_tagged_qimage_color_space(source, surface.color_space,
+            QImage::Format_RGBA32FPx4_Premultiplied,
+            QImageColorConversionPurpose::DecodeNormalization);
         if (source.isNull()) {
           error = QStringLiteral("The photo-fragment tip could not be converted to the paint color space.");
           return false;
@@ -80,7 +81,8 @@ class PhotoPixelStroke final {
     ink.setColorSpace(QColorSpace(QColorSpace::SRgb));
     auto* p = reinterpret_cast<QRgbaFloat32*>(ink.bits());
     *p = QRgbaFloat32{color.redF(),color.greenF(),color.blueF(),1.0F};
-    ink = ink.convertedToColorSpace(surface.color_space,QImage::Format_RGBA32FPx4);
+    ink = convert_tagged_qimage_color_space(ink, surface.color_space,
+        QImage::Format_RGBA32FPx4, QImageColorConversionPurpose::DecodeNormalization);
     ink_ = *reinterpret_cast<const QRgbaFloat32*>(ink.constBits());
     if (texture_material == QStringLiteral("light_paint")) {
       const auto radiance = static_cast<float>(std::exp2(std::clamp(light_exposure, -8.0, 8.0)));

@@ -606,7 +606,8 @@ static PhotoEffectResult apply_photo_effect_impl(std::vector<ColorPixel>* pixels
       if (!std::isfinite(transformed.red) || !std::isfinite(transformed.green) ||
           !std::isfinite(transformed.blue) || !std::isfinite(transformed.alpha) ||
           transformed.alpha < 0.0F || transformed.alpha > 1.0F) return false;
-      const auto alpha = std::lerp(static_cast<double>(original.alpha), transformed.alpha, amount);
+      const auto alpha = std::lerp(static_cast<double>(original.alpha),
+          static_cast<double>(transformed.alpha), amount);
       const auto channel = [&](float a, float b) {
         return alpha > 0.0 ? static_cast<float>((a * original.alpha * (1.0 - amount) +
             b * transformed.alpha * amount) / alpha) : 0.0F;

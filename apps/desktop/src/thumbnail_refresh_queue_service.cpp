@@ -142,8 +142,10 @@ void paint_thumbnail_checker(QPainter* painter, const QRect& rect) {
 QImage decoded_layer_pixel_image(const QVariantMap& layer) {
   if (layer.contains("paintTiles")) {
     const QSize size(layer.value("pixelWidth").toInt(),layer.value("pixelHeight").toInt());
-    return rasterize_photo_paint_layer(layer,size.scaled(128,128,Qt::KeepAspectRatio))
-        .convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
+    return convert_tagged_qimage_color_space(
+        rasterize_photo_paint_layer(layer,size.scaled(128,128,Qt::KeepAspectRatio)),
+        QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
+        QImageColorConversionPurpose::OutputPublication);
   }
   const auto pixel_data = layer.value(QStringLiteral("pixelData")).toByteArray();
   if (!pixel_data.isEmpty()) {

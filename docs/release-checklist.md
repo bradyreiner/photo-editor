@@ -18,6 +18,16 @@ Use this checklist for every shipped version.
 - [ ] User-visible changes, known limitations, migration notes, and backup advice are documented.
 - [ ] Payment, support, privacy, and download configuration remain accurate.
 - [ ] No signing, payment, database, or model secret is present in source or artifacts.
+- [ ] The Qt distribution model is recorded and approved for every selected platform. A macOS
+  Homebrew install not requesting a Qt Account and the Windows Qt Online Installer requesting
+  one are acquisition-path differences, not proof of open-source or commercial license rights.
+- [ ] For a commercial Qt release, entitlement coverage is verified for the developers, Qt
+  version, modules, build process, and distribution channels used by the candidate.
+- [ ] For an LGPL Qt release, the exact license texts, notices, corresponding-source delivery or
+  valid source offer, replacement/relink instructions and means, Qt modification sources, and
+  third-party multimedia/codec obligations are verified. Package, store, signing, EULA, and
+  updater restrictions do not prevent recipients from exercising LGPL rights. See
+  [release-process.md](release-process.md#qt-account-and-distribution-licensing).
 
 ## Candidate proof
 

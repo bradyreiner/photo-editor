@@ -17,6 +17,7 @@
 
 #include "ai_model_runtime.h"
 #include "object_pick_policy.h"
+#include "qimage_color_conversion.h"
 
 namespace {
 
@@ -378,7 +379,9 @@ int main(int argc, char** argv) {
       return fail("Edge-context photographic inference must produce a real 16-bit model patch");
     if (!evidence_dir.isEmpty()) {
       QDir().mkpath(evidence_dir);
-      auto composed=photo.convertedToColorSpace(QColorSpace(QColorSpace::SRgb), QImage::Format_RGBA64);
+      auto composed=photo_editor::desktop::convert_tagged_qimage_color_space(
+          photo, QColorSpace(QColorSpace::SRgb), QImage::Format_RGBA64,
+          photo_editor::desktop::QImageColorConversionPurpose::EvidenceMeasurement);
       QPainter painter(&composed);
       painter.setClipRect(selected);
       painter.drawImage(QPoint(photo_result.patch_x,photo_result.patch_y),photo_result.patch_image);

@@ -1,4 +1,5 @@
 #include "ai_model_runtime.h"
+#include "qimage_color_conversion.h"
 #include <QtGui/qrgbafloat.h>
 
 #include <QColor>
@@ -660,7 +661,8 @@ AiInpaintResult run_source_region_patch(const AiInpaintRequest& request) {
   if (!source.colorSpace().isValid()) {
     source.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
-  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_RGBA64);
+  source = convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
+      QImage::Format_RGBA64, QImageColorConversionPurpose::DecodeNormalization);
   const auto source_rect = patch_source_rect(request, source.size());
   if (!source_rect.isValid() || source_rect.isEmpty()) {
     result.error_message = QStringLiteral("Patch source region is empty.");
@@ -706,7 +708,8 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
   if (!source.colorSpace().isValid()) {
     source.setColorSpace(QColorSpace(QColorSpace::SRgb));
   }
-  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
+  source = convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
+      QImage::Format_ARGB32, QImageColorConversionPurpose::DecodeNormalization);
 
   auto patch = source.copy(bounds);
   const auto patch_width = patch.width();
@@ -1311,7 +1314,8 @@ AiInpaintResult run_fake_inpaint(const AiInpaintRequest& request) {
   }
 
   auto source = request.source_image;
-  source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_ARGB32);
+  source = convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
+      QImage::Format_ARGB32, QImageColorConversionPurpose::DecodeNormalization);
 
   auto patch = source.copy(bounds);
   const auto fill_color = average_patch_boundary_color(source, bounds);
@@ -1481,8 +1485,9 @@ class OnnxAiRuntime final {
       if (!color_managed_source.colorSpace().isValid()) {
         color_managed_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
       }
-      const auto image = color_managed_source.convertedToColorSpace(
-          QColorSpace(QColorSpace::SRgb), QImage::Format_RGB888);
+      const auto image = convert_tagged_qimage_color_space(color_managed_source,
+          QColorSpace(QColorSpace::SRgb), QImage::Format_RGB888,
+          QImageColorConversionPurpose::DecodeNormalization);
       const auto scale = static_cast<double>(model_size) /
                          static_cast<double>(std::max(image.width(), image.height()));
       const auto resized_width = std::clamp(
@@ -2001,7 +2006,8 @@ class OnnxAiRuntime final {
       if (!source.colorSpace().isValid()) {
         source.setColorSpace(QColorSpace(QColorSpace::SRgb));
       }
-      source = source.convertedToColorSpace(QColorSpace(QColorSpace::SRgb),QImage::Format_RGBA32FPx4);
+      source = convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
+          QImage::Format_RGBA32FPx4, QImageColorConversionPurpose::DecodeNormalization);
       const auto patch_source = source.copy(bounds);
       const auto patch_mask = mask_patch_bytes(request, bounds);
       const auto model_size = model_input_size_for_patch(bounds.size());
