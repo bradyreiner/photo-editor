@@ -38,6 +38,8 @@ Item {
     }
 
     function normalizedHue(value) {
+        // Wheel values stay display sRGB hue turns; each tool translates them
+        // into its own rendering model.
         return ((value % 1) + 1) % 1
     }
 

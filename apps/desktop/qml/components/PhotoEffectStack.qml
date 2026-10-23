@@ -84,13 +84,13 @@ ColumnLayout {
         Layout.maximumHeight: 0
         implicitWidth: 0
         implicitHeight: 0
-        Popup {
+        AppPopup {
             id: effectPicker
             objectName: "photoEffectPicker"
             parent: Overlay.overlay
             readonly property real availableOverlayWidth: Overlay.overlay ? Overlay.overlay.width : 720
             readonly property real availableOverlayHeight: Overlay.overlay ? Overlay.overlay.height : 720
-            width: Math.min(Math.max(320, root.width), Math.max(1, availableOverlayWidth - 24))
+            width: Math.min(popupAvailableWidth, Math.max(1, Math.min(Math.max(320, root.width), Math.max(1, availableOverlayWidth - 24))))
             property point anchorPosition: Qt.point(0, 0)
             x: Math.max(12, Math.min(anchorPosition.x + root.width - width, availableOverlayWidth - width - 12))
             y: Math.max(12, Math.min(anchorPosition.y + addEffectButton.height + 6, availableOverlayHeight - height - 12))
@@ -104,7 +104,7 @@ ColumnLayout {
             function updateAnchor() {
                 if (parent) anchorPosition = addEffectButton.mapToItem(parent, 0, 0)
             }
-            height: Math.min(implicitHeight, Math.max(176, availableOverlayHeight - 24))
+            height: Math.min(popupAvailableHeight, Math.max(1, Math.min(implicitHeight, Math.max(176, availableOverlayHeight - 24))))
             padding: 12
             modal: false
             dim: false

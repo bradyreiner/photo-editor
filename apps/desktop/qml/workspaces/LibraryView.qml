@@ -1115,22 +1115,17 @@ Rectangle {
 
     }
 
-    Dialog {
+    AppDialog {
         id: deleteAssetsDialog
         parent: Overlay.overlay
         modal: true
-        width: 420
+        width: Math.min(popupAvailableWidth, Math.max(1, 420))
         title: catalogAssets.selectedAssetCount === 1 ? "Delete selected image?" : "Delete selected images?"
 
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
 
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: theme.hairlineWidth
-            border.color: theme.alpha(theme.lineStrong, 0.36)
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -1183,22 +1178,17 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: projectAssignmentDialog
         parent: Overlay.overlay
         modal: true
-        width: 520
+        width: Math.min(popupAvailableWidth, Math.max(1, 520))
         title: catalogAssets.selectedAssetCount === 1 ? "Projects for 1 selected image" : "Projects for " + catalogAssets.selectedAssetCount + " selected images"
 
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
 
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: theme.hairlineWidth
-            border.color: theme.alpha(theme.lineStrong, 0.36)
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space12
@@ -1306,23 +1296,18 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: unsavedCarouselOpenDialog
         objectName: "libraryUnsavedCarouselOpenDialog"
         parent: Overlay.overlay
         modal: true
-        width: Math.min(theme.scaled(460), parent ? parent.width - theme.space24 : theme.scaled(460))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(460), parent ? parent.width - theme.space24 : theme.scaled(460))))
         title: root.pendingNewCarousel ? "Save before creating a Carousel?" : "Save before opening another Carousel?"
 
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
 
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.surfaceTop
-            border.width: theme.hairlineWidth
-            border.color: theme.alpha(theme.lineStrong, 0.42)
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -1372,22 +1357,17 @@ Rectangle {
         }
     }
 
-    Dialog {
+    AppDialog {
         id: exportSelectionDialog
         parent: Overlay.overlay
         modal: true
-        width: 520
+        width: Math.min(popupAvailableWidth, Math.max(1, 520))
         title: catalogAssets.selectedAssetCount === 1 ? "Export 1 selected image" : "Export " + catalogAssets.selectedAssetCount + " selected items"
 
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
 
-        background: Rectangle {
-            radius: theme.radiusPanel
-            color: theme.ink900
-            border.width: theme.hairlineWidth
-            border.color: theme.alpha(theme.lineStrong, 0.36)
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space12

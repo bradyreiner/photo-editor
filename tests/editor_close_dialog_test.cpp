@@ -1,3 +1,4 @@
+#include "qml_popup_wait.h"
 #include "editor_close_coordinator.h"
 #include <QAccessible>
 #include <QElapsedTimer>
@@ -42,7 +43,7 @@ ApplicationWindow {
   std::unique_ptr<QObject> object(component.createWithInitialProperties({{"coordinator", QVariant::fromValue(&close)}}));
   auto* window = qobject_cast<QQuickWindow*>(object.get());
   if (!window) { std::cerr << component.errorString().toStdString(); return fail("Close dialog fixture should load"); }
-  const auto settle = [] { for (int i = 0; i < 10; ++i) { QCoreApplication::processEvents(QEventLoop::AllEvents, 10); QThread::msleep(5); } };
+  const auto settle = [&] { for (int i = 0; i < 10; ++i) { QCoreApplication::processEvents(QEventLoop::AllEvents, 10); QThread::msleep(5); } wait_for_popup_transition(window->findChild<QObject*>("editorCloseDialog")); };
   auto* opener = qobject_cast<QQuickItem*>(window->findChild<QObject*>("editorCloseOpener"));
   if (!opener) return fail("Close dialog fixture should contain its opener");
   window->show();

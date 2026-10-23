@@ -4,18 +4,18 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "agentFailureDetails"
     parent: Overlay.overlay
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(680, parent ? parent.width - 32 : 680)
-    height: Math.min(520, parent ? parent.height - 32 : 520)
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(680, parent ? parent.width - 32 : 680)))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(520, parent ? parent.height - 32 : 520)))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
-    padding: 20
+    padding: standardPopupPadding
     property string detailsText: ""
     property var returnFocusItem: null
     Theme { id: theme }
@@ -72,7 +72,7 @@ Popup {
             Qt.callLater(function() { opener.forceActiveFocus(Qt.PopupFocusReason) })
     }
 
-    background: PopupSurface { fillColor: theme.ink900 }
+    background: PopupSurface {}
     contentItem: ColumnLayout {
         spacing: 14
         RowLayout {

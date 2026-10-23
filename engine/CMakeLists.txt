@@ -335,6 +335,20 @@ target_compile_features(photo_engine PUBLIC cxx_std_20)
 
 if(APPLE AND PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
   target_link_libraries(photo_engine PRIVATE "-framework Metal" "-framework Foundation")
+  set(color_metal_header "${CMAKE_CURRENT_BINARY_DIR}/generated/color_adjustments_metal_source.h")
+  add_custom_command(
+    OUTPUT "${color_metal_header}"
+    COMMAND "${CMAKE_COMMAND}"
+      "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/src/pipeline/metal/color_adjustments.metal"
+      "-DOUTPUT=${color_metal_header}"
+      -P "${PROJECT_SOURCE_DIR}/cmake/EmbedColorMetal.cmake"
+    DEPENDS src/pipeline/metal/color_adjustments.metal
+      src/pipeline/color_look_harmony_math.h
+      src/pipeline/color_look_grading_math.h
+      "${PROJECT_SOURCE_DIR}/cmake/EmbedColorMetal.cmake"
+    VERBATIM)
+  target_sources(photo_engine PRIVATE "${color_metal_header}")
+  target_include_directories(photo_engine PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
   target_compile_definitions(photo_engine PUBLIC PHOTO_EDITOR_HAS_METAL_BACKEND=1)
   set_source_files_properties(
     src/pipeline/metal/metal_pipeline_backend.mm

@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Rectangle {
+PopupSurface {
     id: banner
 
     required property var studioTheme
@@ -35,10 +35,7 @@ Rectangle {
              !importModeOpen
     width: Math.min(760, Math.max(460, parent ? parent.width - 36 : 460))
     height: recoveryContent.implicitHeight + 22
-    radius: 8
-    color: studioTheme.alpha(studioTheme.glassBase, 0.96)
-    border.width: 1
-    border.color: studioTheme.alpha(studioTheme.warning, 0.62)
+    fillColor: studioTheme.popupFill
 
     ColumnLayout {
         id: recoveryContent

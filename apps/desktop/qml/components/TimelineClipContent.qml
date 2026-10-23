@@ -64,11 +64,14 @@ Item {
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 7
                 elide: Text.ElideNone
-                ToolTip.visible: titleHover.hovered && contentWidth > width + 1
-                ToolTip.delay: 350
-                ToolTip.timeout: 3600
-                ToolTip.text: root.title
-
+                AppToolTip {
+                    id: sharedTooltip1
+                    targetItem: titleLabel
+                    visible: titleLabel.visible && (titleHover.hovered && titleLabel.contentWidth > titleLabel.width + 1)
+                    delay: 350
+                    timeout: 3600
+                    text: root.title
+                }
                 HoverHandler { id: titleHover }
             }
         }
@@ -84,11 +87,14 @@ Item {
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 7
             elide: Text.ElideNone
-            ToolTip.visible: metadataHover.hovered && contentWidth > width + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.metadata
-
+            AppToolTip {
+                id: sharedTooltip2
+                targetItem: metadataLabel
+                visible: metadataLabel.visible && (metadataHover.hovered && metadataLabel.contentWidth > metadataLabel.width + 1)
+                delay: 350
+                timeout: 3600
+                text: root.metadata
+            }
             HoverHandler { id: metadataHover }
         }
 
@@ -118,11 +124,14 @@ Item {
                     height: statusBadgeRow.implicitHeight
                     Accessible.name: String(modelData.tooltip || badgeLabel)
                     Accessible.role: Accessible.StaticText
-                    ToolTip.visible: statusHover.hovered
-                    ToolTip.delay: 350
-                    ToolTip.timeout: 3600
-                    ToolTip.text: String(modelData.tooltip || badgeLabel)
-
+                    AppToolTip {
+                        id: sharedTooltip3
+                        targetItem: statusBadge
+                        visible: statusBadge.visible && (statusHover.hovered)
+                        delay: 350
+                        timeout: 3600
+                        text: String(statusBadge.modelData.tooltip || statusBadge.badgeLabel)
+                    }
                     HoverHandler { id: statusHover }
 
                     Row {

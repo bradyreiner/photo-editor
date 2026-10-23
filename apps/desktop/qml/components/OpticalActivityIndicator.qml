@@ -5,25 +5,24 @@ Item {
     property bool active: true
     property color color: theme.opticalLight
     property real progress: -1
-    readonly property bool animating: root.active && root.visible && root.enabled && !theme.reducedMotion
+    property bool reducedMotion: false
+    readonly property bool animating: active && visible && enabled && !reducedMotion && !theme.reducedMotion
     Theme { id: theme }
     implicitWidth: theme.scaled(18)
     implicitHeight: implicitWidth
+    Accessible.role: Accessible.ProgressBar
+    Accessible.name: progress >= 1 ? "Complete" : progress >= 0 ? Math.round(Math.max(0, progress) * 100) + "%" : "Loading"
 
-    LooksyAgentCharacter {
-        objectName: "activityCharacterGlyph"
+    OpticalLightField {
+        objectName: "activityInterferenceRing"
         anchors.fill: parent
         visible: root.active || root.progress < 1
-        glyphOnly: true
-        lineColor: root.color
-        accentColor: root.color
+        kind: 1
+        active: root.animating
+        reducedMotion: root.reducedMotion
         progress: root.progress
-        animated: root.animating
-        mode: root.active ? "scan" : root.progress >= 1 ? "success" : "idle"
-        opacity: root.active ? 1 : 0.65
-        Accessible.ignored: true
+        opacity: root.active ? 1 : 0.55
     }
-
     AppIcon {
         anchors.fill: parent
         visible: !root.active && root.progress >= 1

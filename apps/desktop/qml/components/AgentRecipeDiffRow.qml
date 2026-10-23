@@ -88,8 +88,12 @@ Rectangle {
         }
     }
 
-    ToolTip.visible: rowHover.hovered
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: root.summary.length > 0 ? root.label + "\n" + root.summary : root.label
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (rowHover.hovered)
+        delay: 350
+        timeout: 3600
+        text: root.summary.length > 0 ? root.label + "\n" + root.summary : root.label
+    }
 }

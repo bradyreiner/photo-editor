@@ -2060,26 +2060,22 @@ Item {
                                             Layout.preferredWidth: 0
                                             Layout.preferredHeight: 0
 
-                                        Popup {
+                                        AppPopup {
                                             id: storyRolePopup
                                             objectName: "aiEditAssignmentStoryRolePopup"
                                             parent: storyRoleButton
                                             x: storyRoleButton.width - width
                                             y: storyRoleButton.height + 6
-                                            width: 260
-                                            height: storyRoleMenuColumn.implicitHeight + 12
+                                            width: Math.min(popupAvailableWidth, Math.max(1, 260))
+                                            height: Math.min(popupAvailableHeight, Math.max(1, storyRoleMenuColumn.implicitHeight + 12))
                                             padding: 6
                                             modal: false
                                             focus: true
                                             closePolicy: Popup.CloseOnEscape |
                                                          Popup.CloseOnPressOutside
 
-                                            background: Rectangle {
+                                            background: PopupSurface {
                                                 objectName: "aiEditAssignmentStoryRolePopupSurface"
-                                                radius: 12
-                                                color: root.themeObject.alpha(root.ink, 0.98)
-                                                border.width: 1
-                                                border.color: root.themeObject.alpha(root.primaryAccent, 0.48)
                                             }
 
                                             contentItem: Column {

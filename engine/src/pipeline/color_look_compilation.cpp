@@ -2,6 +2,7 @@
 
 #include "color_look_compilation_runtime.h"
 #include "color_look_protected_program.h"
+#include "color_look_runtime.h"
 #include "color_mixer_runtime.h"
 #include "color_working_space_runtime.h"
 
@@ -43,51 +44,6 @@ namespace {
          pixel.blue * compiled.luminance_coefficients[2];
 }
 
-[[nodiscard]] float rgb_hue(const ColorPixel& pixel) {
-  const auto red = std::max(0.0F, pixel.red);
-  const auto green = std::max(0.0F, pixel.green);
-  const auto blue = std::max(0.0F, pixel.blue);
-  const auto maximum = std::max({red, green, blue});
-  const auto minimum = std::min({red, green, blue});
-  const auto delta = maximum - minimum;
-  if (delta <= 1.0e-9F) {
-    return -1.0F;
-  }
-  auto hue = 0.0F;
-  if (maximum == red) {
-    hue = (green - blue) / delta;
-    if (hue < 0.0F) {
-      hue += 6.0F;
-    }
-  } else if (maximum == green) {
-    hue = (blue - red) / delta + 2.0F;
-  } else {
-    hue = (red - green) / delta + 4.0F;
-  }
-  return hue / 6.0F;
-}
-
-[[nodiscard]] float channel_weight(float hue, int channel) {
-  static constexpr std::array<float, kColorMixerChannelCount> centers = {
-      0.0F, 0.09F, 0.15F, 0.32F, 0.50F, 0.64F, 0.78F, 0.88F};
-  static constexpr std::array<float, kColorMixerChannelCount> inner = {
-      0.05F, 0.04F, 0.04F, 0.10F, 0.06F, 0.08F, 0.06F, 0.05F};
-  static constexpr std::array<float, kColorMixerChannelCount> outer = {
-      0.10F, 0.09F, 0.08F, 0.18F, 0.10F, 0.13F, 0.10F, 0.10F};
-  auto distance = std::abs(hue - centers[static_cast<std::size_t>(channel)]);
-  distance = std::min(distance, 1.0F - distance);
-  if (distance <= inner[static_cast<std::size_t>(channel)]) {
-    return 1.0F;
-  }
-  if (distance >= outer[static_cast<std::size_t>(channel)]) {
-    return 0.0F;
-  }
-  return 1.0F - smoothstep(
-                    inner[static_cast<std::size_t>(channel)],
-                    outer[static_cast<std::size_t>(channel)],
-                    distance);
-}
-
 [[nodiscard]] ColorPixel apply_rgb_mixer(
     const CompiledLookStageProgram& compiled,
     const ColorPixel& pixel) {
@@ -109,10 +65,12 @@ namespace {
     const CompiledLookStageProgram& compiled,
     const ColorPixel& pixel) {
   auto gray = native_luminance(compiled, pixel);
-  const auto hue = rgb_hue(pixel);
+  const auto selection_rgb = color_selection_rgb(compiled, pixel);
+  const auto confidence = static_cast<float>(color_selection_confidence(selection_rgb));
+  const auto hue = confidence > 0.0F ? rgb_hue_for_mixer_selection(selection_rgb) : -1.0;
   if (hue >= 0.0F) {
     for (auto channel = 0; channel < kColorMixerChannelCount; ++channel) {
-      const auto weight = channel_weight(hue, channel);
+      const auto weight = confidence * static_cast<float>(color_mixer_channel_weight(hue, static_cast<std::size_t>(channel)));
       gray *= std::max(
           0.0F,
           1.0F + weight *
@@ -132,8 +90,18 @@ namespace {
       std::abs(input.red - input.green),
       std::abs(input.green - input.blue),
       std::abs(input.red - input.blue)});
-  if (spread <= 1.0e-6F &&
+  const auto neutral_threshold =
+      (compiled.active_mask & CompiledLookStageProgram::kLegacyCreativeSemantics) != 0U
+          ? 1.0e-6F : 0.0F;
+  if (spread <= neutral_threshold &&
       (compiled.active_mask & CompiledLookStageProgram::kColorGrading) == 0U) {
+    return input;
+  }
+  // Hue-selective edits are exact identities when the source has no reliable color.
+  // Avoid a perceptual round trip (and its rounding noise) in that common case.
+  if ((compiled.active_mask & (CompiledLookStageProgram::kSaturationVibrance |
+                               CompiledLookStageProgram::kColorGrading)) == 0U &&
+      color_selection_confidence(color_selection_rgb(compiled, input)) <= 0.0) {
     return input;
   }
   const auto xyz = multiply(
@@ -157,14 +125,25 @@ namespace {
   auto b = 0.0259040371F * l_root + 0.7827717662F * m_root -
            0.8086757660F * s_root;
   auto chroma = std::hypot(a, b);
-  if (chroma <= 1.0e-4F) {
-    chroma = 0.0F;
-  }
   const auto skin_scale = compiled_look_skin_protection_scale(compiled, a, b);
   const auto vibrance_weight = 1.0F - smoothstep(0.035F, 0.24F, chroma);
   chroma *= std::max(
       0.0F, 1.0F + compiled.vibrance_strength * vibrance_weight * skin_scale * 0.82F);
   const auto original_chroma = std::hypot(a, b);
+  const auto peak = std::max({input.red, input.green, input.blue});
+  const auto over_headroom =
+      (compiled.active_mask &
+       CompiledLookStageProgram::kHighlightChromaCompressionOverHeadroom) != 0U &&
+      static_cast<double>(peak) >
+          sanitized_scene_working_headroom(compiled.output_headroom) + 1.0e-5;
+  const auto from_tone =
+      (compiled.active_mask &
+       CompiledLookStageProgram::kHighlightChromaCompressionFromTone) != 0U &&
+      !over_headroom && peak >= 0.98F;
+  if (over_headroom || from_tone) {
+    chroma *= static_cast<float>(highlight_chroma_compression_scale(
+        static_cast<double>(lightness), static_cast<double>(original_chroma)));
+  }
   auto chroma_scale = original_chroma > 1.0e-9F
                           ? chroma / original_chroma
                           : 0.0F;
@@ -179,7 +158,8 @@ namespace {
   apply_compiled_look_replacement(compiled, input, skin_scale, &lightness, &a, &b,
                                   &replacement_luminance, &replacement_weight);
   if ((compiled.active_mask & CompiledLookStageProgram::kColorHarmony) != 0U)
-    apply_compiled_look_harmony(compiled, skin_scale, &a, &b);
+    apply_compiled_look_harmony(compiled, skin_scale * static_cast<float>(
+        color_selection_confidence(color_selection_rgb(compiled, input))), &a, &b);
   chroma = std::hypot(a, b);
   if ((compiled.active_mask & CompiledLookStageProgram::kColorGrading) != 0U) {
     apply_compiled_look_grading(compiled, skin_scale, &lightness, &a, &b);
@@ -230,6 +210,7 @@ CompiledLookStageProgram compile_look_stage_program(
   const auto context = make_pipeline_color_context(state);
   compiled.rgb_to_xyz_d65 = context.rgb_to_xyz_d65;
   compiled.xyz_d65_to_rgb = context.xyz_d65_to_rgb;
+  compiled.rgb_to_selection_rgb = context.rgb_to_linear_srgb;
   compiled.luminance_coefficients = {
       static_cast<float>(context.rgb_to_xyz_native.values[3]),
       static_cast<float>(context.rgb_to_xyz_native.values[4]),
@@ -272,6 +253,27 @@ CompiledLookStageProgram compile_look_stage_program(
   if (compiled.active_mask == 0U) {
     return compiled;
   }
+  const auto aces2_perceptual =
+      photographic_rendering_model_uses_aces2(
+          state.color_pipeline.photographic_rendering_model) &&
+      state.color_pipeline.render_intent == RenderIntent::Perceptual;
+  if (!aces2_perceptual) {
+    // The historical look stage applies highlight chroma compression when
+    // scene values exceed output headroom. Tone edits also enable its
+    // sub-headroom highlight branch.
+    compiled.active_mask |=
+        CompiledLookStageProgram::kHighlightChromaCompressionOverHeadroom;
+    if (std::abs(effective_input_exposure(state)) > 1.0e-9 ||
+        std::abs(state.filmic_shoulder) > 1.0e-9 ||
+        std::abs(state.hdr_local_tone_mapping) > 1.0e-9) {
+      compiled.active_mask |=
+          CompiledLookStageProgram::kHighlightChromaCompressionFromTone;
+    }
+  }
+  if (state.color_pipeline.photographic_rendering_model !=
+      PhotographicRenderingModel::Aces2OcioV1) {
+    compiled.active_mask |= CompiledLookStageProgram::kLegacyCreativeSemantics;
+  }
   compiled.cache_identity = look_stage_program_payload_identity(compiled);
   return compiled;
 }
@@ -294,7 +296,9 @@ ColorPixel apply_compiled_look_stage_program(
         CompiledLookStageProgram::kColorGrading |
         CompiledLookStageProgram::kPerChannelMixer |
         CompiledLookStageProgram::kColorHarmony |
-        CompiledLookStageProgram::kColorReplacement)) != 0U) {
+        CompiledLookStageProgram::kColorReplacement |
+        CompiledLookStageProgram::kHighlightChromaCompressionOverHeadroom |
+        CompiledLookStageProgram::kHighlightChromaCompressionFromTone)) != 0U) {
     adjusted = apply_saturation_vibrance(compiled, adjusted);
   }
   return adjusted;

@@ -6,6 +6,7 @@
 
 #include "color_adjustment_scheduler.h"
 #include "color_blur_runtime.h"
+#include "color_detail_runtime.h"
 #include "color_curve_evaluator.h"
 #include "color_look_runtime.h"
 #include "color_lut_runtime.h"
@@ -971,6 +972,7 @@ bool photo_layer_requires_gamut_fit(
   if (color_state.black_and_white_enabled) {
     pixel = apply_black_and_white_mixer(
         pixel,
+        pixel_to_linear_srgb_reference(pixel, context),
         color_state,
         luminance_for_pixel(pixel, context));
   }
@@ -1157,166 +1159,14 @@ void apply_photo_layer_sharpen_noise_adjustments(
     int height,
     const PipelineColorContext& context,
     const PhotoLayer& layer) {
-  if (pixels == nullptr || pixels->empty() || width <= 0 || height <= 0) {
-    return;
-  }
-
-  const auto sharpen_strength = clamp_signed_percent(layer.sharpening) / 100.0;
-  const auto sharpen_radius = std::clamp(layer.sharpen_radius, 0.5, 3.0);
-  const auto sharpen_detail = std::clamp(layer.sharpen_detail, 0.0, 100.0) / 100.0;
-  const auto sharpen_mask_strength = clamp_signed_percent(layer.sharpen_masking) / 100.0;
-  const auto luma_nr_strength = clamp_signed_percent(layer.luminance_nr) / 100.0;
-  const auto color_nr_strength = clamp_signed_percent(layer.color_nr) / 100.0;
-  if (std::abs(sharpen_strength) <= 1e-6 &&
-      std::abs(luma_nr_strength) <= 1e-6 &&
-      std::abs(color_nr_strength) <= 1e-6) {
-    return;
-  }
-
-  const auto pixel_count = pixels->size();
-  const auto safe_width = static_cast<std::size_t>(width);
-  std::vector<float> lightness_buf(pixel_count);
-  std::vector<float> chroma_a_buf(pixel_count);
-  std::vector<float> chroma_b_buf(pixel_count);
-  BlurWorkspace detail_blur_workspace;
-
-  parallel_for(height, [&](int y) {
-    const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-    for (int x = 0; x < width; ++x) {
-      const auto index = row_offset + static_cast<std::size_t>(x);
-      const auto ok = linear_rgb_to_oklab((*pixels)[index], context);
-      lightness_buf[index] = static_cast<float>(ok.lightness);
-      chroma_a_buf[index] = static_cast<float>(ok.a);
-      chroma_b_buf[index] = static_cast<float>(ok.b);
-    }
-  });
-
-  if (std::abs(sharpen_strength) > 1e-6) {
-    const auto sharp_radius = std::max(1, static_cast<int>(std::lround(sharpen_radius)));
-    const auto edge_radius =
-        std::max(sharp_radius + 2, static_cast<int>(std::lround(sharpen_radius * 3.0)));
-    const auto sharpen_gain = 1.9 + sharpen_detail * 1.15;
-    std::vector<float> sharp_blur;
-    gaussian_approximate_blur_into(
-        lightness_buf,
-        width,
-        height,
-        sharp_radius,
-        &sharp_blur,
-        &detail_blur_workspace);
-    std::vector<float> edge_blur;
-    if (sharpen_mask_strength > 1e-6) {
-      gaussian_approximate_blur_into(
-          lightness_buf,
-          width,
-          height,
-          edge_radius,
-          &edge_blur,
-          &detail_blur_workspace);
-    }
-
-    parallel_for(height, [&](int y) {
-      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-      for (int x = 0; x < width; ++x) {
-        const auto index = row_offset + static_cast<std::size_t>(x);
-        const auto detail_signal = lightness_buf[index] - sharp_blur[index];
-        auto mask_gate = 1.0;
-        if (sharpen_mask_strength > 1e-6) {
-          const auto edge_strength = std::abs(lightness_buf[index] - edge_blur[index]);
-          mask_gate = smoothstep(
-              0.0015,
-              0.012 + 0.06 * sharpen_mask_strength,
-              static_cast<double>(edge_strength));
-        }
-        lightness_buf[index] += static_cast<float>(
-            static_cast<double>(detail_signal) * sharpen_strength * sharpen_gain * mask_gate);
-      }
-    });
-  }
-
-  if (std::abs(luma_nr_strength) > 1e-6) {
-    std::vector<float> nr_blur;
-    gaussian_approximate_blur_into(
-        lightness_buf,
-        width,
-        height,
-        2,
-        &nr_blur,
-        &detail_blur_workspace);
-    std::vector<float> nr_edge_blur;
-    gaussian_approximate_blur_into(
-        lightness_buf,
-        width,
-        height,
-        5,
-        &nr_edge_blur,
-        &detail_blur_workspace);
-
-    parallel_for(height, [&](int y) {
-      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-      for (int x = 0; x < width; ++x) {
-        const auto index = row_offset + static_cast<std::size_t>(x);
-        const auto edge = std::abs(lightness_buf[index] - nr_edge_blur[index]);
-        const auto edge_preserve = 1.0 - smoothstep(0.005, 0.04, static_cast<double>(edge));
-        const auto blend = luma_nr_strength * 0.85 * edge_preserve;
-        lightness_buf[index] = static_cast<float>(
-            static_cast<double>(lightness_buf[index]) * (1.0 - blend) +
-            static_cast<double>(nr_blur[index]) * blend);
-      }
-    });
-  }
-
-  if (std::abs(color_nr_strength) > 1e-6) {
-    std::vector<float> a_blur;
-    gaussian_approximate_blur_into(
-        chroma_a_buf,
-        width,
-        height,
-        3,
-        &a_blur,
-        &detail_blur_workspace);
-    std::vector<float> b_blur;
-    gaussian_approximate_blur_into(
-        chroma_b_buf,
-        width,
-        height,
-        3,
-        &b_blur,
-        &detail_blur_workspace);
-
-    parallel_for(height, [&](int y) {
-      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-      const auto blend = color_nr_strength * 0.90;
-      for (int x = 0; x < width; ++x) {
-        const auto index = row_offset + static_cast<std::size_t>(x);
-        chroma_a_buf[index] = static_cast<float>(
-            static_cast<double>(chroma_a_buf[index]) * (1.0 - blend) +
-            static_cast<double>(a_blur[index]) * blend);
-        chroma_b_buf[index] = static_cast<float>(
-            static_cast<double>(chroma_b_buf[index]) * (1.0 - blend) +
-            static_cast<double>(b_blur[index]) * blend);
-      }
-    });
-  }
-
-  parallel_for(height, [&](int y) {
-    const auto row_offset = static_cast<std::size_t>(y) * safe_width;
-    for (int x = 0; x < width; ++x) {
-      const auto index = row_offset + static_cast<std::size_t>(x);
-      const auto lightness =
-          static_cast<double>(lightness_buf[index]);
-      const auto a = static_cast<double>(chroma_a_buf[index]);
-      const auto b = static_cast<double>(chroma_b_buf[index]);
-      (*pixels)[index] = oklab_to_linear_rgb(
-          OklabColor{
-              .lightness = lightness,
-              .a = a,
-              .b = b,
-          },
-          (*pixels)[index].alpha,
-          context);
-    }
-  });
+  ColorAdjustmentState detail;
+  detail.sharpening = layer.sharpening;
+  detail.sharpen_radius = layer.sharpen_radius;
+  detail.sharpen_detail = layer.sharpen_detail;
+  detail.sharpen_masking = layer.sharpen_masking;
+  detail.luminance_nr = layer.luminance_nr;
+  detail.color_nr = layer.color_nr;
+  apply_fine_detail_effects_in_context(pixels, width, height, detail, context, {}, nullptr);
 }
 
 namespace {

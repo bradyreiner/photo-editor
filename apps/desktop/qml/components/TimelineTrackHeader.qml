@@ -1007,14 +1007,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: groupTransformPopup
         objectName: "timelineTrackGroupTransformPopup"
-        width: Math.min(340, Math.max(280, root.width * 1.9))
-        height: groupTransformContent.implicitHeight + root.theme.space20
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
+        height: Math.min(popupAvailableHeight, Math.max(1, groupTransformContent.implicitHeight + root.theme.space20))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: root.theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1028,7 +1028,7 @@ Rectangle {
             root.groupTransformRotationDraft = Math.round(
                         Number(root.trackGroupData.transformRotationDegrees || 0))
         }
-        background: PopupSurface { accent: root.patchAccent }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             id: groupTransformContent
             spacing: root.theme.space8
@@ -1175,14 +1175,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: createTrackGroupPopup
         objectName: "timelineCreateTrackGroupPopup"
-        width: Math.min(320, Math.max(260, root.width * 1.8))
-        height: createTrackGroupContent.implicitHeight + root.theme.space20
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+        height: Math.min(popupAvailableHeight, Math.max(1, createTrackGroupContent.implicitHeight + root.theme.space20))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: root.theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1190,7 +1190,7 @@ Rectangle {
             newTrackGroupName.text = ""
             Qt.callLater(function() { newTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
         }
-        background: PopupSurface { accent: root.patchAccent }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             id: createTrackGroupContent
             spacing: root.theme.space8
@@ -1238,19 +1238,19 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: addToTrackGroupPopup
         objectName: "timelineAddToTrackGroupPopup"
-        width: Math.min(320, Math.max(260, root.width * 1.8))
-        height: Math.min(root.theme.scaled(420),
-                         groupPickerContent.implicitHeight + root.theme.space20)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(420),
+                         groupPickerContent.implicitHeight + root.theme.space20)))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: root.theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface { accent: root.patchAccent }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             id: groupPickerContent
             spacing: root.theme.space6
@@ -1286,14 +1286,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: renameTrackGroupPopup
         objectName: "timelineRenameTrackGroupPopup"
-        width: Math.min(320, Math.max(260, root.width * 1.8))
-        height: renameTrackGroupContent.implicitHeight + root.theme.space20
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+        height: Math.min(popupAvailableHeight, Math.max(1, renameTrackGroupContent.implicitHeight + root.theme.space20))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: root.theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1301,7 +1301,7 @@ Rectangle {
             renamedTrackGroupName.text = String(root.trackData.groupName || "")
             Qt.callLater(function() { renamedTrackGroupName.forceActiveFocus(Qt.PopupFocusReason) })
         }
-        background: PopupSurface { accent: root.patchAccent }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             id: renameTrackGroupContent
             spacing: root.theme.space8
@@ -1347,18 +1347,18 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: nestTrackGroupPopup
         objectName: "timelineNestTrackGroupPopup"
-        width: Math.min(340, Math.max(280, root.width * 1.9))
-        height: Math.min(root.theme.scaled(400), nestGroupContent.implicitHeight + root.theme.space20)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(340, Math.max(280, root.width * 1.9))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(root.theme.scaled(400), nestGroupContent.implicitHeight + root.theme.space20)))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: root.theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: PopupSurface { accent: root.patchAccent }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             id: nestGroupContent
             spacing: root.theme.space6
@@ -1431,14 +1431,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: trackRenamePopup
         objectName: "timelineRenameTrackPopup"
-        width: Math.min(320, Math.max(260, root.width * 1.8))
-        height: renameTrackContent.implicitHeight + theme.space20
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(320, Math.max(260, root.width * 1.8))))
+        height: Math.min(popupAvailableHeight, Math.max(1, renameTrackContent.implicitHeight + theme.space20))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -1450,9 +1450,7 @@ Rectangle {
             })
         }
 
-        background: PopupSurface {
-            accent: root.patchAccent
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             id: renameTrackContent
@@ -1509,21 +1507,19 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: deleteTrackConfirmation
         objectName: "timelineDeleteTrackConfirmation"
-        width: Math.min(360, Math.max(300, root.width * 2))
-        height: deleteTrackContent.implicitHeight + theme.space20
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(360, Math.max(300, root.width * 2))))
+        height: Math.min(popupAvailableHeight, Math.max(1, deleteTrackContent.implicitHeight + theme.space20))
         x: root.width - width
         y: Math.max(0, (root.height - height) / 2)
-        padding: theme.space10
+        padding: standardPopupPadding
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            accent: theme.error
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             id: deleteTrackContent
@@ -1588,14 +1584,14 @@ Rectangle {
         }
     }
 
-    Popup {
+    AppPopup {
         id: automationPopup
         property bool contentCreated: false
-        width: Math.min(380, Math.max(300, root.width * 1.9))
-        height: Math.min(680,
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(380, Math.max(300, root.width * 1.9))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(680,
                          (automationContentLoader.item
                           ? automationContentLoader.item.contentImplicitHeight : 0)
-                         + theme.space20)
+                         + theme.space20)))
         x: root.width - width
         y: theme.space8
         padding: theme.space10
@@ -1604,9 +1600,7 @@ Rectangle {
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onAboutToShow: contentCreated = true
 
-        background: PopupSurface {
-            accent: trackData.trackKind === "audio" ? theme.audioAccent : theme.accentCool500
-        }
+        background: PopupSurface {}
 
         contentItem: Loader {
             id: automationContentLoader

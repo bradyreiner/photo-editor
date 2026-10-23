@@ -77,8 +77,12 @@ Item {
         onClicked: root.triggered(root.actionKey)
     }
 
-    ToolTip.visible: rowMouse.containsMouse && root.label.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: 2400
-    ToolTip.text: root.label
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (rowMouse.containsMouse && root.label.length > 0)
+        delay: 350
+        timeout: 2400
+        text: root.label
+    }
 }

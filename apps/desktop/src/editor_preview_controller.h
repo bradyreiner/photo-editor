@@ -1911,6 +1911,7 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE QVariantList photoEffectParameterFields(const QString& type) const;
   Q_INVOKABLE bool setPhotoLayerDisplacementMap(int index, const QString& effect_id, const QString& path);
   Q_INVOKABLE QVariantList availablePhotoEffects() const;
+  Q_INVOKABLE QVariantList availableFilmGrainStocks() const;
   Q_INVOKABLE QVariantList availablePhotoEffectLooks() const;
   Q_INVOKABLE bool applyPhotoLayerEffectLook(int index, const QString& look_id);
   Q_INVOKABLE QStringList availablePhotoTextFonts() const;

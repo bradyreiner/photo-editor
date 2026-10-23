@@ -16,7 +16,7 @@ inline QVariantMap agent_string_enum(const QStringList& choices, const QString& 
 // These partial-update schemas mirror the native setters, not a replacement
 // document format. Native cross-field, font and image checks remain authoritative.
 inline QVariantMap agent_shape_fill_schema() {
-  const QVariantMap color{{"type", "string"}, {"description", "Qt color name or #RRGGBB/#AARRGGBB."}};
+  const QVariantMap color{{"type", "string"}, {"description", "Qt color name or hex. Prefer opaque six-digit #RRGGBB. Eight-digit hex is Qt #AARRGGBB for intentional alpha, never CSS #RRGGBBAA."}};
   return {{"type", "object"}, {"additionalProperties", false}, {"minProperties", 1},
       {"description", "Partial shape fill update. Gradient centers are normalized within the shape; angles are degrees."},
       {"properties", QVariantMap{
@@ -36,7 +36,7 @@ inline QVariantMap agent_shape_fill_schema() {
 
 inline QVariantMap agent_typography_schema() {
   const QVariantMap text{{"type", "string"}, {"maxLength", 1024}};
-  const QVariantMap color{{"type", "string"}, {"description", "Qt color name or #RRGGBB/#AARRGGBB."}};
+  const QVariantMap color{{"type", "string"}, {"description", "Qt color name or hex. Prefer opaque six-digit #RRGGBB. Eight-digit hex is Qt #AARRGGBB for intentional alpha, never CSS #RRGGBBAA."}};
   const QVariantMap boolean{{"type", "boolean"}};
   const QVariantMap point{{"type", "object"}, {"additionalProperties", false}, {"required", QStringList{"x", "y"}},
       {"properties", QVariantMap{{"x", agent_number_schema(0, 1)}, {"y", agent_number_schema(0, 1)}}}};

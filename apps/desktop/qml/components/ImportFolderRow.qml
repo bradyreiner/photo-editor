@@ -61,10 +61,14 @@ Rectangle {
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 2
             elide: Text.ElideNone
-            ToolTip.visible: folderHover.hovered && (folderLabel.truncated || folderLabel.contentHeight > folderLabel.height + 1)
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.fileName
+            AppToolTip {
+                id: sharedTooltip1
+                targetItem: folderLabel
+                visible: folderLabel.visible && (folderHover.hovered && (folderLabel.truncated || folderLabel.contentHeight > folderLabel.height + 1))
+                delay: 350
+                timeout: 3600
+                text: root.fileName
+            }
         }
 
         AppIcon {

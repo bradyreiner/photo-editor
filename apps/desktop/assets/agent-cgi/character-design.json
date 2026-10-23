@@ -1,0 +1,26 @@
+{
+  "status": "animated CRT robot implemented; live preview available for visual review",
+  "selectedByUser": null,
+  "generator": "runtime GPU solid geometry",
+  "hero": null,
+  "turnaround": null,
+  "expressions": null,
+  "modelAsset": null,
+  "rigAsset": null,
+  "animationAssets": [],
+  "notes": [
+    "Latest user clarification asks for an animated little CRT robot itself, not a CRT test card.",
+    "The previous vector optical-surveyor drawing is replaced by genuinely three-dimensional GPU geometry and lighting.",
+    "The standalone preview cycles through idle, wave, talk, work, walk and happy states.",
+    "This is an implemented direction for review; final character-art approval has not been given.",
+    "Prior generated scout and clock images remain archived and are not runtime assets."
+  ],
+  "requestedDirection": "A little animated robot whose character itself has a CRT look: curved glass face, phosphor eyes, scanlines, glitches and expressive movement.",
+  "rejectedDirection": [
+    "humanoid mechanical scout",
+    "clock character"
+  ],
+  "renderer": "apps/desktop/qml/components/LooksyAgentCharacter.qml + agent_robot.frag + CrtSignalSurface.qml",
+  "livePreview": "tests/crt_signal_preview.qml",
+  "verification": "Native Metal pixels verify real solid geometry, moving head, articulated wave, walking, CRT effects and reduced motion."
+}

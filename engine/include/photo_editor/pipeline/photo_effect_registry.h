@@ -35,7 +35,7 @@ inline constexpr std::array photo_effect_registry{
     PhotoEffectDescriptor{"imperfect_print", 1, "Imperfect print", "Print",
         "Simulate paper variation, ink spread, density, and independently registered color plates.", true},
     PhotoEffectDescriptor{"film_grain", 1, "Film grain", "Film",
-        "Add seeded, fine-grained photographic texture that stays fixed in document space.", false},
+        "Stock-inspired silver and dye-cloud grain with tonal response, clumping, and fixed document-space structure.", false},
     PhotoEffectDescriptor{"light_leak", 1, "Light leak", "Film",
         "Add a soft, positioned wash of warm or cool light across the frame.", false},
     PhotoEffectDescriptor{"split_tone", 1, "Split tone", "Color",

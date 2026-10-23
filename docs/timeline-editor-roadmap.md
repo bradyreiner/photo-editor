@@ -2,6 +2,16 @@
 
 ## Active milestone
 
+The immediate focus is finishing real video edits with responsive playback,
+predictable preview quality, usable crop/transform tools, music and dialogue,
+stabilization, grading, and reliable delivery. The current findings and ordered
+acceptance gates are in [Video editing readiness](timeline-video-editing-readiness-2026-10-22.md).
+Use these gates before expanding the feature inventory below.
+
+The [direct animation workflow](timeline-animation-workflow-2026-10-22.md) adds
+Program placement handles, contextual video/text animation controls, a clearer
+curve graph, speed access, opacity, and black/white fades within this milestone.
+
 Build creator-grade editing foundations across tracks, compositing, animation, audio, typography, and the timeline UI. The completed [Timeline MVP Checklist](timeline-mvp-checklist.md) remains the short-form workflow baseline; it is no longer the product ceiling.
 
 ## Goal

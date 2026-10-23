@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "editorCloseDialog"
     property var coordinator: null
@@ -21,11 +21,11 @@ Popup {
     modal: true
     focus: true
     closePolicy: Popup.NoAutoClose
-    width: Math.min(480, parent ? parent.width - 32 : 480)
-    height: contentItem.implicitHeight + 40
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(480, parent ? parent.width - 32 : 480)))
+    height: Math.min(popupAvailableHeight, Math.max(1, contentItem.implicitHeight + 40))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? Math.max(16, (parent.height - height) / 2) : 0
-    padding: 20
+    padding: standardPopupPadding
     Theme { id: theme }
     onAboutToShow: {
         const popupWindow = root.parent ? root.parent.Window.window : null
@@ -49,10 +49,7 @@ Popup {
             root.focusReturnItem = null
         }
     }
-    background: Rectangle {
-        color: theme.ink900
-        radius: theme.radiusPanel
-        border.color: root.failed ? theme.error : theme.lineSoft
+    background: PopupSurface {
         Accessible.name: titleLabel.text
         Accessible.description: detailLabel.text
         Accessible.role: Accessible.Dialog

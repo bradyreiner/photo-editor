@@ -4938,9 +4938,7 @@ QString TimelinePlaybackController::preferredSourceUrl() const {
     return original;
   }
   const auto proxy = timeline_document_->proxyPlaybackSourceUrl();
-  if (preview_quality_mode_ == QStringLiteral("full") ||
-      preview_quality_mode_ == QStringLiteral("half") ||
-      preview_quality_mode_ == QStringLiteral("quarter")) {
+  if (preview_quality_mode_ == QStringLiteral("full")) {
     return original;
   }
   if (preview_quality_mode_ == QStringLiteral("proxy")) {
@@ -4951,8 +4949,16 @@ QString TimelinePlaybackController::preferredSourceUrl() const {
   }
   const auto needs_responsive_source = interaction_active_ || timeline_document_->sequencePlaying();
   const auto render_cache = timeline_document_->renderCachePlaybackSourceUrl();
-  if (needs_responsive_source && !render_cache.isEmpty()) {
+  const auto reduced_resolution = preview_quality_mode_ == QStringLiteral("half") ||
+                                  preview_quality_mode_ == QStringLiteral("quarter");
+  // Resolution controls the published Program size, not whether the authored
+  // composite can use a ready cache. Retain that composite when paused too, so
+  // lowering detail does not force original decoding or lose cached effects.
+  if ((needs_responsive_source || reduced_resolution) && !render_cache.isEmpty()) {
     return render_cache;
+  }
+  if (reduced_resolution) {
+    return original;
   }
   return needs_responsive_source && !proxy.isEmpty() ? proxy : original;
 }

@@ -1,6 +1,8 @@
 #include "color_look_runtime.h"
 
 #include "color_math_runtime.h"
+#include "color_look_grading_math.h"
+#include "color_look_harmony_math.h"
 #include "color_mixer_runtime.h"
 
 #include <algorithm>
@@ -13,16 +15,30 @@ namespace photo_editor::pipeline {
 constexpr double kPi = std::numbers::pi_v<double>;
 
 [[nodiscard]] bool has_color_grading_adjustments(const ColorAdjustmentState& state) {
-  return clamp_unit(state.grading_amount / 100.0) > 1e-9 &&
-         (std::abs(state.grading_shadows_hue) > 1e-9 ||
-         std::abs(state.grading_shadows_saturation) > 1e-9 ||
-         std::abs(state.grading_shadows_luminance) > 1e-9 ||
-         std::abs(state.grading_midtones_hue) > 1e-9 ||
-         std::abs(state.grading_midtones_saturation) > 1e-9 ||
-         std::abs(state.grading_midtones_luminance) > 1e-9 ||
-         std::abs(state.grading_highlights_hue) > 1e-9 ||
-         std::abs(state.grading_highlights_saturation) > 1e-9 ||
-         std::abs(state.grading_highlights_luminance) > 1e-9);
+  if (clamp_unit(state.grading_amount / 100.0) <= 1e-9) {
+    return false;
+  }
+  const auto has_tint_or_lightness_change =
+      std::abs(state.grading_shadows_saturation) > 1e-9 ||
+      std::abs(state.grading_shadows_luminance) > 1e-9 ||
+      std::abs(state.grading_midtones_saturation) > 1e-9 ||
+      std::abs(state.grading_midtones_luminance) > 1e-9 ||
+      std::abs(state.grading_highlights_saturation) > 1e-9 ||
+      std::abs(state.grading_highlights_luminance) > 1e-9;
+  if (state.color_pipeline.photographic_rendering_model ==
+      PhotographicRenderingModel::Aces2OcioV1) {
+    // A modern hue control only selects the direction of an active tint; it
+    // cannot change pixels while every saturation and luminance control is
+    // zero. Keep such recipes on the exact identity path.
+    return has_tint_or_lightness_change;
+  }
+
+  // Preserve the historical renderer's treatment of hue-only grading as an
+  // active look, including its perceptual round trip.
+  return has_tint_or_lightness_change ||
+      std::abs(state.grading_shadows_hue) > 1e-9 ||
+      std::abs(state.grading_midtones_hue) > 1e-9 ||
+      std::abs(state.grading_highlights_hue) > 1e-9;
 }
 
 [[nodiscard]] bool has_color_replacement_adjustments(const ColorAdjustmentState& state) {
@@ -37,7 +53,13 @@ constexpr double kPi = std::numbers::pi_v<double>;
     return 0.0;
   }
   const auto range = std::clamp(state.skin_tone_protection_range / 100.0, 0.01, 1.0) * 0.50;
-  return circular_weight(normalized_hue, wrap_unit(state.skin_tone_line_hue), range) *
+  const auto legacy_semantics =
+      state.color_pipeline.photographic_rendering_model !=
+      PhotographicRenderingModel::Aces2OcioV1;
+  const auto skin_center = legacy_semantics
+      ? wrap_unit(state.skin_tone_line_hue)
+      : wrap_unit(oklab_hue_for_rgb_hue(state.skin_tone_line_hue) / (2.0 * kPi));
+  return circular_weight(normalized_hue, skin_center, range) *
          smoothstep(0.02, 0.12, chroma) *
          clamp_unit(state.skin_tone_protection_strength / 100.0);
 }
@@ -123,6 +145,19 @@ constexpr double kPi = std::numbers::pi_v<double>;
   return best_hue;
 }
 
+[[nodiscard]] std::array<float, 4> color_harmony_oklab_anchors(
+    const ColorAdjustmentState& state, int* count) {
+  const auto display_anchors = color_harmony_anchors(state, count);
+  std::array<float, 4> anchors{};
+  for (auto index = 0; index < *count; ++index) {
+    anchors[static_cast<std::size_t>(index)] = static_cast<float>(wrap_unit(
+        oklab_hue_for_rgb_hue(
+            display_anchors[static_cast<std::size_t>(index)]) /
+        (2.0 * kPi)));
+  }
+  return anchors;
+}
+
 [[nodiscard]] bool has_legacy_color_mixer_adjustments(const ColorAdjustmentState& state) {
   return std::abs(state.hue_adjustment) > 1e-9 ||
          std::abs(state.saturation_adjustment) > 1e-9 ||
@@ -151,6 +186,9 @@ ColorPixel apply_post_tone_color_adjustments(
     double vibrance_strength,
     double dehaze_strength_for_saturation,
     double output_headroom) {
+  const auto legacy_semantics =
+      state.color_pipeline.photographic_rendering_model !=
+      PhotographicRenderingModel::Aces2OcioV1;
   const auto has_post_color = has_post_tone_color_adjustments(
                                   state, saturation_strength, vibrance_strength) ||
       std::max(0.0, dehaze_strength_for_saturation) > 1.0e-9;
@@ -173,7 +211,9 @@ ColorPixel apply_post_tone_color_adjustments(
   if (!has_post_color && highlight_chroma_scale >= 0.999999) {
     return input;
   }
-  if (channel_spread <= 1e-6 && !has_color_grading_adjustments(state) &&
+  const auto neutral_channel_spread = legacy_semantics ? 1.0e-6 : 0.0;
+  if (channel_spread <= neutral_channel_spread &&
+      !has_color_grading_adjustments(state) &&
       highlight_chroma_scale >= 0.999999) {
     return input;
   }
@@ -182,18 +222,17 @@ ColorPixel apply_post_tone_color_adjustments(
   auto lightness = clamp_oklab_lightness(oklab.lightness, context);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
-  if (chroma <= 1e-4) {
-    chroma = 0.0;
-    hue = 0.0;
-  }
+  const auto selection_rgb = pixel_to_linear_srgb_reference(input, context);
+  const auto selection_confidence = color_selection_confidence(selection_rgb);
 
   auto explicit_skin_protection = 1.0;
   auto replacement_luminance_reference = -1.0;
   auto replacement_luminance_weight = 0.0;
-  if (chroma > 1e-6) {
+  if (chroma > 0.0) {
     const auto mixer_model = normalized_color_mixer_model(state);
     const auto normalized_hue = wrap_unit(hue / (2.0 * kPi));
-    const auto mixer_hue_for_selection = mixer_selection_hue(input, hue, chroma, mixer_model);
+    const auto mixer_hue_for_selection = selection_confidence > 0.0
+        ? rgb_hue_for_mixer_selection(selection_rgb) : -1.0;
     const auto low_chroma_weight = 1.0 - smoothstep(0.035, 0.24, chroma);
     explicit_skin_protection = skin_tone_protection_scale(state, normalized_hue, chroma);
     chroma *= std::max(0.0, 1.0 + vibrance_strength * low_chroma_weight *
@@ -202,6 +241,11 @@ ColorPixel apply_post_tone_color_adjustments(
     chroma *= highlight_chroma_scale;
 
     if (mixer_hue_for_selection >= 0.0) {
+      // Match compiled/Metal execution: low chroma cannot trigger a full
+      // absolute lightness lift. Capture this before channel edits so that
+      // a saturation adjustment cannot change another channel's L response.
+      const auto luminance_chroma_scale = legacy_semantics
+          ? 1.0 : std::min(1.0, chroma / 0.12);
       const auto use_legacy_mixer = !has_per_channel_color_mixer_adjustments(state);
       const auto hue_scale = mixer_model == "HSV" ? 0.16 : 0.22;
       const auto saturation_scale = mixer_model == "LCH" ? 0.72 : (mixer_model == "HSV" ? 0.92 : 1.15);
@@ -217,7 +261,7 @@ ColorPixel apply_post_tone_color_adjustments(
         const auto mixer_weight = channel_weight_for_selection(
             mixer_hue_for_selection, kColorMixerChannelNames[static_cast<std::size_t>(ch)]);
         if (mixer_weight > 0.0) {
-          const auto protected_mixer_weight = mixer_weight * explicit_skin_protection;
+          const auto protected_mixer_weight = mixer_weight * explicit_skin_protection * selection_confidence;
           hue = wrap_radians(hue + protected_mixer_weight * (clamp_signed_percent(mixer.hue) / 100.0) *
                                        hue_scale * 2.0 * kPi);
           chroma *= std::max(
@@ -227,13 +271,13 @@ ColorPixel apply_post_tone_color_adjustments(
           lightness +=
               protected_mixer_weight *
               (clamp_signed_percent(mixer.luminance) / 100.0) *
-              luminance_scale;
+              luminance_scale * luminance_chroma_scale;
           apply_selective_color_adjustment(mixer, protected_mixer_weight, &lightness, &chroma, &hue);
         }
       }
     }
     if (has_color_replacement_adjustments(state)) {
-      const auto selection_hue = rgb_hue_for_mixer_selection(input);
+      const auto selection_hue = mixer_hue_for_selection;
       const auto range = std::clamp(state.color_replacement_range / 100.0, 0.01, 1.0) * 0.50;
       const auto softness = clamp_unit(state.color_replacement_softness / 100.0);
       const auto replacement_weight =
@@ -244,7 +288,7 @@ ColorPixel apply_post_tone_color_adjustments(
                      range,
                      softness)
                : 0.0) *
-          clamp_unit(state.color_replacement_strength / 100.0) * explicit_skin_protection;
+          clamp_unit(state.color_replacement_strength / 100.0) * explicit_skin_protection * selection_confidence;
       if (replacement_weight > 1e-6) {
         if (state.color_replacement_preserve_luminance) {
           replacement_luminance_reference = luminance_for_pixel(
@@ -259,7 +303,8 @@ ColorPixel apply_post_tone_color_adjustments(
               context);
           replacement_luminance_weight = replacement_weight;
         }
-        const auto target_hue = oklab_hue_for_rgb_hue(state.color_replacement_target_hue, context);
+        const auto target_hue = oklab_hue_for_rgb_hue(
+            state.color_replacement_target_hue);
         hue = wrap_radians(hue + shortest_angular_delta(hue, target_hue) * replacement_weight);
         if (!state.color_replacement_preserve_saturation) {
           chroma = std::max(chroma, std::lerp(chroma, 0.16, replacement_weight));
@@ -267,10 +312,21 @@ ColorPixel apply_post_tone_color_adjustments(
       }
     }
     if (has_color_harmony_adjustments(state)) {
-      const auto normalized_hue = wrap_unit(hue / (2.0 * kPi));
-      const auto target_hue = nearest_color_harmony_hue(state, normalized_hue) * 2.0 * kPi;
-      const auto harmony_weight = clamp_unit(state.color_harmony_strength / 100.0) * 0.65 * explicit_skin_protection;
-      hue = wrap_radians(hue + shortest_angular_delta(hue, target_hue) * harmony_weight);
+      const auto harmony_weight = clamp_unit(state.color_harmony_strength / 100.0) *
+          0.65 * explicit_skin_protection * selection_confidence;
+      if (legacy_semantics) {
+        const auto normalized_hue = wrap_unit(hue / (2.0 * kPi));
+        const auto target_hue = nearest_color_harmony_hue(state, normalized_hue) * 2.0 * kPi;
+        hue = wrap_radians(
+            hue + shortest_angular_delta(hue, target_hue) * harmony_weight);
+      } else {
+        auto anchor_count = 0;
+        const auto anchors = color_harmony_oklab_anchors(state, &anchor_count);
+        const auto force = photo_editor_color_harmony_circular_force(
+            static_cast<float>(hue), anchors.data(),
+            static_cast<unsigned int>(anchor_count));
+        hue = wrap_radians(hue + static_cast<double>(force * harmony_weight));
+      }
     }
   }
 
@@ -279,24 +335,6 @@ ColorPixel apply_post_tone_color_adjustments(
     auto grade_b = chroma * std::sin(hue);
 
     const auto grading_amount = clamp_unit(state.grading_amount / 100.0);
-    const auto apply_grade = [&](double grade_hue, double grade_sat, double grade_lum, double weight) {
-      if (weight < 1e-9) {
-        return;
-      }
-      const auto sat_norm = clamp_signed_percent(grade_sat) / 100.0;
-      const auto hue_rad = wrap_unit(grade_hue) * 2.0 * kPi;
-      const auto lum_norm = clamp_signed_percent(grade_lum) / 100.0;
-      const auto scaled_weight = weight * grading_amount;
-      const auto intensity = std::abs(sat_norm) * 0.18 * scaled_weight * explicit_skin_protection;
-      if (intensity > 1e-9) {
-        grade_a += intensity * std::cos(hue_rad);
-        grade_b += intensity * std::sin(hue_rad);
-      }
-      lightness +=
-          lum_norm * 0.20 * scaled_weight *
-          explicit_skin_protection;
-    };
-
     const auto balance_shift = clamp_signed_percent(state.grading_balance) / 100.0 * 0.18;
     const auto grading_selection_lightness = clamp_unit(lightness);
     const auto shadow_weight =
@@ -312,12 +350,57 @@ ColorPixel apply_post_tone_color_adjustments(
             grading_selection_lightness);
     const auto midtone_weight = 1.0 - shadow_weight - highlight_weight;
 
-    apply_grade(state.grading_shadows_hue, state.grading_shadows_saturation,
-                state.grading_shadows_luminance, shadow_weight);
-    apply_grade(state.grading_midtones_hue, state.grading_midtones_saturation,
-                state.grading_midtones_luminance, std::max(0.0, midtone_weight));
-    apply_grade(state.grading_highlights_hue, state.grading_highlights_saturation,
-                state.grading_highlights_luminance, highlight_weight);
+    const std::array<double, 3> weights{
+        shadow_weight, std::max(0.0, midtone_weight), highlight_weight};
+    const std::array<double, 3> display_hues{
+        state.grading_shadows_hue, state.grading_midtones_hue,
+        state.grading_highlights_hue};
+    const std::array<double, 3> saturations{
+        state.grading_shadows_saturation, state.grading_midtones_saturation,
+        state.grading_highlights_saturation};
+    const std::array<double, 3> luminances{
+        state.grading_shadows_luminance, state.grading_midtones_luminance,
+        state.grading_highlights_luminance};
+
+    if (legacy_semantics) {
+      // Preserve saved legacy recipes: saturation sign selects magnitude only,
+      // and the stored hue remains a raw turn as it was in the frozen renderer.
+      for (std::size_t band = 0; band < weights.size(); ++band) {
+        if (weights[band] < 1.0e-9) continue;
+        const auto sat_norm = clamp_signed_percent(saturations[band]) / 100.0;
+        const auto hue_radians = wrap_unit(display_hues[band]) * 2.0 * kPi;
+        const auto lum_norm = clamp_signed_percent(luminances[band]) / 100.0;
+        const auto scaled_weight = weights[band] * grading_amount;
+        const auto intensity = std::abs(sat_norm) * 0.18 * scaled_weight *
+            explicit_skin_protection;
+        if (intensity > 1.0e-9) {
+          grade_a += intensity * std::cos(hue_radians);
+          grade_b += intensity * std::sin(hue_radians);
+        }
+        lightness += lum_norm * 0.20 * scaled_weight * explicit_skin_protection;
+      }
+    } else {
+      auto desaturation = 0.0F;
+      auto tint_a = 0.0F;
+      auto tint_b = 0.0F;
+      for (std::size_t band = 0; band < weights.size(); ++band) {
+        const auto hue_turns = wrap_unit(
+            oklab_hue_for_rgb_hue(display_hues[band]) / (2.0 * kPi));
+        const auto contribution = color_look_grading_band_contribution(
+            static_cast<float>(hue_turns),
+            static_cast<float>(clamp_signed_percent(saturations[band]) / 100.0),
+            static_cast<float>(clamp_signed_percent(luminances[band]) / 100.0),
+            static_cast<float>(weights[band] * grading_amount *
+                               explicit_skin_protection));
+        desaturation += contribution.desaturation;
+        tint_a += contribution.tint_a;
+        tint_b += contribution.tint_b;
+        lightness += contribution.lightness_delta;
+      }
+      const auto chroma_retention = std::clamp(1.0F - desaturation, 0.0F, 1.0F);
+      grade_a = static_cast<double>(static_cast<float>(grade_a) * chroma_retention + tint_a);
+      grade_b = static_cast<double>(static_cast<float>(grade_b) * chroma_retention + tint_b);
+    }
 
     chroma = std::hypot(grade_a, grade_b);
     hue = wrap_radians(std::atan2(grade_b, grade_a));
@@ -345,10 +428,13 @@ ColorPixel apply_post_tone_color_adjustments(
         clamp_unit(replacement_luminance_weight));
     output = scale_pixel_to_luminance(output, target_luminance, context);
   }
-  const auto grading_adds_chroma =
-      std::abs(state.grading_shadows_saturation) > 1e-9 ||
-      std::abs(state.grading_midtones_saturation) > 1e-9 ||
-      std::abs(state.grading_highlights_saturation) > 1e-9;
+  const auto grading_adds_chroma = legacy_semantics
+      ? std::abs(state.grading_shadows_saturation) > 1e-9 ||
+            std::abs(state.grading_midtones_saturation) > 1e-9 ||
+            std::abs(state.grading_highlights_saturation) > 1e-9
+      : state.grading_shadows_saturation > 1e-9 ||
+            state.grading_midtones_saturation > 1e-9 ||
+            state.grading_highlights_saturation > 1e-9;
   if (saturation_strength <= -0.999999 && !grading_adds_chroma &&
       !has_color_replacement_adjustments(state)) {
     const auto neutral = static_cast<float>(

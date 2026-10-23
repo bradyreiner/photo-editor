@@ -89,11 +89,14 @@ Rectangle {
         }
     }
 
-    ToolTip.visible: permissionHover.hovered && (helperText.length > 0 || permissionLabel.contentWidth > permissionLabel.width + 1)
-    ToolTip.delay: 250
-    ToolTip.timeout: 3200
-    ToolTip.text: helperText.length > 0 ? helperText : label
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (permissionHover.hovered && (root.helperText.length > 0 || permissionLabel.contentWidth > permissionLabel.width + 1))
+        delay: 250
+        timeout: 3200
+        text: root.helperText.length > 0 ? root.helperText : root.label
+    }
     TapHandler {
         enabled: root.toggleEnabled
         onTapped: root.toggle()

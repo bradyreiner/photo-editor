@@ -12,11 +12,12 @@ namespace photo_editor::pipeline {
 [[nodiscard]] double rgb_hue_for_mixer_selection(
     const ColorPixel& pixel);
 
-[[nodiscard]] double mixer_selection_hue(
-    const ColorPixel& pixel,
-    double oklch_hue,
-    double chroma,
-    std::string_view model);
+// Input is linear sRGB for selection only; working pixels stay unclipped.
+[[nodiscard]] double color_selection_confidence(const ColorPixel& selection_rgb);
+[[nodiscard]] ColorPixel color_selection_rgb(
+    const CompiledLookStageProgram& program, const ColorPixel& pixel);
+
+[[nodiscard]] double color_mixer_channel_weight(double hue, std::size_t channel);
 
 void apply_selective_color_adjustment(
     const ColorMixerChannelAdjustment& mixer,
@@ -34,6 +35,7 @@ void apply_selective_color_adjustment(
 
 [[nodiscard]] ColorPixel apply_black_and_white_mixer(
     const ColorPixel& pixel,
+    const ColorPixel& selection_rgb,
     const ColorAdjustmentState& state,
     double native_luminance);
 

@@ -4,7 +4,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "CanvasPresets.js" as CanvasPresets
 
-Popup {
+AppPopup {
     id: root
     objectName: "newCanvasDialog"
     property bool busy: false
@@ -22,11 +22,11 @@ Popup {
     modal: true
     focus: true
     closePolicy: busy ? Popup.NoAutoClose : Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(460, parent ? parent.width - 32 : 460)
-    height: Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 32 : 620)
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(460, parent ? parent.width - 32 : 460)))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 32 : 620)))
     x: parent ? (parent.width - width) / 2 : 0
     y: parent ? (parent.height - height) / 2 : 0
-    padding: 24
+    padding: standardPopupPadding
     onAboutToShow: {
         root.errorText = ""
         const popupWindow = root.parent ? root.parent.Window.window : null
@@ -39,10 +39,7 @@ Popup {
         root.focusReturnItem = null
     })
     Theme { id: theme }
-    background: Rectangle {
-        color: theme.ink900
-        radius: theme.radiusPanel
-        border.color: theme.lineSoft
+    background: PopupSurface {
         Accessible.name: "New Canvas"
         Accessible.role: Accessible.Dialog
     }

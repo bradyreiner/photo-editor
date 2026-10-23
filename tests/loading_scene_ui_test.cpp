@@ -150,8 +150,15 @@ import QtQuick.Controls.Basic
 import "file:)qml" PHOTO_EDITOR_SOURCE_DIR R"qml(/apps/desktop/qml/components"
 ApplicationWindow {
     id: fixture
+    flags: Qt.Window | Qt.FramelessWindowHint
     width: 1000; height: 740; visible: true; color: "#14171c"
     property bool gallery: false
+    property bool workspaceProof: false
+    property bool recoveryProof: false
+    property bool repairPending: false
+    property int retryCount: 0
+    property int backupCount: 0
+    property int repairCount: 0
     property bool startupBusy: true
     property bool busy: true
     property bool broken: false
@@ -160,19 +167,17 @@ ApplicationWindow {
     property string sceneKind: "library"
     property string sceneTitle: "Opening your library"
     property string sceneDetail: "Loading photos and saved edits."
-    property alias startupOpen: startupDialog.visible
-    property alias startupFinished: startupDialog.finished
     Rectangle {
         anchors.fill: parent
         color: "#111719"
         visible: fixture.gallery
         Text {
             x: 44; y: 38; color: "#e8ece9"; font.pixelSize: 25
-            text: "Small signals. One character."
+            text: "Light, in motion."
         }
         Text {
             x: 44; y: 78; color: "#84979c"; font.pixelSize: 13
-            text: "Drawn lines · quiet color · CRT light · purposeful motion"
+            text: "Caustic wavefronts · additive color · optical instruments"
         }
         Row {
             x: 42; y: 130; spacing: 24
@@ -204,7 +209,7 @@ ApplicationWindow {
                     width: 290; compact: true
                     scene: modelData
                     title: modelData === "startup" ? "Opening your library" : modelData === "library" ? "Finding your photos" : "Preparing Timeline"
-                    detail: "Actual activity. A small, integrated light."
+                    detail: "Preparing your workspace."
                 }
             }
         }
@@ -213,7 +218,7 @@ ApplicationWindow {
             OpticalActivityIndicator { width: 18; height: 18 }
             OpticalActivityIndicator { width: 24; height: 24 }
             OpticalActivityIndicator { width: 32; height: 32 }
-            Text { text: "THE SAME SHAPE, DOWN TO 18 PX"; color: "#81949a"; font.pixelSize: 11; font.family: "monospace" }
+            Text { text: "CIRCULAR INTERFERENCE / MEASURED PROGRESS"; color: "#81949a"; font.pixelSize: 11; font.family: "monospace" }
             ProgressStrip { width: 210; height: 3; progress: 0.35; anchors.verticalCenter: parent.verticalCenter }
         }
     }
@@ -222,14 +227,13 @@ ApplicationWindow {
         x: 24; y: 24; color: "#858f99"; font.family: "monospace"; font.pixelSize: 12
         text: "LOOKSY / " + (fixture.startupBusy ? "STARTUP" : fixture.sceneKind.toUpperCase())
     }
-    StartupLoadingPopup { id: startupDialog; objectName: "startupFixture"; catalogLoading: fixture.startupBusy }
     LooksyLoadingScene {
         id: scene
         objectName: "sceneFixture"
         anchors.centerIn: parent
         width: Math.max(100, Math.min(600, parent.width - 48, (parent.height - 120) * 1.5))
-        visible: !fixture.startupBusy && !fixture.gallery
-        scene: fixture.sceneKind
+        visible: !fixture.gallery && !fixture.workspaceProof && !fixture.recoveryProof
+        scene: fixture.startupBusy ? "startup" : fixture.sceneKind
         title: fixture.sceneTitle
         detail: fixture.sceneDetail
         active: fixture.busy
@@ -237,6 +241,36 @@ ApplicationWindow {
         reducedMotion: fixture.quiet
         progress: fixture.percent
     }
+    AgentWorkspaceOverlay {
+        objectName: "opticalEditorStatusFixture"
+        anchors.fill: parent
+        visible: fixture.workspaceProof
+        applyInProgress: fixture.workspaceProof
+        reducedMotion: fixture.quiet
+    }
+    LooksyAssistantDock {
+        objectName: "opticalAgentEntryFixture"
+        x: 24; y: 24
+        visible: fixture.workspaceProof
+    }
+
+    RecoveryStatusPanel {
+        objectName: "recoverySummarySurface"
+        width: parent.width
+        y: 64
+        height: implicitHeight
+        visible: fixture.recoveryProof
+        catalogFailure: true
+        repairPending: fixture.repairPending
+        summary: "Your originals are unchanged. Retry to reconnect to your library."
+        details: ["The catalog service is unavailable. No photos or saved edits have been discarded."]
+        onRetryRequested: fixture.retryCount += 1
+        onBackupRequested: fixture.backupCount += 1
+        onRepairRequested: fixture.repairPending = true
+        onConfirmRepairRequested: { fixture.repairCount += 1; fixture.repairPending = false }
+        onCancelRepairRequested: fixture.repairPending = false
+    }
+
 })qml", QUrl::fromLocalFile(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR "/tests/loading-scenes-fixture.qml")));
   std::unique_ptr<QObject> fixture(component.create());
   if (!fixture) {
@@ -245,8 +279,8 @@ ApplicationWindow {
   }
   auto* window = qobject_cast<QQuickWindow*>(fixture.get());
   auto* scene = find_item(window->contentItem(), QStringLiteral("sceneFixture"));
+  auto* field = find_item(scene, QStringLiteral("loadingSceneLightField"));
   auto* robot = find_item(scene, QStringLiteral("loadingSceneRobot"));
-  auto* context_lines = find_item(scene, QStringLiteral("loadingSceneLineContext"));
   auto* strip = find_item(scene, QStringLiteral("loadingSceneProgress"));
   const auto output = qEnvironmentVariable("PHOTO_EDITOR_LOADING_PROOF_DIR");
   if (!output.isEmpty()) QDir().mkpath(output);
@@ -254,37 +288,26 @@ ApplicationWindow {
     return output.isEmpty() || window->grabWindow().save(QDir(output).filePath(name + QStringLiteral(".png")));
   };
   settle(400);
-  if (!fixture->property("startupOpen").toBool() || !capture(QStringLiteral("startup-scene")))
-    return fail("The startup scene must open during actual catalog loading");
+  if (!scene->isVisible() || !field->property("motionEnabled").toBool() ||
+      find_item(window->contentItem(), QStringLiteral("startupLoadingPopup")) || !capture(QStringLiteral("startup-scene")))
+    return fail("Startup must present one in-workspace light scene without a second modal loader");
   fixture->setProperty("startupBusy", false);
   settle(350);
-  if (fixture->property("startupOpen").toBool() || !fixture->property("startupFinished").toBool()) {
-    for (auto* object : window->findChildren<QObject*>()) {
-      if (object->metaObject()->indexOfProperty("catalogLoading") < 0) continue;
-      std::cerr << "startup loading=" << object->property("catalogLoading").toBool()
-                << " initialized=" << object->property("initialized").toBool()
-                << " observed=" << object->property("observedLoading").toBool()
-                << " finished=" << object->property("finished").toBool()
-                << " visible=" << object->property("visible").toBool() << '\n';
-    }
-    return fail("The startup scene must close when catalog loading completes");
-  }
 
-  if (!scene || !robot || !context_lines || !strip)
-    return fail("The shared character, drawn context and measured progress must load");
+  if (!scene || robot || !field || !strip)
+    return fail("Loading must render the optical field and progress without a character");
   const auto first_frame = window->grabWindow();
   settle(500);
-  if (!robot->property("artReady").toBool() ||
-      !robot->property("working").toBool() ||
+  if (!field->property("motionEnabled").toBool() ||
       first_frame == window->grabWindow() || !capture(QStringLiteral("library-scene")))
-    return fail("Real loading must move the character's integrated activity light in the native render");
+    return fail("Real loading must move the caustic wavefronts in the native render");
   for (const auto& kind : {QStringLiteral("timeline"), QStringLiteral("startup"), QStringLiteral("import"), QStringLiteral("export")}) {
     fixture->setProperty("sceneKind", kind);
     fixture->setProperty("sceneTitle", kind == QStringLiteral("timeline") ? "Preparing Timeline" : "Opening editor");
     fixture->setProperty("sceneDetail", kind == QStringLiteral("timeline") ? "Opening tracks, preview, and editing tools." : "Preparing the workspace.");
     settle(350);
-    if (!context_lines->isVisible() || !robot->property("working").toBool() || !capture(kind + QStringLiteral("-workspace-scene")))
-      return fail("Every workspace must render the shared line character and its document context");
+    if (!field->isVisible() || !field->property("motionEnabled").toBool() || !capture(kind + QStringLiteral("-workspace-scene")))
+      return fail("Every workspace must render its optical loading field");
   }
   fixture->setProperty("sceneKind", "library");
   fixture->setProperty("sceneTitle", "Your library starts here");
@@ -303,7 +326,6 @@ ApplicationWindow {
   fixture->setProperty("sceneDetail", "Copying selected files.");
   settle(250);
   if (qAbs(strip->property("boundedProgress").toDouble() - 0.35) > 0.001 ||
-      qAbs(robot->property("progress").toDouble() - 0.35) > 0.001 ||
       strip->property("indeterminate").toBool())
     return fail("Measured task progress must remain exactly 35 percent");
   if (!capture(QStringLiteral("import-measured-progress"))) return fail("Progress capture failed");
@@ -311,10 +333,18 @@ ApplicationWindow {
   settle(200);
   const auto quiet_phase = scene->property("phase").toDouble();
   settle(220);
-  if (scene->property("motionEnabled").toBool() || robot->property("motionEnabled").toBool() ||
+  if (scene->property("motionEnabled").toBool() || field->property("motionEnabled").toBool() ||
       strip->property("animate").toBool() || scene->property("phase").toDouble() != quiet_phase)
-    return fail("Reduced motion must stop robot, scene transport, light waves and progress motion");
+    return fail("Reduced motion must stop caustic fields and progress motion");
+  const auto static_frame = window->grabWindow();
+  settle(250);
+  if (static_frame != window->grabWindow()) return fail("Reduced-motion loading pixels must remain static");
   fixture->setProperty("quiet", false);
+  fixture->setProperty("broken", true);
+  settle(200);
+  if (field->property("motionEnabled").toBool() || !capture(QStringLiteral("failed-scene")))
+    return fail("Failure must stop optical activity");
+  fixture->setProperty("broken", false);
   scene->setVisible(false);
   settle(100);
   const auto hidden_phase = scene->property("phase").toDouble();
@@ -345,7 +375,7 @@ ApplicationWindow {
     window->resize(QSize(1240, 740));
     fixture->setProperty("gallery", true);
     settle(500);
-    if (!capture(QStringLiteral("line-character-system")))
+    if (!capture(QStringLiteral("optical-loading-and-agent-system")))
       return fail("Character system gallery capture failed");
     const auto recording = qEnvironmentVariable("PHOTO_EDITOR_CHARACTER_ANIMATION_DIR");
     if (!recording.isEmpty()) {
@@ -358,6 +388,67 @@ ApplicationWindow {
       }
     }
   }
+  // The editor exposes useful task status while the character stays in Agent Studio.
+  fixture->setProperty("gallery", false);
+  fixture->setProperty("workspaceProof", true);
+  settle(350);
+  auto* editor_status = find_item(window->contentItem(), QStringLiteral("opticalEditorStatusFixture"));
+  auto* editor_rig = find_item(editor_status, QStringLiteral("agentWorkspaceRoamingRobot"));
+  if (!editor_status->isVisible() || !editor_rig || editor_rig->isVisible() ||
+      find_item(editor_status, QStringLiteral("agentWorkspaceRoamingCharacter")) ||
+      !find_item(editor_status, QStringLiteral("agentWorkspaceActivitySweep")) ||
+      !capture(QStringLiteral("editor-optical-status")))
+    return fail("The editor must expose optical task status without a roaming character");
+  fixture->setProperty("workspaceProof", false);
+  settle(150);
+  fixture->setProperty("recoveryProof", true);
+  settle(200);
+  auto* recovery = find_item(window->contentItem(), QStringLiteral("recoverySummarySurface"));
+  auto* retry = find_item(recovery, QStringLiteral("catalogRetryButton"));
+  auto* backup = find_item(recovery, QStringLiteral("catalogBackupButton"));
+  auto* repair = find_item(recovery, QStringLiteral("catalogRepairButton"));
+  auto* details = find_item(recovery, QStringLiteral("recoveryDetailsButton"));
+  if (!retry->isVisible() || backup->isVisible() || repair->isVisible() || recovery->height() > 60)
+    return fail("Recovery must be a compact strip with maintenance actions initially collapsed");
+  QMetaObject::invokeMethod(retry, "click");
+  if (fixture->property("retryCount").toInt() != 1) return fail("Retry must reach its catalog action");
+  for (const auto size : {QSize(360, 480), QSize(640, 480), QSize(1000, 740)}) {
+    window->resize(size);
+    settle(200);
+    for (auto* button : {retry, details})
+      if (!recovery->boundingRect().contains(button->mapRectToItem(recovery, button->boundingRect())))
+        return fail("Retry and Details must remain inside the strip at narrow widths");
+    if (!capture(QStringLiteral("recovery-compact-%1").arg(size.width()))) return fail("Recovery capture failed");
+    QMetaObject::invokeMethod(details, "click");
+    settle(200);
+    if (!backup->isVisible() || !repair->isVisible() || recovery->height() <= 60)
+      return fail("Details must reveal complete diagnostics and maintenance actions");
+    for (auto* button : {backup, repair})
+      if (!recovery->boundingRect().contains(button->mapRectToItem(recovery, button->boundingRect())))
+        return fail("Maintenance controls must wrap inside the expanded recovery strip");
+    if (!capture(QStringLiteral("recovery-details-%1").arg(size.width()))) return fail("Details capture failed");
+    QMetaObject::invokeMethod(details, "click");
+    settle(100);
+  }
+  QMetaObject::invokeMethod(details, "click");
+  QMetaObject::invokeMethod(backup, "click");
+  QMetaObject::invokeMethod(repair, "click");
+  settle(200);
+  auto* confirm = find_item(recovery, QStringLiteral("catalogRepairConfirmButton"));
+  auto* cancel = find_item(recovery, QStringLiteral("catalogRepairCancelButton"));
+  if (fixture->property("backupCount").toInt() != 1 || fixture->property("repairCount").toInt() != 0 ||
+      !confirm->isVisible() || !cancel->isVisible())
+    return fail("Requesting a repair must expose confirmation without performing it");
+  QMetaObject::invokeMethod(cancel, "click");
+  if (fixture->property("repairPending").toBool() || fixture->property("repairCount").toInt() != 0)
+    return fail("Cancelling repair must preserve the catalog");
+  QMetaObject::invokeMethod(repair, "click");
+  settle(100);
+  if (!capture(QStringLiteral("recovery-confirmation"))) return fail("Repair confirmation capture failed");
+  QMetaObject::invokeMethod(confirm, "click");
+  if (fixture->property("repairCount").toInt() != 1) return fail("Only explicit confirmation may execute repair");
+  fixture->setProperty("recoveryProof", false);
+  settle(100);
   const auto animation_dir = qEnvironmentVariable("PHOTO_EDITOR_LOADING_ANIMATION_DIR");
   if (!animation_dir.isEmpty()) {
     QDir().mkpath(animation_dir);
@@ -379,9 +470,9 @@ ApplicationWindow {
           {QStringLiteral("frame"), frame}, {QStringLiteral("elapsedMs"), clock.elapsed()},
           {QStringLiteral("scene"), fixture->property("sceneKind")},
           {QStringLiteral("walking"), scene->property("traveling")},
-          {QStringLiteral("tool"), robot->property("toolDeployProgress")}})).toJson(QJsonDocument::Compact) + '\n');
+          {QStringLiteral("opticalMotion"), field->property("motionEnabled")}})).toJson(QJsonDocument::Compact) + '\n');
     }
   }
-  std::cout << "Drawn character, startup lifecycle, visible activity, empty state, exact progress, hidden/reduced motion and responsive layout passed.\n";
+  std::cout << "Character-free optical loading, startup lifecycle, visible activity, empty state, exact progress, hidden/reduced motion and responsive layout passed.\n";
   return 0;
 }

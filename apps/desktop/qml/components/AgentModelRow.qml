@@ -110,8 +110,12 @@ Item {
         onClicked: root.selectedRequested(root.modelId)
     }
 
-    ToolTip.visible: rowMouse.containsMouse
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: root.modelName + "\n" + root.detailText
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (rowMouse.containsMouse)
+        delay: 350
+        timeout: 3600
+        text: root.modelName + "\n" + root.detailText
+    }
 }

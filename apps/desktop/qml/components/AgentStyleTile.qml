@@ -91,10 +91,14 @@ Rectangle {
             elide: Text.ElideNone
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 9
-            ToolTip.visible: tileHover.hovered && contentHeight > height + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.styleName
+            AppToolTip {
+                id: sharedTooltip1
+                targetItem: styleLabel
+                visible: styleLabel.visible && (tileHover.hovered && styleLabel.contentHeight > styleLabel.height + 1)
+                delay: 350
+                timeout: 3600
+                text: root.styleName
+            }
         }
     }
 

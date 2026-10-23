@@ -15,12 +15,11 @@ Menu {
     padding: theme.space4
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
 
-    background: PopupSurface {
-        implicitWidth: root.minimumMenuWidth
-        radius: theme.radiusPanel
-        fillColor: theme.alpha(theme.glassBase, 0.98)
-        borderColor: theme.alpha(theme.glassEdge, 0.34)
-    }
+    background: PopupSurface { implicitWidth: root.minimumMenuWidth }
+    font.family: theme.fontUi
+    font.pixelSize: theme.typeBody
+    enter: PopupEnterTransition {}
+    exit: PopupExitTransition {}
 
     Connections {
         target: root.parent

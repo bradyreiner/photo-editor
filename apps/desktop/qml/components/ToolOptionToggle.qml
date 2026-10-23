@@ -102,11 +102,14 @@ Rectangle {
         }
     }
 
-    ToolTip.visible: optionHover.hovered && (disabledTooltipText.length > 0 || optionLabel.contentWidth > optionLabel.width + 1)
-    ToolTip.delay: 250
-    ToolTip.timeout: 3200
-    ToolTip.text: disabledTooltipText
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (optionHover.hovered && (root.disabledTooltipText.length > 0 || optionLabel.contentWidth > optionLabel.width + 1))
+        delay: 250
+        timeout: 3200
+        text: root.disabledTooltipText
+    }
     TapHandler {
         enabled: root.toggleEnabled
         onTapped: root.toggle()

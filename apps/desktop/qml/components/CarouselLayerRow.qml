@@ -119,15 +119,19 @@ Rectangle {
             fontSizeMode: Text.HorizontalFit
             minimumPixelSize: 8
             elide: Text.ElideNone
-            ToolTip.visible: titleHover.hovered && titleLabel.contentWidth > titleLabel.width + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.label
-
+            AppToolTip {
+                id: sharedTooltip1
+                targetItem: titleLabel
+                visible: titleLabel.visible && (titleHover.hovered && titleLabel.contentWidth > titleLabel.width + 1)
+                delay: 350
+                timeout: 3600
+                text: root.label
+            }
             HoverHandler { id: titleHover }
         }
 
         Rectangle {
+            id: popupTooltipAnchor2
             visible: root.grouped
             Layout.preferredWidth: 20
             Layout.preferredHeight: 18
@@ -145,9 +149,13 @@ Rectangle {
                 font.weight: Font.Bold
             }
 
-            ToolTip.visible: groupHover.hovered
-            ToolTip.text: "Grouped layer"
-            ToolTip.delay: 300
+            AppToolTip {
+                id: sharedTooltip3
+                targetItem: popupTooltipAnchor2
+                visible: popupTooltipAnchor2.visible && (groupHover.hovered)
+                text: "Grouped layer"
+                delay: 300
+            }
             HoverHandler { id: groupHover }
         }
 

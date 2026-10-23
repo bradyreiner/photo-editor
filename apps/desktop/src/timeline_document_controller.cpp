@@ -8176,7 +8176,7 @@ QString TimelineDocumentController::renderCacheSignature(
   // Preview ranges are project-owned. Keeping the timeline identity in the
   // signature prevents an explicit per-project cleanup from evicting an
   // identical edit that belongs to another saved project.
-  root.insert(QStringLiteral("cacheVersion"), 4);
+  root.insert(QStringLiteral("cacheVersion"), 5);
   root.insert(QStringLiteral("rangeStart"), start_seconds);
   root.insert(QStringLiteral("rangeEnd"), end_seconds);
 
@@ -27132,6 +27132,36 @@ void TimelineDocumentController::setSelectedFrameRotationDegrees(double frame_ro
   setSelectedClipAnimatedValue(QStringLiteral("frameRotationDegrees"), frame_rotation_degrees);
 }
 
+bool TimelineDocumentController::setSelectedClipTransform(
+    double offset_x, double offset_y, double scale, double rotation_degrees) {
+  const auto customer_edit_scope = customer_edit_access_.enter();
+  if (!customer_edit_scope) return false;
+  const auto ref = selectedClipRef();
+  const auto* track = trackAt(ref.track_index);
+  const auto* clip = clipAt(ref);
+  if (track == nullptr || track->locked || clip == nullptr ||
+      track->kind != TrackKind::Video || clip->media_type == QStringLiteral("adjustment") ||
+      !std::isfinite(offset_x) || !std::isfinite(offset_y) ||
+      !std::isfinite(scale) || !std::isfinite(rotation_degrees)) return false;
+  const std::array<std::pair<QString, double>, 4> values{{
+      {QStringLiteral("frameOffsetX"), offset_x}, {QStringLiteral("frameOffsetY"), offset_y},
+      {QStringLiteral("frameScale"), scale}, {QStringLiteral("frameRotationDegrees"), rotation_degrees}}};
+  const auto local = selectedClipKeyframeLocalSeconds(*clip);
+  const auto changed = std::any_of(values.begin(), values.end(), [&](const auto& entry) {
+    return qAbs(evaluatedClipParameter(*clip, entry.first, local) -
+                boundedClipParameterValue(entry.first, entry.second)) > kBoundaryEpsilon;
+  });
+  if (!changed) return false;
+  const auto owns_edit = !continuous_edit_active_;
+  if (owns_edit) beginContinuousEdit();
+  for (const auto& [parameter, value] : values)
+    (void)setSelectedClipAnimatedValue(parameter, value, false);
+  publishSelectedClipState(QStringLiteral("frameScale"));
+  setDirty(true);
+  if (owns_edit) endContinuousEdit();
+  return true;
+}
+
 void TimelineDocumentController::setSelectedFramePerspectiveX(double perspective_x) {
   const auto customer_edit_scope = customer_edit_access_.enter();
   if (!customer_edit_scope) return;
@@ -37438,7 +37468,8 @@ bool TimelineDocumentController::trackHasKeyframesFor(
 
 bool TimelineDocumentController::setSelectedClipAnimatedValue(
     const QString& parameter,
-    double value) {
+    double value,
+    bool publish) {
   const auto selected_ref = selectedClipRef();
   auto* clip = clipAt(selected_ref);
   const auto normalized_parameter = normalizedKeyframeParameter(parameter);
@@ -37542,8 +37573,10 @@ bool TimelineDocumentController::setSelectedClipAnimatedValue(
         }
         return left.parameter < right.parameter;
       });
-  publishSelectedClipState(normalized_parameter);
-  setDirty(true);
+  if (publish) {
+    publishSelectedClipState(normalized_parameter);
+    setDirty(true);
+  }
   return true;
 }
 
@@ -43180,7 +43213,28 @@ QString TimelineDocumentController::clipVideoFilter(
   }
   const auto clip_effects_filter = clipEffectsFilter(
       clip, sequence_start_seconds, false, masked_effect_names);
-  const auto finishing_filter = clipColorFinishingFilter(clip);
+  auto finishing_filter = clipColorFinishingFilter(clip);
+  QStringList color_fades;
+  const auto append_color_fade = [&](const QString& name, double duration, bool incoming) {
+    const auto black = name.compare(QStringLiteral("Fade to Black"), Qt::CaseInsensitive) == 0;
+    const auto white = name.compare(QStringLiteral("Fade to White"), Qt::CaseInsensitive) == 0;
+    if ((!black && !white) || duration <= kBoundaryEpsilon) return;
+    const auto start = incoming ? 0.0 : qMax(0.0, clipTrimmedDuration(clip) - duration);
+    color_fades.push_back(QStringLiteral("fade=t=%1:st=%2:d=%3:color=%4")
+        .arg(incoming ? QStringLiteral("in") : QStringLiteral("out"))
+        .arg(QString::number(start, 'f', 9), QString::number(duration, 'f', 9),
+             black ? QStringLiteral("black") : QStringLiteral("white")));
+  };
+  append_color_fade(clip.transition_in_name, clip.transition_in_seconds, true);
+  append_color_fade(clip.transition_out_name, clip.transition_out_seconds, false);
+  if (!color_fades.isEmpty()) {
+    // The compositor renders bounded segments. Evaluate fades in clip-local
+    // timeline time, then restore segment PTS before geometry and composition.
+    const auto local_offset = QString::number(
+        sequence_start_seconds - clip.start_seconds, 'f', 9);
+    finishing_filter += QStringLiteral("format=rgba,setpts=PTS+(%1)/TB,%2,setpts=PTS-(%1)/TB,")
+        .arg(local_offset, color_fades.join(','));
+  }
   const auto effects_filter = clip_effects_filter + finishing_filter;
   const auto opacity_filter = clipHasKeyframesFor(clip, QStringLiteral("opacity")) ||
                                       trackHasKeyframesFor(track, QStringLiteral("opacity"))

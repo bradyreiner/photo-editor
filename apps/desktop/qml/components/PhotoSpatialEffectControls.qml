@@ -22,6 +22,14 @@ ColumnLayout {
     readonly property var extendedFields: root.extended && typeof root.controller.photoEffectParameterFields === "function"
         ? root.controller.photoEffectParameterFields(root.effectType) : []
     readonly property var gradientStops: asArray(root.parameters.gradientStops)
+    readonly property var grainStocks: typeof root.controller.availableFilmGrainStocks === "function"
+        ? root.asArray(root.controller.availableFilmGrainStocks()) : []
+    readonly property int grainStockIndex: {
+        const stock = String(root.parameters.grainStock || "")
+        for (let i = 0; i < root.grainStocks.length; ++i)
+            if (root.grainStocks[i].grainStock === stock) return i + 1
+        return 0
+    }
 
     function asArray(value) {
         const rows = []
@@ -138,6 +146,9 @@ ColumnLayout {
         {key: "grainSize", label: qsTr("Grain size (px)"), minimum: 0.25, maximum: 64, step: 0.05, defaultValue: 1},
         {key: "grainStrength", label: qsTr("Grain strength (%)"), minimum: 0, maximum: 12, step: 0.05, scale: 100, defaultValue: 2},
         {key: "grainColor", label: qsTr("Color variation (%)"), minimum: -100, maximum: 100, step: 1, scale: 100, defaultValue: -80},
+        {key: "grainRoughness", label: qsTr("Clumping (%)"), minimum: 0, maximum: 100, step: 1, scale: 100, defaultValue: 40},
+        {key: "grainShadows", label: qsTr("Shadow grain (%)"), minimum: 0, maximum: 200, step: 1, scale: 100, defaultValue: 100},
+        {key: "grainHighlights", label: qsTr("Highlight grain (%)"), minimum: 0, maximum: 200, step: 1, scale: 100, defaultValue: 100},
         {key: "seed", label: qsTr("Grain seed"), minimum: 0, maximum: 4294967295, step: 1, defaultValue: 1}
     ] : effectType === "light_leak" ? [
         {key: "leakCenterX", label: qsTr("Center X (%)"), minimum: -100, maximum: 200, step: 0.25, scale: 100, defaultValue: 82},
@@ -197,6 +208,44 @@ ColumnLayout {
         {key: "strength", label: qsTr("Strength (%)"), minimum: 0, maximum: 500, step: 0.25, scale: 100, defaultValue: 100},
         {key: "threshold", label: qsTr("Threshold (%)"), minimum: 0, maximum: 100, step: 0.25, scale: 100, defaultValue: 0}
     ]
+    ColumnLayout {
+        visible: root.effectType === "film_grain"
+        Layout.fillWidth: true
+        spacing: uiTheme.space4
+        Label {
+            text: qsTr("Grain stock")
+            color: uiTheme.textMuted
+            font.pixelSize: uiTheme.scaled(10)
+        }
+        ToneComboBox {
+            objectName: "filmGrainStockPicker"
+            Layout.fillWidth: true
+            enabled: !root.locked
+            accessibleLabel: qsTr("Film grain stock")
+            model: [qsTr("Original grain (legacy)")].concat(root.grainStocks.map(function(stock) { return stock.name }))
+            currentIndex: root.grainStockIndex
+            onActivated: function(index) {
+                const values = Object.assign({}, root.parameters)
+                if (index === 0) {
+                    values.grainStock = ""
+                } else {
+                    const stock = root.grainStocks[index - 1]
+                    for (const key in stock)
+                        if (key.indexOf("grain") === 0) values[key] = stock[key]
+                }
+                root.parametersEdited(values)
+            }
+        }
+        Label {
+            objectName: "filmGrainStockDescription"
+            Layout.fillWidth: true
+            text: root.grainStockIndex > 0 ? root.grainStocks[root.grainStockIndex - 1].description
+                : qsTr("Original texture retained for existing edits. Choose a stock for silver or dye-cloud grain.")
+            color: uiTheme.textMuted
+            font.pixelSize: uiTheme.scaled(10)
+            wrapMode: Text.Wrap
+        }
+    }
     Repeater {
         model: root.extended ? [] : root.fields
         delegate: InspectorSlider {
@@ -205,6 +254,9 @@ ColumnLayout {
             readonly property real scale: Number(modelData.scale || 1)
             objectName: "photoEffectParameter_" + modelData.key
             Layout.fillWidth: true
+            visible: root.effectType !== "film_grain" || root.grainStockIndex > 0 ||
+                ["grainRoughness", "grainShadows", "grainHighlights"].indexOf(modelData.key) < 0
+            Layout.preferredHeight: visible ? controlHeight : 0
             forceCompact: root.effectType === "optical_diffusion" || root.effectType === "imperfect_print" ||
                 root.effectType === "film_grain" || root.effectType === "light_leak" ||
                 root.effectType === "split_tone" || root.effectType === "vignette" ||

@@ -2,12 +2,12 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "commandPaletteDialog"
     modal: true
     dim: true
-    width: 480
+    width: Math.min(popupAvailableWidth, Math.max(1, 480))
     padding: 0
     x: Math.round((parent.width - width) / 2)
     y: Math.round(parent.height * 0.22)
@@ -114,12 +114,7 @@ Popup {
         }
     }
 
-    background: PopupSurface {
-        accent: theme.accentWarm400
-        accentRail: false
-        layer.enabled: true
-        layer.effect: Item {}
-    }
+    background: PopupSurface {}
 
     contentItem: ColumnLayout {
         spacing: 0

@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "agentModelSetupDialog"
     required property var controller
@@ -35,25 +35,16 @@ Popup {
     modal: true
     focus: true
     anchors.centerIn: parent
-    width: Math.min(theme.scaled(520), parent ? parent.width - 40 : theme.scaled(520))
-    height: Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 40 : 640)
-    padding: theme.panelPaddingStandard
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(520), parent ? parent.width - 40 : theme.scaled(520))))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(contentItem.implicitHeight + padding * 2, parent ? parent.height - 40 : 640)))
+    padding: standardPopupPadding
     closePolicy: Popup.CloseOnEscape
     Theme { id: theme }
-    background: Rectangle {
-        color: theme.ink900
-        radius: theme.radiusPanel
-        border.color: theme.lineSoft
+    background: PopupSurface {
         Accessible.name: qsTr("Local AI setup")
         Accessible.description: qsTr("Review local model storage and setup status.")
         Accessible.role: Accessible.Dialog
         Accessible.ignored: false
-    }
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 200 }
-            NumberAnimation { property: "scale"; from: 0.97; to: 1; duration: 260; easing.type: Easing.OutCubic }
-        }
     }
     function refreshPlan() {
         plan = controller ? controller.prepareSelectedModelInstall() : ({})
@@ -186,11 +177,11 @@ Popup {
                 }
             }
         }
-        ProgressBar {
+        ProgressStrip {
             Layout.fillWidth: true
             visible: root.downloading || root.verifying
-            indeterminate: root.verifying || Number(root.installProgress.progress || 0) === 0
-            value: Number(root.installProgress.progress || 0)
+            progress: root.verifying || Number(root.installProgress.progress || 0) === 0
+                ? -1 : Number(root.installProgress.progress || 0)
         }
         Flow {
             objectName: "modelSetupActions"

@@ -78,6 +78,7 @@ int main() {
   if (!contains_all(
           backend,
           {
+              "#include \"color_adjustments_metal_source.h\"",
               "kernel void apply_aces2_output_lut",
               "tetrahedral_sample",
               "shaper_maximum",
@@ -111,8 +112,6 @@ int main() {
               "layer_intermediate_buffer",
               "static_assert(sizeof(FillLayerUniforms) == 5248U)",
               "perceptual_blend_gamut_mode",
-              "retained_fill_blend_pixel",
-              "retained_blend_search_chroma",
               "apply_layer_spatial_detail",
               "apply_layer_fine_detail",
               "apply_layer_geometry",
@@ -197,6 +196,10 @@ int main() {
               "photo_editor_apply_ocio_project",
               "apply_ocio_project_gpu_program",
               "newLibraryWithSource",
+              "photo_editor_bundled_color_shader_source",
+              "NSString* shader_source = load_shader_source();",
+              "newLibraryWithSource:shader_source",
+              "return photo_editor_bundled_color_shader_source();",
               "ocio_project_gpu_pipelines",
               "program_cache_key",
               "ocio_project_gpu_output_validation_failed",
@@ -261,6 +264,7 @@ int main() {
               "uniforms.composite_only",
               "uniforms.perceptual_blend_gamut_mode",
               "retained_fill_blend_pixel",
+              "retained_blend_search_chroma",
               "retained_layer_downstream_look",
               "layer.has_downstream_look",
               "retained_layer_point_effects",
@@ -298,7 +302,6 @@ int main() {
           preview_path,
           {
               "compile_aces2_output_lut_application",
-              "Aces2OutputLutQuality::Interactive",
               "Aces2OutputLutQuality::Final",
               "prewarm_default_aces2_output_luts",
               "execute_color_plan",
@@ -360,6 +363,7 @@ int main() {
           {
               "publish_masks_and_color_lut_surface",
               "retained_preview_surface_is_eligible",
+              "Aces2OutputLutQuality::Interactive",
               "!request->require_cpu_preview_image",
               "!request->scopes_visible",
               "publish_retained_preview_surface",
@@ -417,7 +421,8 @@ int main() {
               "adoptNativeSurface",
               "adoptNativeSurfaceAsync",
               "addCompletedHandler",
-              "dispatch_get_main_queue",
+              "QMetaObject::invokeMethod(QCoreApplication::instance()",
+              "Qt::QueuedConnection",
               "encodeWaitForEvent",
               "publication_serial_",
               "surface.device_registry_id()",
@@ -511,6 +516,26 @@ int main() {
           })) {
     std::cerr << "retained ACES-to-device ICC publication must not stage a "
                  "full-frame GPU copy\n";
+    return EXIT_FAILURE;
+  }
+  const auto shader_loader_begin = backend.find("NSString* load_shader_source()");
+  const auto shader_loader_brace = backend.find('{', shader_loader_begin);
+  const auto shader_loader_end = backend.find("\n  }", shader_loader_brace);
+  if (shader_loader_begin == std::string::npos ||
+      shader_loader_brace == std::string::npos ||
+      shader_loader_end == std::string::npos) {
+    std::cerr << "canonical bundled Metal shader loader was not found\n";
+    return EXIT_FAILURE;
+  }
+  const auto shader_loader = backend.substr(
+      shader_loader_begin, shader_loader_end - shader_loader_begin);
+  if (!contains_all(
+          shader_loader,
+          {"return photo_editor_bundled_color_shader_source();"}) ||
+      !contains_none(
+          shader_loader,
+          {"NSBundle", "fileURLWithPath", "color_adjustments.metal", "source-tree fallback"})) {
+    std::cerr << "runtime Metal shader must load only the generated canonical source\n";
     return EXIT_FAILURE;
   }
   const auto dispatch_start =

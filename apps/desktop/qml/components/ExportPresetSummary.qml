@@ -70,6 +70,7 @@ Rectangle {
                     }
 
                     Label {
+                        id: popupTooltipAnchor1
                         Layout.fillWidth: true
                         text: modelData.value
                         color: theme.textMain
@@ -79,11 +80,14 @@ Rectangle {
                         fontSizeMode: Text.HorizontalFit
                         minimumPixelSize: 8
                         elide: Text.ElideNone
-                        ToolTip.visible: valueHover.hovered && contentWidth > width + 1
-                        ToolTip.delay: 350
-                        ToolTip.timeout: 3600
-                        ToolTip.text: modelData.label + ": " + modelData.value
-
+                        AppToolTip {
+                            id: sharedTooltip2
+                            targetItem: popupTooltipAnchor1
+                            visible: popupTooltipAnchor1.visible && (valueHover.hovered && popupTooltipAnchor1.contentWidth > popupTooltipAnchor1.width + 1)
+                            delay: 350
+                            timeout: 3600
+                            text: modelData.label + ": " + modelData.value
+                        }
                         HoverHandler { id: valueHover }
                     }
                 }
@@ -100,11 +104,14 @@ Rectangle {
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             maximumLineCount: 4
             elide: Text.ElideNone
-            ToolTip.visible: descriptionHover.hovered && contentHeight > height + 1
-            ToolTip.delay: 350
-            ToolTip.timeout: 3600
-            ToolTip.text: root.description
-
+            AppToolTip {
+                id: sharedTooltip3
+                targetItem: descriptionLabel
+                visible: descriptionLabel.visible && (descriptionHover.hovered && descriptionLabel.contentHeight > descriptionLabel.height + 1)
+                delay: 350
+                timeout: 3600
+                text: root.description
+            }
             HoverHandler { id: descriptionHover }
         }
     }

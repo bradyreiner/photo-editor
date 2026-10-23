@@ -758,9 +758,15 @@ struct CompiledLookStageProgram final {
   static constexpr std::uint32_t kColorHarmony = 1U << 6U;
   static constexpr std::uint32_t kColorReplacement = 1U << 7U;
   static constexpr std::uint32_t kSkinProtection = 1U << 8U;
+  // Historical renderer versions retain their saved creative-control semantics.
+  static constexpr std::uint32_t kLegacyCreativeSemantics = 1U << 9U;
+  static constexpr std::uint32_t kHighlightChromaCompressionOverHeadroom = 1U << 10U;
+  static constexpr std::uint32_t kHighlightChromaCompressionFromTone = 1U << 11U;
 
   ColorMatrix3 rgb_to_xyz_d65;
   ColorMatrix3 xyz_d65_to_rgb;
+  // Named color selections use a fixed reference, independent of working gamut.
+  ColorMatrix3 rgb_to_selection_rgb;
   std::array<float, 3> luminance_coefficients{};
   std::array<float, 9> rgb_mixer{};
   std::array<float, kColorMixerChannelCount> black_and_white_mixer{};

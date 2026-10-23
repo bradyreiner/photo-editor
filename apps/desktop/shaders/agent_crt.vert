@@ -14,6 +14,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 activityBounds;
     vec4 eyeBounds;
     vec4 activityColor;
+    vec4 displayStyle;
+    float displayPhase;
+    float reactionAmount;
 } ubuf;
 void main() {
     textureCoordinate = qt_MultiTexCoord0;

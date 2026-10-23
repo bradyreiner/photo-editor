@@ -938,6 +938,7 @@ GlassSurface {
             FilterChip {
                 objectName: "timelineSourceTab"
                 Layout.fillWidth: true
+                Layout.preferredWidth: 0
                 text: "Source"
                 active: activeTab === "source"
                 onClicked: tabChangeRequested("source")
@@ -946,12 +947,11 @@ GlassSurface {
             FilterChip {
                 objectName: "timelineMediaTab"
                 Layout.fillWidth: true
+                Layout.preferredWidth: 0
                 text: "Media"
                 active: activeTab === "media"
                 onClicked: tabChangeRequested("media")
             }
-
-            Item { Layout.fillWidth: true }
 
             ActionButton {
                 objectName: "timelineImportMediaButton"
@@ -1079,6 +1079,7 @@ GlassSurface {
                             spacing: theme.space4
 
                             Label {
+                                id: popupTooltipAnchor1
                                 objectName: "timelineSourceTitleLabel"
                                 text: root.hasSource && sourceState.displayLabel ? sourceState.displayLabel : "Source Monitor"
                                 color: theme.textStrong
@@ -1093,9 +1094,12 @@ GlassSurface {
                                                ? "Source media: " + String(sourceState.displayLabel || "Media")
                                                : "Source monitor"
                                 Accessible.role: Accessible.StaticText
-                                ToolTip.visible: sourceTitleHover.hovered && truncated
-                                ToolTip.text: text
-
+                                AppToolTip {
+                                    id: sharedTooltip2
+                                    targetItem: popupTooltipAnchor1
+                                    visible: popupTooltipAnchor1.visible && (sourceTitleHover.hovered && truncated)
+                                    text: popupTooltipAnchor1.text
+                                }
                                 HoverHandler {
                                     id: sourceTitleHover
                                     enabled: parent.truncated
@@ -1250,6 +1254,7 @@ GlassSurface {
                                     }
 
                                     Label {
+                                        id: popupTooltipAnchor3
                                         objectName: "timelineSourceProgramGangTimeMap"
                                         visible: root.programGangState.matched === true
                                         text: "P " + root.timecodeText(root.programGangState.sequenceSeconds)
@@ -1259,11 +1264,14 @@ GlassSurface {
                                         font.pixelSize: theme.typeMicro
                                         maximumLineCount: 1
                                         elide: Text.ElideRight
-                                        ToolTip.visible: gangTimeMapHover.hovered
-                                        ToolTip.text: "Program " + root.timecodeText(root.programGangState.sequenceSeconds)
+                                        AppToolTip {
+                                            id: sharedTooltip4
+                                            targetItem: popupTooltipAnchor3
+                                            visible: popupTooltipAnchor3.visible && (gangTimeMapHover.hovered)
+                                            text: "Program " + root.timecodeText(root.programGangState.sequenceSeconds)
                                                       + " maps to Source " + root.timecodeText(root.programGangState.sourceSeconds)
                                                       + " at " + Number(root.programGangState.instantaneousRate || 0).toFixed(2) + "×"
-
+                                        }
                                         HoverHandler { id: gangTimeMapHover }
                                     }
                                 }
@@ -1692,13 +1700,16 @@ GlassSurface {
                             maximumLineCount: 1
                             elide: Text.ElideRight
 
-                            ToolTip.visible: selectedMediaContextHover.hovered && truncated
-                            ToolTip.text: root.selectedMediaAssetIds.length === 1
+                            AppToolTip {
+                                id: sharedTooltip5
+                                targetItem: selectedMediaContextLabel
+                                visible: selectedMediaContextLabel.visible && (selectedMediaContextHover.hovered && truncated)
+                                text: root.selectedMediaAssetIds.length === 1
                                           ? root.selectedMediaTitleValue
                                             + " · "
                                             + String(root.selectedMediaAssetValue.mediaType || "Media")
                                           : String(root.selectedMediaAssetIds.length) + " selected"
-
+                            }
                             HoverHandler {
                                 id: selectedMediaContextHover
                                 enabled: selectedMediaContextLabel.truncated
@@ -1940,21 +1951,18 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: mediaTagsPopup
         objectName: "timelineMediaTagsPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(380), root.width - theme.space16)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(380), root.width - theme.space16)))
         x: Math.max(theme.space8, (root.width - width) / 2)
         y: Math.max(theme.space24, (root.height - height) / 2)
-        padding: theme.panelPaddingCompact
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -2026,22 +2034,19 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: mediaMetadataInspectorPopup
         objectName: "timelineMediaMetadataInspectorPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(470), Math.max(theme.scaled(340), root.width - theme.space16))
-        height: Math.min(theme.scaled(650), Math.max(theme.scaled(440), root.height - theme.space24))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(470), Math.max(theme.scaled(340), root.width - theme.space16))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(650), Math.max(theme.scaled(440), root.height - theme.space24))))
         x: Math.max(theme.space8, (root.width - width) / 2)
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPaddingCompact
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -2318,23 +2323,20 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: takeComparisonPopup
         objectName: "timelineTakeComparisonPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(720), Math.max(theme.scaled(390), root.width - theme.space16))
-        height: Math.min(theme.scaled(620), Math.max(theme.scaled(420), root.height - theme.space24))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(720), Math.max(theme.scaled(390), root.width - theme.space16))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(620), Math.max(theme.scaled(420), root.height - theme.space24))))
         x: Math.max(theme.space8, (root.width - width) / 2)
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPadding
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         onClosed: root.setTakeComparisonPlaying(false)
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.99)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -2553,22 +2555,19 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: mediaUsagePopup
         objectName: "timelineMediaUsagePopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(620), Math.max(theme.scaled(390), root.width - theme.space16))
-        height: Math.min(theme.scaled(640), Math.max(theme.scaled(430), root.height - theme.space24))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(620), Math.max(theme.scaled(390), root.width - theme.space16))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(640), Math.max(theme.scaled(430), root.height - theme.space24))))
         x: Math.max(theme.space8, (root.width - width) / 2)
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPadding
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.99)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -2793,22 +2792,19 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: smartCollectionsPopup
         objectName: "timelineSmartCollectionsPopup"
         modal: true
         focus: true
-        width: Math.min(theme.scaled(560), Math.max(theme.scaled(380), root.width - theme.space16))
-        height: Math.min(theme.scaled(720), Math.max(theme.scaled(480), root.height - theme.space24))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(560), Math.max(theme.scaled(380), root.width - theme.space16))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(720), Math.max(theme.scaled(480), root.height - theme.space24))))
         x: Math.max(theme.space8, (root.width - width) / 2)
         y: Math.max(theme.space12, (root.height - height) / 2)
-        padding: theme.panelPaddingCompact
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space10
@@ -3161,22 +3157,19 @@ GlassSurface {
         }
     }
 
-    Popup {
+    AppPopup {
         id: mediaBinsPopup
         objectName: "timelineMediaBinsPopup"
         modal: false
         focus: true
-        width: Math.min(theme.scaled(390), Math.max(theme.scaled(280), root.width - theme.space16))
-        height: Math.min(theme.scaled(470), Math.max(theme.scaled(320), root.height - theme.space24))
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(390), Math.max(theme.scaled(280), root.width - theme.space16))))
+        height: Math.min(popupAvailableHeight, Math.max(1, Math.min(theme.scaled(470), Math.max(theme.scaled(320), root.height - theme.space24))))
         x: Math.max(theme.space8, root.width - width - theme.space8)
         y: theme.scaled(116)
         padding: theme.panelPaddingCompact
         closePolicy: Popup.CloseOnEscape
 
-        background: PopupSurface {
-            fillColor: theme.alpha(theme.glassBase, 0.98)
-            borderColor: "transparent"
-        }
+        background: PopupSurface {}
 
         contentItem: ColumnLayout {
             spacing: theme.space8

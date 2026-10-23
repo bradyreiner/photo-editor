@@ -161,12 +161,16 @@ Rectangle {
                         maximumLineCount: 1
                         Layout.fillWidth: true
 
-                        ToolTip.visible: headerHover.hovered &&
+                        AppToolTip {
+                            id: sharedTooltip1
+                            targetItem: titleLabel
+                            visible: titleLabel.visible && (headerHover.hovered &&
                                          (titleLabel.contentWidth > titleLabel.width + 1 ||
                                           (!root.enabled && root.disabledReason.length > 0) ||
-                                          root.helpText.length > 0)
-                        ToolTip.delay: 300
-                        ToolTip.text: root.resolvedTooltipText
+                                          root.helpText.length > 0))
+                            delay: 300
+                            text: root.resolvedTooltipText
+                        }
                     }
 
                     Item {
@@ -175,15 +179,19 @@ Rectangle {
                     }
 
                     Rectangle {
+                        id: popupTooltipAnchor2
                         visible: root.changed
                         Layout.preferredWidth: 6
                         Layout.preferredHeight: 6
                         radius: 3
                         color: root.accent
-                        ToolTip.visible: changedHover.hovered
-                        ToolTip.delay: 250
-                        ToolTip.text: root.title + " has changes"
-
+                        AppToolTip {
+                            id: sharedTooltip3
+                            targetItem: popupTooltipAnchor2
+                            visible: popupTooltipAnchor2.visible && (changedHover.hovered)
+                            delay: 250
+                            text: root.title + " has changes"
+                        }
                         HoverHandler {
                             id: changedHover
                         }

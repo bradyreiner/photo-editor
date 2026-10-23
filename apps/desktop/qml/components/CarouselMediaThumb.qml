@@ -103,8 +103,12 @@ Rectangle {
         Drag.hotSpot.y: 0
     }
 
-    ToolTip.visible: thumbHover.containsMouse
-    ToolTip.text: root.tooltipText + "\nClick to select. Double-click to place."
-    ToolTip.delay: 500
-    ToolTip.timeout: 3600
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (thumbHover.containsMouse)
+        text: root.tooltipText + "\nClick to select. Double-click to place."
+        delay: 500
+        timeout: 3600
+    }
 }

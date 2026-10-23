@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
 
     property var menuItems: []
@@ -25,15 +25,6 @@ Popup {
     }
 
     objectName: ownerObjectName.length > 0 ? ownerObjectName + "Popup" : ""
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
-            NumberAnimation { property: "scale"; from: theme.reducedMotion ? 1 : 0.985; to: 1; duration: theme.opticalOpenDuration; easing.type: Easing.OutCubic }
-        }
-    }
-    exit: Transition {
-        NumberAnimation { property: "opacity"; to: 0; duration: theme.reducedMotion ? 0 : 80 }
-    }
 
     function itemEnabledAt(index) {
         if (index < 0 || index >= root.menuItems.length)
@@ -85,8 +76,8 @@ Popup {
 
     y: root.anchorHeight + theme.space6
     margins: theme.space8
-    width: Math.min(root.Overlay.overlay ? Math.max(1, root.Overlay.overlay.width - margins * 2) : root.menuMaximumWidth, root.menuMaximumWidth, Math.max(root.menuMinimumWidth, root.menuWidth, root.anchorWidth, menuColumn.implicitWidth + root.menuPopoverPadding * 2))
-    height: Math.min(menuColumn.implicitHeight + padding * 2, root.Overlay.overlay ? Math.max(1, root.Overlay.overlay.height - margins * 2) : menuColumn.implicitHeight + padding * 2)
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(root.Overlay.overlay ? Math.max(1, root.Overlay.overlay.width - margins * 2) : root.menuMaximumWidth, root.menuMaximumWidth, Math.max(root.menuMinimumWidth, root.menuWidth, root.anchorWidth, menuColumn.implicitWidth + root.menuPopoverPadding * 2))))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(menuColumn.implicitHeight + padding * 2, root.Overlay.overlay ? Math.max(1, root.Overlay.overlay.height - margins * 2) : menuColumn.implicitHeight + padding * 2)))
     modal: false
     focus: true
     padding: root.menuPopoverPadding
@@ -171,11 +162,5 @@ Popup {
         }
     }
 
-    background: PopupSurface {
-        accent: root.accent
-        radius: theme.radiusSurface
-        fillColor: theme.popupFill
-        borderColor: theme.alpha(theme.glassEdge, root.strongSurface ? 0.54 : 0.36)
-        shadowColor: theme.alpha("#000000", root.strongSurface ? 0.42 : 0.32)
-    }
+    background: PopupSurface {}
 }

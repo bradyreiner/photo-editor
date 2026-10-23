@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
 
     objectName: "firstRunGuideDialog"
@@ -28,29 +28,15 @@ Popup {
     modal: false
     closePolicy: Popup.NoAutoClose
     padding: 0
-    width: Math.min(theme.scaled(430), parent ? parent.width - theme.scaled(32) : theme.scaled(430))
-    height: Math.min(parent ? parent.height - theme.scaled(32) : theme.scaled(650),
-                     Math.max(theme.scaled(550), implicitHeight))
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(theme.scaled(430), parent ? parent.width - theme.scaled(32) : theme.scaled(430))))
+    height: Math.min(popupAvailableHeight, Math.max(1, Math.min(parent ? parent.height - theme.scaled(32) : theme.scaled(650),
+                     Math.max(theme.scaled(550), implicitHeight))))
     x: parent ? Math.max(16, parent.width - width - 22) : 0
     y: parent ? Math.min(76, Math.max(16, parent.height - height - 16)) : 0
 
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: theme.durationMedium; easing.type: Easing.OutCubic }
-            NumberAnimation { property: "x"; from: root.x + 18; to: root.x; duration: theme.durationMedium; easing.type: Easing.OutCubic }
-        }
-    }
 
-    exit: Transition {
-        NumberAnimation { property: "opacity"; from: 1; to: 0; duration: theme.durationFast }
-    }
 
-    background: PopupSurface {
-        accent: theme.accentWarm400
-        fillColor: theme.alpha(theme.ink850, 0.98)
-        borderColor: theme.alpha(theme.glassEdge, 0.64)
-        accentRail: true
-    }
+    background: PopupSurface {}
 
     function start() {
         currentStep = 0

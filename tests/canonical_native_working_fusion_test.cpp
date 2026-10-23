@@ -584,7 +584,9 @@ int main() {
            CompiledFineDetailProgram::kLuminanceNoiseReduction |
            CompiledFineDetailProgram::kColorNoiseReduction) ||
       fine_detail_program.sharpen_radius != 2U ||
-      fine_detail_program.sharpen_edge_radius != 7U) {
+      fine_detail_program.sharpen_edge_radius != 3U ||
+      std::abs(fine_detail_program.sharpen_radius_fraction - 0.3F) > 1e-6F ||
+      fine_detail_program.sharpen_subpixel_scale != 1.0F) {
     return fail("retained fine Detail program must compile exact controls");
   }
   auto canonical_fine_detail = spatial_source;

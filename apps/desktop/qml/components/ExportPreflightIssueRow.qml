@@ -41,11 +41,14 @@ Rectangle {
     Accessible.name: label + ": " + message
     Accessible.role: Accessible.StaticText
 
-    ToolTip.visible: issueHover.hovered && issueText.contentHeight > issueText.height + 1
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: message
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (issueHover.hovered && issueText.contentHeight > issueText.height + 1)
+        delay: 350
+        timeout: 3600
+        text: root.message
+    }
     HoverHandler { id: issueHover }
 
     ColumnLayout {

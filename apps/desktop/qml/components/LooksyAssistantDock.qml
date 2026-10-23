@@ -16,7 +16,7 @@ Control {
 
     readonly property string resolvedStatusText: statusText.length > 0 ? statusText : "Open Looksy Agent Studio"
     readonly property string residentAgentContract:
-        "looksy-agent-entry:v5|placement:left-rail|icon:line-character|character:shared-activity|activation:full-screen-agent-studio"
+        "looksy-agent-entry:v5|placement:left-rail|icon:optical-aperture|character:agent-view-only|activation:full-screen-agent-studio"
 
     implicitWidth: 36
     implicitHeight: 36
@@ -49,15 +49,12 @@ Control {
     }
 
     contentItem: Item {
-        LooksyAgentCharacter {
+        AppIcon {
             anchors.centerIn: parent
-            width: 22
-            height: 22
-            glyphOnly: true
-            animated: root.active
-            mode: root.active ? "scan" : "idle"
-            lineColor: root.buttonHovered || root.active ? theme.brandPaper : theme.textMain
-            accentColor: theme.opticalLight
+            width: 20
+            height: 20
+            name: "agent-terminal"
+            color: root.buttonHovered || root.active ? theme.brandPaper : theme.textMain
             Accessible.ignored: true
         }
 

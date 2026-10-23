@@ -74,11 +74,14 @@ Button {
                             : "Press to select. Open the menu for variants and related actions."
     Accessible.role: Accessible.Button
     Accessible.checked: toolActive
-    ToolTip.visible: hovered && !carouselToolMenu.visible
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: toolLabel + " (" + toolKey + ") - menu has variants and related actions"
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (root.hovered && !carouselToolMenu.visible)
+        delay: 350
+        timeout: 3600
+        text: root.toolLabel + " (" + root.toolKey + ") - menu has variants and related actions"
+    }
     onClicked: root.toolSelected(toolValue)
     onPressAndHold: carouselToolMenu.open()
 
@@ -178,7 +181,7 @@ Button {
         }
     }
 
-    Popup {
+    AppPopup {
         id: carouselToolMenu
 
         property var menuModel: root.menuItems || []
@@ -230,9 +233,9 @@ Button {
 
         x: root.width + theme.space8
         y: 0
-        width: Math.min(root.menuMaximumWidth,
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(root.menuMaximumWidth,
                         Math.max(root.menuMinimumWidth, root.menuWidth,
-                                 carouselToolMenuColumn.implicitWidth + root.menuPopoverPadding * 2))
+                                 carouselToolMenuColumn.implicitWidth + root.menuPopoverPadding * 2))))
         modal: false
         focus: true
         padding: root.menuPopoverPadding
@@ -295,8 +298,6 @@ Button {
             }
         }
 
-        background: PopupSurface {
-            accent: theme.accentWarm400
-        }
+        background: PopupSurface {}
     }
 }

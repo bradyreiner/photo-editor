@@ -127,13 +127,110 @@ int main() {
       photo_editor::desktop::linear_display_p3_color_space(),
       photo_editor::desktop::linear_prophoto_color_space(),
       photo_editor::desktop::linear_rec2020_color_space(),
+      photo_editor::desktop::linear_adobe_rgb_color_space(),
+      photo_editor::desktop::linear_acescg_color_space(),
+      photo_editor::desktop::linear_aces2065_1_color_space(),
   };
   const std::array working_names = {
       QStringLiteral("Linear sRGB"),
       QStringLiteral("Linear Display P3"),
       QStringLiteral("Linear ProPhoto RGB"),
       QStringLiteral("Linear Rec.2020"),
+      QStringLiteral("Linear Adobe RGB"),
+      QStringLiteral("ACEScg"),
+      QStringLiteral("ACES2065-1"),
   };
+  struct WorkingAliasCase final {
+    QString alias;
+    QString canonical_name;
+    photo_editor::pipeline::ColorPrimaries primaries;
+    photo_editor::pipeline::WorkingTransformKind kind;
+  };
+  const std::array working_aliases = {
+      WorkingAliasCase{
+          QStringLiteral("Linear Adobe RGB"), QStringLiteral("Linear Adobe RGB"),
+          photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+          photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      WorkingAliasCase{
+          QStringLiteral("linear-adobe-rgb"), QStringLiteral("Linear Adobe RGB"),
+          photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+          photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      WorkingAliasCase{
+          QStringLiteral("AdobeRGBLinear"), QStringLiteral("Linear Adobe RGB"),
+          photo_editor::pipeline::ColorPrimaries::AdobeRgb,
+          photo_editor::pipeline::WorkingTransformKind::LinearAdobeRgb},
+      WorkingAliasCase{
+          QStringLiteral("ACEScg"), QStringLiteral("ACEScg"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp1,
+          photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      WorkingAliasCase{
+          QStringLiteral("ACEScg/AP1"), QStringLiteral("ACEScg"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp1,
+          photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      WorkingAliasCase{
+          QStringLiteral("linearacesap1"), QStringLiteral("ACEScg"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp1,
+          photo_editor::pipeline::WorkingTransformKind::LinearAcesCg},
+      WorkingAliasCase{
+          QStringLiteral("ACES2065-1"), QStringLiteral("ACES2065-1"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp0,
+          photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      WorkingAliasCase{
+          QStringLiteral("ACES2065-1/AP0"), QStringLiteral("ACES2065-1"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp0,
+          photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      WorkingAliasCase{
+          QStringLiteral("ACES2065_1"), QStringLiteral("ACES2065-1"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp0,
+          photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+      WorkingAliasCase{
+          QStringLiteral("linearacesap0"), QStringLiteral("ACES2065-1"),
+          photo_editor::pipeline::ColorPrimaries::AcesAp0,
+          photo_editor::pipeline::WorkingTransformKind::LinearAces2065_1},
+  };
+  for (const auto& alias_case : working_aliases) {
+    const auto engine_profile =
+        photo_editor::pipeline::working_color_profile_from_name(
+            alias_case.alias.toStdString());
+    const auto alias_space =
+        photo_editor::desktop::working_color_space(alias_case.alias);
+    const auto canonical_space =
+        photo_editor::desktop::working_color_space(alias_case.canonical_name);
+    const auto prophoto_fallback = photo_editor::desktop::linear_prophoto_color_space();
+    if (engine_profile.profile_name != alias_case.canonical_name.toStdString() ||
+        engine_profile.kind != alias_case.kind ||
+        engine_profile.color_space.primaries != alias_case.primaries ||
+        engine_profile.color_space.transfer_function !=
+            photo_editor::pipeline::TransferFunction::Linear ||
+        !alias_space.isValid() || alias_space != canonical_space ||
+        alias_space == prophoto_fallback) {
+      std::cerr << "working-profile alias=" << alias_case.alias.toStdString()
+                << " normalized=" << engine_profile.profile_name
+                << " primaries=" << static_cast<int>(engine_profile.color_space.primaries)
+                << '\n';
+      return fail("Qt working-color aliases must resolve to the engine profile primaries instead of falling back to ProPhoto");
+    }
+
+    QImage tagged(1, 1, QImage::Format_RGBA32FPx4);
+    tagged.setColorSpace(canonical_space);
+    auto* tagged_pixel = reinterpret_cast<QRgbaFloat32*>(tagged.bits());
+    *tagged_pixel = QRgbaFloat32{0.1875F, 0.4375F, 0.8125F, 0.625F};
+    const auto converted = photo_editor::desktop::working_image_from_qimage(
+        tagged, alias_case.alias);
+    if (converted.isNull() || converted.pixels.size() != 1U ||
+        std::abs(converted.pixels.front().red - 0.1875F) > 1.0e-4F ||
+        std::abs(converted.pixels.front().green - 0.4375F) > 1.0e-4F ||
+        std::abs(converted.pixels.front().blue - 0.8125F) > 1.0e-4F ||
+        std::abs(converted.pixels.front().alpha - 0.625F) > 1.0e-6F) {
+      return fail("QImage conversion must retain RGB values and alpha when an alias names the same working primaries");
+    }
+  }
+  if (photo_editor::desktop::working_color_space(QStringLiteral("sRGB")) !=
+          QColorSpace(QColorSpace::SRgb) ||
+      photo_editor::desktop::working_color_space(QStringLiteral("Display P3")) !=
+          QColorSpace(QColorSpace::DisplayP3)) {
+    return fail("display-referred sRGB and Display P3 arguments to working_color_space must retain their display-space meaning");
+  }
   constexpr std::array samples = {
       QRgbaFloat32{1.0F, 0.0F, 0.0F, 1.0F},
       QRgbaFloat32{0.0F, 1.0F, 0.0F, 0.5F},
@@ -141,6 +238,9 @@ int main() {
       QRgbaFloat32{0.18F, 0.18F, 0.18F, 1.0F},
   };
   for (const auto& source_space : source_spaces) {
+    if (!source_space.isValid()) {
+      return fail("every declared source profile must be valid in the Qt raster boundary");
+    }
     QImage tagged(static_cast<int>(samples.size()), 1, QImage::Format_RGBA32FPx4);
     tagged.setColorSpace(source_space);
     auto* row = reinterpret_cast<QRgbaFloat32*>(tagged.bits());
@@ -189,6 +289,27 @@ int main() {
           return fail("raster working conversion must preserve out-of-gamut color and alpha");
         }
       }
+    }
+  }
+
+  // Published output must retain both its exact profile tag and 16-bit
+  // precision for every working-space profile accepted by the editor.
+  for (const auto& working_name : working_names) {
+    const auto target = photo_editor::desktop::working_color_space(working_name);
+    if (!target.isValid()) {
+      return fail("every supported working profile must provide a valid Qt color-space tag");
+    }
+    const auto tagged_16_bit = convert_tagged_qimage_color_space(
+        source,
+        target,
+        QImage::Format_RGBA64,
+        QImageColorConversionPurpose::OutputPublication);
+    if (tagged_16_bit.isNull() || tagged_16_bit.format() != QImage::Format_RGBA64 ||
+        tagged_16_bit.colorSpace() != target ||
+        std::abs(tagged_16_bit.pixelColor(1, 0).alphaF() -
+                 source.pixelColor(1, 0).alphaF()) > 1.0 / 65535.0) {
+      std::cerr << "16-bit output profile=" << working_name.toStdString() << '\n';
+      return fail("16-bit output must preserve the selected wide-gamut profile tag and alpha");
     }
   }
 

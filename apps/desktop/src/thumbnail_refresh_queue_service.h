@@ -110,7 +110,7 @@ inline constexpr int kLayerThumbnailEdge =
     static_cast<int>(kLayerThumbnailDisplayEdge * kLayerThumbnailDevicePixelRatio);
 inline constexpr int kMaskSetThumbnailDisplayEdge = 34;
 inline constexpr int kMaskThumbnailBackingEdge = 96;
-inline constexpr auto kThumbnailColorPipelineVersion = "thumbnail-color-pipeline-v6";
+inline constexpr auto kThumbnailColorPipelineVersion = "thumbnail-color-pipeline-v9";
 
 struct ThumbnailRefreshQueueAdjustmentLayerDependencies final {
   std::function<QString(const QVariantMap& layer)> recipe_hash;

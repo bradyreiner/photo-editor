@@ -1203,10 +1203,14 @@ Rectangle {
                     }
                 }
                 onDoubleClicked: if (!dragged) workspaceContext.editBoardSelected(boardSurface.index)
-                Controls.ToolTip.visible: containsMouse && !pressed && !viewport.boardDragActive
-                Controls.ToolTip.delay: 800
-                Controls.ToolTip.text: canDrag ? (Number(boardSurface.modelData.moveSpanCount) > 1
+                AppToolTip {
+                    id: sharedTooltip1
+                    targetItem: boardHeaderArea
+                    visible: boardHeaderArea.visible && (boardHeaderArea.containsMouse && !boardHeaderArea.pressed && !viewport.boardDragActive)
+                    delay: 800
+                    text: boardHeaderArea.canDrag ? (Number(boardSurface.modelData.moveSpanCount) > 1
                     ? qsTr("Drag to reorder. Connected boards move together.") : qsTr("Drag to reorder this board.")) : qsTr("Click to select. Double-click to edit.")
+                }
             }
             MenuButton {
                 id: boardActions
@@ -1337,24 +1341,19 @@ Rectangle {
         }
     }
 
-    Controls.Popup {
+    AppPopup {
         id: boardImageDropMenu
         objectName: "editBoardImageDropMenu"
         parent: viewport
-        width: Math.min(themeContext.scaled(324), viewport.width - 24)
-        height: contentItem.implicitHeight + padding * 2
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(themeContext.scaled(324), viewport.width - 24)))
+        height: Math.min(popupAvailableHeight, Math.max(1, contentItem.implicitHeight + padding * 2))
         padding: 16
         focus: true
         closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
         readonly property var board: viewport.boardStageModel[viewport.pendingImageDropIndex] || ({})
         onOpened: addDroppedLayerButton.forceActiveFocus(Qt.PopupFocusReason)
         onClosed: workspaceContext.forceActiveFocus(Qt.PopupFocusReason)
-        background: Rectangle {
-            color: themeContext.ink900
-            radius: themeContext.radiusControl
-            border.width: themeContext.hairlineWidth
-            border.color: themeContext.controlEdge
-        }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             spacing: 8
             Controls.Label {

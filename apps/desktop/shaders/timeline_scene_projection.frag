@@ -18,11 +18,14 @@ layout(std140, binding = 0) uniform buf {
     vec4 occlusionRect;
     float occlusionEnabled;
     float occlusionReady;
+    vec4 fadeColor;
+    float fadeAmount;
 } ubuf;
 
 void main()
 {
     fragColor = texture(source, textureCoordinate) * ubuf.qt_Opacity;
+    fragColor.rgb = mix(fragColor.rgb, ubuf.fadeColor.rgb * fragColor.a, clamp(ubuf.fadeAmount, 0.0, 1.0));
     if (ubuf.occlusionEnabled > 0.5) {
         if (ubuf.occlusionReady < 0.5) {
             fragColor = vec4(0.0);

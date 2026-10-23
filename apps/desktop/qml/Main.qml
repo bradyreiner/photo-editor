@@ -40,17 +40,17 @@ ApplicationWindow {
         if (closeCoordinator) event.accepted = closeCoordinator.handleWindowClose()
     }
 
-    Popup {
+    AppPopup {
         id: exportAdmissionCloseDialog
         objectName: "exportAdmissionCloseDialog"
         parent: Overlay.overlay
         modal: true
         focus: true
-        width: Math.min(480, parent.width - 32)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(480, parent.width - 32)))
         x: (parent.width - width) / 2
         y: Math.max(16, (parent.height - height) / 2)
-        padding: 20
-        background: Rectangle { color: theme.ink900; radius: 18; border.color: theme.lineSoft }
+        padding: standardPopupPadding
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             spacing: 16
             Label {
@@ -99,22 +99,17 @@ ApplicationWindow {
         coordinator: window.closeCoordinator
     }
 
-    Popup {
+    AppPopup {
         id: previewFailureDetailsDialog
         objectName: "previewFailureDetailsDialog"
         parent: Overlay.overlay
         modal: true
         focus: true
-        width: Math.min(620, parent.width - 32)
+        width: Math.min(popupAvailableWidth, Math.max(1, 620))
         x: (parent.width - width) / 2
         y: Math.max(16, (parent.height - height) / 2)
         padding: 20
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.ink900
-            radius: theme.radiusPanel
-            border.color: theme.lineSoft
-        }
         contentItem: ColumnLayout {
             spacing: 14
             Label {
@@ -232,11 +227,15 @@ ApplicationWindow {
     property bool pendingAboutDialogOpen: false
     property bool pendingFirstRunGuideOpen: false
     property bool sessionRestoreApplied: false
-    property bool recoveryDetailsExpanded: false
+    property alias recoveryDetailsExpanded: recoverySurface.expanded
     readonly property var workspaceTitles: ["Library", "Edit", "Boards", "Timeline", "Export", "Scene"]
     readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export", "scene"]
     readonly property string pageVisibilityAuditContract: "page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export|buckets:always,contextual,one-expansion,hover-focus,diagnostic,preserve|runtime-active:true|functionality:preserved|major-shape:preserved"
     readonly property string activityProgressPlacementContract: "activity-progress-placement:v2|header-overlay:true|layout-shift:false|text:false|cancel-action:true"
+    // A full Library scene owns its activity feedback; the header is used for
+    // refreshes that leave existing photos visible and for other background work.
+    readonly property bool libraryLoadingSceneVisible: currentWorkspace === libraryWorkspaceIndex
+        && workspaceLoader.item !== null && workspaceLoader.item.libraryLoadingSceneVisible
     readonly property bool catalogRecoveryNeeded: !catalogAssets.loading
                                                    && String(catalogAssets.errorMessage || "").length > 0
                                                    && String(catalogAssets.status || "") === "Catalog unavailable"
@@ -255,7 +254,7 @@ ApplicationWindow {
                                                     && !recoveryBannerVisible
     readonly property string recoverySurfaceSummary: {
         if (catalogRecoveryNeeded)
-            return "The Library could not open. Your originals are unchanged."
+            return "Your originals are unchanged."
         if (jobRecoveryNeeded)
             return "Background jobs are paused. You can still browse your Library; job history has not been discarded."
         if (appShell.sessionRecoveryAvailable)
@@ -2095,7 +2094,7 @@ ApplicationWindow {
         }
     }
 
-    Popup {
+    AppPopup {
         id: editBoardDialog
         objectName: "editBoardDialog"
         parent: Overlay.overlay
@@ -2107,11 +2106,11 @@ ApplicationWindow {
         readonly property bool removing: operation === "remove"
         modal: true
         focus: true
-        width: Math.min(420, parent ? parent.width - 32 : 420)
-        height: contentItem.implicitHeight + padding * 2
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(420, parent ? parent.width - 32 : 420)))
+        height: Math.min(popupAvailableHeight, Math.max(1, contentItem.implicitHeight + padding * 2))
         x: parent ? (parent.width - width) / 2 : 0
         y: parent ? (parent.height - height) / 2 : 0
-        padding: 24
+        padding: standardPopupPadding
         closePolicy: Popup.CloseOnEscape
         onAboutToShow: focusReturnItem = window.activeFocusItem
         onOpened: {
@@ -2140,10 +2139,7 @@ ApplicationWindow {
             }
             close()
         }
-        background: Rectangle {
-            color: theme.ink900
-            radius: theme.radiusPanel
-            border.color: theme.lineSoft
+        background: PopupSurface {
             Accessible.role: Accessible.Dialog
             Accessible.name: editBoardDialog.removing ? "Remove board" : "Rename board"
         }
@@ -3074,11 +3070,6 @@ ApplicationWindow {
         }
     }
 
-    StartupLoadingPopup {
-        parent: Overlay.overlay
-        catalogLoading: window.catalogAssetModel.loading
-    }
-
     Component.onCompleted: {
         currentWorkspace = appShell.sessionRecoveryAvailable
                 ? appShell.recoveredWorkspace()
@@ -3332,16 +3323,16 @@ ApplicationWindow {
             }
         }
     }
-    Popup {
+    AppPopup {
         id: photoRecipeNotice
         objectName: "photoRecipeNotice"
         parent: Overlay.overlay
         x: parent ? (parent.width - width) / 2 : 0
         y: parent ? parent.height - height - 32 : 0
-        width: Math.min(520, parent ? parent.width - 32 : 520)
+        width: Math.min(popupAvailableWidth, Math.max(1, Math.min(520, parent ? parent.width - 32 : 520)))
         padding: 14
         closePolicy: Popup.NoAutoClose
-        background: Rectangle { color: theme.ink800; radius: 12; border.color: theme.lineSoft }
+        background: PopupSurface {}
         contentItem: RowLayout {
             Label { Layout.fillWidth: true; text: window.photoRecipeNoticeText; color: theme.textStrong; wrapMode: Text.WordWrap }
             ActionButton {
@@ -3485,10 +3476,14 @@ ApplicationWindow {
                             hoverEnabled: true
                             focusPolicy: Qt.TabFocus
                             activeFocusOnTab: true
-                            ToolTip.visible: hovered
-                            ToolTip.delay: 350
-                            ToolTip.timeout: 2800
-                            ToolTip.text: workspaceSubtitles[index]
+                            AppToolTip {
+                                id: sharedTooltip1
+                                targetItem: workspaceTab
+                                visible: workspaceTab.visible && (workspaceTab.hovered)
+                                delay: 350
+                                timeout: 2800
+                                text: workspaceSubtitles[workspaceTab.index]
+                            }
                             onHoveredChanged: {
                                 if (workspaceTab.index !== window.timelineWorkspaceIndex)
                                     return
@@ -3581,7 +3576,7 @@ ApplicationWindow {
                     Text {
                         objectName: "topWorkspaceStatusLabel"
                         Layout.fillWidth: true
-                        visible: window.appActivityStatusVisible
+                        visible: window.appActivityStatusVisible && !window.libraryLoadingSceneVisible
                         text: window.appActivityStatusTitle
                         color: theme.textFaint
                         font.family: theme.fontUi
@@ -3601,7 +3596,8 @@ ApplicationWindow {
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
                 height: 4
-                visible: window.appActivityStatusVisible && !window.appActivityErrorVisible
+                visible: window.appActivityStatusVisible && !window.libraryLoadingSceneVisible
+                         && !window.appActivityErrorVisible
                          && !window.recoveryBannerVisible
                          && !window.timelineProgramFullScreenActive && !window.sceneImmersiveActive
                 progress: window.primaryActivityProgress
@@ -3614,7 +3610,8 @@ ApplicationWindow {
                 anchors.right: parent.right
                 anchors.rightMargin: 278
                 anchors.verticalCenter: parent.verticalCenter
-                visible: window.appActivityStatusVisible && !window.appActivityErrorVisible
+                visible: window.appActivityStatusVisible && !window.libraryLoadingSceneVisible
+                         && !window.appActivityErrorVisible
                          && !window.recoveryBannerVisible && window.appActivityStatusCancelable
                 width: 22
                 height: 22
@@ -3654,6 +3651,29 @@ ApplicationWindow {
             onActionRequested: if (window.recoveryBannerVisible) window.reviewRecoveredWork()
             onDismissRequested: if (window.recoveryBannerVisible) window.dismissRecoverySurface()
             onDetailsRequested: previewFailureDetailsDialog.open()
+        }
+
+        RecoveryStatusPanel {
+            id: recoverySurface
+            objectName: "recoverySummarySurface"
+            Layout.fillWidth: true
+            visible: window.recoverySurfaceVisible
+                     && !window.timelineProgramFullScreenActive && !window.sceneImmersiveActive
+            catalogFailure: window.catalogRecoveryNeeded
+            jobFailure: window.jobRecoveryNeeded
+            repairPending: appShell.catalogRepairConfirmationPending
+            summary: window.recoverySurfaceSummary
+            details: window.recoveryDetailItems()
+            onRetryRequested: catalogAssets.refresh()
+            onBackupRequested: appShell.createCatalogBackup()
+            onRepairRequested: appShell.requestCatalogRepair()
+            onConfirmRepairRequested: {
+                if (appShell.confirmCatalogRepair())
+                    catalogAssets.refresh()
+            }
+            onCancelRepairRequested: appShell.cancelCatalogRepair()
+            onReviewRequested: window.reviewRecoveredWork()
+            onDismissRequested: window.dismissRecoverySurface()
         }
 
         Rectangle {
@@ -4169,19 +4189,14 @@ ApplicationWindow {
     Component {
         id: aboutDialogComponent
 
-        Dialog {
+        AppDialog {
             parent: Overlay.overlay
             modal: true
-            width: 420
+            width: Math.min(popupAvailableWidth, Math.max(1, 420))
             standardButtons: Dialog.Ok
             title: "About Looksy"
 
-            background: Rectangle {
-                radius: theme.radius16
-                color: theme.ink900
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.85)
-            }
+            background: PopupSurface {}
 
             contentItem: ColumnLayout {
                 spacing: 12
@@ -4227,190 +4242,6 @@ ApplicationWindow {
         }
     }
 
-    PopupSurface {
-        id: recoverySurface
-        objectName: "recoverySummarySurface"
-        visible: window.recoverySurfaceVisible
-        z: 500
-        anchors.top: parent.top
-        anchors.topMargin: theme.scaled(78)
-        anchors.right: parent.right
-        anchors.rightMargin: theme.scaled(18)
-        width: Math.min(parent.width - theme.scaled(36),
-                        theme.scaled(window.catalogRecoveryNeeded ? 480 : 380))
-        height: Math.max(theme.scaled(80), recoverySurfaceColumn.implicitHeight + theme.scaled(16))
-        radius: theme.radius16
-        opacity: visible ? 1 : 0
-        scale: visible ? 1 : 0.97
-        transformOrigin: Item.TopRight
-        Behavior on opacity { NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic } }
-        Behavior on scale { NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutBack } }
-        accent: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? theme.error : theme.success
-        accentRail: true
-        fillColor: theme.ink850
-        borderColor: theme.alpha(theme.glassEdge, 0.72)
-        shadowColor: visible ? theme.alpha(theme.ink950, 0.56) : "transparent"
-
-        ColumnLayout {
-            id: recoverySurfaceColumn
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.margins: theme.scaled(8)
-            spacing: theme.scaled(6)
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: theme.scaled(8)
-
-                AppIcon {
-                    name: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? "info" : "check"
-                    Layout.preferredWidth: 18
-                    Layout.preferredHeight: 18
-                    color: window.catalogRecoveryNeeded || window.jobRecoveryNeeded ? theme.error : theme.success
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: theme.scaled(1)
-
-                    Label {
-                        objectName: "recoverySummaryTitle"
-                        Layout.fillWidth: true
-                        text: window.catalogRecoveryNeeded ? "Catalog recovery"
-                              : window.jobRecoveryNeeded ? "Job recovery needs attention" : "Work recovered"
-                        color: theme.textMain
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: window.recoverySurfaceSummary
-                        color: theme.textMuted
-                        font.pixelSize: theme.typeCaption
-                        maximumLineCount: 2
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    }
-                }
-
-                ActionButton {
-                    objectName: "recoveryDoneButton"
-                    visible: !window.catalogRecoveryNeeded && !window.jobRecoveryNeeded && !appShell.catalogRepairConfirmationPending
-                    iconName: "close"
-                    showText: false
-                    compact: true
-                    tone: "tertiary"
-                    tooltipText: "Dismiss recovery notice"
-                    Accessible.name: "Dismiss recovery summary"
-                    onClicked: window.dismissRecoverySurface()
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: theme.scaled(6)
-
-                ActionButton {
-                    objectName: "recoveryDetailsButton"
-                    text: window.recoveryDetailsExpanded ? "Hide details" : "Details"
-                    compact: true
-                    tone: "tertiary"
-                    Accessible.name: text
-                    onClicked: window.recoveryDetailsExpanded = !window.recoveryDetailsExpanded
-                }
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    objectName: "recoveryReviewWorkButton"
-                    visible: !window.catalogRecoveryNeeded
-                    text: window.jobRecoveryNeeded ? "Review jobs" : "Review work"
-                    compact: true
-                    tone: "primary"
-                    Accessible.name: window.jobRecoveryNeeded ? "Review paused background jobs" : "Review recovered work"
-                    onClicked: window.reviewRecoveredWork()
-                }
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                visible: window.recoveryDetailsExpanded
-                spacing: theme.scaled(4)
-
-                Repeater {
-                    model: window.recoveryDetailItems()
-                    delegate: Label {
-                        required property string modelData
-                        Layout.fillWidth: true
-                        text: "• " + modelData
-                        color: theme.textMuted
-                        wrapMode: Text.WordWrap
-                        font.pixelSize: 11
-                    }
-                }
-            }
-
-            RowLayout {
-                objectName: "catalogRecoveryActions"
-                Layout.fillWidth: true
-                visible: window.catalogRecoveryNeeded || appShell.catalogRepairConfirmationPending
-                spacing: theme.scaled(6)
-
-                Item { Layout.fillWidth: true }
-
-                ActionButton {
-                    objectName: "catalogRetryButton"
-                    visible: window.catalogRecoveryNeeded
-                    text: "Retry"
-                    iconName: "retry"
-                    compact: true
-                    Accessible.name: "Retry opening the catalog"
-                    onClicked: catalogAssets.refresh()
-                }
-
-                ActionButton {
-                    objectName: "catalogBackupButton"
-                    visible: window.catalogRecoveryNeeded
-                    text: "Create backup"
-                    compact: true
-                    Accessible.name: "Create a catalog backup"
-                    onClicked: appShell.createCatalogBackup()
-                }
-
-                ActionButton {
-                    objectName: "catalogRepairButton"
-                    visible: window.catalogRecoveryNeeded && !appShell.catalogRepairConfirmationPending
-                    text: "Repair from backup"
-                    compact: true
-                    Accessible.name: "Review catalog repair"
-                    onClicked: appShell.requestCatalogRepair()
-                }
-
-                ActionButton {
-                    objectName: "catalogRepairConfirmButton"
-                    visible: appShell.catalogRepairConfirmationPending
-                    text: "Confirm repair"
-                    compact: true
-                    Accessible.name: "Confirm catalog repair from the latest backup"
-                    onClicked: {
-                        if (appShell.confirmCatalogRepair())
-                            catalogAssets.refresh()
-                    }
-                }
-
-                ActionButton {
-                    objectName: "catalogRepairCancelButton"
-                    visible: appShell.catalogRepairConfirmationPending
-                    text: "Cancel"
-                    compact: true
-                    Accessible.name: "Cancel catalog repair"
-                    onClicked: appShell.cancelCatalogRepair()
-                }
-
-            }
-        }
-    }
 
     Component {
         id: libraryView

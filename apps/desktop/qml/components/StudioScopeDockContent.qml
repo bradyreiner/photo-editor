@@ -59,7 +59,7 @@ ColumnLayout {
         wrapMode: Text.Wrap
     }
 
-    Popup {
+    AppPopup {
         id: scopeSettings
         objectName: scopeDock.objectPrefix + "ScopeSettingsPopup"
         parent: Overlay.overlay
@@ -71,15 +71,10 @@ ColumnLayout {
             y = below + height <= overlay.height - 8
                 ? below : Math.max(8, anchor.y - settingsButton.height - height - 6)
         }
-        implicitWidth: Math.min(370, Math.max(0, (parent ? parent.width : 386) - 16))
+        width: Math.min(popupAvailableWidth, Math.max(1, 370))
         padding: 14
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.surfaceTop
-            radius: theme.radius8
-            border.width: 1
-            border.color: theme.controlEdge
-        }
+        background: PopupSurface {}
         contentItem: ColumnLayout {
             spacing: 12
             Label { text: "Analysis domain"; color: theme.textStrong; font.pixelSize: theme.typeLabel }

@@ -1473,20 +1473,12 @@ Item {
                         anchors.fill: parent
                         anchors.margins: 10
                         spacing: 8
-                        Rectangle {
-                            implicitWidth: 8
-                            implicitHeight: 8
-                            Layout.preferredWidth: 8
-                            Layout.preferredHeight: 8
-                            radius: 4
-                            color: root.amber
+                        OpticalActivityIndicator {
+                            Layout.preferredWidth: 18
+                            Layout.preferredHeight: 18
                             Layout.alignment: Qt.AlignTop
-                            SequentialAnimation on opacity {
-                                running: root.busy && !root.reducedMotion
-                                loops: Animation.Infinite
-                                OpacityAnimator { from: 0.5; to: 1; duration: 520 }
-                                OpacityAnimator { from: 1; to: 0.5; duration: 520 }
-                            }
+                            active: root.busy
+                            reducedMotion: root.reducedMotion
                         }
                         ColumnLayout {
                             Layout.fillWidth: true

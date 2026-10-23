@@ -1,5 +1,6 @@
 #include "color_layer_runtime.h"
 #include "color_adjustment_kernel_runtime.h"
+#include "photo_editor/pipeline/color_adjustments.h"
 
 #include <cmath>
 #include <iostream>
@@ -82,6 +83,40 @@ int main() {
         if (!changed || actual.front().red != background.front().red || actual.front().alpha != 1.0F) return 1;
       }
     }
+  }
+
+  ColorAdjustmentState extended_layer_lut_state;
+  extended_layer_lut_state.color_pipeline.working_profile =
+      working_color_profile_from_name("Linear sRGB");
+  extended_layer_lut_state.color_pipeline.output_headroom = 4.0;
+  LutAdjustment extended_layer_lut;
+  extended_layer_lut.enabled = true;
+  extended_layer_lut.strength = 100.0;
+  extended_layer_lut.name = "Signed HDR layer LUT";
+  extended_layer_lut.size = 2;
+  extended_layer_lut.input_color_space = "Linear sRGB";
+  extended_layer_lut.output_color_space = "Linear sRGB";
+  extended_layer_lut.table.assign(8U, ColorPixel{1.25F, -0.25F, 0.50F, 1.25F});
+  extended_layer_lut_state.photo_layers = {
+      PhotoLayer{
+          .id = "signed-hdr-layer-lut",
+          .name = "Signed HDR layer LUT",
+          .kind = "adjustment",
+          .enabled = true,
+          .opacity = 1.0,
+          .lut_stack = {extended_layer_lut},
+      },
+  };
+  std::vector<ColorPixel> extended_layer_pixels{{0.23F, 0.34F, 0.45F, 0.37F}};
+  if (!apply_color_layers_stage(
+          &extended_layer_pixels, 1, 1, extended_layer_lut_state, RemovalQuality::Final) ||
+      extended_layer_pixels.size() != 1U ||
+      std::abs(extended_layer_pixels.front().red - 1.25F) > 1.0e-5F ||
+      std::abs(extended_layer_pixels.front().green + 0.25F) > 1.0e-5F ||
+      std::abs(extended_layer_pixels.front().blue - 0.50F) > 1.0e-5F ||
+      std::abs(extended_layer_pixels.front().alpha - 0.37F) > 1.0e-6F) {
+    std::cerr << "Adjustment-layer LUT must preserve signed/HDR RGB and source alpha\n";
+    return 1;
   }
   std::cout << "Direct raster colors preserve coverage and affect only layer content\n";
 }

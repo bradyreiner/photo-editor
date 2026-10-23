@@ -3,7 +3,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-Popup {
+AppPopup {
     id: root
     objectName: "startupLoadingPopup"
 
@@ -35,16 +35,12 @@ Popup {
     dim: true
     focus: true
     closePolicy: Popup.NoAutoClose
-    padding: 16
-    width: Math.min(560, parent ? Math.max(240, Math.min(parent.width - 32, (parent.height - 100) * 1.5)) : 560)
+    padding: standardPopupPadding
+    width: Math.min(popupAvailableWidth, Math.max(1, Math.min(560, parent ? Math.max(240, Math.min(parent.width - 32, (parent.height - 100) * 1.5)) : 560)))
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
 
-    Overlay.modal: Rectangle { color: "#99000000" }
     background: Item {}
-    enter: Transition {
-        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 140 }
-    }
     // Release the modal as soon as the catalog is ready, even if the render
     // loop is busy preparing the first library frame.
     exit: Transition {}

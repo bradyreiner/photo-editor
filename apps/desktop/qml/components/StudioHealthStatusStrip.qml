@@ -27,6 +27,7 @@ Rectangle {
             model: healthStrip.healthItems
 
             delegate: RowLayout {
+                id: popupTooltipAnchor1
                 required property var modelData
                 spacing: 4
 
@@ -51,10 +52,14 @@ Rectangle {
                     font.weight: Font.DemiBold
                 }
 
-                ToolTip.visible: itemHover.hovered
-                ToolTip.delay: 350
-                ToolTip.timeout: 4200
-                ToolTip.text: modelData.label + " " + modelData.state + ": " + modelData.detail
+                AppToolTip {
+                    id: sharedTooltip2
+                    targetItem: popupTooltipAnchor1
+                    visible: popupTooltipAnchor1.visible && (itemHover.hovered)
+                    delay: 350
+                    timeout: 4200
+                    text: popupTooltipAnchor1.modelData.label + " " + popupTooltipAnchor1.modelData.state + ": " + popupTooltipAnchor1.modelData.detail
+                }
             }
         }
     }

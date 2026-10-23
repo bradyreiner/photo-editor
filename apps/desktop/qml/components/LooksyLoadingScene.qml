@@ -16,7 +16,7 @@ Item {
     readonly property bool motionEnabled: active && visible && enabled && !failed && !reducedMotion && !theme.reducedMotion
     readonly property bool traveling: false
     readonly property real boundedProgress: Math.max(0, Math.min(1, progress))
-    readonly property string renderingContract: "looksy-loading-scene:v3|art:procedural-line|character:single-body|activity:integrated-light|empty:resting|hidden:stopped"
+    readonly property string renderingContract: "looksy-loading-scene:v4|art:caustic-wavefront|character:none|color:additive-rgb|empty:resting|hidden:stopped"
     implicitWidth: compact ? 280 : 440
     implicitHeight: content.implicitHeight
     Accessible.role: active ? Accessible.ProgressBar : Accessible.Graphic
@@ -33,72 +33,15 @@ Item {
             objectName: "loadingSceneStage"
             width: parent.width
             height: root.compact ? 126 : 178
-            // The scene is a handful of document lines, not a separate image.
-            Canvas {
-                id: contextLines
-                objectName: "loadingSceneLineContext"
+            OpticalLightField {
+                objectName: "loadingSceneLightField"
                 anchors.fill: parent
-                antialiasing: true
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
-                onVisibleChanged: { if (visible) requestPaint() }
-                Connections { target: root; function onSceneChanged() { contextLines.requestPaint() } }
-                onPaint: {
-                    const c = getContext("2d")
-                    c.reset()
-                    if (!root.visible || width <= 0 || height <= 0) return
-                    c.strokeStyle = "#526167"
-                    c.lineWidth = 1
-                    c.lineCap = "round"
-                    const x = width / 2, y = height * 0.7
-                    c.globalAlpha = 0.45
-                    c.beginPath(); c.moveTo(x - 100, y + 22); c.lineTo(x + 100, y + 22); c.stroke()
-                    c.globalAlpha = 0.6
-                    if (root.scene === "timeline") {
-                        for (let row = 0; row < 2; ++row) {
-                            const left = x + 48 + row * 8, top = y - 34 + row * 15
-                            c.strokeRect(left, top, 44 - row * 9, 7)
-                        }
-                    } else if ((root.scene === "library" || root.scene === "import")) {
-                        for (let card = 2; card >= 0; --card) {
-                            c.strokeRect(x + 51 + card * 5, y - 39 - card * 5, 28, 31)
-                        }
-                        c.beginPath(); c.moveTo(x + 56, y - 16); c.lineTo(x + 63, y - 23); c.lineTo(x + 73, y - 14); c.stroke()
-                    } else if (root.scene === "export") {
-                        c.beginPath(); c.moveTo(x + 51, y - 25); c.lineTo(x + 79, y - 25)
-                        c.moveTo(x + 71, y - 33); c.lineTo(x + 79, y - 25); c.lineTo(x + 71, y - 17); c.stroke()
-                    } else {
-                        c.beginPath(); c.arc(x + 66, y - 24, 17, -Math.PI * 0.7, Math.PI * 0.7); c.stroke()
-                        c.strokeRect(x + 60, y - 30, 12, 12)
-                    }
-                }
-            }
-            AdditiveLightWaves {
-                objectName: "loadingSceneLightWaves"
-                width: Math.min(200, parent.width * 0.62)
-                height: 30
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: parent.height * 0.72
                 active: root.motionEnabled
                 reducedMotion: root.reducedMotion
-                opacity: root.failed ? 0 : root.active ? 0.4 : 0.15
-            }
-            LooksyAgentCharacter {
-                id: character
-                objectName: "loadingSceneRobot"
-                width: root.compact ? 86 : 118
-                height: width * 1.16
-                x: (stage.width - width) / 2 - 12
-                y: stage.height * 0.7 + 22 - feetBaseline
-                animated: root.motionEnabled
-                reducedMotion: root.reducedMotion
-                progress: root.showProgress ? root.progress : -1
-                mode: root.failed ? "warning" : !root.active ? "idle"
-                    : root.scene === "timeline" ? "assemble"
-                    : root.scene === "export" ? "export"
-                    : root.scene === "library" ? "sort" : "scan"
-                tool: "none"
-                Accessible.ignored: true
+                failed: root.failed
+                variant: root.scene === "timeline" ? 2 : root.scene === "export" ? 4
+                    : root.scene === "import" ? 3 : root.scene === "startup" ? 1 : 0
+                opacity: root.failed ? 0.45 : root.active ? 1 : 0.35
             }
         }
         Label {
@@ -131,6 +74,7 @@ Item {
             progress: root.progress
             failed: root.failed
             active: root.motionEnabled
+            reducedMotion: root.reducedMotion
         }
         Label {
             width: parent.width

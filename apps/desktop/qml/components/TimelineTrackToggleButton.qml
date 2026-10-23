@@ -86,8 +86,12 @@ Item {
         onClicked: root.toggled()
     }
 
-    ToolTip.visible: toggleMouse.containsMouse && root.label.length > 0
-    ToolTip.delay: 350
-    ToolTip.timeout: 2600
-    ToolTip.text: root.label
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (toggleMouse.containsMouse && root.label.length > 0)
+        delay: 350
+        timeout: 2600
+        text: root.label
+    }
 }

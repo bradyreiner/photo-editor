@@ -72,6 +72,7 @@ Rectangle {
             spacing: 1
 
             Label {
+                id: popupTooltipAnchor1
                 objectName: root.titleObjectName
                 Layout.fillWidth: true
                 text: root.title
@@ -84,14 +85,18 @@ Rectangle {
                 minimumPixelSize: 9
                 maximumLineCount: 1
                 elide: Text.ElideNone
-                ToolTip.visible: titleHover.hovered && contentWidth > width + 1
-                ToolTip.delay: 300
-                ToolTip.text: root.title
-
+                AppToolTip {
+                    id: sharedTooltip2
+                    targetItem: popupTooltipAnchor1
+                    visible: popupTooltipAnchor1.visible && (titleHover.hovered && popupTooltipAnchor1.contentWidth > popupTooltipAnchor1.width + 1)
+                    delay: 300
+                    text: root.title
+                }
                 HoverHandler { id: titleHover }
             }
 
             Label {
+                id: popupTooltipAnchor3
                 objectName: root.subtitleObjectName
                 Layout.fillWidth: true
                 text: root.subtitle
@@ -103,10 +108,13 @@ Rectangle {
                 minimumPixelSize: 8
                 maximumLineCount: 1
                 elide: Text.ElideNone
-                ToolTip.visible: subtitleHover.hovered && contentWidth > width + 1
-                ToolTip.delay: 300
-                ToolTip.text: root.subtitle
-
+                AppToolTip {
+                    id: sharedTooltip4
+                    targetItem: popupTooltipAnchor3
+                    visible: popupTooltipAnchor3.visible && (subtitleHover.hovered && popupTooltipAnchor3.contentWidth > popupTooltipAnchor3.width + 1)
+                    delay: 300
+                    text: root.subtitle
+                }
                 HoverHandler { id: subtitleHover }
             }
         }

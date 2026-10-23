@@ -37,7 +37,10 @@ QtObject {
     readonly property color opticalHoverFill: actionSecondaryHover
     readonly property color opticalSelectedFill: editorSelectionFill
     readonly property color opticalEdge: highContrast ? brandPaper : "#607B88"
-    readonly property color popupFill: "#25292E"
+    readonly property color popupFill: "#24262A"
+    readonly property color popupDim: "#80000000"
+    readonly property color popupBorder: highContrast ? lineStrong : "#50545B"
+    readonly property int popupRadius: scaled(6)
     readonly property color warningFill: "#302B23"
     readonly property color errorFill: "#342626"
     readonly property int opticalHoverDuration: reducedMotion ? 0 : 120

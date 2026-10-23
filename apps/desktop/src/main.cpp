@@ -2757,7 +2757,7 @@ int main(int argc, char* argv[]) {
           const bool isolated = catalog_assets.rowCount() > 0 && catalog_assets.errorMessage().isEmpty() &&
               !job_queue.startupRecoveryError().isEmpty() && window->property("jobRecoveryNeeded").toBool() &&
               !window->property("catalogRecoveryNeeded").toBool() &&
-              title && title->property("text").toString() == QStringLiteral("Job recovery needs attention") &&
+              title && title->property("text").toString() == QStringLiteral("Background jobs paused") &&
               app_shell.firstRunExperiencePending() &&
               (!guide || !guide->property("visible").toBool()) && !window->property("workspaceTransitionActive").toBool() &&
               done && !done->isVisible() && repair && !repair->isVisible();

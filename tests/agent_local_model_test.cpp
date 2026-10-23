@@ -29,6 +29,7 @@
 #include "agent_edit_recipe_patch.h"
 #include "agent_edit_style.h"
 #include "agent_local_model.h"
+#include "agent_design_schemas.h"
 #include "agent_mcp_metadata_projection.h"
 #include "agent_runtime_paths.h"
 #include "agent_tool_call_recovery.h"
@@ -2664,6 +2665,72 @@ int main(int argc, char** argv) {
       proof_layers.at(1).toMap().contains("agentGraphic"))
     return fail("Tool-created text proof metadata must preserve scale-aware bounds, effective type size, and stack position without tagging unrelated user layers");
 
+  const auto native_color_typography = [](const QString& color, bool include_color,
+                                          bool include_untrusted_channels) {
+    QVariantMap typography{{QStringLiteral("size"), 32}};
+    if (include_color) typography.insert(QStringLiteral("color"), color);
+    if (include_untrusted_channels)
+      typography.insert(QStringLiteral("nativeColorChannels"),
+          QVariantMap{{QStringLiteral("color"), QVariantList{1, 2, 3, 4}}});
+    return typography;
+  };
+  QVariantMap null_native_color_typography{{QStringLiteral("size"), 32}};
+  null_native_color_typography.insert(QStringLiteral("color"), QVariant{});
+  const QVariantList native_color_source_layers{
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("qt-argb-warm-white")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), native_color_typography(QStringLiteral("#fff8f0ff"), true, true)}},
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("rgb-warm-white")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), native_color_typography(QStringLiteral("#FFF8F0"), true, false)}},
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("qt-argb-alpha")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), native_color_typography(QStringLiteral("#80FFF8F0"), true, false)}},
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("invalid-color")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), native_color_typography(
+              QStringLiteral("not-a-color"), true, true)}},
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("missing-color")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), native_color_typography(QString{}, false, false)}},
+      QVariantMap{{QStringLiteral("id"), QStringLiteral("null-color")},
+          {QStringLiteral("kind"), QStringLiteral("text")}, {QStringLiteral("agentGraphic"), true},
+          {QStringLiteral("textTypography"), null_native_color_typography}},
+  };
+  const auto native_color_proof_layers = photo_editor::desktop::agent_graphic_proof_layers(
+      native_color_source_layers, {});
+  const auto channel_row_matches = [&native_color_proof_layers](qsizetype index,
+      const QString& raw_color, const QVariantList& expected_channels) {
+    if (index >= native_color_proof_layers.size()) return false;
+    const auto typography = native_color_proof_layers.at(index).toMap()
+        .value(QStringLiteral("textTypography")).toMap();
+    const auto channels = typography.value(QStringLiteral("nativeColorChannels")).toMap();
+    return typography.value(QStringLiteral("color")).toString() == raw_color &&
+        channels.value(QStringLiteral("color")).toList() == expected_channels;
+  };
+  const auto invalid_color_typography = native_color_proof_layers.size() > 3
+      ? native_color_proof_layers.at(3).toMap().value(QStringLiteral("textTypography")).toMap()
+      : QVariantMap{};
+  const auto missing_color_typography = native_color_proof_layers.size() > 4
+      ? native_color_proof_layers.at(4).toMap().value(QStringLiteral("textTypography")).toMap()
+      : QVariantMap{};
+  const auto null_color_typography = native_color_proof_layers.size() > 5
+      ? native_color_proof_layers.at(5).toMap().value(QStringLiteral("textTypography")).toMap()
+      : QVariantMap{};
+  if (native_color_proof_layers.size() != 6 ||
+      !channel_row_matches(0, QStringLiteral("#fff8f0ff"), QVariantList{248, 240, 255, 255}) ||
+      !channel_row_matches(1, QStringLiteral("#FFF8F0"), QVariantList{255, 248, 240, 255}) ||
+      !channel_row_matches(2, QStringLiteral("#80FFF8F0"), QVariantList{255, 248, 240, 128}) ||
+      invalid_color_typography.value(QStringLiteral("color")).toString() != QStringLiteral("not-a-color") ||
+      invalid_color_typography.contains(QStringLiteral("nativeColorChannels")) ||
+      !missing_color_typography.contains(QStringLiteral("size")) ||
+      missing_color_typography.contains(QStringLiteral("color")) ||
+      missing_color_typography.contains(QStringLiteral("nativeColorChannels")) ||
+      !null_color_typography.contains(QStringLiteral("color")) ||
+      !null_color_typography.value(QStringLiteral("color")).isNull() ||
+      null_color_typography.contains(QStringLiteral("nativeColorChannels")))
+    return fail("Text proof metadata must derive Qt ARGB/RGB channel tuples without changing raw colors or trusting invalid, null, or missing values");
+
   const auto scaled_layout = photo_editor::desktop::agent_graphic_proof_layout_metrics(
       QVariantMap{{"x", 80}, {"y", 20}, {"pixelWidth", 30}, {"pixelHeight", 12},
           {"canvasWidth", 120}, {"canvasHeight", 80}, {"scale", 1.5}, {"rotation", 0.0},
@@ -3318,8 +3385,28 @@ int main(int argc, char** argv) {
   bool detail_rows_decoded = false;
   const auto decoded_detail_rows = decode_lossless_columnar_rows(
       detail_rows_encoded, &detail_rows_decoded, captured_graphic_ids);
+  auto captured_graphics_with_native_colors = captured_graphic_layers;
+  bool captured_graphic_colors_bind = captured_graphics_with_native_colors.size() == 3;
+  for (qsizetype index = 0; captured_graphic_colors_bind &&
+       index < captured_graphics_with_native_colors.size(); ++index) {
+    auto layer = captured_graphics_with_native_colors.at(index).toMap();
+    auto typography = layer.value(QStringLiteral("textTypography")).toMap();
+    const auto raw_color = typography.value(QStringLiteral("color"));
+    const QColor parsed_color(raw_color.toString());
+    if (raw_color.metaType().id() != QMetaType::QString || !parsed_color.isValid()) {
+      captured_graphic_colors_bind = false;
+      break;
+    }
+    const auto original_color = raw_color.toString();
+    typography.insert(QStringLiteral("nativeColorChannels"), QVariantMap{
+        {QStringLiteral("color"), QVariantList{
+            parsed_color.red(), parsed_color.green(), parsed_color.blue(), parsed_color.alpha()}}});
+    captured_graphic_colors_bind = typography.value(QStringLiteral("color")).toString() == original_color;
+    layer.insert(QStringLiteral("textTypography"), typography);
+    captured_graphics_with_native_colors[index] = layer;
+  }
   bool captured_rows_round_trip = expected_graphics_decoded &&
-      decoded_graphics == captured_graphic_layers && native_rows_decoded &&
+      captured_graphic_colors_bind && decoded_graphics == captured_graphics_with_native_colors && native_rows_decoded &&
       decoded_native_rows.size() == native_expected_rows.size() && geometry_checks_decoded &&
       decoded_geometry_checks.size() == geometry_expected_rows.size() && detail_rows_decoded &&
       decoded_detail_rows.size() == captured_report_rows.size();
@@ -5438,6 +5525,10 @@ int main(int argc, char** argv) {
       .value(QStringLiteral("enum")).toArray();
   const auto app09_value_properties = app09_edit_properties.value(QStringLiteral("values")).toObject()
       .value(QStringLiteral("properties")).toObject();
+  const auto canonical_typography_properties = photo_editor::desktop::agent_typography_schema()
+      .value(QStringLiteral("properties")).toMap();
+  const auto canonical_color_description = canonical_typography_properties
+      .value(QStringLiteral("color")).toMap().value(QStringLiteral("description")).toString();
   const auto app09_family_choices = app09_value_properties.value(QStringLiteral("family")).toObject()
       .value(QStringLiteral("enum")).toArray();
   const auto app09_face_choices = app09_value_properties.value(QStringLiteral("face")).toObject()
@@ -5462,6 +5553,15 @@ int main(int argc, char** argv) {
   const auto app09_current_composition = app09_compacted_history.value(QStringLiteral("currentComposition")).toObject()
       .value(QStringLiteral("result")).toObject().value(QStringLiteral("structuredContent")).toObject();
   const auto app09_current_layers = app09_current_composition.value(QStringLiteral("layers")).toArray();
+  const auto app09_compacted_native_colors_complete = app09_current_layers.size() == 3 &&
+      std::all_of(app09_current_layers.cbegin(), app09_current_layers.cend(), [](const QJsonValue& value) {
+        const auto typography = value.toObject().value(QStringLiteral("textTypography")).toObject();
+        const auto channels = typography.value(QStringLiteral("nativeColorChannels")).toObject()
+            .value(QStringLiteral("color")).toArray();
+        return typography.value(QStringLiteral("color")).toString() == QStringLiteral("#ffffffff") &&
+            channels.size() == 4 && channels.at(0).toInt() == 255 && channels.at(1).toInt() == 255 &&
+            channels.at(2).toInt() == 255 && channels.at(3).toInt() == 255;
+      });
   const auto app09_retained_fonts = app09_current_composition.value(QStringLiteral("fontFaces")).toArray();
   const auto app09_user_section = section(app09_prompt,
       QStringLiteral("User instructions:\n"), QStringLiteral("Current adjustment patch JSON:\n"));
@@ -5624,6 +5724,15 @@ int main(int argc, char** argv) {
       app09_current_layers.at(1).toObject().value(QStringLiteral("id")).toString() == app09_kicker_id &&
       app09_current_layers.at(2).toObject().value(QStringLiteral("id")).toString() == app09_headline_id,
       QStringLiteral("actualReplay.latestNativeReadbackRetainsExactLayerOrderAndIDs"));
+  check_app09(app09_compacted_native_colors_complete,
+      QStringLiteral("actualReplay.nativeColorChannelsPreserveCompactedRawTypography"));
+  check_app09(canonical_color_description.contains(QStringLiteral("Prefer opaque six-digit #RRGGBB")) &&
+      canonical_color_description.contains(QStringLiteral("Eight-digit hex is Qt #AARRGGBB")) &&
+      canonical_color_description.contains(QStringLiteral("never CSS #RRGGBBAA")) &&
+      app09_system.contains(QStringLiteral("Read nativeColorChannels as red, green, blue, alpha")) &&
+      app09_system.contains(QStringLiteral("Prefer opaque six-digit #RRGGBB")) &&
+      app09_system.contains(QStringLiteral("never CSS #RRGGBBAA")),
+      QStringLiteral("actualReplay.qtColorSchemaAndGuidance"));
   check_app09(app09_history_assessment.value(QStringLiteral("batchRound")).toInt() == 3 &&
       app09_history_assessment.value(QStringLiteral("requireProductivePlan")).toBool() &&
       !app09_history_assessment.value(QStringLiteral("instruction")).toString().isEmpty() &&

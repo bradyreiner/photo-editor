@@ -12,51 +12,9 @@ namespace {
 
 constexpr auto kTwoPi = 6.28318530717958647692F;
 
-[[nodiscard]] float wrap_unit_float(float value) {
-  value = std::fmod(value, 1.0F);
-  return value < 0.0F ? value + 1.0F : value;
-}
-
 [[nodiscard]] float wrap_radians_float(float value) {
   value = std::fmod(value, kTwoPi);
   return value < 0.0F ? value + kTwoPi : value;
-}
-
-[[nodiscard]] float rgb_hue(const ColorPixel& pixel) {
-  const auto red = std::max(0.0F, pixel.red);
-  const auto green = std::max(0.0F, pixel.green);
-  const auto blue = std::max(0.0F, pixel.blue);
-  const auto maximum = std::max({red, green, blue});
-  const auto minimum = std::min({red, green, blue});
-  const auto delta = maximum - minimum;
-  if (delta <= 1.0e-9F) return -1.0F;
-  auto hue = 0.0F;
-  if (maximum == red) {
-    hue = (green - blue) / delta;
-    if (hue < 0.0F) hue += 6.0F;
-  } else if (maximum == green) {
-    hue = (blue - red) / delta + 2.0F;
-  } else {
-    hue = (red - green) / delta + 4.0F;
-  }
-  return hue / 6.0F;
-}
-
-[[nodiscard]] float channel_weight(float hue, std::size_t channel) {
-  static constexpr std::array<float, 8> centers{
-      0.0F, 0.09F, 0.15F, 0.32F, 0.50F, 0.64F, 0.78F, 0.88F};
-  static constexpr std::array<float, 8> inner{
-      0.05F, 0.04F, 0.04F, 0.10F, 0.06F, 0.08F, 0.06F, 0.05F};
-  static constexpr std::array<float, 8> outer{
-      0.10F, 0.09F, 0.08F, 0.18F, 0.10F, 0.13F, 0.10F, 0.10F};
-  auto distance = std::abs(hue - centers[channel]);
-  distance = std::min(distance, 1.0F - distance);
-  if (distance <= inner[channel]) return 1.0F;
-  if (distance >= outer[channel]) return 0.0F;
-  const auto unit = std::clamp(
-      (distance - inner[channel]) / (outer[channel] - inner[channel]),
-      0.0F, 1.0F);
-  return 1.0F - unit * unit * (3.0F - 2.0F * unit);
 }
 
 void apply_selective(
@@ -119,12 +77,20 @@ void apply_compiled_look_mixer(
     float* a,
     float* b) {
   auto chroma = std::hypot(*a, *b);
-  if (chroma <= 1.0e-6F) return;
+  if (chroma <= 0.0F) return;
   auto hue = wrap_radians_float(std::atan2(*b, *a));
   if ((compiled.active_mask & CompiledLookStageProgram::kPerChannelMixer) != 0U) {
-    const auto selection_hue = compiled.mixer_model == 1U || compiled.mixer_model == 2U
-                                   ? rgb_hue(input)
-                                   : wrap_unit_float(hue / kTwoPi);
+    // A hue-dependent absolute L offset turns tiny chroma variations into
+    // large light/dark speckles. Bound that offset by the chromatic signal,
+    // using the same pre-mixer C for every channel (including overlaps).
+    // This is a signal-size guard, not a sensor-noise estimate or image blur.
+    const auto luminance_chroma_scale =
+        (compiled.active_mask & CompiledLookStageProgram::kLegacyCreativeSemantics) != 0U
+            ? 1.0F : std::min(1.0F, chroma / 0.12F);
+    const auto selection_rgb = color_selection_rgb(compiled, input);
+    const auto confidence = static_cast<float>(color_selection_confidence(selection_rgb));
+    if (confidence <= 0.0F) return;
+    const auto selection_hue = rgb_hue_for_mixer_selection(selection_rgb);
     if (selection_hue >= 0.0F) {
       const auto hue_scale = compiled.mixer_model == 2U ? 0.16F : 0.22F;
       const auto saturation_scale = compiled.mixer_model == 3U ? 0.72F :
@@ -132,11 +98,16 @@ void apply_compiled_look_mixer(
       const auto luminance_scale = compiled.mixer_model == 2U ? 0.14F :
                                    compiled.mixer_model == 3U ? 0.20F : 0.30F;
       for (auto channel = std::size_t{0}; channel < kColorMixerChannelCount; ++channel) {
-        const auto weight = channel_weight(selection_hue, channel) * skin_scale;
+        if (compiled.mixer_hue[channel] == 0.0F && compiled.mixer_saturation[channel] == 0.0F &&
+            compiled.mixer_luminance[channel] == 0.0F && compiled.selective_cyan[channel] == 0.0F &&
+            compiled.selective_magenta[channel] == 0.0F && compiled.selective_yellow[channel] == 0.0F &&
+            compiled.selective_black[channel] == 0.0F) continue;
+        const auto weight = static_cast<float>(color_mixer_channel_weight(selection_hue, channel)) * skin_scale * confidence;
         if (weight <= 0.0F) continue;
         hue = wrap_radians_float(hue + weight * compiled.mixer_hue[channel] * hue_scale * kTwoPi);
         chroma *= std::max(0.0F, 1.0F + weight * compiled.mixer_saturation[channel] * saturation_scale);
-        *lightness += weight * compiled.mixer_luminance[channel] * luminance_scale;
+        *lightness += weight * compiled.mixer_luminance[channel] * luminance_scale *
+                      luminance_chroma_scale;
         apply_selective(compiled.selective_cyan[channel], 0.50F, weight, &chroma, &hue);
         apply_selective(compiled.selective_magenta[channel], 0.88F, weight, &chroma, &hue);
         apply_selective(compiled.selective_yellow[channel], 0.15F, weight, &chroma, &hue);

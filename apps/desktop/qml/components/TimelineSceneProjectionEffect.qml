@@ -22,6 +22,8 @@ ShaderEffect {
         Number(occlusionFrame.rect && occlusionFrame.rect.height || 1))
     property real itemWidth: width
     property real itemHeight: height
+    property color fadeColor: "black"
+    property real fadeAmount: 0
 
     readonly property vector4d topLeft: pointVector(0)
     readonly property vector4d topRight: pointVector(1)

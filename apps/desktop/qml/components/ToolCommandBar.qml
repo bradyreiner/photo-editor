@@ -208,6 +208,7 @@ Rectangle {
         }
 
         Label {
+            id: popupTooltipAnchor1
             objectName: root.statusObjectName
             readonly property string readableStatusContract: "tool-command-status:v1|full:" + text +
                                                              "|fit-horizontal:true|tooltip-full:true"
@@ -223,10 +224,13 @@ Rectangle {
             minimumPixelSize: 8
             maximumLineCount: 1
             elide: Text.ElideNone
-            ToolTip.visible: statusHover.hovered && contentWidth > width + 1
-            ToolTip.delay: 300
-            ToolTip.text: text
-
+            AppToolTip {
+                id: sharedTooltip2
+                targetItem: popupTooltipAnchor1
+                visible: popupTooltipAnchor1.visible && (statusHover.hovered && popupTooltipAnchor1.contentWidth > popupTooltipAnchor1.width + 1)
+                delay: 300
+                text: popupTooltipAnchor1.text
+            }
             HoverHandler { id: statusHover }
         }
 

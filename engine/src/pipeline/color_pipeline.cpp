@@ -181,6 +181,17 @@ RgbColorSpace make_linear_rec2020_color_space() {
   };
 }
 
+RgbColorSpace make_linear_adobe_rgb_color_space() {
+  return RgbColorSpace{
+      .name = "Linear Adobe RGB",
+      .primaries = ColorPrimaries::AdobeRgb,
+      .transfer_function = TransferFunction::Linear,
+      .white_point = WhitePoint::D65,
+      .scene_referred = true,
+      .wide_gamut = true,
+  };
+}
+
 RgbColorSpace make_aces2065_1_color_space() {
   return RgbColorSpace{
       .name = "ACES2065-1",
@@ -337,6 +348,10 @@ std::optional<RgbColorSpace> resolve_builtin_rgb_color_space(
   if (normalized == "linearprophotorgb") {
     return make_linear_prophoto_rgb_color_space();
   }
+  if (normalized == "linearadobergb" || normalized == "linearadobergb1998" ||
+      normalized == "adobergblinear") {
+    return make_linear_adobe_rgb_color_space();
+  }
   if (normalized == "rec709" || normalized == "bt709") {
     return make_rec709_color_space();
   }
@@ -355,10 +370,14 @@ std::optional<RgbColorSpace> resolve_builtin_rgb_color_space(
   if (normalized == "linearsgamut3cine") {
     return make_linear_sony_s_gamut3_cine_color_space();
   }
-  if (normalized == "aces20651" || normalized == "acesap0") {
+  if (normalized == "aces20651" || normalized == "aces20651ap0" ||
+      normalized == "acesap0" || normalized == "linearaces20651" ||
+      normalized == "linearaces20651ap0" || normalized == "linearacesap0") {
     return make_aces2065_1_color_space();
   }
-  if (normalized == "acescg" || normalized == "acesap1") {
+  if (normalized == "acescg" || normalized == "acescgap1" ||
+      normalized == "acesap1" || normalized == "linearacescg" ||
+      normalized == "linearacescgap1" || normalized == "linearacesap1") {
     return make_acescg_color_space();
   }
   if (normalized == "acescct") {
@@ -406,22 +425,33 @@ std::string normalize_input_color_profile_name(std::string_view value) {
 }
 
 std::string normalize_working_color_profile_name(std::string_view value) {
-  const auto normalized = trimmed_lower(value);
-  if (normalized == "linear srgb" || normalized == "linear-srgb" || normalized == "srgb-linear") {
+  const auto normalized = normalized_color_space_identifier(value);
+  if (normalized == "linearsrgb" || normalized == "srgblinear") {
     return "Linear sRGB";
   }
-  if (normalized == "linear display p3" || normalized == "linear-display-p3" ||
-      normalized == "display-p3-linear" || normalized == "display p3 linear") {
+  if (normalized == "lineardisplayp3" || normalized == "displayp3linear") {
     return "Linear Display P3";
   }
-  if (normalized == "linear prophoto rgb" || normalized == "linear-prophoto-rgb" ||
-      normalized == "prophoto-linear" || normalized == "linear prophoto") {
+  if (normalized == "linearprophotorgb" || normalized == "prophotolinear" ||
+      normalized == "linearprophoto") {
     return "Linear ProPhoto RGB";
   }
-  if (normalized == "linear rec.2020" || normalized == "linear-rec.2020" ||
-      normalized == "linear rec2020" || normalized == "linear-rec2020" ||
-      normalized == "rec2020-linear" || normalized == "rec.2020-linear") {
+  if (normalized == "linearrec2020" || normalized == "rec2020linear") {
     return "Linear Rec.2020";
+  }
+  if (normalized == "linearadobergb" || normalized == "adobergblinear" ||
+      normalized == "linearadobergb1998") {
+    return "Linear Adobe RGB";
+  }
+  if (normalized == "acescg" || normalized == "acescgap1" ||
+      normalized == "acesap1" || normalized == "linearacescg" ||
+      normalized == "linearacescgap1" || normalized == "linearacesap1") {
+    return "ACEScg";
+  }
+  if (normalized == "aces20651" || normalized == "aces20651ap0" ||
+      normalized == "acesap0" || normalized == "linearaces20651" ||
+      normalized == "linearaces20651ap0" || normalized == "linearacesap0") {
+    return "ACES2065-1";
   }
   return "Linear ProPhoto RGB";
 }
@@ -779,6 +809,27 @@ WorkingColorProfile working_color_profile_from_name(std::string_view value) {
         .profile_name = normalized,
         .kind = WorkingTransformKind::LinearRec2020,
         .color_space = make_linear_rec2020_color_space(),
+    };
+  }
+  if (normalized == "Linear Adobe RGB") {
+    return WorkingColorProfile{
+        .profile_name = normalized,
+        .kind = WorkingTransformKind::LinearAdobeRgb,
+        .color_space = make_linear_adobe_rgb_color_space(),
+    };
+  }
+  if (normalized == "ACEScg") {
+    return WorkingColorProfile{
+        .profile_name = normalized,
+        .kind = WorkingTransformKind::LinearAcesCg,
+        .color_space = make_acescg_color_space(),
+    };
+  }
+  if (normalized == "ACES2065-1") {
+    return WorkingColorProfile{
+        .profile_name = normalized,
+        .kind = WorkingTransformKind::LinearAces2065_1,
+        .color_space = make_aces2065_1_color_space(),
     };
   }
   return WorkingColorProfile{

@@ -48,11 +48,14 @@ Rectangle {
     Drag.supportedActions: Qt.CopyAction
     Drag.keys: ["transition"]
 
-    ToolTip.visible: transitionHover.hovered && titleLabel.contentHeight > titleLabel.height + 1
-    ToolTip.delay: 350
-    ToolTip.timeout: 3600
-    ToolTip.text: transitionName
-
+    AppToolTip {
+        id: sharedTooltip1
+        targetItem: root
+        visible: root.visible && (transitionHover.hovered && titleLabel.contentHeight > titleLabel.height + 1)
+        delay: 350
+        timeout: 3600
+        text: root.transitionName
+    }
     HoverHandler { id: transitionHover }
 
     RowLayout {

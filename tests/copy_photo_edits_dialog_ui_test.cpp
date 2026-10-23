@@ -1,3 +1,4 @@
+#include "qml_popup_wait.h"
 #include <QAccessible>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -11,11 +12,12 @@
 #include <memory>
 
 namespace {
-void settle() {
+void settle(QObject* popup = nullptr) {
   for (auto index = 0; index < 12; ++index) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     QThread::msleep(5);
   }
+  wait_for_popup_transition(popup);
 }
 
 int fail(const char* message) {
@@ -59,13 +61,13 @@ int main(int argc, char** argv) {
   opener->setObjectName(QStringLiteral("copyDialogOpener"));
   window.show();
   opener->forceActiveFocus(Qt::TabFocusReason);
-  settle();
+  settle(dialog.get());
   if (window.activeFocusItem() != opener)
     return fail("Copy Edits test opener should own focus before opening the dialog");
 
   if (!QMetaObject::invokeMethod(dialog.get(), "open", Qt::DirectConnection))
     return fail("Copy Edits dialog should expose its open operation");
-  settle();
+  settle(dialog.get());
   if (!dialog->property("visible").toBool())
     return fail("Copy Edits dialog should open");
 
@@ -117,27 +119,27 @@ int main(int argc, char** argv) {
   QCoreApplication::sendEvent(&window, &escape_press);
   QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
   QCoreApplication::sendEvent(&window, &escape_release);
-  settle();
+  settle(dialog.get());
   if (dialog->property("visible").toBool() || window.activeFocusItem() != opener)
     return fail("Escape should cancel Copy Edits and return focus to its invoking control");
 
   dialog->setProperty("focusFallbackItem", QVariant::fromValue(window.contentItem()));
   if (!QMetaObject::invokeMethod(dialog.get(), "open", Qt::DirectConnection))
     return fail("Copy Edits should reopen for fallback-focus verification");
-  settle();
+  settle(dialog.get());
   if (!dialog->property("visible").toBool() || window.activeFocusItem() != first_group)
     return fail("Copy Edits should restore initial group focus when reopened");
   QPointer<QQuickItem> opener_guard(opener);
   opener->deleteLater();
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-  settle();
+  settle(dialog.get());
   if (!opener_guard.isNull())
     return fail("Copy Edits test opener should be removable while the dialog is open");
   QKeyEvent fallback_escape_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
   QCoreApplication::sendEvent(&window, &fallback_escape_press);
   QKeyEvent fallback_escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
   QCoreApplication::sendEvent(&window, &fallback_escape_release);
-  settle();
+  settle(dialog.get());
   if (dialog->property("visible").toBool() || window.activeFocusItem() != window.contentItem()) {
     const auto* active_focus = window.activeFocusItem();
     auto* configured_fallback = qvariant_cast<QQuickItem*>(dialog->property("focusFallbackItem"));

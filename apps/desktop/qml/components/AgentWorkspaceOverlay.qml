@@ -1970,24 +1970,13 @@ Item {
                 style: Text.Outline
                 styleColor: "#111315"
             }
-            Rectangle {
+            ProgressStrip {
+                objectName: "agentWorkspaceActivitySweep"
                 visible: root.running
                 Layout.preferredWidth: 160
                 Layout.preferredHeight: 3
-                color: "#35383b"
-                clip: true
-                Rectangle {
-                    id: activitySweep
-                    objectName: "agentWorkspaceActivitySweep"
-                    width: 46
-                    height: parent.height
-                    color: "#eec58a"
-                    SequentialAnimation on x {
-                        running: root.visible && !root.dismissed && root.running && !root.reducedMotion
-                        loops: Animation.Infinite
-                        XAnimator { from: -46; to: 160; duration: 1400 }
-                    }
-                }
+                active: root.visible && !root.dismissed && root.running
+                reducedMotion: root.reducedMotion
             }
             Label {
                 objectName: "agentWorkspaceCharacterAside"
@@ -2059,7 +2048,7 @@ Item {
     Item {
         id: agentStage
         objectName: "agentWorkspaceRoamingRobot"
-        visible: !root.dismissed
+        visible: false
         width: Math.max(48, Math.min(128, Number((root.currentTouchTarget.surfaceRect || ({})).y || root.height - 8) / 1.25,
                                     Number((root.currentTouchTarget.surfaceRect || ({})).width || root.width) / 0.55,
                                     Number(root.currentTouchTarget.x || root.width / 2) / 0.54))
@@ -2068,59 +2057,25 @@ Item {
         y: root.robotY
 
 
-        LooksyAgentCharacter {
+        // Retain the controller's contact geometry without presenting a character
+        // over the photograph. The optical assistant lives in Agent Studio only.
+        Item {
             id: roamingCharacter
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            objectName: "agentWorkspaceRoamingCharacter"
             width: parent.width
             height: parent.height
-            articulated: true
-            grounded: true
-            locomotion: root.locomotion
-            toolDeployProgress: root.toolDeployProgress
-            toolContactOffset: Number(root.currentTouchTarget.y || 0) - Number((root.currentTouchTarget.surfaceRect || ({})).y || root.height - 8)
-            toolContactOffsetX: Number(root.currentTouchTarget.x || 0) - root.robotX - handContactPoint.x
-            toolWorking: root.touchingControl
-            faceLeft: root.reachLeft
-            reachProgress: root.reachProgress
-            lookAngle: root.traveling ? 4 : root.localModelPlanningActive ? root.scanAngle : 0
-            mode: root.assistantLightMode()
-            tool: root.deployedTool
-            talking: root.speaking && !root.traveling
-            celebrating: root.draftReady
-            animated: !root.reducedMotion
-            accentColor: theme.primaryAccent
-        }
-
-        Rectangle {
-            visible: root.locomotion !== "climb" && root.locomotion !== "jump"
-            width: 44
-            height: 5
-            radius: 3
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: agentStage.height * 0.091
-            color: theme.alpha(theme.brandInk, 0.28)
+            readonly property real feetBaseline: height * 0.909
         }
     }
 
-    Rectangle {
+    PopupSurface {
         id: speechBubble
         visible: !root.dismissed && !root.compactStatus
         objectName: "agentWorkspaceSpeechBubble"
         width: Math.min(430, Math.max(300, root.width * 0.31))
         height: bubbleContent.implicitHeight + 34
-        x: Math.max(18, Math.min(root.width - width - 18,
-                                agentStage.x > root.width * 0.58
-                                ? agentStage.x - width - 20
-                                : agentStage.x + agentStage.width + 14))
-        y: Math.max(18, Math.min(root.height - height - root.filmstripHeight - 12,
-                                agentStage.y - height * 0.48))
-        radius: 12
-        color: "#f211181b"
-        border.width: 1
-        border.color: "#485b60"
+        x: Math.max(18, root.width - root.inspectorWidth - width - 24)
+        y: Math.max(18, root.height - root.filmstripHeight - height - 24)
+        fillColor: theme.popupFill
 
         Behavior on x { XAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
         Behavior on y { YAnimator { duration: root.reducedMotion ? 0 : 360; easing.type: Easing.InOutCubic } }
@@ -2144,18 +2099,12 @@ Item {
                     font.letterSpacing: 1.0
                     font.weight: Font.DemiBold
                 }
-                Rectangle {
+                OpticalActivityIndicator {
                     visible: root.running
-                    Layout.preferredWidth: 7
-                    Layout.preferredHeight: 7
-                    radius: 4
-                    color: theme.primaryAccent
-                    SequentialAnimation on opacity {
-                        running: root.running && root.visible && !root.dismissed && !root.reducedMotion
-                        loops: Animation.Infinite
-                        OpacityAnimator { from: 1; to: 0.32; duration: 520 }
-                        OpacityAnimator { from: 0.32; to: 1; duration: 520 }
-                    }
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    active: root.running && root.visible && !root.dismissed
+                    reducedMotion: root.reducedMotion
                 }
                 BubbleButton {
                     objectName: "agentWorkspaceCloseButton"

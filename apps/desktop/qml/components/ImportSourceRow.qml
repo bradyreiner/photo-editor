@@ -78,10 +78,14 @@ Rectangle {
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
-                ToolTip.visible: sourceHover.hovered && (titleLabel.truncated || titleLabel.contentHeight > titleLabel.height + 1)
-                ToolTip.delay: 350
-                ToolTip.timeout: 3600
-                ToolTip.text: root.label
+                AppToolTip {
+                    id: sharedTooltip1
+                    targetItem: titleLabel
+                    visible: titleLabel.visible && (sourceHover.hovered && (titleLabel.truncated || titleLabel.contentHeight > titleLabel.height + 1))
+                    delay: 350
+                    timeout: 3600
+                    text: root.label
+                }
             }
 
             Label {
@@ -94,10 +98,14 @@ Rectangle {
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 maximumLineCount: 2
                 elide: Text.ElideNone
-                ToolTip.visible: sourceHover.hovered && (subtitleLabel.truncated || subtitleLabel.contentHeight > subtitleLabel.height + 1)
-                ToolTip.delay: 350
-                ToolTip.timeout: 3600
-                ToolTip.text: root.subtitle
+                AppToolTip {
+                    id: sharedTooltip2
+                    targetItem: subtitleLabel
+                    visible: subtitleLabel.visible && (sourceHover.hovered && (subtitleLabel.truncated || subtitleLabel.contentHeight > subtitleLabel.height + 1))
+                    delay: 350
+                    timeout: 3600
+                    text: root.subtitle
+                }
             }
         }
 
