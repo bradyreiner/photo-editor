@@ -1000,7 +1000,7 @@ Components.GlassSurface {
 
             Rectangle {
                 Layout.fillWidth: true
-                height: 1
+                Layout.preferredHeight: 1
                 color: root.theme.alpha(root.theme.glassEdge, 0.20)
             }
 

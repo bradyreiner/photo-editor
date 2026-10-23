@@ -1,6 +1,8 @@
 #include "edit_recipe_state.h"
 #include "edit_recipe_mask_encoding_cache.h"
 
+#include <QJsonDocument>
+
 namespace photo_editor::desktop {
 
 namespace {

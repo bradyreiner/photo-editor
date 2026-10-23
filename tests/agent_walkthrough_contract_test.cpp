@@ -75,10 +75,13 @@ int main() {
       !contains(dialog, "if (!root.hasSessionController() && root.visible && root.agentRunning())") ||
       !contains(conversation, "AgentSessionTerminal {") ||
       !contains(conversation, "visible: root.sessionFlowAvailable") ||
-      !contains(session_terminal, "sessionController.submit(prompt, root.sessionContext())") ||
-      !contains(session_terminal, "root.sessionController.answerQuestions(visibleAnswers)") ||
-      !contains(session_terminal, "root.sessionController.reviseAnswers(answers)") ||
-      !contains(session_terminal, "root.sessionController.start()") ||
+      !contains(conversation, "sessionController: root.sessionController") ||
+      !contains(session_terminal, "readonly property bool sessionAvailable: sessionController !== null") ||
+      !contains(session_terminal, "readonly property var controller: sessionAvailable ? sessionController") ||
+      !contains(session_terminal, "root.controller.submit(prompt, root.sessionContext())") ||
+      !contains(session_terminal, "root.controller.answerQuestions(visibleAnswers)") ||
+      !contains(session_terminal, "root.controller.reviseAnswers(answers)") ||
+      !contains(session_terminal, "root.controller.start()") ||
       !contains(session_terminal, "root.dialog.agentEditController.cancelRun(\"user_requested\")") ||
       !contains(session_terminal, "root.dialog.agentEditController.revertTask()") ||
       !contains(session_terminal, "objectName: \"agentSessionStartButton\"") ||

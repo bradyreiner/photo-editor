@@ -44,21 +44,21 @@ pub struct LocalPostgresState {
 impl LocalPostgresState {
     pub fn database_url(&self) -> String {
         format!(
-            "postgresql://{}:{}@{}:{}/{}",
+            "postgresql://{}:{}@{}:{}/{}?sslmode=disable",
             self.user_name, self.password, self.host, self.port, self.database_name
         )
     }
 
     pub fn maintenance_database_url(&self) -> String {
         format!(
-            "postgresql://{}:{}@{}:{}/postgres",
+            "postgresql://{}:{}@{}:{}/postgres?sslmode=disable",
             self.user_name, self.password, self.host, self.port
         )
     }
 
     pub fn redacted_database_url(&self) -> String {
         format!(
-            "postgresql://{}:<redacted>@{}:{}/{}",
+            "postgresql://{}:<redacted>@{}:{}/{}?sslmode=disable",
             self.user_name, self.host, self.port, self.database_name
         )
     }
@@ -941,11 +941,11 @@ mod tests {
 
         assert_eq!(
             state.database_url(),
-            "postgresql://photo_editor:secret@127.0.0.1:15432/photo_editor"
+            "postgresql://photo_editor:secret@127.0.0.1:15432/photo_editor?sslmode=disable"
         );
         assert_eq!(
             state.redacted_database_url(),
-            "postgresql://photo_editor:<redacted>@127.0.0.1:15432/photo_editor"
+            "postgresql://photo_editor:<redacted>@127.0.0.1:15432/photo_editor?sslmode=disable"
         );
     }
 

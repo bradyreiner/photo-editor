@@ -3817,6 +3817,7 @@
       !library_view_source.contains(QStringLiteral("objectName: \"libraryMainSurface\"")) ||
       !library_view_source.contains(QStringLiteral("surfaceContract: \"library-main-surface:v1|browse-dominant:true|filters-visible:true|view-switch-visible:true|selection-contextual:true|import-handoff-contextual:true|no-elide:true|no-overlap:true\"")) ||
       !library_view_source.contains(QStringLiteral("objectName: \"libraryHeaderBar\"")) ||
+      !library_view_source.contains(QStringLiteral("viewportContract: \"library-viewport:v1|layout:single-fill-slot|panes:overlaid\"")) ||
       !library_view_source.contains(QStringLiteral("objectName: \"libraryUtilityToolbar\"")) ||
       !library_view_source.contains(QStringLiteral("objectName: \"libraryFilterBar\"")) ||
       !library_view_source.contains(QStringLiteral("objectName: \"librarySelectionActionBar\"")) ||

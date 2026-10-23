@@ -465,8 +465,9 @@ GlassSurface {
     }
 
     function animatedClipValue(clip, parameter, fallbackValue) {
-        if (typeof root.animatedClipValueProvider === "function")
-            return Number(root.animatedClipValueProvider(clip, parameter, fallbackValue))
+        const valueProvider = root.animatedClipValueProvider
+        if (typeof valueProvider === "function")
+            return Number(valueProvider.call(root, clip, parameter, fallbackValue))
         return Number(fallbackValue || 0)
     }
 

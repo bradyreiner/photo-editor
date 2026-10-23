@@ -6,6 +6,8 @@
 #include "local_mask_set_settings.h"
 #include "photo_text_style.h"
 
+#include "photo_editor/pipeline/output_rendering.h"
+
 #include <QHash>
 
 #include <algorithm>
@@ -166,6 +168,115 @@ bool preview_bypasses_mask(
          mask.value(QStringLiteral("maskSetPreviewBypassed")).toBool();
 }
 
+QVariantList normalize_masks_for_pipeline(const QVariantList& masks) {
+  QVariantList normalized;
+  normalized.reserve(masks.size());
+  auto ordinal = 1;
+  for (const auto& value : masks) {
+    normalized.append(normalized_mask_definition(value.toMap(), ordinal++));
+  }
+  return normalized;
+}
+
+bool normalized_mask_affects_render(const QVariantMap& mask) {
+  return !(mask.value(QStringLiteral("toolRole")).toString() == QStringLiteral("retouch") &&
+           !mask.value(QStringLiteral("committed")).toBool());
+}
+
+std::vector<photo_editor::pipeline::LocalMaskSet>
+compile_local_mask_sets_from_normalized(
+    const QVariantList& masks,
+    DesktopRenderPurpose purpose,
+    LocalMaskRasterPolicy raster_policy,
+    const QSize& output_size) {
+  std::vector<photo_editor::pipeline::LocalMaskSet> mask_sets;
+  QHash<QString, int> indices_by_id;
+  auto selection_solo_active = false;
+  for (const auto& value : masks) {
+    const auto mask = value.toMap();
+    if (normalized_mask_affects_render(mask) &&
+        pipeline_mask_tool_role(mask) == QStringLiteral("selection") &&
+        !preview_bypasses_mask(mask, purpose) &&
+        mask.value(QStringLiteral("solo")).toBool()) {
+      selection_solo_active = true;
+      break;
+    }
+  }
+
+  for (const auto& value : masks) {
+    const auto mask = value.toMap();
+    if (!normalized_mask_affects_render(mask) ||
+        pipeline_mask_tool_role(mask) != QStringLiteral("selection") ||
+        preview_bypasses_mask(mask, purpose) ||
+        (selection_solo_active && !mask.value(QStringLiteral("solo")).toBool())) {
+      continue;
+    }
+
+    auto source = compile_pipeline_local_mask(mask, raster_policy, output_size);
+    source.exposure = 0.0;
+    source.contrast = 0.0;
+    source.highlights = 0.0;
+    source.shadows = 0.0;
+    source.whites = 0.0;
+    source.blacks = 0.0;
+    source.temperature = 0.0;
+    source.tint = 0.0;
+    source.vibrance = 0.0;
+    source.saturation = 0.0;
+    source.hue_shift = 0.0;
+    source.saturation_shift = 0.0;
+    source.colorize_hue = 0.0;
+    source.colorize_strength = 0.0;
+    source.remove_strength = 0.0;
+    source.retouch_mode.clear();
+
+    const auto set_id = mask.value(QStringLiteral("maskSetId")).toString();
+    auto set_index = indices_by_id.value(set_id, -1);
+    if (set_index < 0) {
+      auto set = compile_local_mask_set_settings(mask);
+      mask_sets.push_back(std::move(set));
+      set_index = static_cast<int>(mask_sets.size()) - 1;
+      indices_by_id.insert(set_id, set_index);
+    }
+    mask_sets[static_cast<std::size_t>(set_index)].sources.push_back(std::move(source));
+  }
+  return mask_sets;
+}
+
+std::vector<photo_editor::pipeline::LocalMask>
+compile_retouch_masks_from_normalized(
+    const QVariantList& masks,
+    LocalMaskRasterPolicy raster_policy,
+    const QSize& output_size) {
+  std::vector<photo_editor::pipeline::LocalMask> retouch_masks;
+  retouch_masks.reserve(static_cast<std::size_t>(masks.size()));
+  auto retouch_solo_active = false;
+  for (const auto& value : masks) {
+    const auto mask = value.toMap();
+    if (normalized_mask_affects_render(mask) &&
+        pipeline_mask_tool_role(mask) == QStringLiteral("retouch") &&
+        mask.value(QStringLiteral("solo")).toBool()) {
+      retouch_solo_active = true;
+      break;
+    }
+  }
+  for (const auto& value : masks) {
+    const auto mask = value.toMap();
+    if (!normalized_mask_affects_render(mask) ||
+        pipeline_mask_tool_role(mask) != QStringLiteral("retouch") ||
+        (retouch_solo_active && !mask.value(QStringLiteral("solo")).toBool())) {
+      continue;
+    }
+    retouch_masks.push_back(compile_pipeline_local_mask(mask, raster_policy, output_size));
+  }
+  std::stable_sort(
+      retouch_masks.begin(), retouch_masks.end(),
+      [](const auto& left, const auto& right) {
+        return left.retouch_order < right.retouch_order;
+      });
+  return retouch_masks;
+}
+
 }  // namespace
 
 DisplayReferredTextPolicySnapshot classify_display_referred_text_layers(
@@ -189,6 +300,9 @@ DisplayReferredTextPolicySnapshot classify_display_referred_text_layers(
           color_pipeline_config.photographic_rendering_model) ||
       color_pipeline_config.render_intent != RenderIntent::Perceptual) {
     return fail(QStringLiteral("aces2-perceptual-output-required"));
+  }
+  if (!photo_editor::pipeline::aces2_official_output_transform_available()) {
+    return fail(QStringLiteral("official-aces2-output-transform-unavailable"));
   }
   const auto& target = purpose == DesktopRenderPurpose::Preview
       ? color_pipeline_config.preview_display_target
@@ -249,65 +363,8 @@ compile_pipeline_local_mask_sets(
     DesktopRenderPurpose purpose,
     LocalMaskRasterPolicy raster_policy,
     const QSize& output_size) {
-  std::vector<photo_editor::pipeline::LocalMaskSet> mask_sets;
-  QHash<QString, int> indices_by_id;
-  auto selection_solo_active = false;
-  auto solo_ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), solo_ordinal);
-    ++solo_ordinal;
-    if (mask_definition_affects_render(mask, solo_ordinal - 1) &&
-        pipeline_mask_tool_role(mask) == QStringLiteral("selection") &&
-        !preview_bypasses_mask(mask, purpose) &&
-        mask.value(QStringLiteral("solo")).toBool()) {
-      selection_solo_active = true;
-      break;
-    }
-  }
-
-  auto ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), ordinal);
-    ++ordinal;
-    if (!mask_definition_affects_render(mask, ordinal - 1) ||
-        pipeline_mask_tool_role(mask) != QStringLiteral("selection") ||
-        preview_bypasses_mask(mask, purpose) ||
-        (selection_solo_active &&
-         !mask.value(QStringLiteral("solo")).toBool())) {
-      continue;
-    }
-
-    auto source = compile_pipeline_local_mask(
-        mask, raster_policy, output_size);
-    source.exposure = 0.0;
-    source.contrast = 0.0;
-    source.highlights = 0.0;
-    source.shadows = 0.0;
-    source.whites = 0.0;
-    source.blacks = 0.0;
-    source.temperature = 0.0;
-    source.tint = 0.0;
-    source.vibrance = 0.0;
-    source.saturation = 0.0;
-    source.hue_shift = 0.0;
-    source.saturation_shift = 0.0;
-    source.colorize_hue = 0.0;
-    source.colorize_strength = 0.0;
-    source.remove_strength = 0.0;
-    source.retouch_mode.clear();
-
-    const auto set_id = mask.value(QStringLiteral("maskSetId")).toString();
-    auto set_index = indices_by_id.value(set_id, -1);
-    if (set_index < 0) {
-      auto set = compile_local_mask_set_settings(mask);
-      mask_sets.push_back(std::move(set));
-      set_index = static_cast<int>(mask_sets.size()) - 1;
-      indices_by_id.insert(set_id, set_index);
-    }
-    mask_sets[static_cast<std::size_t>(set_index)].sources.push_back(
-        std::move(source));
-  }
-  return mask_sets;
+  return compile_local_mask_sets_from_normalized(
+      normalize_masks_for_pipeline(masks), purpose, raster_policy, output_size);
 }
 
 std::vector<photo_editor::pipeline::LocalMask>
@@ -315,39 +372,8 @@ compile_pipeline_retouch_masks(
     const QVariantList& masks,
     LocalMaskRasterPolicy raster_policy,
     const QSize& output_size) {
-  std::vector<photo_editor::pipeline::LocalMask> retouch_masks;
-  retouch_masks.reserve(static_cast<std::size_t>(masks.size()));
-  auto retouch_solo_active = false;
-  auto solo_ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), solo_ordinal);
-    ++solo_ordinal;
-    if (mask_definition_affects_render(mask, solo_ordinal - 1) &&
-        pipeline_mask_tool_role(mask) == QStringLiteral("retouch") &&
-        mask.value(QStringLiteral("solo")).toBool()) {
-      retouch_solo_active = true;
-      break;
-    }
-  }
-  auto ordinal = 1;
-  for (const auto& value : masks) {
-    const auto mask = normalized_mask_definition(value.toMap(), ordinal);
-    ++ordinal;
-    if (!mask_definition_affects_render(mask, ordinal - 1) ||
-        pipeline_mask_tool_role(mask) != QStringLiteral("retouch") ||
-        (retouch_solo_active &&
-         !mask.value(QStringLiteral("solo")).toBool())) {
-      continue;
-    }
-    retouch_masks.push_back(compile_pipeline_local_mask(
-        mask, raster_policy, output_size));
-  }
-  std::stable_sort(
-      retouch_masks.begin(), retouch_masks.end(),
-      [](const auto& left, const auto& right) {
-        return left.retouch_order < right.retouch_order;
-      });
-  return retouch_masks;
+  return compile_retouch_masks_from_normalized(
+      normalize_masks_for_pipeline(masks), raster_policy, output_size);
 }
 
 photo_editor::pipeline::ColorAdjustmentState
@@ -361,10 +387,11 @@ compile_desktop_pipeline_state(
     std::span<const photo_editor::pipeline::ColorPixel> source_pixels) {
   auto pipeline_state = compile_base_color_adjustment_state(
       state, metadata, &color_pipeline_config);
-  pipeline_state.local_mask_sets = compile_pipeline_local_mask_sets(
-      state.mask_stack, purpose, raster_policy, output_size);
-  pipeline_state.retouch_masks = compile_pipeline_retouch_masks(
-      state.mask_stack, raster_policy, output_size);
+  const auto normalized_masks = normalize_masks_for_pipeline(state.mask_stack);
+  pipeline_state.local_mask_sets = compile_local_mask_sets_from_normalized(
+      normalized_masks, purpose, raster_policy, output_size);
+  pipeline_state.retouch_masks = compile_retouch_masks_from_normalized(
+      normalized_masks, raster_policy, output_size);
   auto display_text_policy = classify_display_referred_text_layers(
       state, color_pipeline_config, purpose, output_size);
   pipeline_state.display_referred_text_color_domain =
@@ -376,7 +403,7 @@ compile_desktop_pipeline_state(
   pipeline_state.display_referred_text_policy_version =
       display_text_policy.version.toStdString();
   pipeline_state.photo_layers = compile_pipeline_photo_layers(
-      state.layers, state.mask_stack, raster_policy, output_size,
+      state.layers, normalized_masks, raster_policy, output_size,
       source_pixels, color_pipeline_config, purpose);
   const auto candidate_count = static_cast<std::size_t>(
       display_text_policy.eligible_layer_ids.size());

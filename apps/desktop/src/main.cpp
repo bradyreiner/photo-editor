@@ -1322,13 +1322,13 @@ int main(int argc, char* argv[]) {
       if (editor_preview.photoPaintBusy())
         return {{"ok", false}, {"error", "Wait for the owned photo pixels to finish before rendering planning evidence."}};
       return {{"ok", true}, {"assetId", asset_id},
-          {"recipeJson", editor_preview.currentAssetBoundAdjustmentPatchJson()},
+          {"adjustmentPatchJson", editor_preview.currentAssetBoundAdjustmentPatchJson()},
           {"source", "native-photo"},
           {"taskStateHash", agent_tasks.journal()->checkpointHash(asset_id)}};
     }
     const auto asset = catalog_assets.assetById(asset_id);
     return {{"ok", !asset.isEmpty()}, {"assetId", asset_id},
-        {"recipeJson", asset.value("adjustmentPatchJson")}, {"source", "catalog-photo"}};
+        {"adjustmentPatchJson", asset.value("adjustmentPatchJson")}, {"source", "catalog-photo"}};
   });
   photo_automation.setSearchEditWorkflow(&search_edit);
   agent_edit.setMcpEndpoint(photo_automation.agentMcpEndpoint(), QStringLiteral("in-process"));

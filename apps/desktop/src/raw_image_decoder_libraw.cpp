@@ -1,4 +1,12 @@
 #include "raw_image_decoder_libraw.h"
+
+#ifdef max
+#undef max
+#endif
+
+#ifdef min
+#undef min
+#endif
 #include "capture_camera_metadata.h"
 
 #include <QtGui/qrgbafloat.h>
@@ -31,6 +39,14 @@
 #if defined(PHOTO_EDITOR_HAS_LIBRAW_CAMERA_LINEAR) && \
     PHOTO_EDITOR_HAS_LIBRAW_CAMERA_LINEAR
 #include <libraw/libraw.h>
+#endif
+
+#ifdef max
+#undef max
+#endif
+
+#ifdef min
+#undef min
 #endif
 
 namespace photo_editor::desktop {

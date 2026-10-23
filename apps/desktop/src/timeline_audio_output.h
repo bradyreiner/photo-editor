@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QAudioBuffer>
-#include <QAudioBufferOutput>
 #include <QAudioFormat>
 #include <QMediaDevices>
 #include <QObject>
@@ -12,6 +11,12 @@
 #include <QVector>
 #include <QtQml/qqmlregistration.h>
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+#include <QAudioBufferOutput>
+#else
+#include <QAudioOutput>
+#endif
+
 class QAudioSink;
 class QIODevice;
 
@@ -20,7 +25,6 @@ namespace photo_editor::desktop {
 class TimelineAudioOutput : public QObject {
   Q_OBJECT
   QML_ELEMENT
-  Q_PROPERTY(QAudioBufferOutput* bufferOutput READ bufferOutput CONSTANT)
   Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
   Q_PROPERTY(double pan READ pan WRITE setPan NOTIFY panChanged)
   Q_PROPERTY(bool panEnabled READ panEnabled WRITE setPanEnabled NOTIFY panEnabledChanged)
@@ -58,7 +62,12 @@ class TimelineAudioOutput : public QObject {
   explicit TimelineAudioOutput(QObject* parent = nullptr);
   ~TimelineAudioOutput() override;
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   [[nodiscard]] QAudioBufferOutput* bufferOutput();
+#endif
+  [[nodiscard]] QAudioFormat bufferFormat() const;
+  Q_INVOKABLE bool attachPlayer(QObject* player);
+  Q_INVOKABLE void setPlayerPitchCompensation(QObject* player, bool enabled);
   [[nodiscard]] double volume() const;
   [[nodiscard]] double pan() const;
   [[nodiscard]] bool panEnabled() const;
@@ -165,7 +174,11 @@ class TimelineAudioOutput : public QObject {
     double y2 = 0.0;
   };
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   QAudioBufferOutput buffer_output_;
+#else
+  QAudioOutput playback_output_;
+#endif
   QMediaDevices media_devices_;
   QPointer<QAudioSink> sink_;
   QPointer<QIODevice> sink_device_;

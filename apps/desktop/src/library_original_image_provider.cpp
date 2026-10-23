@@ -1,4 +1,5 @@
 #include "library_original_image_provider.h"
+#include "render_plan_store.h"
 
 #include <QFileInfo>
 #include <QMutexLocker>
@@ -97,13 +98,33 @@ QImage LibraryOriginalImageProvider::requestImage(
 
   const auto scene_linear = metadata.is_raw || is_openexr;
   auto display_image = scene_linear
-      ? render_output_image_with_backend(
-            source, neutral_state, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
-            RenderBackendPreference::CpuOnly, &metadata, nullptr, {},
-            photo_editor::pipeline::RemovalQuality::Final,
-            RenderOutputPolicy::DisplayReferred)
+      ? QImage{}
       : convert_tagged_qimage_color_space(source, QColorSpace(QColorSpace::SRgb),
             QImage::Format_ARGB32, QImageColorConversionPurpose::OutputPublication);
+  if (scene_linear) {
+    const auto admission = RenderPlanStore::shared().admit(
+        QStringLiteral("library-original:%1").arg(key),
+        file_path,
+        neutral_state,
+        source.size(),
+        photo_editor::pipeline::RenderPurpose::Thumbnail,
+        photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation,
+        std::nullopt,
+        &metadata);
+    if (admission.admitted && admission.plan.has_value()) {
+      display_image = render_output_image(
+          source,
+          neutral_state,
+          QColorSpace(QColorSpace::SRgb),
+          QImage::Format_ARGB32,
+          &metadata,
+          nullptr,
+          {},
+          photo_editor::pipeline::RemovalQuality::Final,
+          RenderOutputPolicy::DisplayReferred,
+          &*admission.plan);
+    }
+  }
   if (display_image.isNull()) {
     if (size != nullptr) *size = {};
     return {};

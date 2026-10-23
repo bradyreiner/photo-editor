@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: root
+    objectName: "customerAccountPanel"
     property var controller: null
     property string pendingDeviceId: ""
     readonly property bool serviceAvailable: controller !== null && controller.configured
@@ -138,22 +139,23 @@ ColumnLayout {
     Repeater {
         model: root.serviceAvailable ? root.controller.devices : []
         delegate: RowLayout {
+            id: deviceRow
             required property var modelData
             Layout.fillWidth: true
             Label {
                 Layout.fillWidth: true
-                text: (modelData.id === root.controller.currentInstallationId ? "This device" : modelData.platform || "Device") +
-                    (modelData.revoked ? " · revoked" : " · active") +
-                    (modelData.app_version ? " · " + modelData.app_version : "")
+                text: (deviceRow.modelData.id === root.controller.currentInstallationId ? "This device" : deviceRow.modelData.platform || "Device") +
+                    (deviceRow.modelData.revoked ? " · revoked" : " · active") +
+                    (deviceRow.modelData.app_version ? " · " + deviceRow.modelData.app_version : "")
                 color: theme.textMain
                 elide: Text.ElideMiddle
             }
             ActionButton {
                 text: "Revoke"
-                visible: !modelData.revoked && modelData.id !== root.controller.currentInstallationId
+                visible: !deviceRow.modelData.revoked && deviceRow.modelData.id !== root.controller.currentInstallationId
                 enabled: !root.controller.busy
                 onClicked: {
-                    root.pendingDeviceId = modelData.id
+                    root.pendingDeviceId = deviceRow.modelData.id
                     revokeDialog.open()
                 }
             }
@@ -163,7 +165,7 @@ ColumnLayout {
         text: "Deactivate this device"
         objectName: "deactivateCurrentDeviceAction"
         visible: root.serviceAvailable && root.controller.currentInstallationId.length > 0
-        enabled: !root.controller.busy
+        enabled: root.serviceAvailable && !root.controller.busy
         onClicked: deactivateDialog.open()
     }
     Label {

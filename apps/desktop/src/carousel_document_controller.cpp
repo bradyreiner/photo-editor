@@ -3333,10 +3333,14 @@ QVariantList CarouselDocumentController::textContrastChecks() const {
     QJsonArray media_inputs;
     const auto append_media = [&media_inputs](const MediaItem& media) {
       auto value = mediaObject(media, false);
-      // Rendering consumes the decoded recipe state as well as its serialized
-      // patch. Include both so transient edits cannot reuse an older sample.
-      value.insert(QStringLiteral("renderRecipeState"), serialize_edit_recipe_json(media.recipe_state));
-      value.insert(QStringLiteral("renderAdjustmentPatch"), media.adjustment_patch_json);
+      // Include the live canonical patch so transient edits cannot reuse an
+      // older text-contrast sample before document persistence catches up.
+      value.insert(
+          QStringLiteral("renderAdjustmentPatch"),
+          serialize_adjustment_patch_json(
+              media.recipe_state,
+              all_adjustment_groups(),
+              AdjustmentPatchScope::AssetBound));
       if (media.type == MediaType::Image && !media.file_path.isEmpty()) {
         value.insert(
             QStringLiteral("sourceDecodeRevision"),

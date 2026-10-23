@@ -213,25 +213,37 @@ Dialog {
                 }
 
                 ActionButton {
-                    visible: card.disableFn !== null
+                    visible: typeof card.disableFn === "function"
                     text: "Disable"
                     compact: true
-                    onClicked: card.disableFn()
+                    onClicked: {
+                        const disableHandler = card.disableFn
+                        if (typeof disableHandler === "function")
+                            disableHandler.call(card)
+                    }
                 }
 
                 ActionButton {
-                    visible: card.changeFn !== null
+                    visible: typeof card.changeFn === "function"
                     text: card.path.length > 0 ? "Change" : "Choose"
                     compact: true
                     enabled: card.changeEnabled
-                    onClicked: card.changeFn()
+                    onClicked: {
+                        const changeHandler = card.changeFn
+                        if (typeof changeHandler === "function")
+                            changeHandler.call(card)
+                    }
                 }
 
                 ActionButton {
                     text: "Open"
                     compact: true
                     enabled: card.path.length > 0
-                    onClicked: card.openFn()
+                    onClicked: {
+                        const openHandler = card.openFn
+                        if (typeof openHandler === "function")
+                            openHandler.call(card)
+                    }
                 }
             }
 

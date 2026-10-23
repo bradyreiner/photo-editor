@@ -1158,9 +1158,7 @@ QColorSpace export_target_color_space(
     return working_color_space(state.working_color_profile);
   }
   if (options.hdr_delivery) {
-    return QColorSpace(
-        QColorSpace::Primaries::Bt2020,
-        QColorSpace::TransferFunction::Linear);
+    return linear_rec2020_color_space();
   }
   return preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space));
 }

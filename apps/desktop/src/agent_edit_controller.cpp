@@ -20741,11 +20741,11 @@ QVariantMap AgentEditController::planningRecipeSnapshot(const QVariantMap& asset
   if (planning_snapshot_handler_) {
     auto snapshot = planning_snapshot_handler_(asset_id);
     if (snapshot.value(QStringLiteral("ok")).toBool() && snapshot.value(QStringLiteral("source")) == QStringLiteral("catalog-photo"))
-      snapshot.insert(QStringLiteral("recipeJson"), catalog_recipe());
+      snapshot.insert(QStringLiteral("adjustmentPatchJson"), catalog_recipe());
     return snapshot;
   }
   return {{QStringLiteral("ok"), !live_asset.isEmpty()}, {QStringLiteral("assetId"), asset_id},
-      {QStringLiteral("recipeJson"), catalog_recipe()},
+      {QStringLiteral("adjustmentPatchJson"), catalog_recipe()},
       {QStringLiteral("source"), QStringLiteral("catalog-photo")}};
 }
 
@@ -20767,7 +20767,7 @@ bool AgentEditController::takeOrStartPlanningProof(
   if (!snapshot.value(QStringLiteral("ok")).toBool() || snapshot.value(QStringLiteral("assetId")).toString() != asset_id ||
       snapshot.value(QStringLiteral("paintBusy")).toBool())
     return fail(snapshot.value(QStringLiteral("error"), QStringLiteral("The planning document is unavailable or still processing.")).toString());
-  const auto recipe = snapshot.value(QStringLiteral("recipeJson")).toString();
+  const auto recipe = snapshot.value(QStringLiteral("adjustmentPatchJson")).toString();
   const auto decoded = compatibility_adjustments_for_asset({{QStringLiteral("adjustmentPatchJson"), recipe}});
   if (recipe.isEmpty() || !decoded.ok()) return fail(QStringLiteral("The live planning recipe could not be read."));
   const auto recipe_hash = hash_recipe(recipe);
@@ -20870,7 +20870,7 @@ bool AgentEditController::takeOrStartPlanningProof(
   }
   if (validate_live) {
     const auto live = planningRecipeSnapshot(asset);
-    const auto live_recipe_sha = hash_recipe(live.value(QStringLiteral("recipeJson")).toString());
+    const auto live_recipe_sha = hash_recipe(live.value(QStringLiteral("adjustmentPatchJson")).toString());
     const auto persisted_source_recipe_sha = report->value(QStringLiteral("sourceRecipeSha256")).toString();
     const auto source_recipe_json = report->value(QStringLiteral("sourceRecipeJson")).toString();
     const auto expected_recipe_sha = !persisted_source_recipe_sha.isEmpty()
@@ -21822,9 +21822,58 @@ QVariantMap AgentEditController::planDraftForScope(
         composition_quality_review_enabled &&
         async_model_stage_results_.contains(follow_up_stage) &&
         saved_composition_review_is_complete;
+    const auto follow_up_stage_cached = async_model_stage_results_.contains(follow_up_stage);
+    const auto cached_round_proof = async_model_round_planning_proofs_.constFind(
+        model_tool_plan_cache_key);
+    const auto cached_round_proof_is_valid = [&](const QVariantMap& record) {
+      const auto proof = record.value(QStringLiteral("proof")).toMap();
+      const auto source_recipe = proof.value(QStringLiteral("sourceRecipeJson")).toString();
+      const auto source_recipe_sha = proof.value(QStringLiteral("sourceRecipeSha256")).toString();
+      const auto proof_sha = proof.value(QStringLiteral("proofSha256")).toString();
+      const auto proof_path = proof.value(QStringLiteral("currentProofPath")).toString();
+      if (record.value(QStringLiteral("contract")).toString() !=
+              QStringLiteral("agent-model-round-planning-proof-v1") ||
+          record.value(QStringLiteral("round")).toInt() != model_tool_round ||
+          record.value(QStringLiteral("stage")).toString() != follow_up_stage ||
+          record.value(QStringLiteral("requestId")).toString() != planning_run_id ||
+          record.value(QStringLiteral("assetId")).toString() !=
+              representative_asset.value(QStringLiteral("assetId")).toString() ||
+          record.value(QStringLiteral("recipeSha256")).toString() != source_recipe_sha ||
+          record.value(QStringLiteral("proofSha256")).toString() != proof_sha ||
+          record.value(QStringLiteral("currentProofPath")).toString() != proof_path ||
+          proof.value(QStringLiteral("ok")).toBool() != true ||
+          proof.value(QStringLiteral("stage")).toString() != follow_up_stage ||
+          proof.value(QStringLiteral("assetId")).toString() !=
+              representative_asset.value(QStringLiteral("assetId")).toString() ||
+          proof.value(QStringLiteral("recipeSha256")).toString() != source_recipe_sha ||
+          source_recipe.isEmpty() || !is_sha256_hex(source_recipe_sha) ||
+          sha256_text(source_recipe) != source_recipe_sha ||
+          !is_sha256_hex(proof_sha) || proof_path.isEmpty() ||
+          proof.value(QStringLiteral("proofWidth")).toInt() <= 0 ||
+          proof.value(QStringLiteral("proofHeight")).toInt() <= 0)
+        return false;
+      QFile proof_file(proof_path);
+      if (!proof_file.open(QIODevice::ReadOnly)) return false;
+      const auto proof_bytes = proof_file.readAll();
+      return !proof_bytes.isEmpty() &&
+          QString::fromLatin1(QCryptographicHash::hash(
+              proof_bytes, QCryptographicHash::Sha256).toHex()) == proof_sha;
+    };
     QVariantMap round_proof;
-    if (!mutable_this->takeOrStartPlanningProof(follow_up_stage, planning_proof_asset, style, planning_run_id,
-            scope, !async_model_stage_results_.contains(follow_up_stage), &round_proof)) {
+    if (async_model_planning_enabled_ && follow_up_stage_cached) {
+      if (cached_round_proof == async_model_round_planning_proofs_.cend() ||
+          !cached_round_proof_is_valid(cached_round_proof.value())) {
+        auto invalid = result_map(false, {QStringLiteral(
+            "The exact rendered proof consumed by this model round is unavailable or no longer verifiable. Earlier accepted edits remain available for review or Revert.")});
+        invalid.insert(QStringLiteral("errorCode"), QStringLiteral("planning_proof_unavailable"));
+        invalid.insert(QStringLiteral("proofBoundaryFailed"), true);
+        invalid.insert(QStringLiteral("proofStage"), follow_up_stage);
+        invalid.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
+        return invalid;
+      }
+      round_proof = cached_round_proof.value().value(QStringLiteral("proof")).toMap();
+    } else if (!mutable_this->takeOrStartPlanningProof(follow_up_stage, planning_proof_asset, style, planning_run_id,
+                   scope, !follow_up_stage_cached, &round_proof)) {
       auto pending = mutable_this->requestOwnedWorkerPendingReport(
           QStringLiteral("planning-proof:%1").arg(follow_up_stage), report_scope);
       pending.insert(QStringLiteral("modelToolPlan"), model_tool_plan);
@@ -21848,6 +21897,19 @@ QVariantMap AgentEditController::planDraftForScope(
       return round_proof;
     }
     attach_proof(&follow_up_request, round_proof);
+    if (async_model_planning_enabled_) {
+      mutable_this->async_model_round_planning_proofs_.insert(model_tool_plan_cache_key, QVariantMap{
+          {QStringLiteral("contract"), QStringLiteral("agent-model-round-planning-proof-v1")},
+          {QStringLiteral("round"), model_tool_round},
+          {QStringLiteral("stage"), follow_up_stage},
+          {QStringLiteral("requestId"), planning_run_id},
+          {QStringLiteral("assetId"), representative_asset.value(QStringLiteral("assetId"))},
+          {QStringLiteral("recipeSha256"), round_proof.value(QStringLiteral("sourceRecipeSha256"))},
+          {QStringLiteral("proofSha256"), round_proof.value(QStringLiteral("proofSha256"))},
+          {QStringLiteral("currentProofPath"), round_proof.value(QStringLiteral("currentProofPath"))},
+          {QStringLiteral("proof"), round_proof},
+      });
+    }
     QVariantMap composition_assessment_envelope;
     QVariantMap composition_inspection_receipt;
     auto composition_assessment_retained = false;
@@ -21869,7 +21931,7 @@ QVariantMap AgentEditController::planDraftForScope(
         return QString::fromLatin1(QCryptographicHash::hash(json.toUtf8(), QCryptographicHash::Sha256).toHex());
       };
       const auto live_before_review = mutable_this->planningRecipeSnapshot(representative_asset);
-      const auto live_before_recipe = live_before_review.value(QStringLiteral("recipeJson")).toString();
+      const auto live_before_recipe = live_before_review.value(QStringLiteral("adjustmentPatchJson")).toString();
       const auto review_source_matches = live_before_review.value(QStringLiteral("ok")).toBool() &&
           live_before_review.value(QStringLiteral("assetId")).toString() == asset_id &&
           !live_before_review.value(QStringLiteral("paintBusy")).toBool() &&
@@ -21967,7 +22029,7 @@ QVariantMap AgentEditController::planDraftForScope(
         return stopped;
       }
       const auto live_after_review = mutable_this->planningRecipeSnapshot(representative_asset);
-      const auto live_after_recipe = live_after_review.value(QStringLiteral("recipeJson")).toString();
+      const auto live_after_recipe = live_after_review.value(QStringLiteral("adjustmentPatchJson")).toString();
       const auto review_state_stable = live_after_review.value(QStringLiteral("ok")).toBool() &&
           live_after_review.value(QStringLiteral("assetId")).toString() == asset_id &&
           !live_after_review.value(QStringLiteral("paintBusy")).toBool() &&
@@ -22918,6 +22980,7 @@ void AgentEditController::clearAsyncModelPlanningState() {
   async_mcp_observation_.clear();
   async_model_stage_results_.clear();
   async_model_tool_plan_results_.clear();
+  async_model_round_planning_proofs_.clear();
   async_composition_repair_round_cursors_.clear();
   async_composition_repair_progress_snapshots_.clear();
   async_composition_repair_plan_signatures_.clear();
@@ -28012,7 +28075,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       const auto task_state_hash =
           planning_proof_checkpoint.value(QStringLiteral("taskStateHash")).toString();
       const auto live_snapshot = planningRecipeSnapshot(asset);
-      const auto live_recipe_json = live_snapshot.value(QStringLiteral("recipeJson")).toString();
+      const auto live_recipe_json = live_snapshot.value(QStringLiteral("adjustmentPatchJson")).toString();
       const auto live_recipe_sha = QString::fromLatin1(QCryptographicHash::hash(
           live_recipe_json.toUtf8(), QCryptographicHash::Sha256).toHex());
       const auto source_snapshot_is_current =
@@ -28272,7 +28335,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
     const auto snapshot_checkpoint = [&](const QVariantMap& snapshot) {
       auto checkpoint = snapshot.value(QStringLiteral("taskStateHash")).toString();
       if (checkpoint.isEmpty())
-        checkpoint = hash_recipe_json(snapshot.value(QStringLiteral("recipeJson")).toString());
+        checkpoint = hash_recipe_json(snapshot.value(QStringLiteral("adjustmentPatchJson")).toString());
       return checkpoint;
     };
     auto task_owned_structure_recipe_json = authorized_native_recipe_json;
@@ -28282,7 +28345,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
                                            const QString& expected_recipe_json,
                                            const QString& expected_recipe_sha,
                                            const QString& expected_task_state_hash) {
-      const auto live_recipe_json = snapshot.value(QStringLiteral("recipeJson")).toString();
+      const auto live_recipe_json = snapshot.value(QStringLiteral("adjustmentPatchJson")).toString();
       return snapshot.value(QStringLiteral("ok")).toBool() &&
           snapshot.value(QStringLiteral("source")).toString() == QStringLiteral("native-photo") &&
           snapshot.value(QStringLiteral("assetId")).toString() == asset_id &&
@@ -28301,7 +28364,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       const auto render_recipe_sha = hash_recipe_json(recipe_json);
       const auto snapshot_before_inspection = planningRecipeSnapshot(asset);
       const auto raw_recipe_before_inspection =
-          snapshot_before_inspection.value(QStringLiteral("recipeJson")).toString();
+          snapshot_before_inspection.value(QStringLiteral("adjustmentPatchJson")).toString();
       const auto raw_recipe_sha_before_inspection = hash_recipe_json(raw_recipe_before_inspection);
       const auto checkpoint_before_inspection = snapshot_checkpoint(snapshot_before_inspection);
       const auto candidate_state = compatibility_adjustments_for_asset(
@@ -28317,7 +28380,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       const auto layer_projection_matches = candidate_state.ok() && live_state.ok() &&
           candidate_state.state->layers == live_state.state->layers;
       const auto snapshot_is_valid = [&](const QVariantMap& snapshot) {
-        const auto live_recipe = snapshot.value(QStringLiteral("recipeJson")).toString();
+        const auto live_recipe = snapshot.value(QStringLiteral("adjustmentPatchJson")).toString();
         return snapshot.value(QStringLiteral("ok")).toBool() &&
             snapshot.value(QStringLiteral("assetId")).toString() == asset_id &&
             !snapshot.value(QStringLiteral("paintBusy")).toBool() &&
@@ -28368,7 +28431,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       auto snapshot_after_inspection = planningRecipeSnapshot(asset);
       const auto inspection_snapshot_stable = initial_snapshot_matches &&
           snapshot_is_valid(snapshot_after_inspection) &&
-          hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString()) ==
+          hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("adjustmentPatchJson")).toString()) ==
               raw_recipe_sha_before_inspection &&
           snapshot_checkpoint(snapshot_after_inspection) == checkpoint_before_inspection;
       if (!inspection_snapshot_stable) {
@@ -28459,7 +28522,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           details = stage_result;
           snapshot_after_inspection = planningRecipeSnapshot(asset);
           const auto after_recipe_sha = hash_recipe_json(
-              snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString());
+              snapshot_after_inspection.value(QStringLiteral("adjustmentPatchJson")).toString());
           const auto after_checkpoint = snapshot_checkpoint(snapshot_after_inspection);
           const auto worker_checkpoint_matches =
               details.value(QStringLiteral("sourceTaskStateHash")).toString() == checkpoint_before_inspection;
@@ -28520,7 +28583,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         details.insert(QStringLiteral("sourceOverviewSha256"), proof_overview_sha);
         snapshot_after_inspection = planningRecipeSnapshot(asset);
         if (!snapshot_is_valid(snapshot_after_inspection) ||
-            hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("recipeJson")).toString()) !=
+            hash_recipe_json(snapshot_after_inspection.value(QStringLiteral("adjustmentPatchJson")).toString()) !=
                 raw_recipe_sha_before_inspection ||
             snapshot_checkpoint(snapshot_after_inspection) != checkpoint_before_inspection ||
             details.value(QStringLiteral("sourceRecipeSha256")).toString() != render_recipe_sha ||
@@ -29621,7 +29684,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           const auto accepted_snapshot_source =
               accepted_repair.value(QStringLiteral("snapshotSource")).toString();
           const auto live_checkpoint = planningRecipeSnapshot(asset);
-          const auto live_recipe_json = live_checkpoint.value(QStringLiteral("recipeJson")).toString();
+          const auto live_recipe_json = live_checkpoint.value(QStringLiteral("adjustmentPatchJson")).toString();
           const auto accepted_checkpoint_is_current =
               live_checkpoint.value(QStringLiteral("ok")).toBool() &&
               live_checkpoint.value(QStringLiteral("assetId")).toString() == asset_id &&

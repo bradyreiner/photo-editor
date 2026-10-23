@@ -156,15 +156,17 @@ Rectangle {
     function undoEdit() {
         if (!root.canUndoEdit) return
         root.cancelEditHistoryHoverPreview()
-        if (root.undoEditHandler) root.undoEditHandler()
-        else editorPreview.undo()
+        const undoHandler = root.undoEditHandler
+        if (typeof undoHandler === "function") undoHandler.call(root)
+        else root.editorPreviewController.undo()
     }
 
     function redoEdit() {
         if (!root.canRedoEdit) return
         root.cancelEditHistoryHoverPreview()
-        if (root.redoEditHandler) root.redoEditHandler()
-        else editorPreview.redo()
+        const redoHandler = root.redoEditHandler
+        if (typeof redoHandler === "function") redoHandler.call(root)
+        else root.editorPreviewController.redo()
     }
     property bool editActionFeedbackError: false
     property var recentlyPastedLayerIds: []
@@ -750,7 +752,7 @@ Rectangle {
     property bool brushHudSizeDragActive: false
     property real brushHudSizeDragStartX: 0
     property real brushHudSizeDragStartSize: 0.08
-    property real selectionOutlinePhase: 0
+    property real selectionOutlinePhase
     property bool maskOutlineActivationDeferred: false
     readonly property int selectionOutlineAnimationPointBudget: 1800
     readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
@@ -20410,7 +20412,11 @@ Rectangle {
                                                     modal: true
                                                     focus: true
                                                     padding: theme.space12
-                                                    width: Math.max(theme.scaled(260), photoTextBoardLinks.width)
+                                                    readonly property real preferredDialogWidth: Math.max(theme.scaled(260), photoTextBoardLinks.width)
+                                                    readonly property real availableDialogWidth: Overlay.overlay
+                                                        ? Math.max(0, Overlay.overlay.width - theme.scaled(24))
+                                                        : preferredDialogWidth
+                                                    implicitWidth: Math.min(preferredDialogWidth, availableDialogWidth)
                                                     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
                                                     property string sourceLayerId: ""
                                                     readonly property string currentBoardId: String(root.activeEditBoard.boardId || "")

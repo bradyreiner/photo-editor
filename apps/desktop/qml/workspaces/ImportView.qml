@@ -170,13 +170,7 @@ Rectangle {
     }
 
     function fileUrlForPath(filePath) {
-        const normalized = normalizedImportPath(filePath)
-        if (!normalized.startsWith("/"))
-            return ""
-        const escapedPath = normalized.split("/").map(function(part) {
-            return encodeURIComponent(part)
-        }).join("/")
-        return "file://" + escapedPath
+        return catalogAssets.localFileUrlForPath(normalizedImportPath(filePath))
     }
 
     function pickerFolderLabel(filePath) {
@@ -208,15 +202,24 @@ Rectangle {
 
     function normalizedImportPath(filePath) {
         const path = String(filePath).replace(/\\/g, "/")
-        const absolute = path.startsWith("/")
-        const parts = path.split("/")
+        const uncPath = path.startsWith("//")
+        const drivePath = /^[A-Za-z]:\//.test(path)
+        const absolute = uncPath || path.startsWith("/") || drivePath
+        const prefix = uncPath ? "//"
+                      : drivePath ? path.slice(0, 3)
+                      : path.startsWith("/") ? "/" : ""
+        const body = uncPath ? path.slice(2)
+                    : drivePath ? path.slice(3)
+                    : path.startsWith("/") ? path.slice(1) : path
+        const parts = body.split("/")
         const normalized = []
+        const minimumParts = uncPath ? 2 : 0
         for (let index = 0; index < parts.length; ++index) {
             const part = parts[index]
             if (part.length === 0 || part === ".")
                 continue
             if (part === "..") {
-                if (normalized.length > 0 && normalized[normalized.length - 1] !== "..")
+                if (normalized.length > minimumParts && normalized[normalized.length - 1] !== "..")
                     normalized.pop()
                 else if (!absolute)
                     normalized.push(part)
@@ -224,36 +227,16 @@ Rectangle {
             }
             normalized.push(part)
         }
-        const joined = normalized.join("/")
-        return absolute ? "/" + joined : joined
+        return prefix + normalized.join("/")
+    }
+
+    function isAbsoluteImportPath(filePath) {
+        const path = normalizedImportPath(filePath)
+        return path.startsWith("/") || /^[A-Za-z]:\//.test(path)
     }
 
     function commonDirectoryForFiles(filePaths) {
-        if (!filePaths || filePaths.length === 0)
-            return ""
-
-        const directories = []
-        for (let index = 0; index < filePaths.length; ++index) {
-            const normalized = normalizedImportPath(filePaths[index])
-            if (!normalized.startsWith("/"))
-                return ""
-            const directory = parentPathForFile(normalized)
-            if (directory.length === 0)
-                return ""
-            directories.push(directory)
-        }
-
-        const firstParts = directories[0].split("/").filter(function(part) { return part.length > 0 })
-        let commonLength = firstParts.length
-        for (let index = 1; index < directories.length && commonLength > 0; ++index) {
-            const parts = directories[index].split("/").filter(function(part) { return part.length > 0 })
-            commonLength = Math.min(commonLength, parts.length)
-            let shared = 0
-            while (shared < commonLength && firstParts[shared] === parts[shared])
-                ++shared
-            commonLength = shared
-        }
-        return commonLength === 0 ? "/" : "/" + firstParts.slice(0, commonLength).join("/")
+        return catalogAssets.commonDirectoryForFiles(filePaths || [])
     }
 
     function stagePickedFiles(filePaths) {
@@ -264,7 +247,7 @@ Rectangle {
         const seenPaths = ({})
         for (let index = 0; index < filePaths.length; ++index) {
             const filePath = normalizedImportPath(filePaths[index])
-            if (!filePath.startsWith("/") || seenPaths[filePath])
+            if (!isAbsoluteImportPath(filePath) || seenPaths[filePath])
                 continue
             seenPaths[filePath] = true
             normalizedPaths.push(filePath)
@@ -449,11 +432,9 @@ Rectangle {
         if (folderPath.length === 0)
             return
 
-        if (sourceRootPath.length > 0) {
-            const normalizedRoot = sourceRootPath.endsWith("/") ? sourceRootPath : sourceRootPath + "/"
-            if (folderPath !== sourceRootPath && folderPath.indexOf(normalizedRoot) !== 0)
-                return
-        }
+        if (sourceRootPath.length > 0
+                && !catalogAssets.localPathIsWithinRoot(folderPath, sourceRootPath))
+            return
 
         currentFolderUrl = folderUrl
         currentFolderPath = folderPath

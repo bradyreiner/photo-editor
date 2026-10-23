@@ -96,11 +96,13 @@ int main() {
 
   const QSize size(801, 401);
   QVector<BrushPreviewPoint> samples;
+  // Compare against a continuously swept stroke only at dense spacing; larger
+  // configured values intentionally expose individual stamp spacing.
   for (int i = 0; i <= 12; ++i) {
     const double x = 0.2 + i * 0.05;
     const double y = 0.3 + i * 0.025;
     const auto next = sampled_brush_points_for_segment(samples.isEmpty() ? nullptr : &samples.back(),
-        x, y, 0.06, 0.7, 0, 0, 0, 0.75, 0, false, 1, 0, 0, 2.0);
+        x, y, 0.06, 0.7, 0, 0, 0, 0.10, 0, false, 1, 0, 0, 2.0);
     samples += next;
   }
   BrushLivePreviewRaster live;

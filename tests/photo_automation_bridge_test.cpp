@@ -478,6 +478,10 @@ bool is_proof_critique_request(const QJsonObject& request) {
 
 int main(int argc, char** argv) {
   qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
+  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_DATABASE_URL")) {
+    qputenv("PHOTO_EDITOR_DATABASE_URL",
+        QByteArrayLiteral("postgresql://127.0.0.1:1/photo_automation_bridge_fixture"));
+  }
   QGuiApplication app(argc, argv);
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("PhotoAutomationBridgeTest"));
@@ -1621,7 +1625,7 @@ int main(int argc, char** argv) {
         const auto recipe_sha = QString::fromLatin1(QCryptographicHash::hash(
             native_planning_recipe.toUtf8(), QCryptographicHash::Sha256).toHex());
         return {{QStringLiteral("ok"), true}, {QStringLiteral("assetId"), asset_id},
-            {QStringLiteral("recipeJson"), native_planning_recipe},
+            {QStringLiteral("adjustmentPatchJson"), native_planning_recipe},
             {QStringLiteral("source"), QStringLiteral("native-photo")},
             {QStringLiteral("taskStateHash"), recipe_sha},
             {QStringLiteral("paintBusy"), composition_busy}};
@@ -1631,7 +1635,7 @@ int main(int argc, char** argv) {
         if (proof_failure && native_proof_mutation_count == 1)
           return {{"ok", false}, {"error", "fixture live proof snapshot unavailable"}};
         return {{"ok", asset_id == "asset-1"}, {"assetId", asset_id},
-            {"recipeJson", native_planning_recipe}, {"source", "fixture-native-photo"}, {"paintBusy", composition_busy}};
+            {"adjustmentPatchJson", native_planning_recipe}, {"source", "fixture-native-photo"}, {"paintBusy", composition_busy}};
       });
       QObject::connect(&agent_edit, &photo_editor::desktop::AgentEditController::runEventsChanged, &agent_edit, [&]() {
         const auto events = agent_edit.runEvents();
@@ -1718,9 +1722,10 @@ int main(int argc, char** argv) {
             const auto owner_task_id = context.value(QStringLiteral("taskId")).toString();
             if (owner_task_id.isEmpty() || owner_task_id != task_request_id ||
                 context.value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1") ||
-                context.value(QStringLiteral("patchJson")).toString().isEmpty())
+                context.value(QStringLiteral("patchJson")).toString().isEmpty()) {
               return {{QStringLiteral("ok"), false},
                   {QStringLiteral("error"), QStringLiteral("Catalog write is outside the admitted task owner.")}};
+            }
             catalog_recipe_persistence_stages.append(stage);
             catalog_recipe_persistence_task_ids.append(owner_task_id);
             if (stage == QStringLiteral("guard"))
@@ -2767,17 +2772,24 @@ int main(int argc, char** argv) {
         bool sent = false;
         for (const auto& payload : captured_payloads) {
           const auto messages = QJsonDocument::fromJson(payload).object().value("messages").toArray();
-          if (messages.size() >= 2 && messages[1].toObject().value("content").toString().contains(path) &&
-              messages[1].toObject().value("images").toArray().contains(expected_image)) sent = true;
+          // The host binds the immutable local path and digest in its report;
+          // the model transport should receive pixels, not a private filesystem
+          // path that the model cannot use.
+          if (messages.size() >= 2 &&
+              messages[1].toObject().value("images").toArray().contains(expected_image)) {
+            sent = true;
+          }
         }
         if (!sent) return fail("The next model turn must receive the rendered pixels for that round");
         recipes.insert(evidence.value("recipeSha256").toString());
         paths.insert(path);
         images.insert(expected_image);
       }
-      if (paths.size() != 6 || recipes.size() < 5 || images.size() < 5 ||
-          !agent_edit.rollbackDraft().value("ok").toBool())
+      const auto distinct_evidence = paths.size() == 6 && recipes.size() >= 5 && images.size() >= 5;
+      if (!distinct_evidence)
         return fail("Changed live states must produce distinct images without overwriting old evidence or losing Revert");
+      if (!agent_edit.rollbackDraft().value("ok").toBool())
+        return fail("Fresh planning proof mutations must remain reversible");
       bridge.stop();
       std::cout << "Fresh live-recipe proofs reach each model round with immutable paths and matching recipe/PNG digests.\n";
       return EXIT_SUCCESS;

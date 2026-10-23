@@ -44,7 +44,7 @@ Rectangle {
     property real brushHoverY: 0
     property bool brushHoverActive: false
     property bool brushCursorPositionKnown: false
-    property real selectionOutlinePhase: 0
+    property real selectionOutlinePhase
     readonly property color activeMaskAccent: root.maskAccent({
         "kind": editorPreview.activeMaskKind,
         "operation": editorPreview.activeMaskOperation,

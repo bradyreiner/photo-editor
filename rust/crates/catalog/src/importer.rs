@@ -896,16 +896,32 @@ fn sanitize_folder_name(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|character| match character {
-            '/' | '\\' | ':' | '\0' => '_',
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0' => '_',
+            _ if character.is_control() => '_',
             _ => character,
         })
         .collect::<String>();
-    let trimmed = sanitized.trim();
+    // Windows also rejects path components that end in a period or space.
+    let trimmed = sanitized.trim().trim_end_matches(['.', ' ']);
     if trimmed.is_empty() {
         "Unknown Camera".to_string()
+    } else if is_reserved_windows_folder_name(trimmed) {
+        format!("_{trimmed}")
     } else {
         trimmed.to_string()
     }
+}
+
+fn is_reserved_windows_folder_name(value: &str) -> bool {
+    let stem = value
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 fn disambiguated_relative_path(relative_path: &str, identity: &str) -> String {
@@ -992,8 +1008,16 @@ pub fn extract_metadata(path: &Path) -> std::io::Result<ExtractedMetadata> {
         metadata.capture_day = datetime.day();
     }
 
-    metadata.camera_make = field_string(&exif, Tag::Make).unwrap_or_default();
-    metadata.camera_model = field_string(&exif, Tag::Model).unwrap_or_default();
+    // Make and Model are normally EXIF ASCII values. Reading them through
+    // display_value() can preserve display quoting (for example, `"DJI"`).
+    // Those quotes are not part of the metadata and are illegal in Windows
+    // directory names when the date-camera organization template is used.
+    metadata.camera_make = field_ascii_string(&exif, Tag::Make)
+        .or_else(|| field_string(&exif, Tag::Make))
+        .unwrap_or_default();
+    metadata.camera_model = field_ascii_string(&exif, Tag::Model)
+        .or_else(|| field_string(&exif, Tag::Model))
+        .unwrap_or_default();
     metadata.lens_model = field_string(&exif, Tag::LensModel)
         .or_else(|| field_string(&exif, Tag::LensSpecification))
         .unwrap_or_default();
@@ -1055,7 +1079,11 @@ fn field_ascii_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
             Value::Ascii(values) => values.first(),
             _ => None,
         })
-        .map(|value| String::from_utf8_lossy(value).trim().to_string())
+        .map(|value| {
+            String::from_utf8_lossy(value)
+                .trim_matches(|character: char| character.is_whitespace() || character == '\0')
+                .to_string()
+        })
         .filter(|value| !value.is_empty())
 }
 
@@ -1586,6 +1614,15 @@ mod tests {
             organized_relative_path(&request, "DCIM/IMG_0001.CR3", &metadata),
             "2026/08/04/Canon EOS R5_Studio_A/IMG_0001.CR3"
         );
+
+        metadata.camera_make = "\"DJI\"".into();
+        metadata.camera_model = "FC3411?*<>|. ".into();
+        assert_eq!(
+            organized_relative_path(&request, "DCIM/DJI_0258.jpg", &metadata),
+            "2026/08/04/_DJI_ FC3411_____/DJI_0258.jpg"
+        );
+        assert_eq!(sanitize_folder_name("CON"), "_CON");
+        assert_eq!(sanitize_folder_name("camera. "), "camera");
     }
 
     #[test]

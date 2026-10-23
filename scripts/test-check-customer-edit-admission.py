@@ -33,6 +33,31 @@ class AdmissionAuditTests(unittest.TestCase):
     def test_real_inventory_covers_all_current_photo_and_timeline_apis(self):
         self.assertEqual(AUDIT.audit(), [])
 
+    def test_timeline_split_implementation_units_remain_in_scope(self):
+        root = Path(tempfile.mkdtemp(prefix='looksy-timeline-admission-test-'))
+        source = root / 'apps/desktop/src'
+        source.mkdir(parents=True)
+        (source / 'timeline_document_controller.h').write_text(
+            'class TimelineDocumentController {\n'
+            '  Q_INVOKABLE bool correctTrack();\n'
+            '};\n'
+        )
+        (source / 'timeline_document_controller.cpp').write_text('')
+        (source / 'timeline_tracking_controller.inc').write_text(
+            'bool TimelineDocumentController::correctTrack() {\n'
+            '  const auto access = customer_edit_access_.enter();\n'
+            '  if (!access) return false;\n'
+            '  tracking_state_ = 1;\n'
+            '  return true;\n'
+            '}\n'
+        )
+        manifest = root / 'release/customer-edit-admission.json'
+        manifest.parent.mkdir()
+        manifest.write_text(json.dumps({
+            'timeline_document_controller': {'correctTrack': 'edit'},
+        }))
+        self.assertEqual(AUDIT.audit(root), [])
+
     def test_balanced_parser_accepts_nested_body_and_ignores_comment_fake_guard(self):
         root = fixture_root(
             {'edit': 'edit', 'read': 'read'},

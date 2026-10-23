@@ -673,6 +673,7 @@ class AgentEditController final : public QObject {
   QHash<QString, std::shared_ptr<AgentLocalModelPlanResult>>
       async_model_stage_results_;
   QHash<QString, QVariantMap> async_model_tool_plan_results_;
+  QHash<QString, QVariantMap> async_model_round_planning_proofs_;
   QHash<QString, int> async_composition_repair_round_cursors_;
   QHash<QString, QVariantMap> async_composition_repair_progress_snapshots_;
   QHash<QString, QStringList> async_composition_repair_plan_signatures_;

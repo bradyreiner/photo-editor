@@ -30,7 +30,6 @@ Item {
         width: Math.min(parent.width, parent.height) * 0.64
         height: width
         framed: false
-        scale: 1
         SequentialAnimation on scale {
             running: root.motionEnabled && (root.talking || root.mode === "processing" || root.mode === "thinking")
             loops: Animation.Infinite

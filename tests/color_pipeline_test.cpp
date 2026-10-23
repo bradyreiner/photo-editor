@@ -407,6 +407,39 @@ int main() {
     std::cerr << "ACES 2 output processors should compile once, reuse the official renderer when available, and retain the bounded native fallback\n";
     return EXIT_FAILURE;
   }
+  const auto native_fallback_processor =
+      photo_editor::pipeline::compile_aces2_output_processor(
+          photo_editor::pipeline::make_linear_prophoto_rgb_color_space(),
+          default_config.preview_display_target,
+          "Bradford",
+          photo_editor::pipeline::Aces2OutputImplementation::NativeFallback);
+  if (native_fallback_processor == nullptr) {
+    std::cerr << "native ACES 2 fallback processor should compile for the "
+                 "gamut-boundary continuity regression\n";
+    return EXIT_FAILURE;
+  }
+  // Near-identical working pixels from the custom-input ICC render fixture
+  // previously straddled the output gamut gate and produced a visible jump.
+  const auto near_boundary_custom_input =
+      photo_editor::pipeline::aces2_render_to_linear_display_rgb(
+          {0.131950, 0.318059, 0.087062},
+          native_fallback_processor->parameters);
+  const auto near_boundary_embedded_input =
+      photo_editor::pipeline::aces2_render_to_linear_display_rgb(
+          {0.131836, 0.318115, 0.0870361},
+          native_fallback_processor->parameters);
+  const auto near_boundary_output_delta = std::max({
+      std::abs(near_boundary_custom_input[0] - near_boundary_embedded_input[0]),
+      std::abs(near_boundary_custom_input[1] - near_boundary_embedded_input[1]),
+      std::abs(near_boundary_custom_input[2] - near_boundary_embedded_input[2]),
+  });
+  if (near_boundary_output_delta > 0.002) {
+    std::cerr << "native ACES 2 gamut compression should remain continuous "
+                 "for near-identical working pixels near the target gamut "
+                 "boundary: delta="
+              << near_boundary_output_delta << '\n';
+    return EXIT_FAILURE;
+  }
   const auto transition_output =
       photo_editor::pipeline::make_aces2_output_rendering_parameters(
           photo_editor::pipeline::make_linear_srgb_color_space(),

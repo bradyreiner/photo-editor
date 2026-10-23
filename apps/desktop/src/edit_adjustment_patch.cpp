@@ -128,6 +128,48 @@ bool contains_large_identity_payload(
   return false;
 }
 
+bool exact_identity_payload_equal(
+    const QVariant& left,
+    const QVariant& right) {
+  if (left.metaType().id() != right.metaType().id()) {
+    return false;
+  }
+  const auto type = left.metaType().id();
+  if (type == QMetaType::QVariantList) {
+    const auto left_list = left.toList();
+    const auto right_list = right.toList();
+    if (left_list.size() != right_list.size()) {
+      return false;
+    }
+    if (left_list.constData() == right_list.constData()) {
+      return true;
+    }
+    for (qsizetype index = 0; index < left_list.size(); ++index) {
+      if (!exact_identity_payload_equal(left_list.at(index), right_list.at(index))) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (type == QMetaType::QVariantMap) {
+    const auto left_map = left.toMap();
+    const auto right_map = right.toMap();
+    if (left_map.size() != right_map.size()) {
+      return false;
+    }
+    auto left_it = left_map.cbegin();
+    auto right_it = right_map.cbegin();
+    for (; left_it != left_map.cend(); ++left_it, ++right_it) {
+      if (left_it.key() != right_it.key() ||
+          !exact_identity_payload_equal(left_it.value(), right_it.value())) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return left == right;
+}
+
 qsizetype identity_payload_retained_bytes(const QVariant& value, qsizetype budget) {
   qsizetype retained = 0;
   const auto consume = [&](qsizetype bytes) {
@@ -169,6 +211,131 @@ qsizetype identity_payload_retained_bytes(const QVariant& value, qsizetype budge
     return true;
   };
   return visit(visit, value) ? retained : budget + 1;
+}
+
+constexpr qsizetype kBrushHistoryIdentityCacheEntryOverheadBytes = 512;
+
+struct BrushHistoryIdentityCacheEntry final {
+  QVariant source_payload;
+  QVariantMap identity_payload;
+  qsizetype retained_bytes = 0;
+};
+
+struct BrushHistoryIdentityCache final {
+  QMutex mutex;
+  std::deque<BrushHistoryIdentityCacheEntry> entries;
+  qsizetype retained_bytes = 0;
+  int hit_count = 0;
+  int miss_count = 0;
+  int eviction_count = 0;
+
+  QVariantMap identity_for(const QVariant& payload) {
+    {
+      QMutexLocker lock(&mutex);
+      for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (exact_identity_payload_equal(it->source_payload, payload)) {
+          auto hit = std::move(*it);
+          entries.erase(it);
+          entries.push_front(std::move(hit));
+          ++hit_count;
+          return entries.front().identity_payload;
+        }
+      }
+    }
+
+    // Never accept a caller-provided signature as proof of identity. The
+    // cache is keyed by exact QVariant content equality; this serialization
+    // and SHA-256 digest is only reused after that equality check succeeds.
+    // Keep scalar payloads (notably QByteArray and QString) inside an object:
+    // QJsonDocument only serializes top-level arrays/objects, and an unsupported
+    // top-level value would otherwise produce the same empty byte sequence.
+    const auto bytes = QJsonDocument::fromVariant(
+                           QVariantMap{{QStringLiteral("payload"), payload}})
+                           .toJson(QJsonDocument::Compact);
+    const QVariantMap identity{
+        {QStringLiteral("brushHistoryIdentityVersion"), 1},
+        {QStringLiteral("sha256"), QString::fromLatin1(
+             QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
+        {QStringLiteral("bytes"), bytes.size()},
+    };
+    const auto payload_bytes = identity_payload_retained_bytes(
+        payload,
+        kMaxBrushHistoryIdentityCacheMemoryBytes -
+            kBrushHistoryIdentityCacheEntryOverheadBytes);
+    if (payload_bytes > kMaxBrushHistoryIdentityCacheMemoryBytes -
+                            kBrushHistoryIdentityCacheEntryOverheadBytes) {
+      QMutexLocker lock(&mutex);
+      ++miss_count;
+      return identity;
+    }
+    const auto entry_bytes = payload_bytes + kBrushHistoryIdentityCacheEntryOverheadBytes;
+
+    QMutexLocker lock(&mutex);
+    // Other render/UI workers may have finished this same history while the
+    // digest was being computed. Verify the full payload again before reuse.
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+      if (exact_identity_payload_equal(it->source_payload, payload)) {
+        auto hit = std::move(*it);
+        entries.erase(it);
+        entries.push_front(std::move(hit));
+        ++hit_count;
+        return entries.front().identity_payload;
+      }
+    }
+    ++miss_count;
+    while (!entries.empty() &&
+           (entries.size() >= static_cast<std::size_t>(
+                                  kMaxBrushHistoryIdentityCacheEntries) ||
+            retained_bytes + entry_bytes > kMaxBrushHistoryIdentityCacheMemoryBytes)) {
+      retained_bytes -= entries.back().retained_bytes;
+      entries.pop_back();
+      ++eviction_count;
+    }
+    entries.push_front({payload, identity, entry_bytes});
+    retained_bytes += entry_bytes;
+    return identity;
+  }
+
+  BrushHistoryIdentityCacheSnapshot snapshot() {
+    QMutexLocker lock(&mutex);
+    return BrushHistoryIdentityCacheSnapshot{
+        .entries = static_cast<int>(entries.size()),
+        .retained_bytes = retained_bytes,
+        .hit_count = hit_count,
+        .miss_count = miss_count,
+        .eviction_count = eviction_count,
+    };
+  }
+};
+
+BrushHistoryIdentityCache& brush_history_identity_cache() {
+  static BrushHistoryIdentityCache cache;
+  return cache;
+}
+
+QVariantMap brush_history_payload_identity(const QVariant& payload) {
+  return brush_history_identity_cache().identity_for(payload);
+}
+
+QVariant brush_strokes_payload_identity(const QVariant& payload) {
+  if (payload.metaType().id() != QMetaType::QVariantList) {
+    return brush_history_payload_identity(payload);
+  }
+  auto strokes = payload.toList();
+  bool compacted_samples = false;
+  for (auto& stroke_value : strokes) {
+    auto stroke = stroke_value.toMap();
+    const auto samples = stroke.value(QStringLiteral("samples"));
+    if (!contains_large_identity_payload(samples)) {
+      continue;
+    }
+    stroke.insert(
+        QStringLiteral("samples"),
+        brush_history_payload_identity(samples));
+    stroke_value = stroke;
+    compacted_samples = true;
+  }
+  return brush_history_payload_identity(compacted_samples ? QVariant(strokes) : payload);
 }
 
 QVariantMap paint_payload_identity(const QVariantMap& payload) {
@@ -241,6 +408,20 @@ QVariantMap compact_identity_entry(
   if (!mask_entry && !paint_payload.isEmpty() &&
       contains_large_identity_payload(paint_payload)) {
     entry.insert(QStringLiteral("paintTiles"), paint_payload_identity(paint_payload));
+  }
+  for (const auto& key : {
+           QStringLiteral("brushPoints"),
+           QStringLiteral("brushStrokes"),
+       }) {
+    const auto history = entry.value(key);
+    if (!history.isValid() || !contains_large_identity_payload(history)) {
+      continue;
+    }
+    entry.insert(
+        key,
+        key == QStringLiteral("brushStrokes")
+            ? brush_strokes_payload_identity(history)
+            : QVariant(brush_history_payload_identity(history)));
   }
   // QVariant maps retain immutable, implicitly shared payloads. Equality
   // detects edits (including binary masks) while repeated viewport queries
@@ -453,6 +634,10 @@ QString adjustment_patch_identity_json(
       identity_state,
       all_adjustment_groups(),
       AdjustmentPatchScope::AssetBound);
+}
+
+BrushHistoryIdentityCacheSnapshot brush_history_identity_cache_snapshot() {
+  return brush_history_identity_cache().snapshot();
 }
 
 AdjustmentPatchDecodeResult parse_adjustment_patch(

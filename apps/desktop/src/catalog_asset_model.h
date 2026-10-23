@@ -539,7 +539,10 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE void selectRelative(int offset);
   Q_INVOKABLE QStringList pickFiles(const QString& title = QStringLiteral("Choose Media Files")) const;
   Q_INVOKABLE QString pickFolder(const QString& title = QStringLiteral("Browse Media Folder")) const;
+  Q_INVOKABLE QString localFileUrlForPath(const QString& file_path) const;
+  Q_INVOKABLE QString commonDirectoryForFiles(const QStringList& file_paths) const;
   Q_INVOKABLE QString localPathForUrl(const QString& url) const;
+  Q_INVOKABLE bool localPathIsWithinRoot(const QString& path, const QString& root) const;
   Q_INVOKABLE QString parentFolderUrl(const QString& url) const;
   Q_INVOKABLE void createProject(const QString& name);
   Q_INVOKABLE void createProjectWithSelectedAssets(const QString& name);

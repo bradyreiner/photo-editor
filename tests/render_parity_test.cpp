@@ -123,6 +123,30 @@ QImage deterministic_source_image() {
   return image;
 }
 
+QImage smooth_jpeg_source_image() {
+  QImage image(64, 48, QImage::Format_ARGB32);
+  image.setColorSpace(photo_editor::desktop::preview_color_space());
+  for (int y = 0; y < image.height(); ++y) {
+    const auto vertical = static_cast<double>(y) /
+                          static_cast<double>(image.height() - 1);
+    for (int x = 0; x < image.width(); ++x) {
+      const auto horizontal = static_cast<double>(x) /
+                              static_cast<double>(image.width() - 1);
+      const auto red = static_cast<int>(
+          std::lround(48.0 + 108.0 * horizontal + 18.0 * vertical));
+      const auto green = static_cast<int>(
+          std::lround(58.0 + 34.0 * horizontal + 88.0 * vertical));
+      const auto blue = static_cast<int>(
+          std::lround(92.0 + 24.0 * horizontal + 52.0 * vertical));
+      image.setPixelColor(
+          x,
+          y,
+          QColor(red, green, blue, 255));
+    }
+  }
+  return image;
+}
+
 QImage render_canonical_test_output(
     const QImage& source,
     const photo_editor::desktop::EditRecipeState& state,
@@ -690,6 +714,7 @@ int main(int argc, char** argv) {
   }
 
   const auto source = deterministic_source_image();
+  const auto smooth_jpeg_source = smooth_jpeg_source_image();
   const auto state = deterministic_state();
   const auto target_space = photo_editor::desktop::preview_color_space();
   const auto shared_mask_definition = QVariantMap{
@@ -733,6 +758,49 @@ int main(int argc, char** argv) {
       shared_compiled_mask.segmentation_mask.size() != 48) {
     return fail(
         "one shared local-mask compiler must preserve identity, composition, brush, and output-raster intent");
+  }
+  const QByteArray committed_brush_matte(8 * 6, static_cast<char>(0x7a));
+  const QVariantList committed_brush_points{QVariantMap{
+      {QStringLiteral("x"), 0.5},
+      {QStringLiteral("y"), 0.5},
+      {QStringLiteral("size"), 0.25},
+  }};
+  const auto raster_backed_brush_definition = QVariantMap{
+      {QStringLiteral("kind"), QStringLiteral("brush")},
+      {QStringLiteral("operation"), QStringLiteral("add")},
+      {QStringLiteral("brushPoints"), committed_brush_points},
+      {QStringLiteral("segmentationData"), committed_brush_matte},
+      {QStringLiteral("segmentationWidth"), 8},
+      {QStringLiteral("segmentationHeight"), 6},
+  };
+  const auto raster_backed_compiled_brush =
+      photo_editor::desktop::compile_pipeline_local_mask(
+          raster_backed_brush_definition,
+          photo_editor::desktop::LocalMaskRasterPolicy::
+              RebuildEditableAtOutputResolution,
+          QSize(8, 6));
+  const auto raster_matte_matches =
+      raster_backed_compiled_brush.segmentation_mask.size() ==
+      static_cast<std::size_t>(committed_brush_matte.size()) &&
+      std::equal(
+          raster_backed_compiled_brush.segmentation_mask.cbegin(),
+          raster_backed_compiled_brush.segmentation_mask.cend(),
+          reinterpret_cast<const unsigned char*>(committed_brush_matte.constData()));
+  auto clone_brush_definition = raster_backed_brush_definition;
+  clone_brush_definition.insert(QStringLiteral("retouchMode"), QStringLiteral("clone"));
+  clone_brush_definition.insert(QStringLiteral("cloneSourceSet"), true);
+  const auto clone_compiled_brush =
+      photo_editor::desktop::compile_pipeline_local_mask(
+          clone_brush_definition,
+          photo_editor::desktop::LocalMaskRasterPolicy::
+              RebuildEditableAtOutputResolution,
+          QSize(8, 6));
+  if (!raster_backed_compiled_brush.brush_points.empty() ||
+      !raster_matte_matches || clone_compiled_brush.brush_points.size() != 1 ||
+      clone_compiled_brush.segmentation_mask !=
+          raster_backed_compiled_brush.segmentation_mask) {
+    return fail(
+        "raster-backed non-clone brushes must reuse the committed matte without compiling dab history, while clone retains its points");
   }
   auto missing_plan_telemetry =
       photo_editor::desktop::RenderBackendTelemetry{};
@@ -1235,23 +1303,35 @@ int main(int argc, char** argv) {
           .color_pipeline = &builtin_aces_config,
           .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
       });
-  const auto metal_output_lut =
-      builtin_aces_telemetry.output_lut.status == QStringLiteral("metal");
+  const auto gpu_output_lut =
+      builtin_aces_telemetry.output_lut.status == QStringLiteral("metal") ||
+      builtin_aces_telemetry.output_lut.status == QStringLiteral("cuda");
   if (builtin_aces_preview.isNull() ||
-      (metal_output_lut &&
+      (gpu_output_lut &&
        (builtin_aces_telemetry.output_lut.cpu_to_gpu_bytes <= 0 ||
         builtin_aces_telemetry.output_lut.gpu_to_cpu_bytes <= 0 ||
         builtin_aces_telemetry.output_lut.command_buffer_count != 1 ||
         builtin_aces_telemetry.output_lut.kernel_dispatch_count != 1)) ||
-      (!metal_output_lut &&
+      (!gpu_output_lut &&
        (builtin_aces_telemetry.output_lut.status !=
             QStringLiteral("exact-cpu-fallback") ||
         builtin_aces_telemetry.output_lut.cpu_to_gpu_bytes != 0 ||
         builtin_aces_telemetry.output_lut.gpu_to_cpu_bytes != 0 ||
         builtin_aces_telemetry.output_lut.command_buffer_count != 0 ||
         builtin_aces_telemetry.output_lut.kernel_dispatch_count != 0))) {
+    std::cerr << "ACES output LUT status="
+              << builtin_aces_telemetry.output_lut.status.toStdString()
+              << " cpu_to_gpu="
+              << builtin_aces_telemetry.output_lut.cpu_to_gpu_bytes
+              << " gpu_to_cpu="
+              << builtin_aces_telemetry.output_lut.gpu_to_cpu_bytes
+              << " commands="
+              << builtin_aces_telemetry.output_lut.command_buffer_count
+              << " dispatches="
+              << builtin_aces_telemetry.output_lut.kernel_dispatch_count
+              << '\n';
     return fail(
-        "built-in ACES publication must report a real Metal dispatch or an exact zero-GPU CPU fallback");
+        "built-in ACES publication must report a real GPU dispatch or an exact zero-GPU CPU fallback");
   }
   photo_editor::desktop::WorkingImageQImageTelemetry forced_cpu_aces_telemetry;
   const auto forced_cpu_aces_preview = photo_editor::desktop::qimage_from_working_image(
@@ -1265,6 +1345,7 @@ int main(int argc, char** argv) {
           .color_pipeline = &builtin_aces_config,
           .target = photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
           .allow_metal_output_lut = false,
+          .allow_cuda_output_lut = false,
       });
   if (forced_cpu_aces_preview.isNull() ||
       forced_cpu_aces_telemetry.output_lut.status !=
@@ -2081,6 +2162,83 @@ int main(int argc, char** argv) {
       photo_editor::pipeline::output_color_profile_from_name("sRGB");
   mixed_color_probe_config.export_output_profile =
       photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  auto selection_retouch_selection =
+      photo_editor::desktop::default_mask_definition(QStringLiteral("brush"), 1);
+  selection_retouch_selection.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  selection_retouch_selection.insert(QStringLiteral("maskSetId"), QStringLiteral("normalization-selection"));
+  selection_retouch_selection.insert(QStringLiteral("maskSetName"), QStringLiteral("Normalization Selection"));
+  selection_retouch_selection.insert(QStringLiteral("enabled"), true);
+  selection_retouch_selection.insert(QStringLiteral("segmentationData"), QByteArray(4, char(0x7f)));
+  selection_retouch_selection.insert(QStringLiteral("segmentationWidth"), 2);
+  selection_retouch_selection.insert(QStringLiteral("segmentationHeight"), 2);
+  auto selection_retouch_clone =
+      photo_editor::desktop::default_mask_definition(QStringLiteral("brush"), 2);
+  selection_retouch_clone.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+  selection_retouch_clone.insert(QStringLiteral("retouchMode"), QStringLiteral("clone"));
+  selection_retouch_clone.insert(QStringLiteral("committed"), true);
+  selection_retouch_clone.insert(QStringLiteral("cloneSourceSet"), true);
+  selection_retouch_clone.insert(QStringLiteral("segmentationData"), QByteArray(4, char(0xff)));
+  selection_retouch_clone.insert(QStringLiteral("segmentationWidth"), 2);
+  selection_retouch_clone.insert(QStringLiteral("segmentationHeight"), 2);
+  QVariantList selection_retouch_points;
+  selection_retouch_points.append(QVariantMap{
+      {QStringLiteral("x"), 0.25},
+      {QStringLiteral("y"), 0.75},
+      {QStringLiteral("size"), 0.1},
+      {QStringLiteral("flow"), 0.8},
+      {QStringLiteral("pressure"), 1.0},
+  });
+  selection_retouch_clone.insert(QStringLiteral("brushPoints"), selection_retouch_points);
+  auto selection_retouch_pending = selection_retouch_clone;
+  selection_retouch_pending.insert(QStringLiteral("id"), QStringLiteral("pending-clone"));
+  selection_retouch_pending.insert(QStringLiteral("committed"), false);
+  photo_editor::desktop::RenderEditState selection_retouch_state;
+  selection_retouch_state.mask_stack = QVariantList{
+      selection_retouch_selection,
+      selection_retouch_clone,
+      selection_retouch_pending,
+  };
+  QVariantMap selection_retouch_layer;
+  selection_retouch_layer.insert(QStringLiteral("id"), QStringLiteral("normalization-scoped-layer"));
+  selection_retouch_layer.insert(QStringLiteral("name"), QStringLiteral("Normalization Scoped Layer"));
+  selection_retouch_layer.insert(QStringLiteral("kind"), QStringLiteral("adjustment"));
+  selection_retouch_layer.insert(QStringLiteral("enabled"), true);
+  selection_retouch_layer.insert(QStringLiteral("opacity"), 1.0);
+  selection_retouch_layer.insert(QStringLiteral("selectionScoped"), true);
+  selection_retouch_layer.insert(
+      QStringLiteral("selectionMaskSetId"), QStringLiteral("normalization-selection"));
+  selection_retouch_state.layers.append(selection_retouch_layer);
+  const auto selection_retouch_expected_sets =
+      photo_editor::desktop::compile_pipeline_local_mask_sets(
+          selection_retouch_state.mask_stack,
+          photo_editor::desktop::DesktopRenderPurpose::Preview,
+          photo_editor::desktop::LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(2, 2));
+  const auto selection_retouch_expected_masks =
+      photo_editor::desktop::compile_pipeline_retouch_masks(
+          selection_retouch_state.mask_stack,
+          photo_editor::desktop::LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(2, 2));
+  const auto selection_retouch_compiled =
+      photo_editor::desktop::compile_desktop_pipeline_state(
+          selection_retouch_state,
+          nullptr,
+          mixed_color_probe_config,
+          photo_editor::desktop::DesktopRenderPurpose::Preview,
+          photo_editor::desktop::LocalMaskRasterPolicy::UseStoredRaster,
+          QSize(2, 2));
+  if (selection_retouch_expected_sets.size() != 1 ||
+      selection_retouch_expected_sets.front().sources.size() != 1 ||
+      selection_retouch_expected_masks.size() != 1 ||
+      selection_retouch_expected_masks.front().brush_points.size() != 1 ||
+      selection_retouch_compiled.local_mask_sets != selection_retouch_expected_sets ||
+      selection_retouch_compiled.retouch_masks != selection_retouch_expected_masks ||
+      selection_retouch_compiled.photo_layers.size() != 1 ||
+      selection_retouch_compiled.photo_layers.front().mask_data.size() != 4 ||
+      selection_retouch_compiled.photo_layers.front().mask_data.front() != 0x7f) {
+    return fail(
+        "combined pipeline state compilation must preserve selection and committed retouch mask parity after single-pass normalization");
+  }
   const auto mixed_color_probe_alpha = photo_editor::pipeline::rasterize_local_mask_set_alpha(
       mixed_color_probe_set,
       mixed_selection_working.width,
@@ -3652,8 +3810,11 @@ int main(int argc, char** argv) {
       photo_editor::desktop::preview_color_space(),
       QImage::Format_ARGB32,
       photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto custom_input_delta =
+      max_channel_delta(custom_input_render, embedded_input_render);
   if (custom_input_render.isNull() || embedded_input_render.isNull() ||
-      max_channel_delta(custom_input_render, embedded_input_render) > 2) {
+      custom_input_delta > 2) {
+    std::cerr << "custom input ICC output delta=" << custom_input_delta << '\n';
     return fail("a custom input ICC profile should override the image tag and match the same embedded profile");
   }
   auto missing_input_state = custom_input_state;
@@ -3876,18 +4037,22 @@ int main(int argc, char** argv) {
   auto output_path_case_count = 0;
   for (const auto& output_case : output_path_cases) {
     ++output_path_case_count;
+    const auto& output_source =
+        std::string_view(output_case.writer_format) == "jpg"
+            ? smooth_jpeg_source
+            : source;
     auto output_state = gpu_compatible_state();
     output_state.working_color_profile = QStringLiteral("Linear ProPhoto RGB");
     output_state.preview_color_space = output_case.output_profile;
     output_state.output_color_space = output_case.output_profile;
     const auto preview_render = photo_editor::desktop::render_output_image_with_backend(
-        source,
+        output_source,
         output_state,
         output_case.target_space,
         QImage::Format_ARGB32,
         photo_editor::desktop::RenderBackendPreference::CpuOnly);
     const auto export_render = photo_editor::desktop::render_output_image_with_backend(
-        source,
+        output_source,
         output_state,
         output_case.target_space,
         output_case.export_format,

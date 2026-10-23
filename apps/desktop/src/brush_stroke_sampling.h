@@ -4,6 +4,8 @@
 
 #include <QVector>
 
+#include <functional>
+
 namespace photo_editor::desktop {
 
 [[nodiscard]] double normalized_brush_dab_spacing(
@@ -21,6 +23,8 @@ namespace photo_editor::desktop {
     const BrushPreviewPoint& start, const BrushPreviewPoint& end, double t);
 
 [[nodiscard]] QVector<BrushPreviewPoint> resampled_committed_brush_stroke(
-    const QVector<BrushPreviewPoint>& stroke_points, double brush_spacing);
+    const QVector<BrushPreviewPoint>& stroke_points, double brush_spacing,
+    double image_aspect = 0.0,
+    std::function<bool()> is_cancelled = {});
 
 }  // namespace photo_editor::desktop

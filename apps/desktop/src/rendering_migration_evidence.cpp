@@ -4,6 +4,7 @@
 #include "hdr_avif_image_encoder.h"
 #include "qimage_color_conversion.h"
 #include "bounded_qimage_reader.h"
+#include "working_image.h"
 
 #include <algorithm>
 #include <array>
@@ -362,9 +363,7 @@ namespace {
       mapped_row[offset + 3U] = 1.0F;
     }
   }
-  mapped.setColorSpace(QColorSpace(
-      QColorSpace::Primaries::Bt2020,
-      QColorSpace::TransferFunction::Linear));
+  mapped.setColorSpace(linear_rec2020_color_space());
   return convert_tagged_qimage_color_space(
       mapped,
       QColorSpace(QColorSpace::SRgb),

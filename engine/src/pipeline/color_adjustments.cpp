@@ -268,7 +268,8 @@ bool apply_color_photographic_output_stage(
                     static_cast<std::size_t>(layer.mask_height) ||
             static_cast<std::int64_t>(layer.mask_width) * height !=
                 static_cast<std::int64_t>(layer.mask_height) * width)) ||
-          !layer.text_material.empty() ||
+          (!layer.text_material.empty() &&
+           layer.text_material != "none") ||
           layer.pixel_width <= 0 || layer.pixel_height <= 0 ||
           layer.pixels.size() != static_cast<std::size_t>(layer.pixel_width) *
                                      static_cast<std::size_t>(layer.pixel_height)) {

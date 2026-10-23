@@ -437,6 +437,16 @@ bool apply_export_color_pipeline_with_executor(
           engine_telemetry);
   if (!full_result.ok() ||
       !full_result.output.has_value()) {
+    if (backend_telemetry != nullptr) {
+      const auto stage = QString::fromStdString(
+          full_result.failure_stage);
+      const auto reason = QString::fromStdString(
+          full_result.failure_reason);
+      backend_telemetry->fallback_reason =
+          stage.isEmpty()
+              ? reason
+              : QStringLiteral("%1: %2").arg(stage, reason);
+    }
     return false;
   }
   if (backend_telemetry != nullptr) {
@@ -1119,52 +1129,6 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(
     local_mask.clone_scale = map_double_value(mask, QStringLiteral("cloneScale"), 1.0);
     local_mask.clone_rotation = map_double_value(mask, QStringLiteral("cloneRotation"), 0.0);
     local_mask.clone_aligned = map_bool_value(mask, QStringLiteral("cloneAligned"), true);
-    const auto points = mask.value(QStringLiteral("brushPoints")).toList();
-    local_mask.brush_points.reserve(static_cast<std::size_t>(points.size()));
-    for (const auto& point_value : points) {
-      const auto point = point_value.toMap();
-      local_mask.brush_points.push_back(photo_editor::pipeline::BrushPoint{
-          .x = map_double_value(point, QStringLiteral("x"), 0.5),
-          .y = map_double_value(point, QStringLiteral("y"), 0.5),
-          .size = map_double_value(point, QStringLiteral("size"), local_mask.brush_size),
-          .flow = map_double_value(point, QStringLiteral("flow"), local_mask.brush_flow),
-          .opacity = map_double_value(point, QStringLiteral("opacity"), 1.0),
-          .auto_mask_anchor_x = map_double_value(
-              point,
-              QStringLiteral("autoMaskAnchorX"),
-              map_double_value(point, QStringLiteral("x"), 0.5)),
-          .auto_mask_anchor_y = map_double_value(
-              point,
-              QStringLiteral("autoMaskAnchorY"),
-              map_double_value(point, QStringLiteral("y"), 0.5)),
-          .pressure = map_double_value(point, QStringLiteral("pressure"), 1.0),
-          .tilt_x = map_double_value(point, QStringLiteral("tiltX"), 0.0),
-          .tilt_y = map_double_value(point, QStringLiteral("tiltY"), 0.0),
-          .erase = map_bool_value(point, QStringLiteral("erase"), false),
-      });
-    }
-    // Freeze the source transform per stroke. Resetting a non-aligned stamp
-    // must not move the source of strokes already on the canvas.
-    if (local_mask.retouch_mode=="clone") {
-      std::size_t offset=0;
-      for (const auto& value : mask.value("brushStrokes").toList()) {
-        const auto stroke=value.toMap();
-        const auto settings=stroke.value("settings").toMap();
-        const auto count=static_cast<std::size_t>(stroke.value("samples").toList().size());
-        if (offset+count>local_mask.brush_points.size()) { local_mask.clone_strokes.clear(); break; }
-        photo_editor::pipeline::CloneStroke clone;
-        clone.points.assign(local_mask.brush_points.begin()+static_cast<std::ptrdiff_t>(offset),
-            local_mask.brush_points.begin()+static_cast<std::ptrdiff_t>(offset+count));
-        clone.source_x=settings.value("cloneSourceX",local_mask.clone_source_x).toDouble();
-        clone.source_y=settings.value("cloneSourceY",local_mask.clone_source_y).toDouble();
-        clone.offset_x=settings.value("cloneOffsetX",local_mask.clone_offset_x).toDouble();
-        clone.offset_y=settings.value("cloneOffsetY",local_mask.clone_offset_y).toDouble();
-        clone.scale=settings.value("cloneScale",local_mask.clone_scale).toDouble();
-        clone.rotation=settings.value("cloneRotation",local_mask.clone_rotation).toDouble();
-        local_mask.clone_strokes.push_back(std::move(clone)); offset+=count;
-      }
-      if (offset!=local_mask.brush_points.size()) local_mask.clone_strokes.clear();
-    }
     auto raster_mask = mask;
     bool version2 = false;
     for (const auto& stroke : mask.value(QStringLiteral("brushStrokes")).toList()) {
@@ -1183,9 +1147,68 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(
         output_size.isValid() &&
         seg_width >= output_size.width() &&
         seg_height >= output_size.height();
-    if (!version2 && raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution &&
-        !local_mask.brush_points.empty() && output_size.isValid() &&
-        !stored_raster_covers_output) {
+    const auto rebuild_legacy_brush =
+        !version2 &&
+        raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution &&
+        output_size.isValid() && !stored_raster_covers_output;
+    if (local_mask.retouch_mode == "clone" || rebuild_legacy_brush) {
+      const auto points = mask.value(QStringLiteral("brushPoints")).toList();
+      local_mask.brush_points.reserve(static_cast<std::size_t>(points.size()));
+      for (const auto& point_value : points) {
+        const auto point = point_value.toMap();
+        local_mask.brush_points.push_back(photo_editor::pipeline::BrushPoint{
+            .x = map_double_value(point, QStringLiteral("x"), 0.5),
+            .y = map_double_value(point, QStringLiteral("y"), 0.5),
+            .size = map_double_value(point, QStringLiteral("size"), local_mask.brush_size),
+            .flow = map_double_value(point, QStringLiteral("flow"), local_mask.brush_flow),
+            .opacity = map_double_value(point, QStringLiteral("opacity"), 1.0),
+            .auto_mask_anchor_x = map_double_value(
+                point,
+                QStringLiteral("autoMaskAnchorX"),
+                map_double_value(point, QStringLiteral("x"), 0.5)),
+            .auto_mask_anchor_y = map_double_value(
+                point,
+                QStringLiteral("autoMaskAnchorY"),
+                map_double_value(point, QStringLiteral("y"), 0.5)),
+            .pressure = map_double_value(point, QStringLiteral("pressure"), 1.0),
+            .tilt_x = map_double_value(point, QStringLiteral("tiltX"), 0.0),
+            .tilt_y = map_double_value(point, QStringLiteral("tiltY"), 0.0),
+            .erase = map_bool_value(point, QStringLiteral("erase"), false),
+        });
+      }
+    }
+    // Freeze the source transform per stroke. Resetting a non-aligned stamp
+    // must not move the source of strokes already on the canvas.
+    if (local_mask.retouch_mode == "clone") {
+      std::size_t offset = 0;
+      for (const auto& value : mask.value("brushStrokes").toList()) {
+        const auto stroke = value.toMap();
+        const auto settings = stroke.value("settings").toMap();
+        const auto count = static_cast<std::size_t>(
+            stroke.value("samples").toList().size());
+        if (offset + count > local_mask.brush_points.size()) {
+          local_mask.clone_strokes.clear();
+          break;
+        }
+        photo_editor::pipeline::CloneStroke clone;
+        clone.points.assign(
+            local_mask.brush_points.begin() + static_cast<std::ptrdiff_t>(offset),
+            local_mask.brush_points.begin() +
+                static_cast<std::ptrdiff_t>(offset + count));
+        clone.source_x = settings.value("cloneSourceX", local_mask.clone_source_x).toDouble();
+        clone.source_y = settings.value("cloneSourceY", local_mask.clone_source_y).toDouble();
+        clone.offset_x = settings.value("cloneOffsetX", local_mask.clone_offset_x).toDouble();
+        clone.offset_y = settings.value("cloneOffsetY", local_mask.clone_offset_y).toDouble();
+        clone.scale = settings.value("cloneScale", local_mask.clone_scale).toDouble();
+        clone.rotation = settings.value("cloneRotation", local_mask.clone_rotation).toDouble();
+        local_mask.clone_strokes.push_back(std::move(clone));
+        offset += count;
+      }
+      if (offset != local_mask.brush_points.size()) {
+        local_mask.clone_strokes.clear();
+      }
+    }
+    if (rebuild_legacy_brush && !local_mask.brush_points.empty()) {
       rebuild_brush_segmentation_at_output_resolution(&local_mask, output_size.width(), output_size.height());
     } else if (valid_segmentation_payload(seg_data, seg_width, seg_height)) {
       local_mask.segmentation_mask.resize(static_cast<std::size_t>(seg_data.size()));
@@ -1964,18 +1987,6 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         .shadows = layer_adjustment_value(layer, QStringLiteral("shadows")),
         .whites = layer_adjustment_value(layer, QStringLiteral("whites")),
         .blacks = layer_adjustment_value(layer, QStringLiteral("blacks")),
-        .brightness = layer_adjustment_value(layer, QStringLiteral("brightness")),
-        .filmic_shoulder = layer_adjustment_value(layer, QStringLiteral("filmicShoulder")),
-        .filmic_toe = layer_adjustment_value(layer, QStringLiteral("filmicToe")),
-        .adaptive_contrast = layer_adjustment_value(layer, QStringLiteral("adaptiveContrast")),
-        .levels_black_point = layer_adjustment_value(layer, QStringLiteral("levelsBlackPoint")),
-        .levels_gamma = layer_adjustment_value(layer, QStringLiteral("levelsGamma")),
-        .levels_white_point = layer_adjustment_value(layer, QStringLiteral("levelsWhitePoint")),
-        .zone_deep_shadows = layer_adjustment_value(layer, QStringLiteral("zoneDeepShadows")),
-        .zone_shadows = layer_adjustment_value(layer, QStringLiteral("zoneShadows")),
-        .zone_midtones = layer_adjustment_value(layer, QStringLiteral("zoneMidtones")),
-        .zone_lights = layer_adjustment_value(layer, QStringLiteral("zoneLights")),
-        .zone_highlights = layer_adjustment_value(layer, QStringLiteral("zoneHighlights")),
         .temperature = layer_adjustment_value(layer, QStringLiteral("temperature")),
         .tint = layer_adjustment_value(layer, QStringLiteral("tint")),
         .texture = layer_adjustment_value(layer, QStringLiteral("texture")),
@@ -2036,6 +2047,18 @@ std::vector<photo_editor::pipeline::PhotoLayer> compile_pipeline_photo_layers(
         .saturation_shift = layer_adjustment_value(layer, QStringLiteral("saturationShift")),
         .colorize_hue = layer_adjustment_value(layer, QStringLiteral("colorizeHue")),
         .colorize_strength = layer_adjustment_value(layer, QStringLiteral("colorizeStrength")),
+        .brightness = layer_adjustment_value(layer, QStringLiteral("brightness")),
+        .filmic_shoulder = layer_adjustment_value(layer, QStringLiteral("filmicShoulder")),
+        .filmic_toe = layer_adjustment_value(layer, QStringLiteral("filmicToe")),
+        .adaptive_contrast = layer_adjustment_value(layer, QStringLiteral("adaptiveContrast")),
+        .levels_black_point = layer_adjustment_value(layer, QStringLiteral("levelsBlackPoint")),
+        .levels_gamma = layer_adjustment_value(layer, QStringLiteral("levelsGamma")),
+        .levels_white_point = layer_adjustment_value(layer, QStringLiteral("levelsWhitePoint")),
+        .zone_deep_shadows = layer_adjustment_value(layer, QStringLiteral("zoneDeepShadows")),
+        .zone_shadows = layer_adjustment_value(layer, QStringLiteral("zoneShadows")),
+        .zone_midtones = layer_adjustment_value(layer, QStringLiteral("zoneMidtones")),
+        .zone_lights = layer_adjustment_value(layer, QStringLiteral("zoneLights")),
+        .zone_highlights = layer_adjustment_value(layer, QStringLiteral("zoneHighlights")),
         .curve_shadows = layer_adjustment_value(layer, QStringLiteral("curveShadows")),
         .curve_darks = layer_adjustment_value(layer, QStringLiteral("curveDarks")),
         .curve_lights = layer_adjustment_value(layer, QStringLiteral("curveLights")),
@@ -3886,7 +3909,8 @@ QImage render_output_image_with_backend_impl(
     QImage device_image(
         working.width,
         working.height,
-        working_publication_format(output_format));
+        working_publication_format(
+            output_format, working.width, working.height));
     if (device_image.isNull() ||
         !pack_working_rows_for_publication(
             working,
@@ -3924,6 +3948,7 @@ QImage render_output_image_with_backend_impl(
                                 : nullptr,
           .target = photo_editor::pipeline::GamutWarningTarget::ExportOutput,
           .allow_metal_output_lut = backend_preference != RenderBackendPreference::CpuOnly,
+          .allow_cuda_output_lut = backend_preference != RenderBackendPreference::CpuOnly,
       });
   if (cancellation.cancelled() || output_image.isNull()) {
     if (telemetry != nullptr && !output_transform_telemetry.failure_reason.isEmpty()) {

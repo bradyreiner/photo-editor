@@ -90,11 +90,15 @@ if tool == "pgrep":
         self.assertEqual(calls[-1]["args"], ["a photo.jpg", "--literal", "$(not-a-command)"])
         self.assertIn(r"checkout \[local\] \(test\)", calls[-2]["args"][-1])
         pattern = calls[-2]["args"][-1]
+        # pgrep uses POSIX ERE character classes, while Python's re reports
+        # `[[:space:]]` as a nested-set warning. Normalize only that token for
+        # the equivalent Python-side path-boundary assertions below.
+        python_pattern = pattern.replace("[[:space:]]", r"\s")
         for preset in ("dev-macos-debug", "release-macos"):
             executable = self.root / "build" / preset / "apps/desktop/Looksy.app/Contents/MacOS/Looksy"
-            self.assertIsNotNone(re.search(pattern, str(executable)))
-            self.assertIsNone(re.search(pattern, str(executable) + "-other"))
-        self.assertIsNone(re.search(pattern, "/other-checkout/build/release-macos/apps/desktop/Looksy.app/Contents/MacOS/Looksy"))
+            self.assertIsNotNone(re.search(python_pattern, str(executable)))
+            self.assertIsNone(re.search(python_pattern, str(executable) + "-other"))
+        self.assertIsNone(re.search(python_pattern, "/other-checkout/build/release-macos/apps/desktop/Looksy.app/Contents/MacOS/Looksy"))
 
     def test_reuses_configuration_and_can_force_refresh(self):
         self.assertEqual(self.run_launcher("--build-only").returncode, 0)

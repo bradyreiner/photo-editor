@@ -12,6 +12,9 @@
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #endif
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+#include "photo_editor/pipeline/cuda/cuda_pipeline_backend.h"
+#endif
 
 #include <QColorSpace>
 #include <QElapsedTimer>
@@ -160,6 +163,7 @@ struct WorkingImageOutputTransform final {
   photo_editor::pipeline::Aces2OutputLutQuality aces2_lut_quality =
       photo_editor::pipeline::Aces2OutputLutQuality::Final;
   bool allow_metal_output_lut = true;
+  bool allow_cuda_output_lut = true;
 };
 
 [[nodiscard]] inline QColorSpace encoded_device_color_space(
@@ -294,7 +298,15 @@ struct WorkingImageOutputTransform final {
 }
 
 [[nodiscard]] inline QImage::Format working_publication_format(
-    QImage::Format output_format) {
+    QImage::Format output_format,
+    int width,
+    int height) {
+  if (output_format == QImage::Format_ARGB32 && width == 1 && height == 1) {
+    // Qt 6.7's one-pixel RGBA16F -> ARGB32 conversion can corrupt otherwise
+    // valid colors. Keep this narrow publication in float32 until Qt performs
+    // the final conversion; normal-sized output remains on the half-float path.
+    return QImage::Format_RGBA32FPx4;
+  }
   return high_precision_publication_format(output_format)
              ? QImage::Format_RGBA32FPx4
              : QImage::Format_RGBA16FPx4;
@@ -344,7 +356,12 @@ struct WorkingImageOutputTransform final {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   return QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Linear);
 #else
-  return linear_srgb_color_space();
+  return QColorSpace(
+      QPointF(0.3127, 0.3290),
+      QPointF(0.7080, 0.2920),
+      QPointF(0.1700, 0.7970),
+      QPointF(0.1310, 0.0460),
+      QColorSpace::TransferFunction::Linear);
 #endif
 }
 
@@ -359,8 +376,21 @@ struct WorkingImageOutputTransform final {
       output_format,
       QImageColorConversionPurpose::OutputPublication);
 #else
+  auto conversion_source = image;
+  if (high_precision_publication_format(output_format) ||
+      output_format == QImage::Format_RGBA16FPx4 ||
+      output_format == QImage::Format_RGBA16FPx4_Premultiplied) {
+    // Qt versions before 6.8 cannot request the converted image format in the
+    // same operation. Promote first so an 8-bit source is not color-converted
+    // into an 8-bit intermediate before the working buffer is widened.
+    conversion_source = image.convertToFormat(QImage::Format_RGBA32FPx4);
+    if (conversion_source.isNull()) {
+      return {};
+    }
+    conversion_source.setColorSpace(image.colorSpace());
+  }
   auto converted = convert_tagged_qimage_color_space(
-      image,
+      conversion_source,
       target_color_space,
       QImageColorConversionPurpose::OutputPublication);
   if (converted.isNull()) {
@@ -1066,7 +1096,8 @@ inline void schedule_icc_transform_lut_prewarm(
   if (telemetry != nullptr) {
     pack_timer.start();
   }
-  const auto profile_format = working_publication_format(output_format);
+  const auto profile_format = working_publication_format(
+      output_format, bounded.width(), bounded.height());
   QImage profile_image(bounded.width(), bounded.height(), profile_format);
   if (profile_image.isNull()) {
     if (telemetry != nullptr) {
@@ -1170,11 +1201,37 @@ inline void schedule_icc_transform_lut_prewarm(
           output_transform.aces2_lut_quality);
   if (aces_lut.ready()) {
     auto output_lut_applied_on_metal = false;
+    auto output_lut_applied_on_cuda = false;
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+    auto cuda_telemetry = photo_editor::pipeline::ColorAdjustmentTelemetry{};
+    auto& cuda =
+        photo_editor::pipeline::cuda::shared_cuda_pipeline_backend();
+    if (output_transform.allow_cuda_output_lut && cuda.available()) {
+      output_lut_applied_on_cuda = cuda.apply_aces2_output_lut_target(
+          &output.pixels,
+          output.width,
+          output.height,
+          aces_lut,
+          &cuda_telemetry,
+          cancellation);
+    }
+    if (telemetry != nullptr) {
+      telemetry->output_lut.cpu_to_gpu_bytes =
+          cuda_telemetry.gpu_cpu_to_gpu_bytes;
+      telemetry->output_lut.gpu_to_cpu_bytes =
+          cuda_telemetry.gpu_gpu_to_cpu_bytes;
+      telemetry->output_lut.command_buffer_count =
+          cuda_telemetry.gpu_command_buffer_count;
+      telemetry->output_lut.kernel_dispatch_count =
+          cuda_telemetry.gpu_kernel_dispatch_count;
+    }
+#endif
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
     auto metal_telemetry = photo_editor::pipeline::ColorAdjustmentTelemetry{};
     auto& metal =
         photo_editor::pipeline::metal::shared_metal_pipeline_backend();
-    if (output_transform.allow_metal_output_lut && metal.available()) {
+    if (!output_lut_applied_on_cuda && output_transform.allow_metal_output_lut &&
+        metal.available()) {
       output_lut_applied_on_metal = metal.apply_aces2_output_lut_target(
           &output.pixels,
           output.width,
@@ -1193,17 +1250,21 @@ inline void schedule_icc_transform_lut_prewarm(
           metal_telemetry.gpu_kernel_dispatch_count;
     }
 #endif
-    if (!output_lut_applied_on_metal) {
+    if (!output_lut_applied_on_cuda && !output_lut_applied_on_metal) {
       photo_editor::pipeline::
           apply_aces2_output_lut_target_application(
               output.pixels,
               aces_lut);
     }
     if (telemetry != nullptr) {
-      telemetry->color_processor += output_lut_applied_on_metal
+      telemetry->color_processor += output_lut_applied_on_cuda
+                                        ? QStringLiteral(" Final LUT CUDA")
+                                    : output_lut_applied_on_metal
                                         ? QStringLiteral(" Final LUT Metal")
                                         : QStringLiteral(" Final LUT CPU");
-      telemetry->output_lut.status = output_lut_applied_on_metal
+      telemetry->output_lut.status = output_lut_applied_on_cuda
+                                         ? QStringLiteral("cuda")
+                                     : output_lut_applied_on_metal
                                          ? QStringLiteral("metal")
                                          : QStringLiteral("exact-cpu-fallback");
     }
@@ -1212,6 +1273,10 @@ inline void schedule_icc_transform_lut_prewarm(
         output.pixels,
         *output_transform.color_pipeline,
         output_transform.target);
+    if (telemetry != nullptr) {
+      telemetry->color_processor += QStringLiteral(" Final Direct CPU");
+      telemetry->output_lut.status = QStringLiteral("exact-cpu-fallback");
+    }
   }
   if (cancellation.cancelled()) {
     return {};
@@ -1224,7 +1289,8 @@ inline void schedule_icc_transform_lut_prewarm(
   if (telemetry != nullptr) {
     pack_timer.start();
   }
-  const auto publication_format = working_publication_format(output_format);
+  const auto publication_format = working_publication_format(
+      output_format, output.width, output.height);
   QImage linear_image(output.width, output.height, publication_format);
   if (linear_image.isNull()) {
     if (telemetry != nullptr) {
@@ -1299,7 +1365,8 @@ inline void schedule_icc_transform_lut_prewarm(
     pack_timer.start();
   }
   const auto publication_format =
-      working_publication_format(output_format);
+      working_publication_format(
+          output_format, bounded.width(), bounded.height());
   QImage encoded_image(
       bounded.width(),
       bounded.height(),
@@ -1397,7 +1464,10 @@ inline void schedule_icc_transform_lut_prewarm(
     pack_timer.start();
   }
   QImage linear_image(
-      working.width, working.height, working_publication_format(output_format));
+      working.width,
+      working.height,
+      working_publication_format(
+          output_format, working.width, working.height));
   if (linear_image.isNull()) {
     return {};
   }
@@ -1509,7 +1579,10 @@ inline void schedule_icc_transform_lut_prewarm(
     pack_timer.start();
   }
   QImage linear_image(
-      bounded.width(), bounded.height(), working_publication_format(output_format));
+      bounded.width(),
+      bounded.height(),
+      working_publication_format(
+          output_format, bounded.width(), bounded.height()));
   if (linear_image.isNull()) {
     return {};
   }

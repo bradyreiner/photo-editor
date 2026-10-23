@@ -19,40 +19,47 @@ QImage thumbnail_image(const QVariantMap& entry) {
   return QImage::fromData(QByteArray::fromBase64(source.section(',', 1).toLatin1()), "PNG");
 }
 
-bool verify_source(const QString& path) {
-  auto request = make_thumbnail_refresh_queue_request(ThumbnailRefreshQueueRequestFacts{
-      .asset_id = QStringLiteral("thumbnail-proof"),
-      .file_path = QStringLiteral("/deliberately-unrelated-base.dng"),
-      .photo_layers = {QVariantMap{{"id", "source"}, {"kind", "source"}, {"sourcePath", path}}},
-      .generation = 1,
-      .photo_layer_thumbnail_dirty = true,
-      .cancellation = std::make_shared<std::atomic_bool>(false)});
-  const auto layer = request.photo_layers.first().toMap();
-  if (!rendered_photo_layer_thumbnail_source(layer).isEmpty()) return false;
-  const auto renderers = make_thumbnail_worker_renderers({});
-  const auto run = [&renderers](const ThumbnailRefreshQueueRequest& snapshot) {
-    QEventLoop loop;
-    QFutureWatcher<ThumbnailRefreshQueueResult> watcher;
-    QObject::connect(&watcher, &QFutureWatcher<ThumbnailRefreshQueueResult>::finished,
-        &loop, &QEventLoop::quit);
-    watcher.setFuture(QtConcurrent::run([snapshot, renderers] {
-      return compute_thumbnail_refresh_queue_result(snapshot, renderers);
-    }));
-    loop.exec();
-    return watcher.result();
-  };
-  auto result = run(request);
-  if (!result.success || result.photo_layer_thumbnail_entries.size() != 1) return false;
-  const auto ui_thread = QStringLiteral("0x%1").arg(
-      reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16);
-  if (result.worker_thread.isEmpty() || result.worker_thread == ui_thread) return false;
-  const auto entry = result.photo_layer_thumbnail_entries.first().toMap();
-  const auto actual = thumbnail_image(entry);
-  if (actual.size() != QSize(64, 64) || actual.colorSpace() != QColorSpace(QColorSpace::SRgb) ||
-      !entry.value("thumbnailReady").toBool() || !entry.value("thumbnailColorManaged").toBool() ||
-      entry.value("thumbnailPreviewRenderMode").toString() != "source_neutral_srgb") return false;
+ThumbnailRefreshQueueResult run_thumbnail_request_worker(
+    ThumbnailRefreshQueueRequest snapshot,
+    ThumbnailRefreshQueueRenderers renderers) {
+  return compute_thumbnail_refresh_queue_result(snapshot, renderers);
+}
 
-  // Compare against the canonical neutral output, with this file's own metadata.
+ThumbnailRefreshQueueResult run_thumbnail_request(
+    const ThumbnailRefreshQueueRequest& snapshot,
+    const ThumbnailRefreshQueueRenderers& renderers) {
+  QEventLoop loop;
+  QFutureWatcher<ThumbnailRefreshQueueResult> watcher;
+  QObject::connect(
+      &watcher,
+      &QFutureWatcher<ThumbnailRefreshQueueResult>::finished,
+      &loop,
+      &QEventLoop::quit);
+  watcher.setFuture(QtConcurrent::run(run_thumbnail_request_worker, snapshot, renderers));
+  loop.exec();
+  return watcher.result();
+}
+
+int maximum_rgba8_delta(const QImage& candidate, const QImage& reference) {
+  const auto left = candidate.convertToFormat(QImage::Format_RGBA8888);
+  const auto right = reference.convertToFormat(QImage::Format_RGBA8888);
+  if (left.isNull() || right.size() != left.size()) return -1;
+  auto delta = 0;
+  for (int y = 0; y < left.height(); ++y) {
+    for (int x = 0; x < left.width() * 4; ++x) {
+      delta = std::max(
+          delta,
+          std::abs(
+              int(left.constScanLine(y)[x]) -
+              int(right.constScanLine(y)[x])));
+    }
+  }
+  return delta;
+}
+
+bool matches_canonical_thumbnail(
+    const QString& path,
+    const QImage& actual) {
   EditRecipeState neutral;
   QImage decoded;
   photo_editor::pipeline::DecodedImageMetadata metadata;
@@ -60,48 +67,105 @@ bool verify_source(const QString& path) {
   if (path.endsWith(".jpg")) {
     // Independent ICC conversion oracle for neutral display-referred input.
     const auto icc_reference = scaled_layer_thumbnail_image(
-        decoded.convertedToColorSpace(QColorSpace(QColorSpace::SRgb)))
-        .convertToFormat(QImage::Format_RGBA8888);
-    const auto pixels = actual.convertToFormat(QImage::Format_RGBA8888);
-    int icc_delta = 0;
-    if (icc_reference.size() != pixels.size()) return false;
-    for (int y = 0; y < pixels.height(); ++y)
-      for (int x = 0; x < pixels.width() * 4; ++x)
-        icc_delta = std::max(icc_delta, std::abs(int(pixels.constScanLine(y)[x]) - int(icc_reference.constScanLine(y)[x])));
+        decoded.convertedToColorSpace(QColorSpace(QColorSpace::SRgb)));
+    const auto icc_delta = maximum_rgba8_delta(actual, icc_reference);
     std::cout << "Independent neutral JPEG ICC max RGB8 delta=" << icc_delta << '\n';
-    if (icc_delta > 2) return false;
+    if (icc_delta < 0 || icc_delta > 2) return false;
   }
-  const auto reference = scaled_layer_thumbnail_image(metadata.is_raw ? render_output_image_with_backend(
-      decoded, neutral, QColorSpace(QColorSpace::SRgb), QImage::Format_ARGB32,
-      RenderBackendPreference::CpuOnly, &metadata)
-      : convert_tagged_qimage_color_space(decoded, QColorSpace(QColorSpace::SRgb),
-            QImage::Format_ARGB32, QImageColorConversionPurpose::EvidenceMeasurement));
-  const auto left = actual.convertToFormat(QImage::Format_RGBA8888);
-  const auto right = reference.convertToFormat(QImage::Format_RGBA8888);
-  if (left.isNull() || right.size() != left.size()) return false;
-  int delta = 0;
-  for (int y = 0; y < left.height(); ++y)
-    for (int x = 0; x < left.width() * 4; ++x)
-      delta = std::max(delta, std::abs(int(left.constScanLine(y)[x]) - int(right.constScanLine(y)[x])));
-  std::cout << path.toStdString() << " canonical max RGB8 delta=" << delta
-            << " worker=" << result.worker_thread.toStdString() << '\n';
-  if (delta != 0) return false;
+  const auto reference = scaled_layer_thumbnail_image(
+      metadata.is_raw
+          ? render_output_image_with_backend(
+                decoded,
+                neutral,
+                QColorSpace(QColorSpace::SRgb),
+                QImage::Format_ARGB32,
+                RenderBackendPreference::CpuOnly,
+                &metadata)
+          : convert_tagged_qimage_color_space(
+                decoded,
+                QColorSpace(QColorSpace::SRgb),
+                QImage::Format_ARGB32,
+                QImageColorConversionPurpose::EvidenceMeasurement));
+  const auto delta = maximum_rgba8_delta(actual, reference);
+  std::cout << path.toStdString() << " canonical max RGB8 delta=" << delta << '\n';
+  return delta == 0;
+}
 
+bool verify_thumbnail_request_controls(
+    ThumbnailRefreshQueueRequest request,
+    const ThumbnailRefreshQueueRenderers& renderers,
+    const QImage& actual) {
   // Base-image edits and working/output policy must not contaminate content thumbnails.
   request.state.exposure = 4;
   request.state.temperature = 9000;
   request.state.working_color_profile = QStringLiteral("Linear sRGB");
   request.state.photographic_rendering_model = QStringLiteral("legacy-oklch-v1");
-  result = run(request);
-  if (!result.success || thumbnail_image(result.photo_layer_thumbnail_entries.first().toMap()) != actual)
+  auto result = run_thumbnail_request(request, renderers);
+  if (!result.success ||
+      thumbnail_image(result.photo_layer_thumbnail_entries.first().toMap()) != actual) {
     return false;
+  }
   request.cancellation->store(true);
-  result = run(request);
-  if (!result.cancelled || result.success || !result.photo_layer_thumbnail_entries.isEmpty()) return false;
+  result = run_thumbnail_request(request, renderers);
+  if (!result.cancelled || result.success ||
+      !result.photo_layer_thumbnail_entries.isEmpty()) {
+    return false;
+  }
   request.cancellation->store(false);
   // Missing worker support must fail closed, not publish a generic placeholder.
   result = compute_thumbnail_refresh_queue_result(request, {});
-  return !result.success && result.photo_layer_thumbnail_failed && result.photo_layer_thumbnail_entries.isEmpty();
+  return !result.success && result.photo_layer_thumbnail_failed &&
+         result.photo_layer_thumbnail_entries.isEmpty();
+}
+
+ThumbnailRefreshQueueRequest make_source_thumbnail_request(const QString& path) {
+  ThumbnailRefreshQueueRequestFacts facts;
+  facts.asset_id = QStringLiteral("thumbnail-proof");
+  facts.file_path = QStringLiteral("/deliberately-unrelated-base.dng");
+  QVariantMap layer;
+  layer.insert(QStringLiteral("id"), QStringLiteral("source"));
+  layer.insert(QStringLiteral("kind"), QStringLiteral("source"));
+  layer.insert(QStringLiteral("sourcePath"), path);
+  facts.photo_layers.push_back(layer);
+  facts.generation = 1;
+  facts.photo_layer_thumbnail_dirty = true;
+  facts.cancellation = std::make_shared<std::atomic_bool>(false);
+  return make_thumbnail_refresh_queue_request(std::move(facts));
+}
+
+QString current_thread_label() {
+  return QStringLiteral("0x%1").arg(
+      reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16);
+}
+
+bool has_expected_thumbnail_result(
+    const ThumbnailRefreshQueueResult& result,
+    const QString& ui_thread,
+    QImage* actual) {
+  if (!result.success || result.photo_layer_thumbnail_entries.size() != 1 ||
+      result.worker_thread.isEmpty() || result.worker_thread == ui_thread) {
+    return false;
+  }
+  const auto entry = result.photo_layer_thumbnail_entries.first().toMap();
+  *actual = thumbnail_image(entry);
+  return actual->size() == QSize(64, 64) &&
+         actual->colorSpace() == QColorSpace(QColorSpace::SRgb) &&
+         entry.value("thumbnailReady").toBool() &&
+         entry.value("thumbnailColorManaged").toBool() &&
+         entry.value("thumbnailPreviewRenderMode").toString() == "source_neutral_srgb";
+}
+
+bool verify_source(const QString& path) {
+  auto request = make_source_thumbnail_request(path);
+  const auto layer = request.photo_layers.first().toMap();
+  if (!rendered_photo_layer_thumbnail_source(layer).isEmpty()) return false;
+  const auto renderers = make_thumbnail_worker_renderers({});
+  const auto result = run_thumbnail_request(request, renderers);
+  QImage actual;
+  if (!has_expected_thumbnail_result(result, current_thread_label(), &actual)) return false;
+  std::cout << "worker=" << result.worker_thread.toStdString() << '\n';
+  return matches_canonical_thumbnail(path, actual) &&
+         verify_thumbnail_request_controls(request, renderers, actual);
 }
 }  // namespace
 

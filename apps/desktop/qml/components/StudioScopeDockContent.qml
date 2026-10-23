@@ -71,7 +71,7 @@ ColumnLayout {
             y = below + height <= overlay.height - 8
                 ? below : Math.max(8, anchor.y - settingsButton.height - height - 6)
         }
-        width: 370
+        implicitWidth: Math.min(370, Math.max(0, (parent ? parent.width : 386) - 16))
         padding: 14
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {

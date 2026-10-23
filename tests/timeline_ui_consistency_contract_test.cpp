@@ -1420,7 +1420,7 @@ int main() {
             "export:bounded-sampled-curve-shared-options|duration:ripple-downstream|"
             "persistence:undo-save-reopen") ||
         !contains(timeline_view, "root.animatedClipValueAtLocal(") ||
-        !contains(timeline_view, "pitchCompensation:") ||
+        !contains(timeline_view, "setPlayerPitchCompensation(") ||
         !contains(timeline_view, "timelineDocument.addSelectedClipRetimePoint(") ||
         !contains(timeline_view, "timelineDocument.addSelectedClipRetimeHold(local, 1.0)") ||
         !contains(timeline_view, "timelineDocument.applySelectedClipRetimePreset(\"reset\")") ||
@@ -1966,8 +1966,10 @@ int main() {
         !contains(effects_panel, "function titlePositionValue(axis)") ||
         !contains(effects_panel, "function setTitlePosition(axis, value)") ||
         !contains(effects_panel, "function animatedClipValue(clip, parameter, fallbackValue)") ||
+        !contains(effects_panel, "const valueProvider = root.animatedClipValueProvider") ||
+        !contains(effects_panel, "if (typeof valueProvider === \"function\")") ||
         !contains(effects_panel,
-                  "root.animatedClipValueProvider(clip, parameter, fallbackValue)") ||
+                  "valueProvider.call(root, clip, parameter, fallbackValue)") ||
         !contains(effects_panel, "const offset = root.animatedClipValue(") ||
         !contains(timeline_view,
                   "animatedClipValueProvider: function(clip, parameter, fallbackValue)") ||
@@ -2402,7 +2404,7 @@ int main() {
         !contains(audio_output, "double* true_peak_left") ||
         !contains(audio_output, "publish_true_peak_segment") ||
         !contains(audio_output, "void TimelineAudioOutput::resetMeters()") ||
-        !contains(timeline_view, "audioBufferOutput: layerAudioOutput.bufferOutput") ||
+        !contains(timeline_view, "layerAudioOutput.attachPlayer(audioPlayer)") ||
         !contains(timeline_view, "root.publishTrackMeter(") ||
         !contains(timeline_view, "meterVisible: root.sequencePlaying") ||
         !contains(track_header,
@@ -2661,9 +2663,7 @@ int main() {
       }
     }
 
-    std::regex item_pattern(
-        R"(^- \[([ x])\] ([0-9]+)\.)",
-        std::regex_constants::ECMAScript | std::regex_constants::multiline);
+    const std::regex item_pattern(R"((?:^|\n)- \[([ x])\] ([0-9]+)\.)");
     int expected = 1;
     for (auto it = std::sregex_iterator(checklist.begin(), checklist.end(), item_pattern);
          it != std::sregex_iterator(); ++it) {

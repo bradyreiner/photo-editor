@@ -282,6 +282,8 @@ struct ColorPlanExecutionOptions final {
   // Preview-only opt-in. Keep the CPU reference/export route unchanged and
   // materialize pixels for downstream proof, device transforms, and scopes.
   bool allow_metal_photographic_output = false;
+  bool allow_cuda_scene_adjustments = false;
+  bool allow_cuda_photographic_output = false;
 };
 [[nodiscard]] RenderExecutionResult
 execute_color_plan(

@@ -1,5 +1,6 @@
 #include "gaussian_capture_preparation.h"
 #include "photo_render_utils.h"
+#include "render_plan_store.h"
 #include "raw_image_decoder.h"
 #include "capture_camera_metadata.h"
 #include "gaussian_camera_priors.h"
@@ -11,6 +12,8 @@
 #include <QFileInfo>
 #include <QDateTime>
 #include <QImageReader>
+#include <QJsonDocument>
+#include <QJsonParseError>
 
 namespace photo_editor::desktop {
 QVariantMap validate_prepared_gaussian_timed_capture(const QString& project,
@@ -130,9 +133,32 @@ QVariantMap prepare_gaussian_capture(const QStringList& sources, const QString& 
     photo_editor::pipeline::DecodedImageMetadata metadata;
     if (!decode_source_image(source, &decoded, maximum_edge, state, &metadata, cancellation))
       return {{"ok", false}, {"error", QStringLiteral("Cannot decode capture: %1").arg(source)}};
-    const auto rendered = render_output_image_with_backend(decoded, state, QColorSpace(QColorSpace::SRgb),
-        QImage::Format_RGB888, RenderBackendPreference::CpuOnly, &metadata, nullptr, {},
-        photo_editor::pipeline::RemovalQuality::Final, RenderOutputPolicy::DisplayReferred, nullptr, cancellation);
+    const auto admission = RenderPlanStore::shared().admit(
+        QStringLiteral("gaussian-capture:%1").arg(QFileInfo(source).absoluteFilePath()),
+        source,
+        state,
+        decoded.size(),
+        photo_editor::pipeline::RenderPurpose::Export,
+        photo_editor::pipeline::DisplayRenderingTarget::SrgbSimulation,
+        std::nullopt,
+        &metadata);
+    if (!admission.admitted || !admission.plan.has_value()) {
+      return {{"ok", false}, {"error", admission.error.isEmpty()
+          ? QStringLiteral("Capture could not be admitted for canonical rendering.")
+          : admission.error}};
+    }
+    const auto rendered = render_output_image(
+        decoded,
+        state,
+        QColorSpace(QColorSpace::SRgb),
+        QImage::Format_RGB888,
+        &metadata,
+        nullptr,
+        {},
+        photo_editor::pipeline::RemovalQuality::Final,
+        RenderOutputPolicy::DisplayReferred,
+        &*admission.plan,
+        cancellation);
     const auto relative = QStringLiteral("images/frame_%1.png").arg(index, 6, 10, QLatin1Char('0'));
     const auto target = QDir(project).filePath(relative);
     const QFileInfo after(source);

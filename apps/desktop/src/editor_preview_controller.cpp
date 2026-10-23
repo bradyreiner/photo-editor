@@ -81,6 +81,7 @@
 #include "preview_color_pipeline_config.h"
 #include "preview_display_publication.h"
 #include "preview_output_color_space.h"
+#include "qimage_color_conversion.h"
 #include "preset_registry.h"
 #include "render_executor_service.h"
 #include "retained_preview_surface.h"
@@ -1772,6 +1773,7 @@ struct TiledWorkingImageRenderResult final {
   qint64 output_tile_cache_elapsed_ms = 0;
   QStringList completed_render_stages;
   bool photographic_output_executor_cache_hit = false;
+  QString failure_reason;
 };
 
 struct WorkingTileOverride final {
@@ -8757,7 +8759,12 @@ QImage preset_thumbnail_fixture_source_image() {
                          .convertToFormat(QImage::Format_ARGB32);
     return thumbnail;
   }();
-  if (!photograph.isNull()) return photograph.convertedToColorSpace(preview_target_color_space());
+  if (!photograph.isNull()) {
+    return convert_tagged_qimage_color_space(
+        photograph,
+        preview_target_color_space(),
+        QImageColorConversionPurpose::OutputPublication);
+  }
   constexpr auto width = 96;
   constexpr auto height = 64;
   QImage image(width, height, QImage::Format_ARGB32);
@@ -10326,12 +10333,18 @@ void schedule_color_transform_prewarm(
         const auto aces2_active =
             photo_editor::pipeline::
                 photographic_rendering_model_uses_aces2(
-                    config
-                        .photographic_rendering_model) &&
+                    config.photographic_rendering_model) &&
             config.render_intent ==
                 photo_editor::pipeline::
                     RenderIntent::Perceptual;
-        if (aces2_active) {
+        const auto official_aces2_lut_active =
+            photo_editor::pipeline::
+                photographic_rendering_model_uses_official_aces2(
+                    config.photographic_rendering_model) &&
+            photo_editor::pipeline::
+                aces2_official_output_transform_available() &&
+            aces2_active;
+        if (official_aces2_lut_active) {
           for (const auto quality : {
                    photo_editor::pipeline::
                        Aces2OutputLutQuality::
@@ -12280,6 +12293,12 @@ execute_preview_publication_plan(
       .allow_metal_photographic_output =
           request.use_in_memory_preview && !request.full_resolution &&
           !qEnvironmentVariableIsSet("PHOTO_EDITOR_DISABLE_METAL_PREVIEW"),
+      .allow_cuda_scene_adjustments =
+          request.use_in_memory_preview &&
+          !qEnvironmentVariableIsSet("PHOTO_EDITOR_DISABLE_CUDA_PREVIEW"),
+      .allow_cuda_photographic_output =
+          request.use_in_memory_preview &&
+          !qEnvironmentVariableIsSet("PHOTO_EDITOR_DISABLE_CUDA_PREVIEW"),
   };
   auto native_suffix_telemetry = photo_editor::pipeline::ColorAdjustmentTelemetry{};
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
@@ -12543,74 +12562,57 @@ TiledWorkingImageRenderResult render_working_image_for_request(
             canonical_has_proof_stage,
             canonical_has_device_stage,
             cancellation);
-    if (!consolidated.valid()) {
-      return {};
-    }
-    publication_working =
-        std::move(consolidated.working);
-    publication_pixels =
-        &publication_working;
-    publication_completed_stages =
-        std::move(
-            consolidated
-                .completed_render_stages);
-    publication_gamut_warning_mask =
-        std::move(
-            consolidated
-                .gamut_warning_mask);
-    publication_photographic_output_stage_elapsed_ms =
-        consolidated.photographic_output_stage_elapsed_ms;
-    publication_native_surface = std::move(consolidated.native_output_surface);
-    publication_native_output_lut = std::move(consolidated.output_lut);
-    photographic_output_executor_cache_hit =
-        consolidated.executor_cache_hit;
-    if (!consolidated.scope_working.isNull()) {
-      scope_working =
-          std::move(
-              consolidated.scope_working);
-      scope_surface_stage =
+    const auto consolidated_valid = consolidated.valid();
+    if (!consolidated_valid) {
+      // Optimized publication is optional. Preserve the already-rendered
+      // working image and let the exact CPU publication path below finish the
+      // preview when a native/GPU suffix cannot be produced.
+      publication_completed_stages.clear();
+      publication_native_surface.reset();
+      publication_native_output_lut = {};
+    } else {
+      publication_working =
+          std::move(consolidated.working);
+      publication_pixels =
+          &publication_working;
+      publication_completed_stages =
           std::move(
               consolidated
-                  .scope_surface_stage);
+                  .completed_render_stages);
+      publication_gamut_warning_mask =
+          std::move(
+              consolidated
+                  .gamut_warning_mask);
+      publication_photographic_output_stage_elapsed_ms =
+          consolidated.photographic_output_stage_elapsed_ms;
+      publication_native_surface = std::move(consolidated.native_output_surface);
+      publication_native_output_lut = std::move(consolidated.output_lut);
+      photographic_output_executor_cache_hit =
+          consolidated.executor_cache_hit;
+      if (!consolidated.scope_working.isNull()) {
+        scope_working =
+            std::move(
+                consolidated.scope_working);
+        scope_surface_stage =
+            std::move(
+                consolidated
+                    .scope_surface_stage);
+      }
     }
-    publication_color_pipeline = nullptr;
-    publication_encoded_device_profile =
-        consolidated.encoded_device_pixels
-            ? &color_pipeline
-                   .preview_icc_profile_asset
-            : nullptr;
-    using photo_editor::pipeline::ColorPrimaries;
-    switch (color_pipeline
-                .preview_output_profile
-                .color_space.primaries) {
-      case ColorPrimaries::Srgb:
-      case ColorPrimaries::Rec709:
-        publication_working_profile =
-            color_pipeline.preview_output_profile
-                        .color_space.primaries ==
-                    ColorPrimaries::Rec709
-                ? QStringLiteral("Rec.709")
-                : QStringLiteral("sRGB");
-        break;
-      case ColorPrimaries::DisplayP3:
-        publication_working_profile =
-            QStringLiteral("Display P3");
-        break;
-      case ColorPrimaries::Rec2020:
-        publication_working_profile =
-            QStringLiteral("Rec.2020");
-        break;
-      case ColorPrimaries::ProPhotoRgb:
-        publication_working_profile =
-            QStringLiteral("ProPhoto RGB");
-        break;
-      case ColorPrimaries::Unknown:
-      case ColorPrimaries::AdobeRgb:
-      case ColorPrimaries::SonySGamut3:
-      case ColorPrimaries::SonySGamut3Cine:
-      case ColorPrimaries::AcesAp0:
-      case ColorPrimaries::AcesAp1:
-        break;
+    if (consolidated_valid) {
+      publication_color_pipeline = nullptr;
+      publication_encoded_device_profile =
+          consolidated.encoded_device_pixels
+              ? &color_pipeline
+                     .preview_icc_profile_asset
+              : nullptr;
+      // The consolidated plan's pixels have crossed Publish and are encoded
+      // for the resolved preview output profile. Do not leave the source
+      // working profile on this surface: the remaining QImage pack must treat
+      // those values as destination-encoded, including profiles whose engine
+      // primaries are not represented by the hand-maintained enum switch.
+      publication_working_profile = QString::fromStdString(
+          color_pipeline.preview_output_profile.profile_name);
     }
   }
   if (publication_native_surface != nullptr) {
@@ -13354,10 +13356,18 @@ BrushRasterCommitResult compute_brush_raster_commit_result(
     if (cancellation.cancelled()) {
       return finish_cancelled();
     }
+    // Canonicalize the released path here, off the UI thread. The live raster
+    // remains append-only for pointer latency; this residual-distance pass
+    // makes the committed matte independent of event subdivision.
     const auto committed_stroke =
-        mask.value(QStringLiteral("toolRole")).toString() == QStringLiteral("retouch")
-            ? resampled_committed_brush_stroke(stroke_points, request.brush_spacing)
-            : stroke_points;  // The live and committed matte use exactly the same samples.
+        resampled_committed_brush_stroke(
+            stroke_points,
+            request.brush_spacing,
+            request.image_aspect,
+            [&cancellation]() { return cancellation.cancelled(); });
+    if (cancellation.cancelled()) {
+      return finish_cancelled();
+    }
     if (committed_stroke.isEmpty()) {
       continue;
     }
@@ -14496,7 +14506,7 @@ bool apply_color_adjustments(
   }
   if (telemetry != nullptr) {
     telemetry->backend = QStringLiteral("cpu");
-    telemetry->fallback_reason = QStringLiteral("metal_not_compiled");
+    telemetry->fallback_reason.clear();
   }
   photo_editor::pipeline::ColorAdjustmentTelemetry engine_telemetry;
   QElapsedTimer pipeline_timer;
@@ -14512,6 +14522,10 @@ bool apply_color_adjustments(
       &engine_telemetry,
       std::move(decode_stage))) {
     if (telemetry != nullptr) {
+      if (telemetry->fallback_reason.isEmpty()) {
+        telemetry->fallback_reason =
+            QStringLiteral("canonical_preview_pipeline_failed");
+      }
       telemetry->pipeline_elapsed_ms = pipeline_timer.elapsed();
     }
     return false;
@@ -14591,6 +14605,11 @@ bool apply_color_adjustments(
           *adjusted_image,
           request,
           state);
+  if (telemetry != nullptr && !rendered_has_image_or_patch(rendered)) {
+    telemetry->fallback_reason = rendered.failure_reason.isEmpty()
+                                     ? QStringLiteral("preview_publication_failed")
+                                     : rendered.failure_reason;
+  }
   record_retained_surface_materialization(adjusted_image.get(), telemetry);
   if (telemetry != nullptr &&
       !telemetry->canonical_scope_stage_image
@@ -17898,7 +17917,7 @@ QVariantMap EditorPreviewController::colorTransformDiagnostics() const {
       rendered_tile_memory.bytes +
       foreground_memory.bytes +
       mask_tile_memory.bytes +
-      scaled_mask_memory.bytes +
+      scaled_mask_memory.total_bytes +
       mask_alpha_memory_bytes +
       thumbnail_cache_session_.entryBytes() +
       active_mask_preview_bytes +
@@ -18047,11 +18066,23 @@ QVariantMap EditorPreviewController::colorTransformDiagnostics() const {
            {QStringLiteral("scaledMasks"),
             QVariantMap{
                 {QStringLiteral("bytes"),
-                 scaled_mask_memory.bytes},
+                 scaled_mask_memory.total_bytes},
                 {QStringLiteral("entries"),
-                 scaled_mask_memory.entries},
+                 scaled_mask_memory.total_entries},
                 {QStringLiteral("ceilingBytes"),
                  kMaxScaledMaskMatteCacheMemoryBytes},
+                {QStringLiteral("ceilingEntries"),
+                 kMaxScaledMaskMatteCacheEntries},
+                {QStringLiteral("resampledEntries"),
+                 scaled_mask_memory.entries},
+                {QStringLiteral("brushReplayEntries"),
+                 scaled_mask_memory.brush_replay_entries},
+                {QStringLiteral("brushReplayBytes"),
+                 scaled_mask_memory.brush_replay_bytes},
+                {QStringLiteral("brushReplayHits"),
+                 scaled_mask_memory.brush_replay_hit_count},
+                {QStringLiteral("brushReplayMisses"),
+                 scaled_mask_memory.brush_replay_miss_count},
             }},
            {QStringLiteral("compositeMasks"),
             QVariantMap{
@@ -19838,8 +19869,9 @@ QStringList EditorPreviewController::pastePhotoLayers(int above_index, bool in_p
   for (int i = 0; i < pasted.size(); ++i) next.layers.insert(insertion + i, pasted.at(i));
   for (const auto& value : remap_photo_clipboard_ids(copied->state.mask_stack, ids).toList())
     next.mask_stack.push_back(rebase_photo_clipboard_mask(value.toMap(), copied->canvas, destination, dx, dy));
-  const auto json = serialize_edit_recipe_json(next);
-  if (!validate_edit_recipe_json(json).valid) {
+  const auto adjustment_patch = serialize_adjustment_patch_json(
+      next, all_adjustment_groups(), AdjustmentPatchScope::AssetBound);
+  if (!parse_adjustment_patch_json(adjustment_patch).ok()) {
     const auto error = QStringLiteral("The pasted layer dependencies could not be restored.");
     setStatus(error);
     emit photoLayerClipboardOperationFinished(QStringLiteral("paste"), 0, error);
@@ -29564,7 +29596,12 @@ bool EditorPreviewController::setPhotoLayerShapeTexture(int index, const QString
   if (image.isNull()) return false;
   if (image.width() > 1024 || image.height() > 1024)
     image = image.scaled(QSize(1024, 1024), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-  if (image.colorSpace().isValid()) image = image.convertedToColorSpace(QColorSpace(QColorSpace::SRgb));
+  if (image.colorSpace().isValid()) {
+    image = convert_tagged_qimage_color_space(
+        image,
+        QColorSpace(QColorSpace::SRgb),
+        QImageColorConversionPurpose::DecodeNormalization);
+  }
   else image.setColorSpace(QColorSpace(QColorSpace::SRgb));
   QByteArray encoded;
   QBuffer buffer(&encoded);
@@ -39874,6 +39911,7 @@ void EditorPreviewController::schedulePendingBrushCommit(PendingBrushCommit comm
         active_request.mask_id == commit.mask_id &&
         std::abs(active_request.hardness - commit.hardness) <= kSettingTolerance &&
         std::abs(active_request.brush_spacing - commit.brush_spacing) <= kSettingTolerance &&
+        std::abs(active_request.image_aspect - commit.image_aspect) <= kSettingTolerance &&
         std::abs(active_request.feather - commit.feather) <= kSettingTolerance &&
         std::abs(active_request.auto_mask_tolerance - commit.auto_mask_tolerance) <=
             kSettingTolerance &&
@@ -39893,6 +39931,7 @@ void EditorPreviewController::schedulePendingBrushCommit(PendingBrushCommit comm
       replay_commit.undo_state_valid = active_request.undo_state_valid;
       replay_commit.undo_label = active_request.undo_label;
       replay_commit.brush_spacing = active_request.brush_spacing;
+      replay_commit.image_aspect = active_request.image_aspect;
       replay_commit.feather = active_request.feather;
       replay_commit.hardness = active_request.hardness;
       replay_commit.auto_mask_tolerance = active_request.auto_mask_tolerance;
@@ -39936,6 +39975,7 @@ void EditorPreviewController::processNextPendingBrushCommit() {
            base.mask_id == candidate.mask_id &&
            std::abs(base.hardness - candidate.hardness) <= kSettingTolerance &&
            std::abs(base.brush_spacing - candidate.brush_spacing) <= kSettingTolerance &&
+           std::abs(base.image_aspect - candidate.image_aspect) <= kSettingTolerance &&
            std::abs(base.feather - candidate.feather) <= kSettingTolerance &&
            std::abs(base.auto_mask_tolerance - candidate.auto_mask_tolerance) <= kSettingTolerance &&
            base.auto_mask == candidate.auto_mask &&
@@ -40032,6 +40072,7 @@ void EditorPreviewController::processNextPendingBrushCommit() {
       .undo_state_valid = commit.undo_state_valid,
       .undo_label = commit.undo_label,
       .brush_spacing = commit.brush_spacing,
+      .image_aspect = commit.image_aspect,
       .feather = commit.feather,
       .hardness = commit.hardness,
       .auto_mask_tolerance = commit.auto_mask_tolerance,
@@ -40099,6 +40140,7 @@ void EditorPreviewController::publishBrushRasterCommitResult(
       // Preserve edits made after pointer release when this delayed stroke is undone.
       replay.undo_state = current; replay.undo_state_valid = request.undo_state_valid;
       replay.undo_label = request.undo_label; replay.brush_spacing = request.brush_spacing;
+      replay.image_aspect = request.image_aspect;
       replay.feather = request.feather; replay.hardness = request.hardness; replay.auto_mask = request.auto_mask;
       replay.auto_mask_tolerance = request.auto_mask_tolerance; replay.protect_edges = request.protect_edges;
       replay.live_preview_elapsed_ms = request.live_preview_elapsed_ms;
@@ -40315,6 +40357,17 @@ void EditorPreviewController::endActiveBrushStroke() {
   }
   commit.undo_label = QStringLiteral("%1 stroke").arg(brush_label_name);
   commit.brush_spacing = activeMaskBrushSpacing();
+  if (commit.mask.value(QStringLiteral("toolRole")).toString() !=
+          QStringLiteral("retouch") && source_size_cache_.isValid()) {
+    // addBrushPoint() has already refreshed the per-controller size cache;
+    // capture the cropped geometry now without decoding on the UI thread.
+    const auto cropped_size =
+        crop_rect_for_image(source_size_cache_, currentState()).size();
+    if (cropped_size.isValid()) {
+      commit.image_aspect = static_cast<double>(cropped_size.width()) /
+          static_cast<double>(cropped_size.height());
+    }
+  }
   commit.feather = activeMaskFeather();
   commit.hardness = activeMaskBrushHardness();
   commit.auto_mask = activeMaskBrushAutoMask();
@@ -40331,8 +40384,11 @@ void EditorPreviewController::endActiveBrushStroke() {
   brush_stroke_undo_state_valid_ = false;
   active_brush_auto_mask_anchor_valid_ = false;
   active_brush_live_points_.clear();
-  ++*brush_live_preview_generation_;
-  pending_brush_live_preview_points_.clear();
+  // Drop the last incremental raster/native frame while keeping the immutable
+  // raw samples above available as the release-to-commit fallback. The cached
+  // frame may lag the final pointer sample, so it must not remain publishable
+  // while the worker canonicalizes and commits the complete path.
+  clearActiveBrushLivePreview();
   if (brush_stroke_state_changed) emit brushStrokeActiveChanged();
   emit activeBrushStrokeChanged();
   schedulePendingBrushCommit(std::move(commit));
@@ -43719,10 +43775,6 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
               ? preview_viewport_patch_max_edge_
               : 0,
       .draft_interactive = draft_interactive,
-      .reuse_layer_transform_prefix = draft_interactive &&
-          history_service_.transactionActive() &&
-          last_edit_intent_.operation == QStringLiteral("photo_layer_transform") &&
-          last_render_graph_resolution_.dirty_domain == QStringLiteral("layers_composite"),
       .allow_native_srgb_surface =
           display_preview_texture_ != nullptr &&
           display_preview_texture_->supportsNativeOutputSurface() &&
@@ -43731,6 +43783,10 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
       .allow_native_device_surface = display_preview_texture_ != nullptr && display_preview_texture_->supportsNativeOutputSurface(),
       .require_cpu_preview_image = rendering_upgrade_preview_active_ ||
           (diagnostic_overlays_requested_ && (state.soft_proof_enabled || diagnostic_native_readback_failed_)),
+      .reuse_layer_transform_prefix = draft_interactive &&
+          history_service_.transactionActive() &&
+          last_edit_intent_.operation == QStringLiteral("photo_layer_transform") &&
+          last_render_graph_resolution_.dirty_domain == QStringLiteral("layers_composite"),
       // Regional paint needs an immutable display base, not float CPU working pixels.
       .require_cpu_display_image = compare_mode_ ||
           std::any_of(state.layers.cbegin(), state.layers.cend(), [](const QVariant& value) {
@@ -44686,6 +44742,7 @@ EditState EditorPreviewController::currentState() const {
       .highlight_reconstruction_mode = highlight_reconstruction_mode_,
       .highlight_reconstruction_model = highlight_reconstruction_model_,
       .chromatic_adaptation_method = chromatic_adaptation_method_,
+      .raw_demosaic_quality = raw_demosaic_quality_,
       .raw_exposure = raw_exposure_,
       .raw_boost = raw_boost_,
       .raw_shadow_boost = raw_shadow_boost_,
@@ -44695,7 +44752,6 @@ EditState EditorPreviewController::currentState() const {
       .raw_hot_dead_pixel_cleanup = raw_hot_dead_pixel_cleanup_,
       .raw_false_color_suppression = raw_false_color_suppression_,
       .raw_highlight_recovery = raw_highlight_recovery_,
-      .raw_demosaic_quality = raw_demosaic_quality_,
       .raw_gamut_mapping = raw_gamut_mapping_,
       .raw_lens_correction = raw_lens_correction_,
       .raw_white_balance_override = raw_white_balance_override_,

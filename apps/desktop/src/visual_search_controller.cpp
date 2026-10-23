@@ -2,6 +2,7 @@
 #include "visual_search_index.h"
 #include "agent_model_artifact.h"
 #include "agent_runtime_paths.h"
+#include "qimage_color_conversion.h"
 
 #include <QBuffer>
 #include <QColorSpace>
@@ -88,7 +89,10 @@ QVariantMap prepare_image(const QVariantMap& asset) {
     auto image = reader.read();
     if (image.isNull()) continue;
     if (image.colorSpace().isValid() && image.colorSpace() != QColorSpace(QColorSpace::SRgb)) {
-      image = image.convertedToColorSpace(QColorSpace::SRgb);
+      image = convert_tagged_qimage_color_space(
+          image,
+          QColorSpace(QColorSpace::SRgb),
+          QImageColorConversionPurpose::DecodeNormalization);
     }
     if (image.isNull()) continue;
     image = image.scaled(768, 768, Qt::KeepAspectRatio, Qt::SmoothTransformation);

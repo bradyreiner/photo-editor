@@ -9,6 +9,7 @@
 #include "photo_render_utils.h"
 #include "render_executor_service.h"
 #include "rendering_migration_evidence.h"
+#include "working_image.h"
 
 #include <array>
 
@@ -726,9 +727,7 @@ assess_rendering_migration_inventory_asset(
           QStringLiteral("rec2100-hlg"),
           QStringLiteral("HDR HLG AVIF")},
   };
-  const auto linear_rec2020 = QColorSpace(
-      QColorSpace::Primaries::Bt2020,
-      QColorSpace::TransferFunction::Linear);
+  const auto linear_rec2020 = linear_rec2020_color_space();
   for (const auto& [target_identity, export_preset] : hdr_targets) {
     const auto settings =
         export_image_settings_for_preset(export_preset);

@@ -4,6 +4,7 @@
 #include "timeline_foreground_matte.h"
 #include "timeline_processed_frame_cache.h"
 #include "timeline_video_grade_runtime.h"
+#include "qimage_color_conversion.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_lut_program.h"
 #include "photo_editor/pipeline/color_pipeline.h"
@@ -61,6 +62,40 @@ constexpr std::size_t kParsedCubeLutCacheEntryLimit = 32U;
 constexpr int kRec709ColorProfileSampleCount = 4097;
 constexpr std::size_t kProcessedVideoFrameCacheBudgetBytes = 128U * 1024U * 1024U;
 constexpr std::size_t kProcessedVideoFrameCacheEntryLimit = 240U;
+
+QtVideo::Rotation video_surface_rotation(const QVideoFrameFormat& format) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+  return format.rotation();
+#else
+  Q_UNUSED(format)
+  return QtVideo::Rotation::None;
+#endif
+}
+
+QVideoFrame video_frame_from_image(const QImage& image) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+  return QVideoFrame(image);
+#else
+  if (image.isNull()) {
+    return {};
+  }
+  const auto rgba = image.convertToFormat(QImage::Format_RGBA8888);
+  QVideoFrame frame(QVideoFrameFormat(
+      rgba.size(), QVideoFrameFormat::Format_RGBA8888));
+  if (!frame.map(QVideoFrame::WriteOnly)) {
+    return {};
+  }
+  const auto bytes_per_row = qMin(frame.bytesPerLine(0), rgba.bytesPerLine());
+  for (auto y = 0; y < rgba.height(); ++y) {
+    std::memcpy(
+        frame.bits(0) + static_cast<qsizetype>(y) * frame.bytesPerLine(0),
+        rgba.constScanLine(y),
+        static_cast<std::size_t>(bytes_per_row));
+  }
+  frame.unmap();
+  return frame;
+#endif
+}
 
 TimelineProcessedFrameCache& processed_video_frame_cache() {
   static TimelineProcessedFrameCache cache(
@@ -171,9 +206,10 @@ QColorSpace video_frame_rgb_color_space(const QVideoFrameFormat& format) {
   }
   auto primaries = QColorSpace::Primaries::SRgb;
   auto use_bt601_primaries = false;
+  auto use_bt2020_primaries = false;
   switch (source_space) {
     case QVideoFrameFormat::ColorSpace_BT2020:
-      primaries = QColorSpace::Primaries::Bt2020;
+      use_bt2020_primaries = true;
       break;
     case QVideoFrameFormat::ColorSpace_AdobeRgb:
       primaries = QColorSpace::Primaries::AdobeRgb;
@@ -185,34 +221,51 @@ QColorSpace video_frame_rgb_color_space(const QVideoFrameFormat& format) {
     case QVideoFrameFormat::ColorSpace_Undefined:
       break;
   }
-  auto bt601_primary_points = QColorSpace::PrimaryPoints{};
+  auto custom_white_point = QPointF{};
+  auto custom_red_point = QPointF{};
+  auto custom_green_point = QPointF{};
+  auto custom_blue_point = QPointF{};
   if (use_bt601_primaries) {
-    bt601_primary_points.whitePoint = QPointF(0.3127, 0.3290);
+    custom_white_point = QPointF(0.3127, 0.3290);
     if (format.frameHeight() <= 576) {
-      bt601_primary_points.redPoint = QPointF(0.630, 0.340);
-      bt601_primary_points.greenPoint = QPointF(0.310, 0.595);
-      bt601_primary_points.bluePoint = QPointF(0.155, 0.070);
+      custom_red_point = QPointF(0.630, 0.340);
+      custom_green_point = QPointF(0.310, 0.595);
+      custom_blue_point = QPointF(0.155, 0.070);
     } else {
-      bt601_primary_points.redPoint = QPointF(0.640, 0.330);
-      bt601_primary_points.greenPoint = QPointF(0.290, 0.600);
-      bt601_primary_points.bluePoint = QPointF(0.150, 0.060);
+      custom_red_point = QPointF(0.640, 0.330);
+      custom_green_point = QPointF(0.290, 0.600);
+      custom_blue_point = QPointF(0.150, 0.060);
     }
+  }
+  if (use_bt2020_primaries) {
+    custom_white_point = QPointF(0.3127, 0.3290);
+    custom_red_point = QPointF(0.7080, 0.2920);
+    custom_green_point = QPointF(0.1700, 0.7970);
+    custom_blue_point = QPointF(0.1310, 0.0460);
   }
   const auto with_primaries = [&](QColorSpace::TransferFunction transfer,
                                   float gamma = 0.0F) {
-    return use_bt601_primaries
-               ? QColorSpace(bt601_primary_points, transfer, gamma)
-               : QColorSpace(primaries, transfer, gamma);
+    if (use_bt601_primaries || use_bt2020_primaries) {
+      return QColorSpace(
+          custom_white_point,
+          custom_red_point,
+          custom_green_point,
+          custom_blue_point,
+          transfer,
+          gamma);
+    }
+    return QColorSpace(primaries, transfer, gamma);
   };
   const auto with_rec709_transfer_table = [&]() {
     const auto& transfer_table = rec709_video_transfer_table();
-    return use_bt601_primaries
-               ? QColorSpace(bt601_primary_points.whitePoint,
-                             bt601_primary_points.redPoint,
-                             bt601_primary_points.greenPoint,
-                             bt601_primary_points.bluePoint,
-                             transfer_table)
-               : QColorSpace(primaries, transfer_table);
+    if (use_bt601_primaries || use_bt2020_primaries) {
+      return QColorSpace(custom_white_point,
+                         custom_red_point,
+                         custom_green_point,
+                         custom_blue_point,
+                         transfer_table);
+    }
+    return QColorSpace(primaries, transfer_table);
   };
 
   switch (format.colorTransfer()) {
@@ -223,15 +276,23 @@ QColorSpace video_frame_rgb_color_space(const QVideoFrameFormat& format) {
     case QVideoFrameFormat::ColorTransfer_Gamma28:
       return with_primaries(QColorSpace::TransferFunction::Gamma, 2.8F);
     case QVideoFrameFormat::ColorTransfer_ST2084:
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
       return QColorSpace::NamedColorSpace::Bt2100Pq;
+#else
+      return with_primaries(QColorSpace::TransferFunction::Linear);
+#endif
     case QVideoFrameFormat::ColorTransfer_STD_B67:
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
       return QColorSpace::NamedColorSpace::Bt2100Hlg;
+#else
+      return with_primaries(QColorSpace::TransferFunction::Linear);
+#endif
     case QVideoFrameFormat::ColorTransfer_Unknown:
       if (source_space == QVideoFrameFormat::ColorSpace_AdobeRgb) {
         return QColorSpace::NamedColorSpace::AdobeRgb;
       }
       if (source_space == QVideoFrameFormat::ColorSpace_BT2020) {
-        return QColorSpace::NamedColorSpace::Bt2020;
+        return with_rec709_transfer_table();
       }
       return with_rec709_transfer_table();
     case QVideoFrameFormat::ColorTransfer_BT709:
@@ -1015,7 +1076,7 @@ QString processed_video_frame_cache_key(
       QString::number(static_cast<int>(format.colorSpace())),
       QString::number(static_cast<int>(format.colorTransfer())),
       QString::number(static_cast<int>(format.colorRange())),
-      QString::number(static_cast<int>(format.rotation())),
+      QString::number(static_cast<int>(video_surface_rotation(format))),
       QString::number(static_cast<int>(frame.rotation())),
       QString::number(format.isMirrored()),
       QString::number(frame.mirrored()),
@@ -1910,7 +1971,7 @@ TimelineProcessedVideoFrame process_video_frame(
     target_size = QSize(kFallbackPreviewWidth, kFallbackPreviewHeight);
   }
   const auto surface_format = frame.surfaceFormat();
-  const auto surface_rotation = surface_format.rotation();
+  const auto surface_rotation = video_surface_rotation(surface_format);
   const auto frame_rotation = frame.rotation();
   const auto total_rotation =
       (rotation_degrees(surface_rotation) + rotation_degrees(frame_rotation)) % 360;
@@ -2105,8 +2166,10 @@ TimelineProcessedVideoFrame process_video_frame(
     }
     if (image.colorSpace().isValid() &&
         image.colorSpace() != rec709_video_signal_color_space()) {
-      auto rec709_image = image.convertedToColorSpace(
-          rec709_video_signal_color_space());
+      auto rec709_image = convert_tagged_qimage_color_space(
+          image,
+          rec709_video_signal_color_space(),
+          QImageColorConversionPurpose::DecodeNormalization);
       if (!rec709_image.isNull()) {
         image = std::move(rec709_image);
       } else if (conversion_warning.isEmpty()) {
@@ -2597,7 +2660,7 @@ TimelinePlaybackController::TimelinePlaybackController(
     : QObject(parent), timeline_document_(timeline_document) {
   native_media_enabled_ = !qEnvironmentVariableIsSet("PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS");
   if (native_media_enabled_) {
-    player_.setAudioBufferOutput(audio_output_.bufferOutput());
+    audio_output_.attachPlayer(&player_);
     player_.setVideoSink(&video_sink_);
     connect(
         &video_sink_,
@@ -4850,7 +4913,11 @@ void TimelinePlaybackController::syncScenePreviewFrame() {
     }
     return;
   }
-  auto frame = QVideoFrame(image.convertToFormat(QImage::Format_RGBA8888));
+  auto frame = video_frame_from_image(image);
+  if (!frame.isValid()) {
+    setErrorString(QStringLiteral("Scene preview frame could not be prepared for playback."));
+    return;
+  }
   frame.setStartTime(source_timestamp_us);
   scene_preview_frame_key_ = frame_key;
   const auto was_injecting_scene_preview_frame = injecting_scene_preview_frame_;

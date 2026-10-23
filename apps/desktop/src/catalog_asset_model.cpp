@@ -454,6 +454,26 @@ QString normalize_local_path(const QString& path) {
   return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
 }
 
+Qt::CaseSensitivity local_path_case_sensitivity() {
+#ifdef Q_OS_WIN
+  return Qt::CaseInsensitive;
+#else
+  return Qt::CaseSensitive;
+#endif
+}
+
+bool local_path_is_within_root(const QString& path, const QString& root) {
+  const auto normalized_path = QDir::fromNativeSeparators(QDir::cleanPath(path));
+  const auto normalized_root = QDir::fromNativeSeparators(QDir::cleanPath(root));
+  if (normalized_path.isEmpty() || normalized_root.isEmpty()) return false;
+  const auto sensitivity = local_path_case_sensitivity();
+  if (normalized_path.compare(normalized_root, sensitivity) == 0) return true;
+  const auto prefix = normalized_root.endsWith(QLatin1Char('/'))
+                          ? normalized_root
+                          : normalized_root + QLatin1Char('/');
+  return normalized_path.startsWith(prefix, sensitivity);
+}
+
 QString stable_prepared_catalog_source_path(const QString& path) {
   const auto normalized = normalize_local_path(path);
   if (normalized.isEmpty()) return {};
@@ -3339,13 +3359,11 @@ std::shared_ptr<const ImportPreflightScan> scan_import_files(const ImportPreflig
   const auto cancelled = [&] { return request.cancelled->load(std::memory_order_relaxed); };
   if (cancelled()) return {};
   scan->root_available = !request.root.isEmpty() && QFileInfo::exists(request.root);
-  const auto prefix = request.root.endsWith(QDir::separator())
-      ? request.root : request.root + QDir::separator();
   const auto append = [&](const QString& path) {
     ImportFileFact fact;
     fact.path = normalize_local_path(path);
     const QFileInfo info(fact.path);
-    fact.within_root = fact.path == request.root || fact.path.startsWith(prefix);
+    fact.within_root = local_path_is_within_root(fact.path, request.root);
     fact.is_file = info.isFile();
     fact.supported = has_supported_import_extension(fact.path);
     if (fact.is_file && fact.supported) {
@@ -4372,13 +4390,44 @@ QStringList CatalogAssetModel::pickFiles(const QString& title) const {
   return normalized_paths;
 }
 
+QString CatalogAssetModel::localFileUrlForPath(const QString& file_path) const {
+  const auto normalized_path = normalize_local_path(file_path);
+  return normalized_path.isEmpty() ? QString{} : QUrl::fromLocalFile(normalized_path).toString();
+}
+
+QString CatalogAssetModel::commonDirectoryForFiles(const QStringList& file_paths) const {
+  if (file_paths.isEmpty()) return {};
+
+  auto common_directory = normalize_local_path(QFileInfo(file_paths.front()).absolutePath());
+  if (common_directory.isEmpty()) return {};
+  for (qsizetype index = 1; index < file_paths.size(); ++index) {
+    const auto directory = normalize_local_path(QFileInfo(file_paths.at(index)).absolutePath());
+    if (directory.isEmpty()) return {};
+    while (!local_path_is_within_root(directory, common_directory)) {
+      QDir parent(common_directory);
+      if (!parent.cdUp()) return {};
+      const auto parent_path = normalize_local_path(parent.absolutePath());
+      if (parent_path.isEmpty() ||
+          parent_path.compare(common_directory, local_path_case_sensitivity()) == 0) {
+        return {};
+      }
+      common_directory = parent_path;
+    }
+  }
+  return common_directory;
+}
+
 QString CatalogAssetModel::localPathForUrl(const QString& url) const {
   const auto parsed = QUrl(url);
   if (!parsed.isValid()) {
-    return url;
+    return normalize_local_path(url);
   }
 
-  return parsed.isLocalFile() ? parsed.toLocalFile() : url;
+  return normalize_local_path(parsed.isLocalFile() ? parsed.toLocalFile() : url);
+}
+
+bool CatalogAssetModel::localPathIsWithinRoot(const QString& path, const QString& root) const {
+  return local_path_is_within_root(normalize_local_path(path), normalize_local_path(root));
 }
 
 QString CatalogAssetModel::parentFolderUrl(const QString& url) const {
@@ -8879,7 +8928,9 @@ void CatalogAssetModel::
     startNextAdjustmentPatchPersistence() {
   if (recipe_persistence_process_.state() != QProcess::NotRunning ||
       adjustment_patch_persistence_queue_blocked_ ||
-      pending_adjustment_patch_persistence_.isEmpty()) return;
+      pending_adjustment_patch_persistence_.isEmpty()) {
+    return;
+  }
 
   while (!pending_adjustment_patch_persistence_.isEmpty()) {
     const auto revision = pending_adjustment_patch_persistence_.constFirst();

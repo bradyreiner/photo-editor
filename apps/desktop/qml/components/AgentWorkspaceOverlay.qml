@@ -741,8 +741,9 @@ Item {
     }
 
     function refreshSurfaceGeometry() {
-        if (typeof root.targetResolver !== "function" || root.dismissed || !root.visible || root.traveling) return
-        const updated = root.targetResolver(root.motionEvent, root.activeParameterKey)
+        const targetResolver = root.targetResolver
+        if (typeof targetResolver !== "function" || root.dismissed || !root.visible || root.traveling) return
+        const updated = targetResolver.call(root, root.motionEvent, root.activeParameterKey)
         if (!updated) {
             robotReach.stop()
             root.touchingControl = false

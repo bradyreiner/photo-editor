@@ -10,6 +10,7 @@
 
 #include <QAudioSink>
 #include <QIODevice>
+#include <QMediaPlayer>
 #include <QStringList>
 #include <QtMath>
 
@@ -183,14 +184,22 @@ void process_samples(
 
 TimelineAudioOutput::TimelineAudioOutput(QObject* parent)
     : QObject(parent),
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
       buffer_output_(preferred_audio_format()),
+#else
+      playback_output_(this),
+#endif
       native_audio_enabled_(!qEnvironmentVariableIsSet(
           "PHOTO_EDITOR_TIMELINE_PLAYBACK_HEADLESS")) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   connect(
       &buffer_output_,
       &QAudioBufferOutput::audioBufferReceived,
       this,
       [this](const QAudioBuffer& buffer) { processBuffer(buffer); });
+#else
+  playback_output_.setVolume(volume_);
+#endif
   if (native_audio_enabled_) {
     connect(
         &media_devices_,
@@ -253,8 +262,38 @@ TimelineAudioOutput::~TimelineAudioOutput() {
   }
 }
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 QAudioBufferOutput* TimelineAudioOutput::bufferOutput() {
   return &buffer_output_;
+}
+#endif
+
+QAudioFormat TimelineAudioOutput::bufferFormat() const {
+  return preferred_audio_format();
+}
+
+bool TimelineAudioOutput::attachPlayer(QObject* player) {
+  auto* media_player = qobject_cast<QMediaPlayer*>(player);
+  if (media_player == nullptr) {
+    return false;
+  }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+  media_player->setAudioBufferOutput(&buffer_output_);
+#else
+  media_player->setAudioOutput(&playback_output_);
+#endif
+  return true;
+}
+
+void TimelineAudioOutput::setPlayerPitchCompensation(QObject* player, bool enabled) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+  if (auto* media_player = qobject_cast<QMediaPlayer*>(player); media_player != nullptr) {
+    media_player->setPitchCompensation(enabled);
+  }
+#else
+  Q_UNUSED(player)
+  Q_UNUSED(enabled)
+#endif
 }
 
 double TimelineAudioOutput::volume() const { return volume_; }
@@ -306,6 +345,9 @@ void TimelineAudioOutput::setVolume(double volume) {
     return;
   }
   volume_ = bounded;
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+  playback_output_.setVolume(qBound(0.0, volume_, 1.0));
+#endif
   emit volumeChanged();
 }
 
@@ -597,7 +639,12 @@ void TimelineAudioOutput::ensureSink(const QAudioFormat& format) {
   }
   sink_format_ = format;
   sink_ = new QAudioSink(format, this);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
   sink_->setBufferFrameCount(qMax(256, format.framesForDuration(kSinkBufferDurationUs)));
+#else
+  sink_->setBufferSize(format.bytesForFrames(
+      qMax<qint64>(256, format.framesForDuration(kSinkBufferDurationUs))));
+#endif
   sink_device_ = sink_->start();
   pending_audio_.clear();
 }
@@ -629,6 +676,9 @@ void TimelineAudioOutput::drainPendingAudio() {
 }
 
 void TimelineAudioOutput::recoverOutputDevice() {
+#if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
+  playback_output_.setDevice(QMediaDevices::defaultAudioOutput());
+#endif
   drain_timer_.stop();
   pending_audio_.clear();
   sink_device_.clear();

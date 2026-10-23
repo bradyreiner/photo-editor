@@ -724,12 +724,22 @@ bool ExportJobController::queueExportWithCropConstraint(
   const auto effective_preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
   const auto normalized_source = normalized_local_path(source_path);
   const auto normalized_destination = normalized_local_path(destination_directory);
+  QSet<QString> reserved_paths;
+  for (const auto& queued_job : jobs_) {
+    const auto output_path = normalized_local_path(queued_job.output_path);
+    if (!output_path.isEmpty()) reserved_paths.insert(output_path);
+  }
+  for (auto it = unconfirmed_jobs_.cbegin(); it != unconfirmed_jobs_.cend(); ++it) {
+    const auto output_path = normalized_local_path(it->output_path);
+    if (!output_path.isEmpty()) reserved_paths.insert(output_path);
+  }
   const auto delivery_plan = plan_export_output(
       display_label_for_job(display_label, normalized_source),
       normalized_source,
       media_type.trimmed().toLower(),
       effective_preset,
-      normalized_destination);
+      normalized_destination,
+      &reserved_paths);
   return queuePlannedExportWithCropConstraint(
       asset_id,
       media_type,

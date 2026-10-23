@@ -183,6 +183,19 @@ int main(int argc, char** argv) {
   for (const auto& path : {raw, jpeg, video, unsupported, other_photo})
     if (!write_file(path)) return fail("Cannot write source fixture");
   CatalogAssetModel model;
+  if (!expect(
+          QDir::cleanPath(model.commonDirectoryForFiles({raw, jpeg})) == QDir::cleanPath(source),
+          "Native common-directory resolution failed") ||
+      !expect(
+          QDir::cleanPath(model.localPathForUrl(model.localFileUrlForPath(raw))) ==
+              QDir::cleanPath(raw),
+          "Native file URL round trip failed") ||
+      !expect(model.localPathIsWithinRoot(raw, source),
+              "Native child path should be accepted within its source root") ||
+      !expect(!model.localPathIsWithinRoot(other_photo, source),
+              "Native sibling path should be rejected outside its source root")) {
+    return 1;
+  }
   model.setInteractiveRenderingActive(true);
   CatalogAssetItem duplicate;
   duplicate.asset_id = "known-photo";

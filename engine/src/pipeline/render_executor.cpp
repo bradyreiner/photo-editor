@@ -4,6 +4,9 @@
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #endif
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+#include "photo_editor/pipeline/cuda/cuda_pipeline_backend.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -725,6 +728,10 @@ RenderExecutionResult execute_color_plan(
   if (options.allow_metal_photographic_output) {
     request.backend_version += ":metal-photographic-output-v1";
   }
+  if (options.allow_cuda_scene_adjustments ||
+      options.allow_cuda_photographic_output) {
+    request.backend_version += ":cuda-preview-v1";
+  }
   if (executor == nullptr) {
     invalid.failure_reason =
         "render executor is required";
@@ -1053,6 +1060,30 @@ RenderExecutionResult execute_color_plan(
                     input_finite_validated);
             break;
           case RenderStageKind::SceneAdjustments:
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+            if (options.allow_cuda_scene_adjustments &&
+                !cancellation.cancelled()) {
+              const auto exposure_gain =
+                  std::pow(2.0, effective_input_exposure(state));
+              if (std::abs(exposure_gain - 1.0) > 1.0e-12) {
+                executed = cuda::shared_cuda_pipeline_backend()
+                               .apply_scene_exposure(
+                                   &pixels,
+                                   static_cast<int>(
+                                       invocation.expected_output.width),
+                                   static_cast<int>(
+                                       invocation.expected_output.height),
+                                   exposure_gain,
+                                   stage_telemetry,
+                                   cancellation);
+                if (executed) {
+                  backend = "cuda-scene-adjustments";
+                  break;
+                }
+                fallback_reason = stage_telemetry->gpu_fallback_reason;
+              }
+            }
+#endif
             executed = apply_color_scene_adjustments_stage(
                 &pixels,
                 static_cast<int>(
@@ -1155,6 +1186,45 @@ RenderExecutionResult execute_color_plan(
                   "PhotographicOutput configuration is required";
               break;
             }
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+            if (options.allow_cuda_photographic_output &&
+                !defer_display_referred_text && !cancellation.cancelled()) {
+              const auto timer = std::chrono::steady_clock::now();
+              const auto application = compile_aces2_output_lut_application(
+                  *options.photographic_output_config,
+                  options.gamut_warning_target, options.output_lut_quality);
+              if (application.ready() && !cancellation.cancelled()) {
+                executed = cuda::shared_cuda_pipeline_backend()
+                               .apply_aces2_output_lut_target(
+                                   &pixels,
+                                   static_cast<int>(
+                                       invocation.expected_output.width),
+                                   static_cast<int>(
+                                       invocation.expected_output.height),
+                                   application,
+                                   stage_telemetry,
+                                   cancellation);
+              }
+              if (executed) {
+                stage_telemetry->photographic_output_ms +=
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - timer)
+                        .count();
+                backend = "cuda-photographic-output";
+                executed = !cancellation.cancelled();
+                break;
+              }
+              // CUDA commits only after a successful device readback and
+              // validation. The CPU reference can safely continue here.
+              fallback_reason = application.ready()
+                                    ? stage_telemetry->gpu_fallback_reason
+                                    : "photographic-output-lut-unavailable";
+            }
+#else
+            if (options.allow_cuda_photographic_output) {
+              fallback_reason = "cuda-backend-not-compiled";
+            }
+#endif
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
             if (options.allow_metal_photographic_output &&
                 !defer_display_referred_text && !cancellation.cancelled()) {
@@ -1330,13 +1400,16 @@ RenderExecutionResult execute_color_plan(
             break;
         }
         if (!executed) {
+          if (failure_reason.empty()) {
+            failure_reason = stage_telemetry->failure_reason;
+          }
+          if (failure_reason.empty()) {
+            failure_reason = cancellation.cancelled()
+                                 ? "color plan execution cancelled"
+                                 : "color plan stage execution failed";
+          }
           return RenderStageExecution{
-              .failure_reason =
-                  !failure_reason.empty()
-                      ? std::move(failure_reason)
-                      : cancellation.cancelled()
-                            ? "color plan execution cancelled"
-                            : "color plan stage execution failed",
+              .failure_reason = std::move(failure_reason),
           };
         }
         return RenderStageExecution{

@@ -5,6 +5,12 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <windows.h>
+#include <aclapi.h>
+#endif
+
 #include <sqlite3.h>
 
 #include <memory>
@@ -19,12 +25,85 @@ bool valid_key(const QString& key) {
   return pattern.match(key).hasMatch();
 }
 
+#ifdef Q_OS_WIN
+bool set_private_windows_dacl(const QString& path, bool directory) {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  DWORD user_info_size = 0;
+  (void)GetTokenInformation(token, TokenUser, nullptr, 0, &user_info_size);
+  if (user_info_size == 0) {
+    CloseHandle(token);
+    return false;
+  }
+  QByteArray user_info(static_cast<qsizetype>(user_info_size), Qt::Uninitialized);
+  const bool has_user = GetTokenInformation(token, TokenUser, user_info.data(), user_info_size,
+                                            &user_info_size) != FALSE;
+  CloseHandle(token);
+  if (!has_user) return false;
+
+  const auto* user = reinterpret_cast<const TOKEN_USER*>(user_info.constData());
+  EXPLICIT_ACCESSW user_access{};
+  user_access.grfAccessPermissions = FILE_ALL_ACCESS;
+  user_access.grfAccessMode = SET_ACCESS;
+  user_access.grfInheritance = directory
+      ? OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+      : NO_INHERITANCE;
+  user_access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+  user_access.Trustee.TrusteeType = TRUSTEE_IS_USER;
+  user_access.Trustee.ptstrName = reinterpret_cast<LPWSTR>(user->User.Sid);
+
+  PACL private_acl = nullptr;
+  if (SetEntriesInAclW(1, &user_access, nullptr, &private_acl) != ERROR_SUCCESS) return false;
+  const auto native_path = reinterpret_cast<LPWSTR>(const_cast<ushort*>(path.utf16()));
+  const auto result = SetNamedSecurityInfoW(
+      native_path, SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, private_acl, nullptr);
+  LocalFree(private_acl);
+  return result == ERROR_SUCCESS;
+}
+#endif
+
+bool secure_index_directory(const QString& path) {
+#ifdef Q_OS_WIN
+  return set_private_windows_dacl(path, true);
+#else
+  return QFile::setPermissions(
+      path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+#endif
+}
+
+bool secure_index_file(const QString& path, bool create) {
+  if (!QFileInfo::exists(path)) {
+    if (!create) return false;
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly,
+                   QFile::ReadOwner | QFile::WriteOwner)) {
+      // Another process may have created the file after the existence check.
+      if (!QFileInfo::exists(path)) return false;
+    } else {
+      file.close();
+    }
+  }
+
+#ifdef Q_OS_WIN
+  return set_private_windows_dacl(path, false);
+#else
+  return QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner);
+#endif
+}
+
 Database open(const QString& path, bool write) {
   if (path.isEmpty() || !QFileInfo(path).isAbsolute() || QFileInfo(path).isSymLink()) return {nullptr, sqlite3_close};
   if (write) {
+    // SQLite journals and vacuum files are siblings of the database; callers
+    // provide a dedicated directory so those sidecars inherit private access.
     const auto directory = QFileInfo(path).absolutePath();
-    if (!QDir().mkpath(directory)) return {nullptr, sqlite3_close};
+    if (!QDir().mkpath(directory) || !secure_index_directory(directory)) {
+      return {nullptr, sqlite3_close};
+    }
   }
+  if (!secure_index_file(path, write) || QFileInfo(path).isSymLink()) return {nullptr, sqlite3_close};
   sqlite3* raw = nullptr;
   const auto flags = write ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY;
   if (sqlite3_open_v2(QFile::encodeName(path).constData(), &raw, flags, nullptr) != SQLITE_OK) {
@@ -34,8 +113,7 @@ Database open(const QString& path, bool write) {
   Database database(raw, sqlite3_close);
   sqlite3_busy_timeout(raw, 1000);
   if (write) {
-    if (!QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner) ||
-        sqlite3_exec(raw, "CREATE TABLE IF NOT EXISTS descriptions ("
+    if (sqlite3_exec(raw, "CREATE TABLE IF NOT EXISTS descriptions ("
                          "key TEXT PRIMARY KEY, description TEXT NOT NULL, "
                          "created_at INTEGER NOT NULL DEFAULT (unixepoch()));"
                          "CREATE TABLE IF NOT EXISTS preparation_aliases ("

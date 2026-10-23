@@ -4,7 +4,10 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSemaphore>
 #include <QTemporaryDir>
 #include <QThread>
@@ -18,6 +21,11 @@ struct ExportJobControllerTestAccess {
   static void writer(ExportJobController& controller, std::function<ExportAdmissionResult(PersistentJobRecord)> writer) {
     controller.admission_writer_ = std::move(writer);
     controller.history_reader_ = [] { return ExportHistoryReadResult{}; };
+  }
+  static void history(
+      ExportJobController& controller,
+      std::function<ExportHistoryReadResult()> reader) {
+    controller.history_reader_ = std::move(reader);
   }
 };
 }
@@ -60,6 +68,62 @@ else: sys.exit(1)
   QImage image(32, 24, QImage::Format_RGB32); image.fill(Qt::red);
   if (!image.save(source)) return 1;
   photo_editor::desktop::ExportJobController exports;
+#ifdef Q_OS_WIN
+  struct PortableAdmissionState {
+    QMutex mutex;
+    QVector<photo_editor::desktop::PersistentJobRecord> records;
+    QString root_path;
+  };
+  const auto portable_admission = std::make_shared<PortableAdmissionState>();
+  portable_admission->root_path = root.path();
+  photo_editor::desktop::ExportJobControllerTestAccess::writer(
+      exports, [portable_admission](auto record) {
+        QThread::msleep(200);
+        const QDir app_data(portable_admission->root_path);
+        if (QFile::exists(app_data.filePath("fail-read"))) {
+          return photo_editor::desktop::ExportAdmissionResult{
+              record, QStringLiteral("Catalog temporarily unavailable")};
+        }
+        QMutexLocker lock(&portable_admission->mutex);
+        for (const auto& existing : portable_admission->records) {
+          if (existing.job_id == record.job_id) {
+            return photo_editor::desktop::ExportAdmissionResult{existing, {}};
+          }
+        }
+        record.status = QStringLiteral("Queued");
+        record.error_message.clear();
+        const auto lost_ack_path = app_data.filePath("lost-ack");
+        const bool lose_acknowledgement = QFile::exists(lost_ack_path);
+        if (lose_acknowledgement) record.status = QStringLiteral("Completed");
+        portable_admission->records.push_back(record);
+
+        QJsonArray rows;
+        for (const auto& stored : portable_admission->records) {
+          rows.append(QJsonObject{
+              {QStringLiteral("job_id"), stored.job_id},
+              {QStringLiteral("status"), stored.status}});
+        }
+        QFile records_file(app_data.filePath("records.json"));
+        if (!records_file.open(QIODevice::WriteOnly) ||
+            records_file.write(QJsonDocument(rows).toJson(QJsonDocument::Compact)) < 0) {
+          return photo_editor::desktop::ExportAdmissionResult{
+              record, QStringLiteral("Unable to write the portable catalog fixture")};
+        }
+        records_file.close();
+        if (lose_acknowledgement) {
+          QFile::remove(lost_ack_path);
+          return photo_editor::desktop::ExportAdmissionResult{
+              record, QStringLiteral("Catalog commit receipt was lost")};
+        }
+        return photo_editor::desktop::ExportAdmissionResult{record, {}};
+      });
+  photo_editor::desktop::ExportJobControllerTestAccess::history(
+      exports, [portable_admission] {
+        QMutexLocker lock(&portable_admission->mutex);
+        return photo_editor::desktop::ExportHistoryReadResult{
+            portable_admission->records, {}};
+      });
+#endif
   const auto wait = [&](const auto& ready) {
     QElapsedTimer deadline; deadline.start();
     while (!ready() && deadline.elapsed() < 10000) { app.processEvents(); QThread::msleep(1); }
@@ -78,6 +142,12 @@ else: sys.exit(1)
   }
   QFile records(root.filePath("records.json"));
   if (!accepted || !records.open(QIODevice::ReadOnly) || !QJsonDocument::fromJson(records.readAll()).isArray()) return 1;
+  const auto first_output = immediate.first().toMap().value("outputPath").toString();
+  if (first_output.isEmpty() ||
+      !exports.queueExport("source-again", "photo", "Proof", source, {}, {}, "Full Resolution", root.filePath("exports"))) return 1;
+  const auto second_output = exports.jobs().last().toMap().value("outputPath").toString();
+  if (second_output.isEmpty() || second_output == first_output ||
+      !wait([&] { return exports.property("pendingAdmissionCount").toInt() == 0 && !exports.loading(); })) return 1;
   std::cout << "admission_ms=" << admission_ms << " ticks_at_return=" << ticks_at_return
             << " total_ticks=" << ticks << " immediate_status="
             << (immediate.isEmpty() ? QString{} : immediate.first().toMap().value("status").toString()).toStdString() << '\n';

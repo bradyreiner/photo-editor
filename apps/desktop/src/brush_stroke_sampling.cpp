@@ -11,9 +11,14 @@ namespace {
 constexpr double kMinimumNormalizedBrushDabSpacing = 0.0025;
 constexpr double kMaximumNormalizedBrushDabSpacing = 0.05;
 
-bool brush_points_same_position(
+bool brush_points_same_value(
     const BrushPreviewPoint& left, const BrushPreviewPoint& right) {
-  return std::hypot(left.x - right.x, left.y - right.y) <= 1e-9;
+  return left.x == right.x && left.y == right.y && left.size == right.size &&
+         left.flow == right.flow && left.opacity == right.opacity &&
+         left.auto_mask_anchor_x == right.auto_mask_anchor_x &&
+         left.auto_mask_anchor_y == right.auto_mask_anchor_y &&
+         left.pressure == right.pressure && left.tilt_x == right.tilt_x &&
+         left.tilt_y == right.tilt_y && left.erase == right.erase;
 }
 
 }  // namespace
@@ -84,9 +89,20 @@ QVector<BrushPreviewPoint> sampled_brush_points_for_segment(
                                   (clamped_point.y - last_point->y) * y_scale);
   const auto cursor_distance = std::hypot((cursor_point.x - last_point->x) * x_scale,
                                          (cursor_point.y - last_point->y) * y_scale);
+  const auto smaller_tip_size = std::min(last_point->size, clamped_point.size);
+  const auto tip_size_changed =
+      std::abs(last_point->size - clamped_point.size) > 1e-9;
+  // Keep a growing or shrinking pressure tip densely sampled during its size
+  // transition; otherwise the configured spacing controls ordinary dabs.
+  const auto aspect_spacing_limit =
+      tip_size_changed
+          ? std::min(kMaximumNormalizedBrushDabSpacing, smaller_tip_size * 0.10)
+          : kMaximumNormalizedBrushDabSpacing;
   const auto spacing = image_aspect > 0.0
-      ? std::max(0.00005, std::min(std::min(last_point->size, clamped_point.size) * 0.10,
-                                 clamped_point.size * std::clamp(brush_spacing, 0.05, 2.0)))
+      ? std::clamp(
+            smaller_tip_size * std::clamp(brush_spacing, 0.05, 2.0),
+            0.00005,
+            aspect_spacing_limit)
       : normalized_brush_dab_spacing(clamped_point.size, brush_spacing);
   if (distance <= spacing * 0.35) {
     if (smoothing_amount > 0.0 && cursor_distance > spacing * 0.35) {
@@ -158,23 +174,48 @@ BrushPreviewPoint interpolated_brush_preview_point(
 
 QVector<BrushPreviewPoint> resampled_committed_brush_stroke(
     const QVector<BrushPreviewPoint>& stroke_points,
-    double brush_spacing) {
-  if (stroke_points.size() <= 2) {
+    double brush_spacing,
+    double image_aspect,
+    std::function<bool()> is_cancelled) {
+  if (stroke_points.size() <= 1) {
     return stroke_points;
   }
 
-  const auto spacing =
-      normalized_brush_dab_spacing(stroke_points.constFirst().size, brush_spacing);
+  const auto x_scale = image_aspect > 0.0 ? std::max(1.0, image_aspect) : 1.0;
+  const auto y_scale = image_aspect > 0.0 ? std::max(1.0, 1.0 / image_aspect) : 1.0;
+  const auto spacing_for_segment = [brush_spacing, image_aspect](
+                                       const BrushPreviewPoint& start,
+                                       const BrushPreviewPoint& end) {
+    const auto smaller_tip_size = std::min(start.size, end.size);
+    if (image_aspect <= 0.0) {
+      return normalized_brush_dab_spacing(smaller_tip_size, brush_spacing);
+    }
+    const auto tip_size_changed = std::abs(start.size - end.size) > 1e-9;
+    const auto spacing_limit = tip_size_changed
+        ? std::min(kMaximumNormalizedBrushDabSpacing, smaller_tip_size * 0.10)
+        : kMaximumNormalizedBrushDabSpacing;
+    return std::clamp(
+        smaller_tip_size * std::clamp(brush_spacing, 0.05, 2.0),
+        0.00005,
+        spacing_limit);
+  };
   QVector<BrushPreviewPoint> resampled_points;
-  resampled_points.reserve(stroke_points.size());
+  resampled_points.reserve(std::min<qsizetype>(stroke_points.size(), 4096));
   resampled_points.append(stroke_points.constFirst());
 
-  auto distance_to_next_dab = spacing;
+  auto distance_to_next_dab = spacing_for_segment(
+      stroke_points.constFirst(), stroke_points.at(1));
   for (auto index = 1; index < stroke_points.size(); ++index) {
+    if (is_cancelled && is_cancelled()) {
+      return {};
+    }
     const auto segment_start = stroke_points.at(index - 1);
     const auto segment_end = stroke_points.at(index);
-    const auto segment_length =
-        std::hypot(segment_end.x - segment_start.x, segment_end.y - segment_start.y);
+    const auto spacing = spacing_for_segment(segment_start, segment_end);
+    distance_to_next_dab = std::min(distance_to_next_dab, spacing);
+    const auto segment_length = std::hypot(
+        (segment_end.x - segment_start.x) * x_scale,
+        (segment_end.y - segment_start.y) * y_scale);
     if (segment_length <= 1e-9) {
       continue;
     }
@@ -182,8 +223,18 @@ QVector<BrushPreviewPoint> resampled_committed_brush_stroke(
     auto consumed = 0.0;
     auto remaining_segment = segment_length;
     while (remaining_segment + 1e-9 >= distance_to_next_dab) {
+      if ((resampled_points.size() & 0xFF) == 0 &&
+          is_cancelled && is_cancelled()) {
+        return {};
+      }
+      // The incoming live path is already bounded by the same maximum gap.
+      // If pathological pressure/path geometry would expand it excessively,
+      // retain that safe path instead of allocating an unbounded canonical one.
+      if (resampled_points.size() >= 1'000'000) {
+        return stroke_points;
+      }
       consumed += distance_to_next_dab;
-      const auto t = consumed / segment_length;
+      const auto t = std::clamp(consumed / segment_length, 0.0, 1.0);
       resampled_points.append(
           interpolated_brush_preview_point(segment_start, segment_end, t));
       remaining_segment = segment_length - consumed;
@@ -194,7 +245,7 @@ QVector<BrushPreviewPoint> resampled_committed_brush_stroke(
 
   const auto final_point = stroke_points.constLast();
   if (resampled_points.isEmpty() ||
-      !brush_points_same_position(resampled_points.constLast(), final_point)) {
+      !brush_points_same_value(resampled_points.constLast(), final_point)) {
     resampled_points.append(final_point);
   }
   return resampled_points;

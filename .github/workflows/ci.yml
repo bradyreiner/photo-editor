@@ -32,6 +32,12 @@ jobs:
       - name: Validate release helper syntax
         run: bash -n scripts/*.sh
 
+      - name: Exercise native launcher orchestration
+        run: python3 -B scripts/test-run-native.py
+
+      - name: Validate optional CUDA and Little CMS build contracts
+        run: python3 -B scripts/test-cuda-build-contract.py
+
       - name: Validate Looksy brand surface
         run: |
           python3 -B scripts/test-brand-surface.py

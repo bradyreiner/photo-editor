@@ -7,6 +7,7 @@
 #include "local_mask_compiler.h"
 #include "photo_render_utils.h"
 #include "photo_layer_compiler.h"
+#include "render_plan_store.h"
 
 #include <QCryptographicHash>
 #include <QColorSpace>
@@ -198,43 +199,36 @@ std::optional<PreparedVideoGrade> prepare_video_grade(
     }
     return std::nullopt;
   }
-  const auto recipe_digest = QString::fromLatin1(
-      QCryptographicHash::hash(
-          serialize_edit_recipe_json(recipe).toUtf8(),
-          QCryptographicHash::Sha256)
-          .toHex());
-  const auto plan_result = compile_desktop_render_plan_with_derived_assets(
+  photo_editor::pipeline::DecodedImageMetadata decoder_metadata;
+  decoder_metadata.valid = true;
+  decoder_metadata.pixel_encoding =
+      photo_editor::pipeline::DecodedPixelEncoding::DisplayReferredRgb;
+  decoder_metadata.decoder_backend = "timeline-qvideoframe-rec709-v1";
+  decoder_metadata.decoded_color_space_name = "Rec.709";
+  decoder_metadata.camera_profile_identity = "timeline-rec709-signal-v1";
+  const auto admission = RenderPlanStore::shared().admit(
+      QStringLiteral("timeline-video-grade"),
+      {},
       recipe,
-      DesktopRenderPlanRequest{
-          .recipe_id = QStringLiteral("timeline-video-grade:%1").arg(recipe_digest),
-          .recipe_payload_digest = recipe_digest,
-          .source_id = QStringLiteral("timeline-video-clip:%1").arg(recipe_digest),
-          .decoder_provenance = QStringLiteral("timeline-qvideoframe-rec709-v1"),
-          .raw_source = false,
-          .source_width = static_cast<std::uint32_t>(output_size.width()),
-          .source_height = static_cast<std::uint32_t>(output_size.height()),
-          .rendering_target = photo_editor::pipeline::DisplayRenderingTarget::ActiveDisplay,
-          .backend_requirement = photo_editor::pipeline::RenderBackendRequirement::GpuPermitted,
-          .purpose = photo_editor::pipeline::RenderPurpose::InteractivePreview,
-          .scope_domain = photo_editor::pipeline::RenderScopeDomain::FinalDisplay,
-      });
-  if (!plan_result.ok()) {
-    QStringList errors;
-    for (const auto& adapter_error : plan_result.adapter_errors) {
-      errors.push_back(QString::fromStdString(adapter_error.message));
-    }
-    for (const auto& compiler_error : plan_result.compiler_errors) {
-      errors.push_back(QString::fromStdString(compiler_error.message));
-    }
+      output_size,
+      photo_editor::pipeline::RenderPurpose::InteractivePreview,
+      photo_editor::pipeline::DisplayRenderingTarget::ActiveDisplay,
+      std::nullopt,
+      &decoder_metadata,
+      {},
+      photo_editor::pipeline::RenderScopeDomain::FinalDisplay);
+  if (!admission.admitted || !admission.plan.has_value()) {
     if (error != nullptr) {
-      *error = errors.join(QStringLiteral(" "));
+      *error = admission.error.isEmpty()
+          ? QStringLiteral("Timeline grade could not be admitted for canonical rendering.")
+          : admission.error;
     }
     return std::nullopt;
   }
   return PreparedVideoGrade{
       std::move(recipe),
       std::move(pipeline_state),
-      std::move(*plan_result.plan)};
+      std::move(*admission.plan)};
 }
 
 GradeStateCache& grade_state_cache() {

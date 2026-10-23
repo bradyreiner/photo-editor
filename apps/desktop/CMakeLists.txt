@@ -1,5 +1,14 @@
 find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Network Quick Qml QuickControls2 ShaderTools Widgets)
 find_package(SQLite3 REQUIRED)
+
+if(MSVC)
+  # MSVC 2019 can exhaust or crash its shared type-server PDB while compiling
+  # this lambda-heavy translation unit. Embed its debug types in the object.
+  set_source_files_properties(
+    src/thumbnail_worker_renderer_factory.cpp
+    PROPERTIES COMPILE_OPTIONS /Z7)
+endif()
+
 if(NOT TARGET SQLite3::SQLite3)
   add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
 endif()
@@ -824,6 +833,9 @@ target_link_libraries(
     photo_engine
     photo_editor_raw_decoder_backend
     photo_rust_ffi)
+if(WIN32)
+  target_link_libraries(photo_editor_app PRIVATE Advapi32)
+endif()
 
 target_compile_definitions(photo_editor_app
   PRIVATE

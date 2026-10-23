@@ -148,6 +148,29 @@ function Resolve-Python {
     Fail "Python 3.7 or newer was not found. Install it with 'winget install --exact --id Python.Python.3.12', reopen PowerShell, and rerun this script. The zero-byte C:\Windows\System32\python launcher is not a usable Python installation."
 }
 
+function Resolve-Cargo {
+    $command = Find-CommandPath "cargo.exe"
+    if ($command) {
+        return $command
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:CARGO_HOME) {
+        [void]$candidates.Add((Join-Path $env:CARGO_HOME "bin\cargo.exe"))
+    }
+    if ($env:USERPROFILE) {
+        [void]$candidates.Add((Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"))
+    }
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            return [System.IO.Path]::GetFullPath($candidate)
+        }
+    }
+
+    Fail "cargo.exe is required. Install the stable Rust toolchain from https://rustup.rs/."
+}
+
 function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     $preview = @($FilePath) + $Arguments
     Write-Info ("$ " + ($preview -join " "))
@@ -157,24 +180,31 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments) {
     }
 }
 
-function Import-VisualStudioEnvironment {
-    if (Find-CommandPath "cl.exe") {
-        return
-    }
-
+function Find-VisualStudioInstallPath {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-        Fail "MSVC was not found. Install Visual Studio 2019 or newer Build Tools with the 'Desktop development with C++' workload."
+        return $null
     }
 
     $installation = & $vswhere -latest -products * `
         -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
         -property installationPath
     if ($LASTEXITCODE -ne 0 -or -not $installation) {
-        Fail "Visual Studio is installed without the Desktop development with C++ workload."
+        return $null
     }
 
-    $script:vsInstallPath = ([string]$installation).Trim()
+    return ([string]$installation).Trim()
+}
+
+function Import-VisualStudioEnvironment {
+    $script:vsInstallPath = Find-VisualStudioInstallPath
+    if (Find-CommandPath "cl.exe") {
+        return
+    }
+    if (-not $script:vsInstallPath) {
+        Fail "MSVC was not found. Install Visual Studio 2019 or newer Build Tools with the 'Desktop development with C++' workload."
+    }
+
     $devCmd = Join-Path $script:vsInstallPath "Common7\Tools\VsDevCmd.bat"
     if (-not (Test-Path -LiteralPath $devCmd -PathType Leaf)) {
         Fail "Visual Studio developer environment script was not found: $devCmd"
@@ -333,7 +363,7 @@ if (-not $NoBuild) {
     $cmake = Resolve-CMake $cmakeBeforeVisualStudio
     $ninja = Require-Command "ninja.exe" "Install Ninja and add it to PATH."
     $python = Resolve-Python
-    $cargo = Require-Command "cargo.exe" "Install the stable Rust toolchain from https://rustup.rs/."
+    $cargo = Resolve-Cargo
     $qtRoot = Resolve-QtRoot
     $vcpkgRoot = Resolve-VcpkgRoot
     $toolchain = Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"
@@ -346,6 +376,10 @@ if (-not $NoBuild) {
     $pythonBin = Split-Path -Parent $python
     if (($env:Path -split ';') -notcontains $pythonBin) {
         $env:Path = "$pythonBin;$env:Path"
+    }
+    $cargoBin = Split-Path -Parent $cargo
+    if (($env:Path -split ';') -notcontains $cargoBin) {
+        $env:Path = "$cargoBin;$env:Path"
     }
     if (($env:VCPKG_KEEP_ENV_VARS -split ';') -notcontains "PATH") {
         $env:VCPKG_KEEP_ENV_VARS = if ($env:VCPKG_KEEP_ENV_VARS) {
@@ -364,6 +398,7 @@ if (-not $NoBuild) {
     Write-Info "CMake: $cmake"
     Write-Info "Ninja: $ninja"
     Write-Info "Python: $python"
+    Write-Info "Cargo: $cargo"
     Write-Info "Qt: $qtRoot"
     Write-Info "vcpkg: $vcpkgRoot"
 
@@ -467,13 +502,10 @@ if ($env:PHOTO_EDITOR_DATABASE_URL) {
 
 Stop-ExistingApp $appBinary
 Write-Host "`nLaunching: $appBinary" -ForegroundColor Magenta
-$startParameters = @{
-    FilePath = $appBinary
-    PassThru = $true
-}
+# Native argument splatting preserves each file path as one argument, including spaces.
 if ($AppArguments -and $AppArguments.Count -gt 0) {
-    $startParameters.ArgumentList = $AppArguments
+    & $appBinary @AppArguments
+} else {
+    & $appBinary
 }
-$process = Start-Process @startParameters
-$process.WaitForExit()
-exit $process.ExitCode
+exit $LASTEXITCODE

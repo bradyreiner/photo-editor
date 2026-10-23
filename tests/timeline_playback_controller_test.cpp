@@ -286,9 +286,9 @@ int main(int argc, char** argv) {
   playback.seekSequenceSeconds(0.0);
 
   photo_editor::desktop::TimelineAudioOutput panned_output;
-  if (panned_output.bufferOutput()->format().sampleRate() != 48000 ||
-      panned_output.bufferOutput()->format().channelCount() != 2 ||
-      panned_output.bufferOutput()->format().sampleFormat() != QAudioFormat::Float) {
+  if (panned_output.bufferFormat().sampleRate() != 48000 ||
+      panned_output.bufferFormat().channelCount() != 2 ||
+      panned_output.bufferFormat().sampleFormat() != QAudioFormat::Float) {
     return fail("the decoded-buffer output should request a predictable stereo float format");
   }
   const QVector<float> stereo_samples = {0.50F, 0.50F, -0.50F, -0.50F};

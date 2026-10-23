@@ -51,6 +51,40 @@
     auto* workspace = find_named_object(import_root, QStringLiteral("importWorkspace"));
     if (!workspace) return fail("Import workspace unavailable");
 
+    const auto normalized_import_path_matches = [&](const QString& input,
+                                                     const QString& expected) {
+      QVariant normalized_path;
+      return QMetaObject::invokeMethod(
+                 workspace,
+                 "normalizedImportPath",
+                 Q_RETURN_ARG(QVariant, normalized_path),
+                 Q_ARG(QVariant, QVariant(input))) &&
+          normalized_path.toString() == expected;
+    };
+    const auto import_path_is_absolute = [&](const QString& input) {
+      QVariant is_absolute;
+      return QMetaObject::invokeMethod(
+                 workspace,
+                 "isAbsoluteImportPath",
+                 Q_RETURN_ARG(QVariant, is_absolute),
+                 Q_ARG(QVariant, QVariant(input))) &&
+          is_absolute.toBool();
+    };
+    const auto unc_import_path = QStringLiteral("\\\\server\\share\\x.jpg");
+    if (!normalized_import_path_matches(
+            unc_import_path, QStringLiteral("//server/share/x.jpg")) ||
+        !import_path_is_absolute(unc_import_path) ||
+        !normalized_import_path_matches(
+            QStringLiteral("C:\\Users\\test\\x.jpg"),
+            QStringLiteral("C:/Users/test/x.jpg")) ||
+        !import_path_is_absolute(QStringLiteral("C:\\Users\\test\\x.jpg")) ||
+        !normalized_import_path_matches(
+            QStringLiteral("/home/test/x.jpg"),
+            QStringLiteral("/home/test/x.jpg")) ||
+        !import_path_is_absolute(QStringLiteral("/home/test/x.jpg"))) {
+      return fail("Import path normalization should preserve UNC, drive-letter, and POSIX roots");
+    }
+
     const auto multi_folder_root = runtime_root.filePath(QStringLiteral("Multi Folder Picker"));
     const auto first_folder = QDir(multi_folder_root).filePath(QStringLiteral("Camera A/Day 1"));
     const auto second_folder = QDir(multi_folder_root).filePath(QStringLiteral("Camera B/Day 2"));

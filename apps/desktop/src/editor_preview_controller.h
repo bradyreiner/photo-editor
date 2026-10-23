@@ -2208,6 +2208,7 @@ signals:
     bool undo_state_valid = false;
     QString undo_label;
     double brush_spacing = 0.75;
+    double image_aspect = 0.0;
     double feather = 0.0;
     double hardness = 0.25;
     double auto_mask_tolerance = 0.18;

@@ -26,9 +26,11 @@ struct CanonicalNativeDeviceLut final {
             : photo_editor::pipeline::IccTransformLutQuality::Final);
     selection.lut = photo_editor::pipeline::find_cached_icc_transform_lut(
         *device_transform, settings);
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
     if (selection.lut == nullptr) {
       schedule_icc_transform_lut_prewarm(*device_transform, settings);
     }
+#endif
   }
   selection.eligible = canonical_native_device_suffix_is_eligible(
       request,

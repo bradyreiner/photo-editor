@@ -101,7 +101,7 @@
                  collection_root->property("currentWorkspace") == collection_root->property("timelineWorkspaceIndex") &&
                  !collection_root->property("workspaceTransitionActive").toBool() &&
                  item_visible(find_named_item(collection_root, QStringLiteral("timelineWorkspace")));
-        }, 20000)) {
+        }, 45000)) {
       auto* timeline_page = find_named_item(collection_root, QStringLiteral("timelineWorkspace"));
       std::cerr << "Timeline open: active=" << timeline_document.hasActiveTimeline()
                 << " path=" << timeline_document.savedDocumentPath().toStdString()

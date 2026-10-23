@@ -2,6 +2,9 @@
 
 #include <cmath>
 
+#include <QJsonDocument>
+#include <QJsonParseError>
+
 namespace photo_editor::desktop {
 
 EditRecipeMigrationResult migrate_edit_recipe_json(

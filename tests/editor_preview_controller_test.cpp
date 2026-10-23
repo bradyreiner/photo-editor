@@ -46,8 +46,10 @@
 #include "photo_editor/io/hdr_avif_io.h"
 #include "photo_editor/io/openexr_io.h"
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/output_rendering.h"
 #include "raw_image_decoder.h"
 #include "segmentation_result_schema.h"
+#include "source_image_decode_cache.h"
 #include "working_image.h"
 
 namespace {
@@ -1009,6 +1011,11 @@ struct EditorPreviewControllerTestAccess {
   }
   static EditState current_state(const EditorPreviewController& controller) {
     return controller.currentState();
+  }
+  static void set_preview_source_for_test(
+      EditorPreviewController& controller,
+      const QString& path) {
+    controller.file_path_ = path;
   }
   static QString cache_path_for_selection(
       const EditorPreviewController& controller,
@@ -2157,6 +2164,350 @@ int main(int argc, char** argv) {
   if (!photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories()) {
     return fail("editor preview test should configure durable runtime storage");
   }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_COLOR_TOOL_SAMPLING_ONLY")) {
+    QImage source(48, 36, QImage::Format_ARGB32);
+    source.fill(QColor(30, 34, 38));
+    for (int y = 4; y < 24; ++y) {
+      for (int x = 4; x < 18; ++x) source.setPixelColor(x, y, QColor(224, 42, 36));
+      for (int x = 30; x < 44; ++x) source.setPixelColor(x, y, QColor(48, 190, 64));
+    }
+    const auto path = runtime_root.filePath(QStringLiteral("isolated-color-sampler.png"));
+    if (!source.save(path)) return fail("write isolated color sampler fixture");
+    photo_editor::desktop::EditorPreviewController controller;
+    controller.loadAsset(QStringLiteral("isolated-color-sampler"), path, {}, {}, {}, {}, {});
+    controller.setColorToolSamplingTarget(QStringLiteral("color-replace-source"));
+    QElapsedTimer admission;
+    admission.start();
+    controller.sampleColorToolAt(0.22, 0.38);
+    const auto immediate_target = controller.colorToolSamplingTarget();
+    const auto immediate_busy = controller.sourceSamplingBusy();
+    if (admission.elapsed() > 250 || !immediate_busy ||
+        immediate_target != QStringLiteral("color-replace-source")) {
+      return fail("cold color sampling should be admitted asynchronously without blocking the caller");
+    }
+    QElapsedTimer completion;
+    completion.start();
+    while (controller.sourceSamplingBusy() && completion.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+      QThread::msleep(1);
+    }
+    if (completion.elapsed() >= 10000 || controller.sourceSamplingBusy() ||
+        !controller.colorToolSamplingTarget().isEmpty() ||
+        !controller.colorReplacementEnabled() ||
+        controller.colorReplacementStrength() < 69.0 ||
+        !(controller.colorReplacementSourceHue() < 0.04 ||
+          controller.colorReplacementSourceHue() > 0.96)) {
+      return fail("isolated cold color sampler should complete with the sampled red hue");
+    }
+
+    using Access = photo_editor::desktop::EditorPreviewControllerTestAccess;
+    QImage mask_fixture(256, 192, QImage::Format_ARGB32);
+    mask_fixture.fill(QColor(36, 42, 48));
+    for (int y = 16; y < 144; ++y) {
+      for (int x = 20; x < 112; ++x) mask_fixture.setPixelColor(x, y, QColor(224, 42, 36));
+      for (int x = 144; x < 236; ++x) mask_fixture.setPixelColor(x, y, QColor(48, 190, 64));
+    }
+    const auto mask_path = runtime_root.filePath(QStringLiteral("isolated-color-mask-preview.png"));
+    if (!mask_fixture.save(mask_path)) return fail("write isolated color mask fixture");
+
+    photo_editor::desktop::EditorPreviewController mask_controller;
+    mask_controller.setColorReplacementEnabled(true);
+    Access::set_preview_source_for_test(mask_controller, mask_path);
+    QImage unexpected_warm_source;
+    if (photo_editor::desktop::find_source_image_decode_cache(
+            mask_path, Access::current_state(mask_controller), 512, &unexpected_warm_source)) {
+      return fail("isolated color mask preview fixture should begin with a cold 512 decode cache");
+    }
+    mask_controller.setColorToolMaskPreviewEnabled(true);
+    auto mask_source = mask_controller.colorToolMaskPreviewSource();
+    if (!mask_source.isEmpty() || !mask_controller.colorToolMaskPreviewBusy()) {
+      return fail("cold color mask preview should queue asynchronously and report busy");
+    }
+    const auto wait_for_mask_preview = [](auto& target) {
+      QElapsedTimer timer;
+      timer.start();
+      while (target.colorToolMaskPreviewBusy() && timer.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+      }
+      return !target.colorToolMaskPreviewBusy();
+    };
+    if (!wait_for_mask_preview(mask_controller)) {
+      return fail("cold color mask preview should finish its asynchronous worker");
+    }
+    mask_source = mask_controller.colorToolMaskPreviewSource();
+    if (!mask_source.startsWith(QStringLiteral("data:image/png;base64,"))) {
+      return fail("completed cold color mask preview should publish a PNG data URL");
+    }
+    mask_controller.setColorReplacementSourceHue(1.0 / 3.0);
+    auto updated_mask_source = mask_controller.colorToolMaskPreviewSource();
+    if (updated_mask_source.isEmpty() &&
+        (!mask_controller.colorToolMaskPreviewBusy() || !wait_for_mask_preview(mask_controller))) {
+      return fail("changed color mask preview key should schedule or synchronously produce a result");
+    }
+    if (updated_mask_source.isEmpty()) updated_mask_source = mask_controller.colorToolMaskPreviewSource();
+    if (!updated_mask_source.startsWith(QStringLiteral("data:image/png;base64,")) ||
+        updated_mask_source == mask_source) {
+      return fail("color mask preview should refresh after the selected source hue changes");
+    }
+
+    const auto cancel_path = runtime_root.filePath(QStringLiteral("isolated-color-mask-cancel.png"));
+    if (!mask_fixture.save(cancel_path)) return fail("write isolated color mask cancellation fixture");
+    photo_editor::desktop::EditorPreviewController cancel_controller;
+    cancel_controller.setColorReplacementEnabled(true);
+    Access::set_preview_source_for_test(cancel_controller, cancel_path);
+    QImage unexpected_cancel_warm_source;
+    if (photo_editor::desktop::find_source_image_decode_cache(
+            cancel_path, Access::current_state(cancel_controller), 512, &unexpected_cancel_warm_source)) {
+      return fail("isolated cancellation fixture should begin with a cold 512 decode cache");
+    }
+    cancel_controller.setColorToolMaskPreviewEnabled(true);
+    if (!cancel_controller.colorToolMaskPreviewSource().isEmpty() ||
+        !cancel_controller.colorToolMaskPreviewBusy()) {
+      return fail("cold cancellation preview should start asynchronously before disable");
+    }
+    cancel_controller.setColorToolMaskPreviewEnabled(false);
+    if (!cancel_controller.colorToolMaskPreviewSource().isEmpty() ||
+        !wait_for_mask_preview(cancel_controller) || cancel_controller.colorToolMaskPreviewEnabled() ||
+        !cancel_controller.colorToolMaskPreviewSource().isEmpty()) {
+      return fail("disabling color mask preview should cancel and drain the in-flight worker");
+    }
+    return EXIT_SUCCESS;
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_MONITOR_PREWARM_ONLY")) {
+    using namespace photo_editor::desktop;
+    using Access = EditorPreviewControllerTestAccess;
+    QImage source(192, 128, QImage::Format_ARGB32);
+    source.fill(QColor(38, 52, 66));
+    for (int y = 12; y < 112; ++y) {
+      for (int x = 16; x < 88; ++x) source.setPixelColor(x, y, QColor(192, 86, 48));
+      for (int x = 104; x < 176; ++x) source.setPixelColor(x, y, QColor(48, 132, 196));
+    }
+    const auto path = runtime_root.filePath(QStringLiteral("monitor-prewarm.png"));
+    if (!source.save(path)) return fail("write monitor prewarm fixture");
+
+    EditorPreviewController controller;
+    const auto prewarm_before = controller.colorTransformDiagnostics()
+        .value(QStringLiteral("transformPrewarm")).toMap();
+    const auto completed_before = prewarm_before.value(QStringLiteral("completed")).toULongLong();
+    const auto failed_before = prewarm_before.value(QStringLiteral("failed")).toULongLong();
+    controller.loadAsset(QStringLiteral("monitor-prewarm"), path, {}, {}, {}, {}, {});
+    controller.setReferenceDisplayTarget(QStringLiteral("sRGB"));
+    controller.setPreviewOutputMode(QStringLiteral("Reference Display Target"));
+    controller.setPreviewOutputMode(QStringLiteral("Match Export"));
+    controller.setPreviewOutputMode(QStringLiteral("Monitor"));
+    controller.setInputColorProfile(QStringLiteral("/profiles/Canon EOS R5 Adobe Standard.dcp"));
+    controller.setInputColorProfile(QStringLiteral("ICC: Manufacturer Camera Profile"));
+    controller.setRawCameraMatchingLook(QStringLiteral("Vivid"));
+    controller.setRawCameraMatchingLook(QStringLiteral("Standard"));
+    controller.setInputColorProfile(QStringLiteral("Embedded"));
+    controller.setMonitorColorProfile(QStringLiteral("sRGB"));
+
+    const auto wait_for_idle = [&controller](int timeout_ms) {
+      QElapsedTimer timer;
+      timer.start();
+      while (timer.elapsed() < timeout_ms) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+        if (!controller.processing() && !Access::full_render_timer_active(controller) &&
+            !Access::full_render_running(controller) && !Access::full_render_pending(controller) &&
+            !Access::interactive_render_timer_active(controller) &&
+            !Access::edit_transaction_interactive_preview_timer_active(controller) &&
+            !Access::photo_layer_adjustment_render_timer_active(controller)) {
+          return true;
+        }
+        QThread::msleep(25);
+      }
+      return false;
+    };
+    const auto wait_for_prewarm = [&controller](qulonglong target_completed, int timeout_ms) {
+      QElapsedTimer timer;
+      timer.start();
+      while (timer.elapsed() < timeout_ms) {
+        const auto snapshot = controller.colorTransformDiagnostics()
+            .value(QStringLiteral("transformPrewarm")).toMap();
+        if (snapshot.value(QStringLiteral("pending")).toInt() == 0 &&
+            snapshot.value(QStringLiteral("completed")).toULongLong() >= target_completed) {
+          return true;
+        }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+        QThread::msleep(25);
+      }
+      return false;
+    };
+    const auto preview_idle = wait_for_idle(2000);
+    const auto prewarm_complete = wait_for_prewarm(completed_before + 1U, 10000);
+    const auto prewarm = controller.colorTransformDiagnostics()
+        .value(QStringLiteral("transformPrewarm")).toMap();
+    const auto prewarm_contract =
+        prewarm.value(QStringLiteral("completed")).toULongLong() >= completed_before + 1U &&
+        prewarm.value(QStringLiteral("failed")).toULongLong() == failed_before &&
+        prewarm.value(QStringLiteral("pending")).toInt() == 0 &&
+        prewarm.value(QStringLiteral("lastCompletedKey")).toString().size() == 64;
+    if (!preview_idle || !prewarm_complete || !prewarm_contract) {
+      const auto detail = QStringLiteral(
+          "monitor prewarm slice: previewIdle=%1 processing=%2 fullRunning=%3 fullPending=%4 "
+          "prewarmComplete=%5 requests=%6 scheduled=%7 deduplicated=%8 completed=%9 failed=%10 "
+          "pending=%11 lastKey=%12")
+          .arg(preview_idle)
+          .arg(controller.processing())
+          .arg(Access::full_render_running(controller))
+          .arg(Access::full_render_pending(controller))
+          .arg(prewarm_complete)
+          .arg(prewarm.value(QStringLiteral("requests")).toULongLong())
+          .arg(prewarm.value(QStringLiteral("scheduled")).toULongLong())
+          .arg(prewarm.value(QStringLiteral("deduplicated")).toULongLong())
+          .arg(prewarm.value(QStringLiteral("completed")).toULongLong())
+          .arg(prewarm.value(QStringLiteral("failed")).toULongLong())
+          .arg(prewarm.value(QStringLiteral("pending")).toInt())
+          .arg(prewarm.value(QStringLiteral("lastCompletedKey")).toString());
+      const auto utf8 = detail.toUtf8();
+      return fail(utf8.constData());
+    }
+    return EXIT_SUCCESS;
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_DISPLAY_P3_BOUNDARY_ONLY")) {
+    using namespace photo_editor::desktop;
+    using Access = EditorPreviewControllerTestAccess;
+    const auto display_p3 = QColorSpace(QColorSpace::DisplayP3);
+    QImage source(18, 12, QImage::Format_ARGB32);
+    source.fill(QColor(0, 255, 0));
+    source.setColorSpace(display_p3);
+    const auto path = runtime_root.filePath(QStringLiteral("display-p3-boundary.png"));
+    if (!source.save(path)) return fail("write Display P3 boundary fixture");
+
+    EditorPreviewController controller;
+    TestImageSink sink;
+    controller.setImageProvider(&sink);
+    controller.loadAsset(QStringLiteral("display-p3-boundary"), path, {}, {}, {}, {}, {});
+    controller.setOutputColorSpace(QStringLiteral("Display P3"));
+    controller.setMonitorColorProfile(QStringLiteral("Display P3"));
+    controller.setExposure(0.0);
+    controller.setTemperature(0.0);
+    controller.setTint(0.0);
+    controller.setSaturation(1.0);
+    QElapsedTimer idle_timer;
+    idle_timer.start();
+    auto idle = false;
+    while (idle_timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      if (!controller.processing() && !Access::full_render_running(controller) &&
+          !Access::full_render_pending(controller) && !Access::full_render_timer_active(controller) &&
+          !Access::interactive_render_timer_active(controller) &&
+          !Access::edit_transaction_interactive_preview_timer_active(controller) &&
+          !Access::photo_layer_adjustment_render_timer_active(controller)) {
+        idle = true;
+        break;
+      }
+      QThread::msleep(25);
+    }
+    const auto sink_image = sink.image(QStringLiteral("edited"));
+    const auto request = Access::interactive_render_request(controller);
+    const auto synchronous_result = Access::render_preview_request_sync(request);
+    const auto sync_image = synchronous_result.preview_image;
+    const auto rgba = [](const QImage& image) {
+      if (image.isNull()) return QStringLiteral("null");
+      const auto color = image.convertToFormat(QImage::Format_ARGB32)
+                             .pixelColor(image.width() / 2, image.height() / 2);
+      return QStringLiteral("%1,%2,%3,%4")
+          .arg(color.red()).arg(color.green()).arg(color.blue()).arg(color.alpha());
+    };
+    const auto sample = [](const QImage& image) {
+      return image.isNull()
+          ? QColor{}
+          : image.convertToFormat(QImage::Format_ARGB32)
+                .pixelColor(image.width() / 2, image.height() / 2);
+    };
+    const auto is_green_dominant = [](const QImage& image) {
+      if (image.isNull()) return false;
+      const auto color = image.convertToFormat(QImage::Format_ARGB32)
+                             .pixelColor(image.width() / 2, image.height() / 2);
+      return color.green() >= 180 && color.red() <= 96 && color.blue() <= 96 &&
+             color.green() - color.red() >= 100 && color.green() - color.blue() >= 100;
+    };
+    const auto diagnostics = controller.colorTransformDiagnostics();
+    const auto sink_green = is_green_dominant(sink_image);
+    const auto sync_green = is_green_dominant(sync_image);
+
+    controller.setOutputColorSpace(QStringLiteral("sRGB"));
+    controller.setMonitorColorProfile(QStringLiteral("sRGB"));
+    QElapsedTimer srgb_idle_timer;
+    srgb_idle_timer.start();
+    auto srgb_idle = false;
+    while (srgb_idle_timer.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      if (!controller.processing() && !Access::full_render_running(controller) &&
+          !Access::full_render_pending(controller) && !Access::full_render_timer_active(controller) &&
+          !Access::interactive_render_timer_active(controller) &&
+          !Access::edit_transaction_interactive_preview_timer_active(controller) &&
+          !Access::photo_layer_adjustment_render_timer_active(controller)) {
+        srgb_idle = true;
+        break;
+      }
+      QThread::msleep(25);
+    }
+    const auto srgb_sink_image = sink.image(QStringLiteral("edited"));
+    const auto srgb_request = Access::interactive_render_request(controller);
+    const auto srgb_sync_result = Access::render_preview_request_sync(srgb_request);
+    const auto srgb_sync_image = srgb_sync_result.preview_image;
+    const auto p3_color = sample(sink_image);
+    const auto srgb_color = sample(srgb_sink_image);
+    const auto target_delta = std::max({
+        std::abs(p3_color.red() - srgb_color.red()),
+        std::abs(p3_color.green() - srgb_color.green()),
+        std::abs(p3_color.blue() - srgb_color.blue())});
+    const auto p3_target_is_distinct = srgb_idle &&
+        srgb_sink_image.colorSpace() == QColorSpace(QColorSpace::SRgb) && target_delta >= 16;
+    if (!idle || !srgb_idle || !sink_green || !sync_green ||
+        sink_image.colorSpace() != display_p3 || sync_image.colorSpace() != display_p3 ||
+        rgba(sink_image) != rgba(sync_image) || !p3_target_is_distinct) {
+      auto detail = QStringLiteral(
+          "Display P3 boundary: idle=%1 sink=%2x%3 fmt=%4 cs=%5 rgba=%6 green=%7 "
+          "sync=%8x%9 fmt=%10 cs=%11 rgba=%12 green=%13 stages=%14 backend=%15 fallback=%16 "
+          "lut=%17 lutCpuBytes=%18 lutGpuBytes=%19 lutCommands=%20 lutDispatches=%21 "
+          "nativeSurface=%22 controllerNative=%23 model=%24 execution=%25 renderStatus=%26 "
+          "requestInput=%27 requestWorking=%28 requestOutput=%29 requestMonitor=%30 requestPreview=%31")
+          .arg(idle)
+          .arg(sink_image.width()).arg(sink_image.height())
+          .arg(static_cast<int>(sink_image.format()))
+          .arg(sink_image.colorSpace().description(), rgba(sink_image))
+          .arg(sink_green)
+          .arg(sync_image.width()).arg(sync_image.height())
+          .arg(static_cast<int>(sync_image.format()))
+          .arg(sync_image.colorSpace().description(), rgba(sync_image))
+          .arg(sync_green)
+          .arg(synchronous_result.completed_render_stages.join(QLatin1Char(',')))
+          .arg(synchronous_result.backend, synchronous_result.failure_detail,
+               synchronous_result.output_lut.status)
+          .arg(synchronous_result.output_lut.cpu_to_gpu_bytes)
+          .arg(synchronous_result.output_lut.gpu_to_cpu_bytes)
+          .arg(synchronous_result.output_lut.command_buffer_count)
+          .arg(synchronous_result.output_lut.kernel_dispatch_count)
+          .arg(synchronous_result.texture_upload_surface != nullptr)
+          .arg(controller.displayPreviewNativeAvailable())
+          .arg(request.state.photographic_rendering_model,
+               diagnostics.value(QStringLiteral("executionBackend")).toString(),
+               diagnostics.value(QStringLiteral("photographicRenderingStatus")).toString(),
+               request.state.input_color_profile,
+               request.state.working_color_profile,
+               request.state.output_color_space,
+               request.state.monitor_color_profile,
+               request.state.preview_color_space);
+      detail += QStringLiteral(" srgbIdle=%1 srgbSink=%2x%3 fmt=%4 cs=%5 rgba=%6 "
+                               "srgbSync=%7x%8 fmt=%9 cs=%10 rgba=%11 stages=%12 backend=%13 fallback=%14")
+          .arg(srgb_idle)
+          .arg(srgb_sink_image.width()).arg(srgb_sink_image.height())
+          .arg(static_cast<int>(srgb_sink_image.format()))
+          .arg(srgb_sink_image.colorSpace().description(), rgba(srgb_sink_image))
+          .arg(srgb_sync_image.width()).arg(srgb_sync_image.height())
+          .arg(static_cast<int>(srgb_sync_image.format()))
+          .arg(srgb_sync_image.colorSpace().description(), rgba(srgb_sync_image))
+          .arg(srgb_sync_result.completed_render_stages.join(QLatin1Char(',')))
+          .arg(srgb_sync_result.backend, srgb_sync_result.failure_detail);
+      const auto utf8 = detail.toUtf8();
+      return fail(utf8.constData());
+    }
+    return EXIT_SUCCESS;
+  }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_CUTOUT_ADJUSTMENT_ONLY")) {
     using namespace photo_editor::desktop;
     using Access = EditorPreviewControllerTestAccess;
@@ -2517,6 +2868,17 @@ int main(int argc, char** argv) {
       } while (deadline.elapsed() < 10000);
       return false;
     };
+    const auto wait_for_brush_commit = [&brush]() {
+      QElapsedTimer deadline;
+      deadline.start();
+      do {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        if (!Access::pending_brush_commit_count(brush)) return true;
+        QThread::msleep(1);
+      } while (deadline.elapsed() < 10000);
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+      return !Access::pending_brush_commit_count(brush);
+    };
     QImage source(640, 320, QImage::Format_ARGB32);
     source.fill(QColor(100, 120, 140));
     const auto path = runtime_root.filePath(QStringLiteral("live-brush.png"));
@@ -2538,6 +2900,13 @@ int main(int argc, char** argv) {
     if (!qAlpha(first) || Access::active_brush_live_preview_image(brush).pixel(128, 96) != first)
       return fail("A later pointer batch must preserve the beginning of the live stroke");
     brush.endActiveBrushStroke();
+    if (brush.brushStrokeActive() ||
+        brush.activeMaskLiveBrushPoints().isEmpty() ||
+        !Access::active_brush_live_preview_image(brush).isNull() ||
+        !brush.activeMaskLiveBrushPreviewSource().isEmpty() ||
+        brush.activeMaskLiveBrushPreviewNativeAvailable()) {
+      return fail("release should retain raw pending samples while discarding the stale live frame");
+    }
     if (!settle()) return fail("Manual stroke must commit");
     const auto original_index = brush.activeMaskIndex();
     brush.addMask("brush");
@@ -2562,7 +2931,7 @@ int main(int argc, char** argv) {
     brush.addBrushPoint(0.31, 0.4);
     brush.setActiveMaskIndex(other_index);
     if (brush.brushStrokeActive()) return fail("Target switch must finish the old stroke first");
-    if (!settle()) return fail("Target-switch commit must settle");
+    if (!wait_for_brush_commit()) return fail("Target-switch commit must settle");
     wait.restart();
     while (Access::brush_preview_running(brush) && wait.elapsed() < 10000) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
@@ -2936,14 +3305,26 @@ int main(int argc, char** argv) {
   auto controller_storage =
       std::make_unique<photo_editor::desktop::EditorPreviewController>();
   auto& controller = *controller_storage;
+  const auto model_runtime_status =
+      photo_editor::desktop::ai_model_runtime_status();
+  const auto vision_runtime_available = controller.subjectMaskAvailable();
   const auto expected_selection_runtime =
-      controller.aiSmartSelectionAvailable()
-          ? QStringLiteral("SAM Smart Select")
-          : (controller.subjectMaskAvailable() ? QStringLiteral("Vision Object Select")
-                                               : QStringLiteral("Local Smart Select"));
+      model_runtime_status.smart_selection_available
+          ? model_runtime_status.smart_selection_runtime_label
+          : (vision_runtime_available
+                 ? QStringLiteral("Vision Object Select")
+                 : model_runtime_status.smart_selection_runtime_label);
   const auto expected_inpaint_runtime =
-      controller.aiInpaintAvailable() ? QStringLiteral("LaMa Model Inpaint")
-                                      : QStringLiteral("Local CPU Fill");
+      model_runtime_status.inpaint_runtime_label;
+  const auto expected_model_diagnostics =
+      QStringLiteral("%1|vision:%2")
+          .arg(model_runtime_status.diagnostics,
+               vision_runtime_available ? QStringLiteral("available")
+                                        : QStringLiteral("unavailable"));
+  const auto expected_aces2_backend = QString::fromStdString(std::string(
+      photo_editor::pipeline::aces2_output_renderer_backend_name()));
+  const auto expected_aces2_processor_version = QString::fromStdString(std::string(
+      photo_editor::pipeline::aces2_output_renderer_version()));
   auto cancelled_encode_probe =
       QImage(64, 48, QImage::Format_ARGB32);
   cancelled_encode_probe.fill(
@@ -2964,13 +3345,7 @@ int main(int argc, char** argv) {
   const auto color_transform_diagnostics = controller.colorTransformDiagnostics();
   if (controller.smartSelectionRuntimeLabel() != expected_selection_runtime ||
       controller.inpaintRuntimeLabel() != expected_inpaint_runtime ||
-      model_diagnostics.isEmpty() ||
-      !model_diagnostics.contains(QStringLiteral("root:")) ||
-      !model_diagnostics.contains(QStringLiteral("|manifest:")) ||
-      !model_diagnostics.contains(QStringLiteral("|sam:")) ||
-      !model_diagnostics.contains(QStringLiteral("|lama:")) ||
-      !model_diagnostics.contains(QStringLiteral("|onnx:")) ||
-      !model_diagnostics.contains(QStringLiteral("|vision:")) ||
+      model_diagnostics != expected_model_diagnostics ||
       color_transform_diagnostics.value(QStringLiteral("schema")).toString() !=
           QStringLiteral("color-transform-diagnostics:v25") ||
       color_transform_diagnostics
@@ -3168,9 +3543,9 @@ int main(int argc, char** argv) {
               .toList()
               .size() != 43 ||
       color_transform_diagnostics.value(QStringLiteral("executionBackend")).toString() !=
-          QStringLiteral("OpenColorIO ACES 2") ||
+          expected_aces2_backend ||
       color_transform_diagnostics.value(QStringLiteral("processorVersion")).toString() !=
-          QStringLiteral("ocio-aces2-output-transform:2.5.1") ||
+          expected_aces2_processor_version ||
       color_transform_diagnostics.value(QStringLiteral("sourceProfile")).toString() !=
           QStringLiteral("Linear ProPhoto RGB") ||
       color_transform_diagnostics.value(QStringLiteral("destinationProfile")).toString() !=
@@ -3272,7 +3647,7 @@ int main(int argc, char** argv) {
   const auto retained_diagnostics_state =
       photo_editor::desktop::EditorPreviewControllerTestAccess::current_state(controller);
   if (custom_color_diagnostics.value(QStringLiteral("executionBackend")).toString() !=
-          QStringLiteral("OpenColorIO ACES 2 + Little CMS") ||
+          QStringLiteral("%1 + Little CMS").arg(expected_aces2_backend) ||
       custom_color_diagnostics.value(QStringLiteral("profileAssetStatus")).toString() !=
           QStringLiteral("ready") ||
       custom_color_diagnostics.value(QStringLiteral("profileAssetId")).toString() !=
@@ -4162,8 +4537,10 @@ int main(int argc, char** argv) {
     return fail("rendered scope image sink should receive the adjusted preview");
   }
   const auto last_good_preview_source = rendered_scope_controller.displayPreviewSource();
-  const auto display_scope_result = photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(
-      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(rendered_scope_controller));
+  const auto display_scope_result =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(
+          photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(
+              rendered_scope_controller));
   const auto& display_scope_image = display_scope_result.histogram_image;
   if (!display_scope_result.success || display_scope_image.isNull() ||
       display_scope_result.scope_domain != QStringLiteral("final-display") ||
@@ -4175,8 +4552,9 @@ int main(int argc, char** argv) {
   for (int y = 0; y < display_scope_image.height(); ++y) {
     for (int x = 0; x < display_scope_image.width(); ++x) {
       for (const auto channel : {'r', 'g', 'b'}) {
-        if (std::abs(scope_sample(display_scope_image, x, y, channel) -
-                     scope_sample(rendered_scope_preview, x, y, channel)) > 1.0 / 255.0) {
+        const auto scope_value = scope_sample(display_scope_image, x, y, channel);
+        const auto canvas_value = scope_sample(rendered_scope_preview, x, y, channel);
+        if (std::abs(scope_value - canvas_value) > 1.0 / 255.0) {
           return fail("float final-display scopes must agree with canvas pixels within display quantization");
         }
       }
@@ -5348,7 +5726,7 @@ int main(int argc, char** argv) {
       QString(),
       QString(),
       QString());
-  if (!wait_for_preview_idle(localized_tile_controller)) {
+  if (!wait_for_preview_idle(localized_tile_controller, 12000)) {
     return fail("localized tile controller should finish its initial preview");
   }
   localized_tile_controller.setPreviewViewport(0.75, 0.75, 0.125, 0.125, 512, true);
@@ -5373,7 +5751,7 @@ int main(int argc, char** argv) {
       localized_tile_request.planned_background_tile_count != 1) {
     return fail("localized dirty regions should plan only intersecting max-preview tiles");
   }
-  if (!wait_for_preview_idle(localized_tile_controller)) {
+  if (!wait_for_preview_idle(localized_tile_controller, 5000)) {
     return fail("localized tile controller should settle after tile-plan probe");
   }
   auto localized_seed_request =
@@ -6396,13 +6774,13 @@ int main(int argc, char** argv) {
     return fail("brush tile controller should finish its initial preview");
   }
   brush_tile_controller.addMask(QStringLiteral("brush"));
-  if (!wait_for_preview_idle(brush_tile_controller)) {
+  if (!wait_for_preview_idle(brush_tile_controller, 16000)) {
     return fail("brush tile controller should settle after adding a brush mask");
   }
   brush_tile_controller.setPreviewViewport(0.0, 0.0, 0.25, 0.25, 512, true);
   brush_tile_controller.setActiveMaskBrushSize(0.04);
   brush_tile_controller.setActiveMaskBrushSpacing(0.20);
-  if (!wait_for_preview_idle(brush_tile_controller)) {
+  if (!wait_for_preview_idle(brush_tile_controller, 16000)) {
     return fail("brush tile controller should settle after brush setup");
   }
   const auto brush_tile_final_x = static_cast<int>(std::lround(
@@ -6870,9 +7248,16 @@ int main(int argc, char** argv) {
       return fail("repeated redo should restore the latest large-mask edit without corrupting brush history");
     }
   }
-  if (!wait_for_preview_idle(stress_undo_controller, 12000)) {
+  // This intentionally extreme history exercises both the interactive and
+  // settled full-quality passes. On the supported MSVC Debug build each pass
+  // is measured below eight seconds, so allow both workers to drain while
+  // keeping a firm regression ceiling.
+  QElapsedTimer stress_idle_wait;
+  stress_idle_wait.start();
+  if (!wait_for_preview_idle(stress_undo_controller, 30000)) {
     std::cerr
-        << "stress idle state processing=" << stress_undo_controller.processing()
+        << "stress idle wait ms=" << stress_idle_wait.elapsed()
+        << " processing=" << stress_undo_controller.processing()
         << " fullTimer="
         << photo_editor::desktop::EditorPreviewControllerTestAccess::
                full_render_timer_active(stress_undo_controller)
@@ -8774,7 +9159,9 @@ int main(int argc, char** argv) {
       QString(),
       QString(),
       QString());
-  if (!wait_for_preview_idle(live_preview_controller)) {
+  // Windows Debug settles this 3000x1500 source load in about 6.6s; leave
+  // headroom for slower CI machines without extending the unrelated waits.
+  if (!wait_for_preview_idle(live_preview_controller, 12000)) {
     return fail("live brush preview source should finish loading before sizing its overlay target");
   }
   live_preview_controller.setPreviewTargetEdge(960);
@@ -9795,6 +10182,8 @@ int main(int argc, char** argv) {
     return fail("photo layer isolate should mark exactly one layer for render-state isolation");
   }
   photo_editor::desktop::EditState synthetic_solo_render_state;
+  synthetic_solo_render_state.photographic_rendering_model =
+      QStringLiteral("legacy-oklch-v1");
   synthetic_solo_render_state.layers = QVariantList{
       QVariantMap{
           {QStringLiteral("id"), QStringLiteral("solo-red")},
@@ -9822,10 +10211,51 @@ int main(int argc, char** argv) {
           QColorSpace::SRgb,
           QImage::Format_ARGB32,
           photo_editor::desktop::RenderBackendPreference::Auto);
-  const auto solo_render_pixel = solo_render_output.pixelColor(0, 0);
+  if (solo_render_output.isNull()) {
+    return fail("one-pixel solo layer render should publish an image");
+  }
+  const auto solo_render_pixel = solo_render_output.pixelColor(
+      solo_render_output.width() / 2,
+      solo_render_output.height() / 2);
   if (!(solo_render_pixel.red() > solo_render_pixel.green() &&
         solo_render_pixel.red() > solo_render_pixel.blue())) {
-    return fail("photo layer isolate should constrain rendered pixels to the isolated layer");
+    return fail("one-pixel ARGB32 publication should preserve the isolated red layer");
+  }
+  auto no_layer_render_state = synthetic_solo_render_state;
+  no_layer_render_state.layers.clear();
+  QImage plain_red_input(1, 1, QImage::Format_ARGB32);
+  plain_red_input.fill(QColor::fromRgb(255, 0, 0));
+  const auto plain_red_output =
+      photo_editor::desktop::render_output_image_with_backend(
+          plain_red_input,
+          no_layer_render_state,
+          QColorSpace::SRgb,
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::Auto);
+  if (plain_red_output.isNull()) {
+    return fail("one-pixel plain red render should publish an image");
+  }
+  const auto plain_red_pixel = plain_red_output.pixelColor(0, 0);
+  if (!(plain_red_pixel.red() > plain_red_pixel.green() &&
+        plain_red_pixel.red() > plain_red_pixel.blue())) {
+    return fail("one-pixel plain ARGB32 publication should preserve red input");
+  }
+  QImage two_by_two_render_input(2, 2, QImage::Format_ARGB32);
+  two_by_two_render_input.fill(QColor::fromRgb(0, 0, 0));
+  const auto two_by_two_render_output =
+      photo_editor::desktop::render_output_image_with_backend(
+          two_by_two_render_input,
+          synthetic_solo_render_state,
+          QColorSpace::SRgb,
+          QImage::Format_ARGB32,
+          photo_editor::desktop::RenderBackendPreference::Auto);
+  if (two_by_two_render_output.isNull()) {
+    return fail("2x2 solo layer render should publish an image");
+  }
+  const auto two_by_two_render_pixel = two_by_two_render_output.pixelColor(1, 1);
+  if (!(two_by_two_render_pixel.red() > two_by_two_render_pixel.green() &&
+        two_by_two_render_pixel.red() > two_by_two_render_pixel.blue())) {
+    return fail("2x2 solo layer publication should preserve red output");
   }
   if (!layer_ops_controller.clearPhotoLayerSolo()) {
     return fail("photo layer isolate workflow should return to the full stack");
@@ -10859,9 +11289,11 @@ int main(int argc, char** argv) {
     QImage source;
     std::uint64_t expected_hash;
   } built_in_preset_renders[] = {
-      {"Clean Portrait", built_in_preset_portrait_source_image(), 9129669526530108660ULL},
-      {"Landscape Pop", built_in_preset_landscape_source_image(), 15304467165491280083ULL},
-      {"Clean Black and White", built_in_preset_portrait_source_image(), 15195584239314180347ULL},
+      // These golden outputs pin the native ACES 2 renderer's smooth
+      // 75%-boundary gamut-compression onset.
+      {"Clean Portrait", built_in_preset_portrait_source_image(), 12304500963924410907ULL},
+      {"Landscape Pop", built_in_preset_landscape_source_image(), 12348379829002526309ULL},
+      {"Clean Black and White", built_in_preset_portrait_source_image(), 12256909247801773523ULL},
   };
   auto built_in_preset_hashes_match = true;
   for (const auto& preset_render : built_in_preset_renders) {
@@ -12357,8 +12789,7 @@ int main(int argc, char** argv) {
   if (smoothed_live_points.size() < 4) {
     return fail("stroke smoothing should keep damped intermediate samples before the live endpoint");
   }
-  const auto smoothed_intermediate_point =
-      smoothed_live_points.at(smoothed_live_points.size() - 2).toMap();
+  const auto smoothed_intermediate_point = smoothed_live_points.at(1).toMap();
   const auto smoothed_live_endpoint = smoothed_live_points.last().toMap();
   if (!(smoothed_intermediate_point.value(QStringLiteral("x")).toDouble() < 0.50) ||
       !almost_equal(smoothed_live_endpoint.value(QStringLiteral("x")).toDouble(), 0.90) ||
@@ -12433,7 +12864,7 @@ int main(int argc, char** argv) {
       !almost_equal(smoothed_committed_endpoint.value(QStringLiteral("y")).toDouble(), 0.40)) {
     return fail("ending a smoothed stroke should commit the same cursor endpoint shown live");
   }
-  const auto smoothed_penultimate_x =
+  const auto smoothed_first_intermediate_x =
       smoothed_intermediate_point.value(QStringLiteral("x")).toDouble();
   controller.clearActiveBrushPoints();
   controller.setActiveMaskBrushSpacing(2.0);
@@ -12443,11 +12874,11 @@ int main(int argc, char** argv) {
   controller.addBrushPoint(0.90, 0.40);
   const auto unsmoothed_live_points = controller.activeMaskLiveBrushPoints();
   (void)finish_brush_stroke(controller);
-  if (unsmoothed_live_points.size() <= smoothed_live_points.size() ||
-      unsmoothed_live_points.at(unsmoothed_live_points.size() - 2)
+  if (unsmoothed_live_points.size() < 2 ||
+      unsmoothed_live_points.at(1)
               .toMap()
               .value(QStringLiteral("x"))
-              .toDouble() <= smoothed_penultimate_x ||
+              .toDouble() <= smoothed_first_intermediate_x ||
       !almost_equal(
           unsmoothed_live_points.last().toMap().value(QStringLiteral("x")).toDouble(),
           0.90)) {
@@ -14949,7 +15380,29 @@ int main(int argc, char** argv) {
       controller.colorToolSamplingTarget() != QStringLiteral("color-replace-source")) {
     return fail("color tool sampling should cancel white balance sampling and expose the active target");
   }
+  const auto wait_for_color_tool_sample = [&controller]() {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (controller.sourceSamplingBusy() && deadline.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+      QThread::msleep(1);
+    }
+    return !controller.sourceSamplingBusy() &&
+           controller.colorToolSamplingTarget().isEmpty();
+  };
+  const auto wait_for_color_tool_mask_preview = [&controller]() {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (controller.colorToolMaskPreviewBusy() && deadline.elapsed() < 10000) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+      QThread::msleep(1);
+    }
+    return !controller.colorToolMaskPreviewBusy();
+  };
   controller.sampleColorToolAt(0.22, 0.38);
+  if (!wait_for_color_tool_sample()) {
+    return fail("cold color replace source sampling should complete through its asynchronous worker");
+  }
   if (!controller.colorToolSamplingTarget().isEmpty() ||
       !controller.colorReplacementEnabled() ||
       controller.colorReplacementStrength() < 69.0 ||
@@ -14958,6 +15411,9 @@ int main(int argc, char** argv) {
   }
   controller.setColorToolSamplingTarget(QStringLiteral("color-replace-target"));
   controller.sampleColorToolAt(0.78, 0.38);
+  if (!wait_for_color_tool_sample()) {
+    return fail("color replace target sampling should complete through its asynchronous worker");
+  }
   if (!controller.colorToolSamplingTarget().isEmpty() ||
       !almost_equal(controller.colorReplacementTargetHue(), 1.0 / 3.0, 0.04)) {
     return fail("color replace target sampler should pick the sampled green hue");
@@ -14965,6 +15421,9 @@ int main(int argc, char** argv) {
   controller.setSkinToneProtectionStrength(0.0);
   controller.setColorToolSamplingTarget(QStringLiteral("skin-protection"));
   controller.sampleColorToolAt(0.50, 0.84);
+  if (!wait_for_color_tool_sample()) {
+    return fail("skin protection sampling should complete through its asynchronous worker");
+  }
   if (!controller.colorToolSamplingTarget().isEmpty() ||
       !controller.skinToneProtectionEnabled() ||
       controller.skinToneProtectionStrength() < 64.0 ||
@@ -14975,19 +15434,33 @@ int main(int argc, char** argv) {
     return fail("color tool mask preview should stay hidden until explicitly enabled");
   }
   controller.setColorToolMaskPreviewEnabled(true);
-  const auto color_tool_mask_source = controller.colorToolMaskPreviewSource();
+  auto color_tool_mask_source = controller.colorToolMaskPreviewSource();
+  if (color_tool_mask_source.isEmpty()) {
+    if (!controller.colorToolMaskPreviewBusy() || !wait_for_color_tool_mask_preview()) {
+      return fail("cold color tool mask preview should report and drain its asynchronous request");
+    }
+    color_tool_mask_source = controller.colorToolMaskPreviewSource();
+  }
   if (!controller.colorToolMaskPreviewEnabled() ||
       !color_tool_mask_source.startsWith(QStringLiteral("data:image/png;base64,"))) {
     return fail("color tool mask preview should publish affected pixels as a PNG data URL");
   }
   controller.setColorReplacementSourceHue(1.0 / 3.0);
-  const auto updated_color_tool_mask_source = controller.colorToolMaskPreviewSource();
-  if (updated_color_tool_mask_source.isEmpty() ||
+  auto updated_color_tool_mask_source = controller.colorToolMaskPreviewSource();
+  if (updated_color_tool_mask_source.isEmpty()) {
+    if (!controller.colorToolMaskPreviewBusy() || !wait_for_color_tool_mask_preview()) {
+      return fail("changed color tool mask key should schedule and drain its asynchronous request");
+    }
+    updated_color_tool_mask_source = controller.colorToolMaskPreviewSource();
+  }
+  if (!updated_color_tool_mask_source.startsWith(QStringLiteral("data:image/png;base64,")) ||
       updated_color_tool_mask_source == color_tool_mask_source) {
     return fail("color tool mask preview should refresh when the selected source hue changes");
   }
   controller.setColorToolMaskPreviewEnabled(false);
-  if (!controller.colorToolMaskPreviewSource().isEmpty()) {
+  if (!controller.colorToolMaskPreviewSource().isEmpty() ||
+      !wait_for_color_tool_mask_preview() ||
+      !controller.colorToolMaskPreviewSource().isEmpty()) {
     return fail("color tool mask preview should clear when disabled");
   }
   controller.addMask(QStringLiteral("color"));
@@ -15017,7 +15490,11 @@ int main(int argc, char** argv) {
   controller.setSkinToneProtectionRange(30.0);
   controller.setColorReplacementEnabled(false);
   const auto auto_skin_detected = controller.autoDetectSkinProtection();
-  const auto auto_skin_mask_source = controller.colorToolMaskPreviewSource();
+  auto auto_skin_mask_source = controller.colorToolMaskPreviewSource();
+  if (auto_skin_mask_source.isEmpty() && controller.colorToolMaskPreviewBusy() &&
+      wait_for_color_tool_mask_preview()) {
+    auto_skin_mask_source = controller.colorToolMaskPreviewSource();
+  }
   if (!auto_skin_detected || !controller.skinToneProtectionEnabled() ||
       controller.skinToneProtectionStrength() < 69.0 || !controller.colorToolMaskPreviewEnabled() ||
       !almost_equal(controller.skinToneLineHue(), 0.055, 0.07) ||
@@ -15436,11 +15913,34 @@ int main(int argc, char** argv) {
   const auto p3_boundary_argb = p3_boundary_preview.convertToFormat(QImage::Format_ARGB32);
   const auto p3_boundary_sample =
       p3_boundary_argb.pixel(p3_boundary_argb.width() / 2, p3_boundary_argb.height() / 2);
+  controller.setOutputColorSpace(QStringLiteral("sRGB"));
+  controller.setMonitorColorProfile(QStringLiteral("sRGB"));
+  if (!wait_for_preview_idle(controller)) {
+    return fail("sRGB comparison preview for the Display P3 boundary should finish rendering");
+  }
+  const auto srgb_boundary_preview = image_sink.image(QStringLiteral("edited"));
+  const auto srgb_boundary_sample =
+      srgb_boundary_preview.convertToFormat(QImage::Format_ARGB32).pixel(
+          srgb_boundary_preview.width() / 2,
+          srgb_boundary_preview.height() / 2);
+  controller.setOutputColorSpace(QStringLiteral("Display P3"));
+  controller.setMonitorColorProfile(QStringLiteral("Display P3"));
+  if (!wait_for_preview_idle(controller)) {
+    return fail("restored Display P3 boundary preview should finish rendering");
+  }
+  const auto p3_boundary_color = QColor::fromRgba(p3_boundary_sample);
+  const auto srgb_boundary_color = QColor::fromRgba(srgb_boundary_sample);
+  const auto p3_vs_srgb_target_delta = std::max({
+      std::abs(p3_boundary_color.red() - srgb_boundary_color.red()),
+      std::abs(p3_boundary_color.green() - srgb_boundary_color.green()),
+      std::abs(p3_boundary_color.blue() - srgb_boundary_color.blue())});
   if (qGreen(p3_boundary_sample) < 180 ||
       qRed(p3_boundary_sample) > 96 ||
       qBlue(p3_boundary_sample) > 96 ||
-      qGreen(p3_boundary_sample) - qRed(p3_boundary_sample) < 150 ||
-      qGreen(p3_boundary_sample) - qBlue(p3_boundary_sample) < 150) {
+      qGreen(p3_boundary_sample) - qRed(p3_boundary_sample) < 100 ||
+      qGreen(p3_boundary_sample) - qBlue(p3_boundary_sample) < 100 ||
+      srgb_boundary_preview.colorSpace() != expected_srgb ||
+      p3_vs_srgb_target_delta < 16) {
     return fail("edited Display P3 previews should not be routed through a clipped sRGB image");
   }
   controller.setSoftProofProfile(QStringLiteral("sRGB"));

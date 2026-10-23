@@ -1,11 +1,12 @@
 #include "preview_backend_controller.h"
 
-#include <QProcess>
 #include <QSettings>
-#include <QStandardPaths>
 
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
+#endif
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+#include "photo_editor/pipeline/cuda/cuda_pipeline_backend.h"
 #endif
 
 namespace photo_editor::desktop {
@@ -21,6 +22,12 @@ const auto kPreviewBackendPreferenceKey = "preview/backendPreference";
 photo_editor::pipeline::metal::MetalPipelineBackend& metal_probe_backend() {
   return photo_editor::pipeline::metal::
       shared_metal_pipeline_backend();
+}
+#endif
+
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+photo_editor::pipeline::cuda::CudaPipelineBackend& cuda_probe_backend() {
+  return photo_editor::pipeline::cuda::shared_cuda_pipeline_backend();
 }
 #endif
 
@@ -174,33 +181,18 @@ PreviewBackendController::ProbeResult PreviewBackendController::probeMetal() con
 PreviewBackendController::ProbeResult PreviewBackendController::probeCuda() const {
   ProbeResult result;
 #if defined(Q_OS_WIN)
-#if defined(PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND) && PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND
-  const auto nvidia_smi = QStandardPaths::findExecutable(QStringLiteral("nvidia-smi"));
-  if (nvidia_smi.isEmpty()) {
-    result.reason = QStringLiteral("CUDA preview requires an NVIDIA GPU and nvidia-smi on PATH.");
+#if defined(PHOTO_EDITOR_HAS_CUDA_BACKEND) && PHOTO_EDITOR_HAS_CUDA_BACKEND
+  auto& backend = cuda_probe_backend();
+  if (backend.available()) {
+    result.available = true;
     return result;
   }
-
-  QProcess process;
-  process.start(
-      nvidia_smi,
-      {
-          QStringLiteral("--query-gpu=name"),
-          QStringLiteral("--format=csv,noheader"),
-      });
-  if (!process.waitForFinished(2000) || process.exitCode() != 0) {
-    result.reason = QStringLiteral("CUDA preview could not confirm a compatible NVIDIA device; falling back to CPU.");
-    return result;
-  }
-
-  const auto output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-  if (output.isEmpty()) {
-    result.reason = QStringLiteral("CUDA preview found no compatible NVIDIA device; falling back to CPU.");
-    return result;
-  }
-
-  result.reason = QStringLiteral("CUDA preview is planned for supported Windows NVIDIA systems, but this build still uses CPU rendering.");
-  return result;
+  const auto reason =
+      QString::fromStdString(backend.unavailable_reason()).trimmed();
+  result.reason = reason.isEmpty()
+                      ? QStringLiteral("CUDA preview backend is unavailable.")
+                      : QStringLiteral("CUDA preview backend is unavailable: %1")
+                            .arg(reason);
 #else
   result.reason = QStringLiteral("CUDA preview backend was not compiled into this build.");
 #endif

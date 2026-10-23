@@ -274,6 +274,7 @@ bool verify_overlay_pixels(
 
 QImage preview_result_pixels_for_test(const RenderResult& result) {
   if (!result.preview_image.isNull()) return result.preview_image;
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   if (result.texture_upload_surface == nullptr ||
       result.texture_upload_surface->format() !=
           photo_editor::pipeline::metal::MetalOutputSurfaceFormat::Bgra8UnormSrgbEncoded ||
@@ -298,6 +299,9 @@ QImage preview_result_pixels_for_test(const RenderResult& result) {
   }
   image.setColorSpace(QColorSpace(QColorSpace::SRgb));
   return image;
+#else
+  return {};
+#endif
 }
 
 int maximum_channel_delta(const QImage& left, const QImage& right, QPoint* first_delta = nullptr) {
@@ -367,7 +371,12 @@ bool verify_native_preview_suffix_parity(
     EditRecipeState baseline_state,
     EditRecipeState overlay_state,
     const PhotoLayer& overlay_layer,
-    QString* error) {
+    QString* error,
+    bool* skipped) {
+  if (!canonical_native_suffix_backend_available()) {
+    if (skipped != nullptr) *skipped = true;
+    return true;
+  }
   QTemporaryDir runtime_root;
   if (!runtime_root.isValid()) {
     *error = QStringLiteral("Could not create the isolated native preview test directory.");
@@ -1087,6 +1096,25 @@ int main(int argc, char** argv) {
   overlay_state.layers = QVariantList{plain_text_layer(QStringLiteral("cover-title"))};
   const auto overlay_config = compile_color_pipeline_config(overlay_state);
   const auto compiled_overlay_state = compile_state(overlay_state, source.size(), overlay_config);
+  if (!aces2_official_output_transform_available()) {
+    const auto fallback_plan = admitted_plan(
+        QStringLiteral("display-text-unavailable-fallback"), overlay_state,
+        source.size(), DisplayRenderingTarget::SrgbSimulation);
+    const auto fallback_rendered = fallback_plan.has_value()
+        ? render_with_plan(source, overlay_state, *fallback_plan)
+        : QImage{};
+    if (!compiled_overlay_state.display_referred_text_layers.empty() ||
+        !has_layer_id(compiled_overlay_state.photo_layers,
+                      QStringLiteral("cover-title")) ||
+        compiled_overlay_state.display_referred_text_eligibility_reason !=
+            "official-aces2-output-transform-unavailable" ||
+        fallback_rendered.isNull()) {
+      std::cerr << "An unavailable official ACES 2 transform must retain text in the working-scene fallback\n";
+      return 1;
+    }
+    std::cout << "Official ACES 2 output transform unavailable; working-scene text fallback passed\n";
+    return 77;
+  }
   if (compiled_overlay_state.display_referred_text_layers.size() != 1 ||
       compiled_overlay_state.display_referred_text_layers.front().id != "cover-title" ||
       has_layer_id(compiled_overlay_state.photo_layers, QStringLiteral("cover-title"))) {
@@ -1162,6 +1190,31 @@ int main(int argc, char** argv) {
     std::cerr << (warm_error.isEmpty()
         ? "Warm authored text did not enter the display-referred overlay stage\n"
         : warm_error.toStdString() + '\n');
+    return 1;
+  }
+
+  auto explicit_none_text =
+      plain_text_layer(QStringLiteral("explicit-none-title"), QStringLiteral("NONE"));
+  explicit_none_text.insert(
+      QStringLiteral("textTypography"),
+      QVariantMap{{QStringLiteral("material"), QStringLiteral("none")}});
+  auto explicit_none_state = baseline_state;
+  explicit_none_state.layers = QVariantList{explicit_none_text};
+  const auto explicit_none_config =
+      compile_color_pipeline_config(explicit_none_state);
+  const auto explicit_none_compiled = compile_state(
+      explicit_none_state, source.size(), explicit_none_config);
+  const auto explicit_none_plan = admitted_plan(
+      QStringLiteral("display-text-explicit-none"), explicit_none_state,
+      source.size(), DisplayRenderingTarget::SrgbSimulation);
+  const auto explicit_none_rendered = explicit_none_plan.has_value()
+      ? render_with_plan(source, explicit_none_state, *explicit_none_plan)
+      : QImage{};
+  if (explicit_none_compiled.display_referred_text_layers.size() != 1 ||
+      explicit_none_compiled.display_referred_text_layers.front().text_material !=
+          "none" ||
+      explicit_none_rendered.isNull()) {
+    std::cerr << "An explicit no-material value must remain eligible for display-referred text rendering\n";
     return 1;
   }
 
@@ -1459,9 +1512,11 @@ int main(int argc, char** argv) {
   }
 
   QString preview_error;
+  auto native_preview_parity_skipped = false;
   if (!verify_native_preview_suffix_parity(
           source, baseline_state, overlay_state,
-          compiled_overlay_layers.front(), &preview_error)) {
+          compiled_overlay_layers.front(), &preview_error,
+          &native_preview_parity_skipped)) {
     std::cerr << preview_error.toStdString() << '\n';
     return 1;
   }
@@ -1488,7 +1543,10 @@ int main(int argc, char** argv) {
 
   std::cout << "display text overlay regression: SDR authored colors/alpha, cache identity, "
                "overlap and proportional-mask parity, exact outside-ink pixels, legacy fallback, "
-               "HDR highlight preservation, native-surface-eligible preview/export parity, and "
-               "actual system-monitor ICC preview/text/mask parity plus task-owned Photo Fragment file-effect guards passed\n";
+               "HDR highlight preservation, "
+            << (native_preview_parity_skipped
+                    ? "native Metal preview parity skipped (backend unavailable), and "
+                    : "native-surface-eligible preview/export parity, and ")
+            << "actual system-monitor ICC preview/text/mask parity plus task-owned Photo Fragment file-effect guards passed\n";
   return 0;
 }
